@@ -1,0 +1,1168 @@
+{
+"image_path": "images/step_004.png",
+"screen_resolution": [
+1346,
+758
+],
+"elements": [
+{
+"element_id": "e_1",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+24,
+2,
+104,
+46
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_2",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "社区",
+"bbox": [
+256,
+0,
+304,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_3",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "GitCode",
+"bbox": [
+304,
+0,
+379,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_4",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "InsCode",
+"bbox": [
+379,
+0,
+453,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_5",
+"parent_id": "root",
+"element_type": "button",
+"native_role": "button",
+"text": "",
+"bbox": [
+765,
+4,
+885,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_6",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+872,
+4,
+912,
+44
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_7",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "会员12.12",
+"bbox": [
+942,
+0,
+1025,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_8",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "历史",
+"bbox": [
+1097,
+0,
+1129,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_9",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "创作中心",
+"bbox": [
+1149,
+0,
+1205,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_10",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "发布",
+"bbox": [
+1225,
+8,
+1305,
+40
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_11",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+125,
+16,
+145,
+36
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_12",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "编程语言专家",
+"bbox": [
+151,
+14,
+235,
+38
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_13",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1011,
+12,
+1025,
+36
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_14",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "消息",
+"bbox": [
+1047,
+14,
+1075,
+34
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_15",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "linux 常用命令",
+"bbox": [
+911,
+43,
+1201,
+65
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_16",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+126,
+77,
+144,
+95
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_17",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "人工智能技术趋势",
+"bbox": [
+152,
+76,
+273,
+95
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_18",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "当使用Linux操作系统时，了解一些基本的Linux命令是非常重要的。以下是一些常用的Linux命令及其简要说明：",
+"bbox": [
+911,
+73,
+1201,
+113
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_19",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "数据库课程设计",
+"bbox": [
+911,
+129,
+1201,
+151
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_20",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "数据库课程设计通常是计算机科学或信息技术相关专业的一部分，旨在帮助学生掌握数据库设计、开发和管理的基本原则和技能。以下是一个典型的数据库课程设计大纲，供您参考",
+"bbox": [
+911,
+159,
+1201,
+199
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_21",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+127,
+188,
+143,
+204
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_22",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "清除历史记录",
+"bbox": [
+120,
+180,
+325,
+212
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_23",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "点击生成AI结果",
+"bbox": [
+413,
+214,
+807,
+264
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_24",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "java读取制表符文本转换json",
+"bbox": [
+911,
+215,
+1201,
+237
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_25",
+"parent_id": "root",
+"element_type": "i",
+"native_role": "i",
+"text": "",
+"bbox": [
+127,
+237,
+145,
+255
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_26",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "新的对话",
+"bbox": [
+153,
+236,
+209,
+256
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_27",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "收起",
+"bbox": [
+827,
+247,
+851,
+264
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_28",
+"parent_id": "root",
+"element_type": "i",
+"native_role": "i",
+"text": "",
+"bbox": [
+851,
+250,
+863,
+262
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_29",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "要将包含制表符的文本数据转换为JSON格式，你可以使用Java的JSON库，例如Jackson或Gson。以下是一个使用Jackson库将包含制表符的文本数据转换为JSON的示例代码",
+"bbox": [
+911,
+245,
+1201,
+285
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_30",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "爱心代码c语言",
+"bbox": [
+911,
+301,
+1201,
+323
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_31",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "AI伦理",
+"bbox": [
+119,
+325,
+172,
+345
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_32",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "人工智能",
+"bbox": [
+262,
+325,
+334,
+345
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_33",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "在C语言中，你可以使用字符数组和循环来打印出爱心形状。以下是一个简单的例子",
+"bbox": [
+911,
+331,
+1201,
+371
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_34",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+911,
+374,
+951,
+414
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_35",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "Leodong.",
+"bbox": [
+967,
+374,
+1129,
+390
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_36",
+"parent_id": "root",
+"element_type": "p",
+"native_role": "p",
+"text": "已回答 22次 提问",
+"bbox": [
+967,
+394,
+1217,
+410
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_37",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "去有风的地方呀",
+"bbox": [
+676,
+407,
+774,
+423
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_38",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+911,
+438,
+951,
+478
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_39",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "呈两面包夹芝士",
+"bbox": [
+967,
+438,
+1129,
+457
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_40",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "人工智能",
+"bbox": [
+155,
+460,
+227,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_41",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "伦理",
+"bbox": [
+335,
+460,
+371,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_42",
+"parent_id": "root",
+"element_type": "p",
+"native_role": "p",
+"text": "已回答 20次 提问",
+"bbox": [
+967,
+461,
+1217,
+477
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_43",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "python面试10题",
+"bbox": [
+911,
+473,
+1201,
+495
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_44",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+733,
+485,
+861,
+559
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_45",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+911,
+502,
+951,
+542
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_46",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "threenewbee",
+"bbox": [
+967,
+502,
+1129,
+518
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_47",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "",
+"bbox": [
+1242,
+506,
+1286,
+550
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_48",
+"parent_id": "root",
+"element_type": "p",
+"native_role": "p",
+"text": "已回答 20次 提问",
+"bbox": [
+967,
+522,
+1217,
+538
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_49",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "南北极之间",
+"bbox": [
+552,
+541,
+622,
+557
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_50",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+911,
+566,
+951,
+606
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_51",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "专家-赤兔[在线]",
+"bbox": [
+967,
+566,
+1129,
+585
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_52",
+"parent_id": "root",
+"element_type": "p",
+"native_role": "p",
+"text": "已回答 17次 提问",
+"bbox": [
+967,
+589,
+1217,
+605
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_53",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "ChatGPT探索系列文章合集，涉及理解ChatGPT的来龙去脉，原理背景等方面内容",
+"bbox": [
+119,
+594,
+769,
+616
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_54",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "文章",
+"bbox": [
+266,
+594,
+302,
+614
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_55",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+911,
+630,
+951,
+670
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_56",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "bug菌¹",
+"bbox": [
+967,
+630,
+1129,
+649
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_57",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "AI",
+"bbox": [
+719,
+652,
+732,
+668
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_58",
+"parent_id": "root",
+"element_type": "p",
+"native_role": "p",
+"text": "已回答 17次 提问",
+"bbox": [
+967,
+653,
+1217,
+669
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_59",
+"parent_id": "root",
+"element_type": "div",
+"native_role": "div",
+"text": "以下是一个简单版本的俄罗斯方块游戏的Python代码。在这个游戏中，你可以使用左、右、下箭头键控制方块的移动，使用上箭头键旋转方块。",
+"bbox": [
+911,
+675,
+1201,
+715
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_60",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "人工智能",
+"bbox": [
+119,
+705,
+191,
+725
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_61",
+"parent_id": "root",
+"element_type": "em",
+"native_role": "em",
+"text": "伦理",
+"bbox": [
+353,
+705,
+389,
+725
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+}
+]
+}

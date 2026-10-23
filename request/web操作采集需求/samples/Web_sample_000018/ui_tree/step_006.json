@@ -1,0 +1,1263 @@
+{
+"image_path": "images/step_006.png",
+"screen_resolution": [
+1346,
+758
+],
+"elements": [
+{
+"element_id": "e_1",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+24,
+2,
+104,
+46
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_2",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "博客",
+"bbox": [
+112,
+0,
+160,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_3",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "下载",
+"bbox": [
+160,
+0,
+208,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_4",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "学习",
+"bbox": [
+208,
+0,
+256,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_5",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "社区",
+"bbox": [
+256,
+0,
+304,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_6",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "GitCode",
+"bbox": [
+304,
+0,
+379,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_7",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "InsCode",
+"bbox": [
+379,
+0,
+453,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_8",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+485,
+8,
+752,
+40
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_9",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "搜索",
+"bbox": [
+790,
+8,
+818,
+40
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_10",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+872,
+4,
+912,
+44
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_11",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "会员12.12",
+"bbox": [
+942,
+0,
+1025,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_12",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "历史",
+"bbox": [
+1097,
+0,
+1129,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_13",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "创作中心",
+"bbox": [
+1149,
+0,
+1205,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_14",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "发布",
+"bbox": [
+1225,
+8,
+1305,
+40
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_15",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+60,
+13,
+360,
+151
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_16",
+"parent_id": "root",
+"element_type": "i",
+"native_role": "i",
+"text": "",
+"bbox": [
+766,
+13,
+790,
+37
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_17",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1011,
+12,
+1025,
+36
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_18",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "消息",
+"bbox": [
+1047,
+14,
+1075,
+34
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_19",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+76,
+167,
+302,
+199
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_20",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+312,
+167,
+344,
+199
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_21",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "element ui 表单验证触发方式：trigger: ‘change‘和trigger: ‘blur‘区别  69234",
+"bbox": [
+76,
+265,
+344,
+311
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_22",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1276,
+276,
+1338,
+364
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_23",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+255,
+292,
+269,
+306
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_24",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "69234",
+"bbox": [
+276,
+292,
+310,
+306
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_25",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "程序员常见系统错误代码大全：1到15841  63343",
+"bbox": [
+76,
+319,
+344,
+365
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_26",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+80,
+346,
+94,
+360
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_27",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "63343",
+"bbox": [
+101,
+346,
+135,
+360
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_28",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1306,
+368,
+1332,
+380
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_29",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "如何批量快速提取复制文件夹里所有文件夹名和文件名（包括所有子文件里的所有文件夹名和文件名）详细步骤  61483",
+"bbox": [
+76,
+373,
+344,
+441
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_30",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+382,
+1318,
+406
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_31",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+238,
+422,
+252,
+436
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_32",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "61483",
+"bbox": [
+259,
+422,
+293,
+436
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_33",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1306,
+420,
+1332,
+432
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_34",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+434,
+1318,
+458
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_35",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "vue3面试题：2022 最新前端 Vue 3.0 面试题及答案（持续更新中……）  56152",
+"bbox": [
+76,
+449,
+344,
+495
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_36",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+266,
+476,
+280,
+490
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_37",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "56152",
+"bbox": [
+287,
+476,
+321,
+490
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_38",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+484,
+1318,
+512
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_39",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "vuejs项目纯js导出word、在线下载富文本内容或者网页另存为word文件  46777",
+"bbox": [
+76,
+503,
+344,
+549
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_40",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+269,
+530,
+283,
+544
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_41",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "46777",
+"bbox": [
+290,
+530,
+323,
+544
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_42",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+538,
+1318,
+562
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_43",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+590,
+1318,
+614
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_44",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+93,
+623,
+117,
+647
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_45",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "web前端特效源码",
+"bbox": [
+125,
+623,
+235,
+647
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_46",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "付费",
+"bbox": [
+243,
+626,
+277,
+644
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_48",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "举报",
+"bbox": [
+1284,
+632,
+1328,
+676
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_49",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+93,
+663,
+117,
+687
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_50",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "前端知识点",
+"bbox": [
+125,
+663,
+195,
+687
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_51",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "付费",
+"bbox": [
+203,
+666,
+237,
+684
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_53",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+93,
+703,
+117,
+727
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_54",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "前端进阶练手实战",
+"bbox": [
+125,
+703,
+237,
+727
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_55",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "付费",
+"bbox": [
+245,
+706,
+279,
+724
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_57",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+392,
+710,
+424,
+742
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_58",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "南北极之间",
+"bbox": [
+432,
+714,
+512,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_59",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "关注",
+"bbox": [
+520,
+712,
+580,
+740
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_60",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+854,
+714,
+878,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_61",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "3",
+"bbox": [
+882,
+715,
+890,
+737
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_62",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+906,
+714,
+930,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_63",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+946,
+714,
+970,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_64",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "38",
+"bbox": [
+974,
+715,
+990,
+737
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_65",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1006,
+714,
+1030,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_66",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1050,
+714,
+1074,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_67",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "0",
+"bbox": [
+1078,
+715,
+1085,
+737
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_68",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1118,
+714,
+1142,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_69",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "专栏目录",
+"bbox": [
+1170,
+712,
+1244,
+740
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+}
+]
+}

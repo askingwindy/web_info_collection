@@ -1,0 +1,107 @@
+{
+  "type": "object",
+  "properties": {
+    "image_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "screen_resolution": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "element_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "parent_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "element_type": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "native_role": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "clickable": {
+            "type": "boolean"
+          },
+          "inputable": {
+            "type": "boolean"
+          },
+          "scrollable": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "default",
+              "selected",
+              "checked",
+              "unchecked",
+              "expanded",
+              "collapsed",
+              "disabled",
+              "focused"
+            ]
+          }
+        },
+        "required": [
+          "element_id",
+          "parent_id",
+          "element_type",
+          "native_role",
+          "text",
+          "bbox",
+          "clickable",
+          "inputable",
+          "scrollable",
+          "visible",
+          "enabled",
+          "state"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "image_path",
+    "screen_resolution",
+    "elements"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webcollect.local/schemas/ui_tree-1.0.0.json"
+}

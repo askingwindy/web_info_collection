@@ -1,0 +1,36 @@
+import json,html
+from pathlib import Path
+from .engine import SEMANTIC
+
+def write_outputs(report,output):
+    output=Path(output);output.mkdir(parents=True,exist_ok=False)
+    (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+    (output/'rule-catalog.json').write_text(json.dumps(report['rules']+report.get('local_rule_catalog',[]),ensure_ascii=False,indent=2)+'\n')
+    template={'schema_version':'qc-review-1','records':[{'sample_id':s['sample_id'],'baseline_sha256':report['baseline']['config_sha256'],'annotation_sha256':s['annotation_sha256'],'evidence_sha256':s['evidence_sha256'],'reviewer':{'kind':'','name':''},'provenance':{'description':''},'checks':{name:{'status':'REVIEW_REQUIRED','note':''} for name in SEMANTIC}} for s in report['samples']]}
+    if 'local_profile' in report:
+        from .profiles import package_review_template
+        template['package_review']=package_review_template(report)
+        (output/'local-profile.json').write_text(json.dumps(report['local_profile'],ensure_ascii=False,indent=2)+'\n')
+        (output/'requirements-baseline.json').write_text(json.dumps(report['requirements_baseline'],ensure_ascii=False,indent=2)+'\n')
+    (output/'review-template.json').write_text(json.dumps(template,ensure_ascii=False,indent=2)+'\n')
+    text=['# 独立质检程序结果','',f'程序状态：{report["status"]}；样本数：{report["sample_count"]}。这是本程序在已声明基准下的结果，客户真实程序未执行，客户验收为UNKNOWN。','',f'逐样本状态：{json.dumps(report["sample_status_counts"],ensure_ascii=False)}。','', '基准原件哈希：'+report['baseline']['integrity']+'。原样例已知空task_type及历史矛盾保留为限制，不要求新产物复制错误。','','|样本|状态|FAIL规则|待审规则数|','|---|---|---|---|']
+    for s in report['samples']:text.append('|'+s['sample_id']+'|'+s['status']+'|'+', '.join(c['rule_id'] for c in s['checks'] if c['status']=='FAIL')+'|'+str(sum(c['status']=='REVIEW_REQUIRED' for c in s['checks']))+'|')
+    text+=['','## 数据集/外部待审（不重复成逐样本人工任务）','']
+    text += ['- '+c['rule_id']+' ['+c['scope']+'] '+c['status']+'：'+c['reason'] for c in report.get('dataset_checks',[])]
+    text += ['','本地样本汇总：'+report.get('local_sample_status',report['status'])+'；外部客户验收：UNKNOWN。']
+    if 'local_profile' in report:
+        text += ['','## 显式本地验收','', '本地验收：'+report['local_acceptance_status']+'；客户实际验收：UNKNOWN。',
+                 '配置：'+report['local_profile']['configuration']['profile_id']+'；SHA256 '+report['local_profile']['sha256']+'。',
+                 '样本/批次/试点均须PASS。已配置近似算法命中即FAIL，不以语义审核豁免；外部算法等价性与全集验收另列。',
+                 '文档审核使用review-template.json内package_review，绑定完整交付包与profile；离线页面导出会保留其默认待审，实际审核后再填写。',
+                 '', '|作用域|状态|', '|---|---|']
+        text += ['|'+scope+'|'+result['status']+'|' for scope,result in report['acceptance_scopes'].items()]
+        text += ['', '本地未通过项：']
+        text += ['- '+s['sample_id']+'：'+', '.join(c['rule_id']+'='+c['status'] for c in s['local_checks'] if c['status']!='PASS') for s in report['samples'] if s['local_acceptance_status']!='PASS']
+        text += ['- '+c['rule_id']+'='+c['status'] for scope in ['batch','pilot'] for c in report['acceptance_scopes'][scope]['checks'] if c['status']!='PASS']
+    text+=['','review.html为离线证据与审核入口，包含截图、树/动作定位、失败和修复建议。review-template.json需由实际审核者填写；默认待审，不能冒充签名。使用--reviews重新运行，哈希/基准不一致的记录将拒绝。已有AI字段证据以partial_ai_evidence附录接入，部分字段复核不自动等同全轨迹视觉通过。','','批次文件、去重算法及逐步骤证据见report.json。程序PASS只表示本质检配置下已执行规则通过，永不代表客户真实程序通过。']
+    (output/'报告.md').write_text('\n'.join(text)+'\n')
+    data=json.dumps({'report':report,'template':template,'semantic':SEMANTIC},ensure_ascii=False).replace('<','\\u003c')
+    (output/'review.html').write_text(HTML.replace('__DATA__',data))
+
+HTML='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>独立质检证据审核</title><style>body{font:16px system-ui;margin:24px;background:#f5f7fa}header,article{background:white;padding:20px;margin-bottom:16px;border-radius:8px}button,select,input,textarea{font:inherit;margin:5px;padding:7px}img{max-width:100%;border:1px solid #ddd}pre{white-space:pre-wrap;font-size:13px}.FAIL{color:#b42318}.PASS{color:#067647}.REVIEW_REQUIRED{color:#9a6700}nav{display:flex;flex-wrap:wrap}textarea{width:95%;min-height:55px}label{display:block}</style><header><h1>独立质检证据审核</h1><p id="status"></p><p>程序检查与视觉审核分开。请查看截图及树和动作，填写真实来源。导出不会修改输入或自动标记人工通过。客户程序未执行。</p><label>审核来源<select id="kind"><option value="">请选择</option><option value="ai">AI</option><option value="human">人工</option></select></label><label>审核者/模型名<input id="name"></label><label>来源说明<input id="provenance" placeholder="实际审核过程与证据来源"></label><button onclick="downloadReview()">导出质检审核记录</button><nav id="samples"></nav></header><main id="main"></main><script>const D=__DATA__;let current=0;const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const file=p=>'file://'+p.split('/').map(encodeURIComponent).join('/');document.getElementById('status').textContent='程序状态 '+D.report.status+'，客户实际验收 UNKNOWN';D.report.samples.forEach((s,i)=>{let b=document.createElement('button');b.textContent=s.sample_id+' '+s.status;b.onclick=()=>show(i);document.getElementById('samples').appendChild(b)});function save(){const r=D.template.records[current];D.semantic.forEach(k=>{const el=document.getElementById('r_'+k),n=document.getElementById('n_'+k);if(el)r.checks[k]={status:el.value,note:n.value}})}function show(i){if(document.getElementById('r_visual_alignment'))save();current=i;const s=D.report.samples[i],r=D.template.records[i];document.getElementById('main').innerHTML='<article><h2>'+esc(s.sample_id)+'</h2><p>'+esc(s.status)+'</p>'+s.checks.map(c=>'<details><summary class="'+c.status+'">'+esc(c.rule_id)+' '+c.status+'</summary><p>'+esc(c.reason)+'</p><p>修复建议：'+esc(c.fix_suggestion)+'</p><pre>'+esc(JSON.stringify(c.evidence||c.sources,null,2))+'</pre></details>').join('')+'</article><article><h2>逐步证据</h2>'+s.steps.map(st=>'<details><summary>步骤 '+st.step_id+'</summary><img src="'+file(st.image_path)+'"><p><a href="'+file(st.tree_path)+'" target="_blank">打开同步界面树</a></p><pre>'+esc(JSON.stringify(st.action,null,2))+'</pre><p>'+esc(st.step_result)+'</p></details>').join('')+'</article><article><h2>视觉与语义审核</h2><p>如证据不足，保留REVIEW_REQUIRED。PASS和FAIL均须写具体截图/步骤理由。</p>'+D.semantic.map(k=>'<label>'+esc(k)+'<select id="r_'+k+'">'+['REVIEW_REQUIRED','PASS','FAIL'].map(v=>'<option '+(r.checks[k].status===v?'selected':'')+'>'+v+'</option>').join('')+'</select><textarea id="n_'+k+'">'+esc(r.checks[k].note)+'</textarea></label>').join('')+'</article>'}function downloadReview(){save();let kind=document.getElementById('kind').value,name=document.getElementById('name').value.trim(),source=document.getElementById('provenance').value.trim();if(!kind||!name||!source){alert('请填写真实审核来源、名称及来源说明');return}for(const r of D.template.records){r.reviewer={kind,name};r.provenance={description:source};for(const [k,v] of Object.entries(r.checks))if(v.status!=='REVIEW_REQUIRED'&&!v.note.trim()){alert(r.sample_id+' '+k+'需填写具体证据理由');return}}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(D.template,null,2)],{type:'application/json'}));a.download='qc-review.json';a.click();URL.revokeObjectURL(a.href)}if(D.report.samples.length)show(0);</script></html>'''

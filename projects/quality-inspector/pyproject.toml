@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "webcollect-quality-inspector"
+version = "0.3.2"
+requires-python = ">=3.11"
+dependencies = ["jsonschema>=4.26,<5", "Pillow>=13,<14"]
+[project.scripts]
+webcollect-qc = "quality_inspector.__main__:main"
+[tool.setuptools.packages.find]
+include = ["quality_inspector*"]

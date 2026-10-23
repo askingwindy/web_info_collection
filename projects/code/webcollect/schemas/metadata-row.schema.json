@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "properties": {
+    "sample_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "site_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "site_category": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "app_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "task_type": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "task_instruction": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "screen_resolution": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "completion_status": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "actions": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "steps": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "sample_id",
+    "site_id",
+    "site_category",
+    "app_name",
+    "task_type",
+    "task_instruction",
+    "screen_resolution",
+    "completion_status",
+    "actions"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webcollect.local/schemas/metadata-row-1.0.0.json"
+}

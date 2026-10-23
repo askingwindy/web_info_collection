@@ -1,0 +1,32 @@
+{
+  "rule_version": "1.0.0",
+  "schema_version": "1.0.0",
+  "data_type": "webcollect_agent_v1",
+  "action_space": "unified_gui_v4",
+  "viewport": [
+    1280,
+    720
+  ],
+  "max_viewport_specs": 3,
+  "minimum_effective_steps": 5,
+  "short_flow_limit": 0.02,
+  "category_limit": 0.2,
+  "target_samples": 200000,
+  "site_registry": [],
+  "batch_manifest_example": {
+    "batch_id": "B20261021_001",
+    "sample_kind": "real",
+    "program_version": "填写 Git 提交号",
+    "rule_version": "1.0.0",
+    "sites": [
+      {
+        "site_id": "S000001",
+        "uri": "https://example.invalid/",
+        "site_category": "在线工具"
+      }
+    ],
+    "samples": [
+      "S000001_sample_000001"
+    ]
+  }
+}

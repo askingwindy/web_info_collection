@@ -1,0 +1,106 @@
+{
+  "profile": "client-original-samples-with-documented-clarifications",
+  "repository_root": "../../..",
+  "primary_authority": "two original customer samples; observed values do not imply requiredness/closed enums",
+  "samples": [
+    {
+      "path": "request/web操作采集需求/samples/Web_sample_000017",
+      "files": {
+        "annotation.json": "bc43a7f2a6309a9e3fa145f37632d84fc1c1cc940e38ba825356622a290f5308",
+        "images/step_001.png": "4bbde8684afa75d137e79cac2e3be4becdcf14144d7ae911f09a3f262eafe3dd",
+        "images/step_002.png": "57179a2bdf973f0d624d20ff64dbf510b90285470649e4fb9978472c7ab3690c",
+        "images/step_003.png": "1d1dde1c8cc9fdf61c6cff225da946f05a7df986d008a1031357b5da7686c91d",
+        "images/step_004.png": "f22134dd910a0a1704e631aeeaee4c6e9050cd0b7243f79b61c945288fdee8f4",
+        "images/step_005.png": "2554d62cfd1562aaf39d65f313de4de26a46374c23376edfb7aefa228369bbc9",
+        "images/step_006.png": "c361b2dc4a8b0ad1e2ab42f075535ab5499b5984c7f11a4109a38549e3be9029",
+        "images/step_007.png": "0c223b37c2517805399046f58eb3a596d15437cc29e1eaf91f3cde9dcf7a2a0a",
+        "images/step_008.png": "ef5fadfc6b72b77d12aa16167d25223d72608dccbcb270396f4bcf0e03420cf8",
+        "ui_tree/step_001.json": "9b66e1acff481ed2c8883155a8130033c77bcbb64ab3ab848570e016e0932750",
+        "ui_tree/step_002.json": "4aced455d5a5bca8f63db353dfed27028f813cc290b8ec36ece3dd484f5e4c47",
+        "ui_tree/step_003.json": "9a184710ebfeb1dc1684625e2bbb8787724ee1933473cfd18f36cf6e3c589cc7",
+        "ui_tree/step_004.json": "529e38de743babfcf5e1e4ca55742950c46e6a2338ae77b47487eab5a8677604",
+        "ui_tree/step_005.json": "ca7729945577fe89f9d328a9e1c4aa69c00094eca19b5aa0ca4202a3424f595f",
+        "ui_tree/step_006.json": "c30f102b850740c0d62b643025b208ac8698e0d7c449ed7df0dfa91c324d8b57",
+        "ui_tree/step_007.json": "7bca5ba413df68d221b4a68e283a0f19ec5cb59638df4f5b5d5697c3e3c0c6fd",
+        "ui_tree/step_008.json": "bf3b98f6432079e98fe7b3c86fa7d12a39b377ff51d02e767bd4cc0cb9c20d2b"
+      }
+    },
+    {
+      "path": "request/web操作采集需求/samples/Web_sample_000018",
+      "files": {
+        "annotation.json": "961922947857a77e3280a3d61f16e712916ee5f1f4214231a0983f4b63c3516d",
+        "images/step_001.png": "39b689939d8edbd351d05e40912787707bad81a9b2a0e6e47f381273e7ac1c10",
+        "images/step_002.png": "49d99b7ae0c8c40ca0fb645d3ac9f758962241f28384a4fb94de51235092e2e1",
+        "images/step_003.png": "6a32e097ab22bdcb3564c938a60dd4ed27e430aec50f07c42babe866ea4bfeb0",
+        "images/step_004.png": "e4c0e20898961e83bbfb56c30abd847307664b47d1445a710e23b8dc006700cf",
+        "images/step_005.png": "101628ae4adaa03a1518b30cff7c34c2dadb802b68c09b01e56baa6807034901",
+        "images/step_006.png": "bc10c092737170f5cac6f53a5fd71f55e26e6638bfb25723f9e7ec16fbd13704",
+        "images/step_007.png": "79a0b44fa42acb89cfa9c3c5bdd3a3bae5bccd03e0a41d0bc455828824f277ac",
+        "images/step_008.png": "a2f33d5da28a6ac06235ac06035d58915b0b808da3d8be88c9d1336e81ea4031",
+        "images/step_009.png": "6dab3ed030f9ac9d88bc5f49781dd7ff1f074c6320b3dd1c5f8fb909d67e9e6d",
+        "ui_tree/step_001.json": "11143ade3e997bcd4eb01d0625b0c717a2826dfa1f381711e7dc9211bcf76aab",
+        "ui_tree/step_002.json": "93fe1a2e72caa29af700fb23f75b9a65bc82669edf2f0e18233289c982673ae3",
+        "ui_tree/step_003.json": "fb70b37b96c09236997a68f231762d56f42fd7c4ba00270491dadf2f26d0a104",
+        "ui_tree/step_004.json": "699e4b277854cc5b00240acef6a639191cd9dee1613eb66f2a2cf723c4af27bb",
+        "ui_tree/step_005.json": "ac373df9f0c3a5a4a8788bb61d009b77aa77b450aeca71a87401a700059557af",
+        "ui_tree/step_006.json": "30a5fd82dcc944ad16f9ef6e90bbb848d5f831e9262a549b5c6b57fd39ee1145",
+        "ui_tree/step_007.json": "23b7a694034cb6ad1049550e5d25f183394523ddec0e4b688aebd961f843c416",
+        "ui_tree/step_008.json": "ae5fd345b8dbbca7e43ff291f2d5a858df508ca8c87b623a5fb5edec1c4bd90d",
+        "ui_tree/step_009.json": "cb0314764c70b134b957ebd7a74ab9c8da2fa5f3c0d5eaa3c7208c58e5882572"
+      }
+    }
+  ],
+  "supplemental_documents": [
+    {
+      "path": "request/需求书-Web浏览器自动化操作轨迹数据集.md",
+      "sha256": "44ace260935f969d95f01ce07ff88508e732c2ce7e81e35d666d848e85e6e608"
+    },
+    {
+      "path": "request/需求澄清记录.md",
+      "sha256": "61589d3801a034bfc007c0ca247a82490e9b515ab4a903627000dee309523146"
+    },
+    {
+      "path": "request/web操作采集需求/附件A-字段说明.md",
+      "sha256": "0c3fe9b2050f55c25cec8ef5145ed3ad0d569aa0d0022f0293c21c4406857639"
+    },
+    {
+      "path": "request/web操作采集需求/附件B-动作空间与坐标系.md",
+      "sha256": "564ab9cc7a4297d3966aaebe5e14c4090e0b056da60072e232744a00422f5ed2"
+    },
+    {
+      "path": "request/web操作采集需求/samples/样例说明.md",
+      "sha256": "3de271818ff4b960b366211b4efaf781457d8d12018b3220489d2f56f7564b75"
+    }
+  ],
+  "known_limits": [
+    {
+      "sample": "sample_000017",
+      "facts": [
+        "task_type empty despite documented 1–3 requirement",
+        "step3/5 target names do not equal empty tree text",
+        "step5 type action contradicts checkbox state and retains point; cannot recover original action record"
+      ],
+      "production_waiver": false
+    },
+    {
+      "sample": "sample_000018",
+      "facts": [
+        "task_type empty",
+        "step1 type point and name mismatch",
+        "unsupported red-circle wording"
+      ],
+      "production_waiver": false
+    }
+  ],
+  "inferred_conventions": [
+    "exact sample/site ID regex",
+    "single observed data_type/action_space is not a constant",
+    "CSV serialization details and closed extension schema unknown"
+  ],
+  "unresolved_rules": [
+    "external lineage naming",
+    "technical-term Chinese policy",
+    "client near-hash implementation parameters",
+    "actual customer checker acceptance"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "schema_version": "qc-local-profile-1",
+  "profile_id": "webcollect-local-pilot-20261022-v1",
+  "scope": "pilot",
+  "authority": "Explicit local test baseline; customer algorithm equivalence and actual acceptance remain UNKNOWN",
+  "duplicates": {
+    "exact_images": "zero-cross-sample-reuse",
+    "sequence": "exact-action_type+target_text+page_name-list",
+    "dhash": {
+      "bits": 64,
+      "orientation": "horizontal",
+      "grayscale": "Pillow-L",
+      "resize": [9, 8],
+      "resampling": "Pillow-LANCZOS",
+      "comparison": "left>right",
+      "bit_order": "row-major-left-to-right-top-to-bottom-msb-first",
+      "maximum_hamming_each_endpoint": 4
+    },
+    "simhash": {
+      "bits": 64,
+      "tokens": "CJK-bigrams-or-single-character+lowercase-Latin-alphanumeric-underscore",
+      "cjk_range": ["U+4E00", "U+9FFF"],
+      "latin_regex": "[a-zA-Z0-9_]+",
+      "lowercase": "Python-str.lower",
+      "cjk_window": 2,
+      "single_cjk_token": true,
+      "weight": "term-frequency",
+      "hash": "SHA256-first-8-bytes-big-endian",
+      "tie": 0,
+      "maximum_hamming": 3
+    }
+  },
+  "targets": {
+    "minimum_samples": 20,
+    "minimum_sites": 10,
+    "max_category_share": 0.2,
+    "max_viewport_specs": 3,
+    "max_short_flow_share": 0.02
+  }
+}

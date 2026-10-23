@@ -1,0 +1,764 @@
+{
+  "type": "object",
+  "properties": {
+    "sample_id": {
+      "type": "string",
+      "pattern": "^S\\d{6}_sample_\\d{6,}$"
+    },
+    "task_instruction": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "task_type": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "搜索查询",
+          "填写表单",
+          "修改设置",
+          "创建/编辑/保存文件",
+          "发送消息",
+          "预约日程",
+          "购买流程",
+          "筛选排序",
+          "上传下载",
+          "导入导出",
+          "权限配置",
+          "内容发布",
+          "数据查看",
+          "问题排查"
+        ]
+      }
+    },
+    "terminal_type": {
+      "const": "Web"
+    },
+    "device_info": {
+      "type": "object",
+      "properties": {
+        "device_model": {
+          "type": "string"
+        },
+        "os_name": {
+          "type": "string"
+        },
+        "os_version": {
+          "type": "string"
+        },
+        "screen_resolution": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "device_model",
+        "os_name",
+        "os_version",
+        "screen_resolution"
+      ],
+      "additionalProperties": false
+    },
+    "app_info": {
+      "type": "object",
+      "properties": {
+        "app_name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "app_version": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "ui_language": {
+          "const": "zh"
+        }
+      },
+      "required": [
+        "app_name",
+        "app_version",
+        "environment",
+        "ui_language"
+      ],
+      "additionalProperties": false
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sensitive",
+        "high_risk"
+      ]
+    },
+    "trajectory_source": {
+      "type": "object",
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "human_agent_hybrid"
+          ]
+        },
+        "data_type": {
+          "const": "webcollect_agent_v1"
+        },
+        "action_space": {
+          "const": "unified_gui_v4"
+        }
+      },
+      "required": [
+        "source_type",
+        "data_type",
+        "action_space"
+      ],
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "image_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "ui_tree_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "page_name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "user_goal": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "action": {
+            "type": "object",
+            "properties": {
+              "action_type": {
+                "type": "string",
+                "enum": [
+                  "click",
+                  "double_click",
+                  "right_click",
+                  "type",
+                  "hotkey",
+                  "scroll",
+                  "drag",
+                  "back",
+                  "open_url",
+                  "select",
+                  "wait",
+                  "complete"
+                ]
+              },
+              "target_element_id": {
+                "type": "string"
+              },
+              "target_text": {
+                "type": "string"
+              },
+              "target_control_type": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "target_bbox": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "coordinate": {
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "minItems": 0,
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                ]
+              },
+              "end_coordinate": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "input_text": {
+                "type": "string"
+              },
+              "precondition": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "expected_result": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "action_type",
+              "target_element_id",
+              "target_text",
+              "coordinate",
+              "input_text",
+              "precondition",
+              "expected_result"
+            ],
+            "additionalProperties": false
+          },
+          "tool_call": {
+            "type": "object",
+            "properties": {
+              "tool_name": {
+                "type": "string",
+                "enum": [
+                  "click",
+                  "double_click",
+                  "right_click",
+                  "type",
+                  "hotkey",
+                  "scroll",
+                  "drag",
+                  "back",
+                  "open_url",
+                  "select",
+                  "wait",
+                  "complete"
+                ]
+              },
+              "call_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "arguments": {
+                "type": "object"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "context": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "tool_name",
+              "call_id",
+              "arguments",
+              "timestamp",
+              "context"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "click"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer"
+                        },
+                        "y": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "double_click"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer"
+                        },
+                        "y": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "right_click"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer"
+                        },
+                        "y": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "type"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "hotkey"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "keys": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "minItems": 1,
+                          "uniqueItems": true
+                        }
+                      },
+                      "required": [
+                        "keys"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "scroll"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer"
+                        },
+                        "y": {
+                          "type": "integer"
+                        },
+                        "direction": {
+                          "type": "string",
+                          "enum": [
+                            "up",
+                            "down",
+                            "left",
+                            "right"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "direction"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "drag"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer"
+                        },
+                        "y": {
+                          "type": "integer"
+                        },
+                        "end_x": {
+                          "type": "integer"
+                        },
+                        "end_y": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "end_x",
+                        "end_y"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "back"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {},
+                      "required": [],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "open_url"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "pattern": "^https?://[^\\s/]+"
+                        }
+                      },
+                      "required": [
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "select"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer"
+                        },
+                        "y": {
+                          "type": "integer"
+                        },
+                        "option": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "option"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "wait"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {},
+                      "required": [],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "tool_name": {
+                      "const": "complete"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "infeasible"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "tool_result": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "error"
+                ]
+              },
+              "return_value": {
+                "type": "object",
+                "properties": {
+                  "screen_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "return_value",
+              "error"
+            ],
+            "additionalProperties": false
+          },
+          "next_step_rationale": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "step_result": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "exception_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          }
+        },
+        "required": [
+          "step_id",
+          "image_path",
+          "ui_tree_path",
+          "page_name",
+          "user_goal",
+          "action",
+          "tool_call",
+          "tool_result",
+          "next_step_rationale",
+          "step_result",
+          "exception_evidence"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "final_state_image": {
+      "type": "string"
+    },
+    "final_result": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "controlled_exception",
+        "failed"
+      ]
+    },
+    "completion_judgement": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "short_flow": {
+      "type": "boolean"
+    },
+    "short_flow_reason": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "required": [
+    "sample_id",
+    "task_instruction",
+    "task_type",
+    "terminal_type",
+    "device_info",
+    "app_info",
+    "risk_level",
+    "trajectory_source",
+    "steps",
+    "final_result",
+    "completion_status",
+    "completion_judgement"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webcollect.local/schemas/annotation-1.0.0.json"
+}

@@ -1,0 +1,1396 @@
+{
+"image_path": "images/step_009.png",
+"screen_resolution": [
+1346,
+758
+],
+"elements": [
+{
+"element_id": "e_1",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+24,
+2,
+104,
+46
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_2",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "博客",
+"bbox": [
+112,
+0,
+160,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_3",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "下载",
+"bbox": [
+160,
+0,
+208,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_4",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "学习",
+"bbox": [
+208,
+0,
+256,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_5",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "社区",
+"bbox": [
+256,
+0,
+304,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_6",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "GitCode",
+"bbox": [
+304,
+0,
+379,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_7",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "InsCode",
+"bbox": [
+379,
+0,
+453,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_8",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+485,
+8,
+752,
+40
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_9",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "搜索",
+"bbox": [
+790,
+8,
+818,
+40
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_10",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+872,
+4,
+912,
+44
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_11",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "会员12.12",
+"bbox": [
+942,
+0,
+1025,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_12",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "历史",
+"bbox": [
+1097,
+0,
+1129,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_13",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "创作中心",
+"bbox": [
+1149,
+0,
+1205,
+48
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_14",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "发布",
+"bbox": [
+1225,
+8,
+1305,
+40
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_15",
+"parent_id": "root",
+"element_type": "i",
+"native_role": "i",
+"text": "",
+"bbox": [
+766,
+13,
+790,
+37
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_16",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1011,
+12,
+1025,
+36
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_17",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "消息",
+"bbox": [
+1047,
+14,
+1075,
+34
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_18",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "js中的join()与split()函数的区别和用法",
+"bbox": [
+76,
+200,
+354,
+222
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_19",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "【web前端特效源码】使用HTML5+CSS3制作一个会动的loading加载动画效果~~适合初学者~超简单~ |前端开发|IT软件",
+"bbox": [
+76,
+234,
+354,
+300
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_20",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1276,
+276,
+1338,
+364
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_21",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "纯 CSS 开关切换按钮",
+"bbox": [
+76,
+312,
+354,
+334
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_22",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2023年",
+"bbox": [
+79,
+366,
+125,
+382
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_23",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "30篇",
+"bbox": [
+133,
+366,
+162,
+382
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_24",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2022年",
+"bbox": [
+222,
+366,
+267,
+382
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_25",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "290篇",
+"bbox": [
+275,
+366,
+312,
+382
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_26",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1306,
+368,
+1332,
+380
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_27",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+382,
+1318,
+406
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_28",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2021年",
+"bbox": [
+79,
+396,
+125,
+412
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_29",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "198篇",
+"bbox": [
+133,
+396,
+170,
+412
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_30",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2020年",
+"bbox": [
+222,
+396,
+267,
+412
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_31",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "122篇",
+"bbox": [
+275,
+396,
+312,
+412
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_32",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2019年",
+"bbox": [
+79,
+426,
+125,
+442
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_33",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "195篇",
+"bbox": [
+133,
+426,
+170,
+442
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_34",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2018年",
+"bbox": [
+222,
+426,
+267,
+442
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_35",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "53篇",
+"bbox": [
+275,
+426,
+305,
+442
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_36",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1306,
+420,
+1332,
+432
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_37",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+434,
+1318,
+458
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_38",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "2017年",
+"bbox": [
+79,
+456,
+125,
+472
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_39",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "1篇",
+"bbox": [
+133,
+456,
+154,
+472
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_40",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+484,
+1318,
+512
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_41",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "定义人工智能中的伦理/伦理学导论",
+"bbox": [
+60,
+506,
+356,
+530
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_42",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+538,
+1318,
+562
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_43",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人工智能伦理的分支",
+"bbox": [
+60,
+542,
+356,
+566
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_44",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人工智能项目",
+"bbox": [
+440,
+548,
+553,
+566
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_45",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "1. 规范伦理",
+"bbox": [
+60,
+578,
+356,
+602
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_46",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+590,
+1318,
+614
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_47",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "2. 应用伦理",
+"bbox": [
+60,
+614,
+356,
+638
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_48",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "举报",
+"bbox": [
+1284,
+632,
+1328,
+676
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_49",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "Python入门技能树",
+"bbox": [
+400,
+640,
+514,
+656
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_50",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人工智能",
+"bbox": [
+528,
+640,
+584,
+656
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_51",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "机器学习工具包Scikit-learn",
+"bbox": [
+598,
+640,
+765,
+656
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_52",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "3. 元伦理",
+"bbox": [
+60,
+650,
+356,
+674
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_53",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人工智能伦理的意义",
+"bbox": [
+60,
+686,
+356,
+710
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_54",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1294,
+694,
+1318,
+718
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_55",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+635,
+709,
+681,
+755
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_56",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "卷上加卷",
+"bbox": [
+689,
+709,
+912,
+735
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_57",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+392,
+710,
+424,
+742
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_58",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "南北极之间",
+"bbox": [
+432,
+714,
+512,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_59",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "关注",
+"bbox": [
+520,
+712,
+580,
+740
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_60",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+854,
+714,
+878,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_61",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "3",
+"bbox": [
+882,
+715,
+890,
+737
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_62",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+912,
+714,
+928,
+730
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_63",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+946,
+714,
+970,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_64",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "38",
+"bbox": [
+974,
+715,
+990,
+737
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_65",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+992,
+716,
+998,
+728
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_66",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1006,
+714,
+1030,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_67",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1050,
+714,
+1074,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_68",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "0",
+"bbox": [
+1078,
+715,
+1085,
+737
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_69",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+1118,
+714,
+1142,
+738
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_70",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "专栏目录",
+"bbox": [
+1170,
+712,
+1244,
+740
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_71",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人工智能的伦理挑战：",
+"bbox": [
+60,
+722,
+356,
+746
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_72",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "关注博主即可阅读全文",
+"bbox": [
+735,
+734,
+875,
+750
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_73",
+"parent_id": "root",
+"element_type": "img",
+"native_role": "img",
+"text": "",
+"bbox": [
+879,
+734,
+901,
+746
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+}
+]
+}

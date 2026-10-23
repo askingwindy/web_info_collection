@@ -1,0 +1,1529 @@
+{
+"image_path": "images/step_006.png",
+"screen_resolution": [
+1920,
+937
+],
+"elements": [
+{
+"element_id": "e_1",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+346,
+15,
+632,
+105
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_2",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1022,
+20,
+1428,
+56
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_3",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+1428,
+20,
+1462,
+56
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_4",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+1473,
+26,
+1497,
+50
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_5",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "",
+"bbox": [
+1513,
+26,
+1537,
+50
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_6",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "首页",
+"bbox": [
+776,
+70,
+889,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_7",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "披露",
+"bbox": [
+889,
+70,
+1002,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_8",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "数据",
+"bbox": [
+1002,
+70,
+1115,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_9",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "基准",
+"bbox": [
+1115,
+70,
+1228,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_10",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "自律",
+"bbox": [
+1228,
+70,
+1341,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_11",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "服务",
+"bbox": [
+1341,
+70,
+1454,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_12",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "关于",
+"bbox": [
+1454,
+70,
+1566,
+120
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_13",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "全部",
+"bbox": [
+1090,
+289,
+1118,
+319
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_14",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+296,
+1087,
+312
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_15",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+327,
+1087,
+343
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_16",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "USD/CNY",
+"bbox": [
+1090,
+320,
+1153,
+350
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_17",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+358,
+1087,
+374
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_18",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "EUR/CNY",
+"bbox": [
+1090,
+351,
+1153,
+381
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_19",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "人民币汇率中间价",
+"bbox": [
+633,
+369,
+761,
+386
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_20",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "历史数据",
+"bbox": [
+803,
+369,
+867,
+386
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_21",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "中间价形成机制",
+"bbox": [
+909,
+369,
+1021,
+386
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_22",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+389,
+1087,
+405
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_23",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "100JPY/CNY",
+"bbox": [
+1090,
+382,
+1172,
+412
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_24",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "外汇市场",
+"bbox": [
+346,
+415,
+591,
+465
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_25",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "人民币汇率中间价",
+"bbox": [
+632,
+413,
+760,
+430
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_26",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "月平均汇率",
+"bbox": [
+783,
+413,
+863,
+430
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_27",
+"parent_id": "root",
+"element_type": "span",
+"native_role": "span",
+"text": "年平均汇率",
+"bbox": [
+887,
+413,
+967,
+430
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_28",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "HKD/CNY",
+"bbox": [
+1090,
+413,
+1153,
+443
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_29",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+420,
+1087,
+436
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_30",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "GBP/CNY",
+"bbox": [
+1090,
+444,
+1153,
+474
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_31",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "日期",
+"bbox": [
+632,
+450,
+675,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_32",
+"parent_id": "root",
+"element_type": "select",
+"native_role": "select",
+"text": "2023\n2022\n2021\n2020\n2019\n2018\n2017\n2016\n2015\n2014\n2013\n2012\n2011\n2010\n2009\n2008\n2007\n2006",
+"bbox": [
+675,
+450,
+732,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_33",
+"parent_id": "root",
+"element_type": "select",
+"native_role": "select",
+"text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12",
+"bbox": [
+735,
+450,
+776,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_34",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "至",
+"bbox": [
+780,
+450,
+794,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_35",
+"parent_id": "root",
+"element_type": "select",
+"native_role": "select",
+"text": "2023\n2022\n2021\n2020\n2019\n2018\n2017\n2016\n2015\n2014\n2013\n2012\n2011\n2010\n2009\n2008\n2007\n2006",
+"bbox": [
+798,
+450,
+855,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_36",
+"parent_id": "root",
+"element_type": "select",
+"native_role": "select",
+"text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12",
+"bbox": [
+859,
+450,
+900,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_37",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "币种",
+"bbox": [
+1021,
+450,
+1064,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_38",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+451,
+1087,
+467
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_39",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "查询",
+"bbox": [
+1373,
+450,
+1433,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_40",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "导出Excel",
+"bbox": [
+1441,
+450,
+1525,
+480
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_41",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人民币汇率中间价",
+"bbox": [
+346,
+465,
+591,
+515
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_42",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "AUD/CNY",
+"bbox": [
+1090,
+475,
+1153,
+505
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_43",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+482,
+1087,
+498
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_44",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "NZD/CNY",
+"bbox": [
+1090,
+506,
+1152,
+536
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_45",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人民币参考汇率",
+"bbox": [
+346,
+515,
+591,
+565
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_46",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+513,
+1087,
+529
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_47",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "SGD/CNY",
+"bbox": [
+1090,
+537,
+1154,
+567
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_48",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+544,
+1087,
+560
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_49",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "人民币汇率指数",
+"bbox": [
+346,
+565,
+591,
+615
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_50",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CHF/CNY",
+"bbox": [
+1090,
+568,
+1152,
+598
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_51",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+575,
+1087,
+591
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_52",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CAD/CNY",
+"bbox": [
+1090,
+599,
+1153,
+629
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_53",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+606,
+1087,
+622
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_54",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "USD CIROR",
+"bbox": [
+346,
+615,
+591,
+665
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_55",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+637,
+1087,
+653
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_56",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/MYR",
+"bbox": [
+1090,
+630,
+1154,
+660
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_57",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "外汇掉期曲线",
+"bbox": [
+346,
+665,
+591,
+715
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_58",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+668,
+1087,
+684
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_59",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/RUB",
+"bbox": [
+1090,
+661,
+1153,
+691
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_60",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+699,
+1087,
+715
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_61",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/ZAR",
+"bbox": [
+1090,
+692,
+1151,
+722
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_62",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "外币隐含利率曲线",
+"bbox": [
+346,
+715,
+591,
+765
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_63",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+1563,
+717,
+1603,
+757
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_64",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/KRW",
+"bbox": [
+1090,
+723,
+1156,
+753
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_65",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+730,
+1087,
+746
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_66",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/AED",
+"bbox": [
+1090,
+754,
+1152,
+784
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_67",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "",
+"bbox": [
+1563,
+757,
+1603,
+797
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_68",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "外汇期权隐含波动率曲线",
+"bbox": [
+346,
+765,
+591,
+815
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_69",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+761,
+1087,
+777
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_70",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/SAR",
+"bbox": [
+1090,
+785,
+1152,
+815
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_71",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+792,
+1087,
+808
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_72",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "外汇期权Delta计量参数",
+"bbox": [
+346,
+815,
+591,
+865
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_73",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/HUF",
+"bbox": [
+1090,
+816,
+1152,
+846
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_74",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+823,
+1087,
+839
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_75",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/PLN",
+"bbox": [
+1090,
+847,
+1150,
+877
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_76",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+854,
+1087,
+870
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_77",
+"parent_id": "root",
+"element_type": "a",
+"native_role": "a",
+"text": "货币掉期曲线",
+"bbox": [
+346,
+865,
+591,
+915
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_78",
+"parent_id": "root",
+"element_type": "text",
+"native_role": "label",
+"text": "CNY/DKK",
+"bbox": [
+1090,
+878,
+1152,
+908
+],
+"clickable": true,
+"inputable": false,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_79",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+885,
+1087,
+901
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+},
+{
+"element_id": "e_80",
+"parent_id": "root",
+"element_type": "input",
+"native_role": "input",
+"text": "",
+"bbox": [
+1071,
+916,
+1087,
+932
+],
+"clickable": true,
+"inputable": true,
+"scrollable": false,
+"visible": true,
+"enabled": true,
+"state": "default"
+}
+]
+}

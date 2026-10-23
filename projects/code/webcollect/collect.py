@@ -1,0 +1,878 @@
+"""M2 可审查的真实采集器：保留原始证据，结构通过也不自动通过人工验收。"""
+import asyncio
+from datetime import datetime
+import hashlib
+import json
+from pathlib import Path
+import platform
+import shutil
+from urllib.parse import urldefrag
+from zoneinfo import ZoneInfo
+from .browser import capture, execute, prepare_action, observe, CONTROL, POINTER, SNAPSHOT_JS
+from .scaffold import program_version
+from .storage import allocate, write_json, verify_existing_registry
+from .validate import validate_sample, read_json
+from .content_preparation import assess_content, preparation_settings
+
+
+def now():return datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()
+
+
+def chinese_ratio(text):
+    letters=[character for character in text if character.isalpha()]
+    han=sum(0x3400<=ord(character)<=0x9fff or 0xf900<=ord(character)<=0xfaff or
+            0x20000<=ord(character)<=0x323af for character in letters)
+    return han/len(letters) if letters else 0
+
+
+def verify_public_url(url, allowed_hosts=None):
+    from urllib.parse import urlsplit
+    import ipaddress
+    parsed=urlsplit(url)
+    host=(parsed.hostname or '').lower()
+    if parsed.scheme not in {'http','https'} or not host or parsed.username or parsed.password:
+        raise ValueError('真实采集只接受不含账号信息的 HTTP(S) 网站地址')
+    if host=='localhost' or host.endswith(('.localhost','.local','.invalid')):
+        raise ValueError('本地或联调地址不能声明为真实公开站点')
+    try:
+        address=ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if not address.is_global:raise ValueError('私网或回环地址不能声明为真实公开站点')
+    if allowed_hosts is not None and host not in allowed_hosts:
+        raise ValueError('实际页面跳转到了任务计划之外的站点：'+host)
+    return host
+
+
+def check_numbers(text, spec):
+    import re
+    from decimal import Decimal
+    values=[Decimal(token) for token in re.findall(r'-?(?:\d+(?:\.\d*)?|\.\d+)',text)]
+    return (len(values)==spec['count'] and
+            all(Decimal(str(spec['minimum']))<=v<Decimal(str(spec['maximum_exclusive'])) for v in values) and
+            (not spec.get('unique') or len(set(values))==len(values)) and
+            (not spec.get('integer') or all(v==v.to_integral_value() for v in values)))
+
+
+async def assert_state(page, conditions):
+    results=[]
+    for condition in conditions:
+        if 'visible_text' in condition:
+            expected=condition['visible_text']
+            if not isinstance(expected,str) or not expected.strip():raise ValueError('可见终态文字断言必须非空')
+            observed=await observe(page)
+            actual=observed['visible_text'];passed=expected in actual
+            at=actual.find(expected)
+            results.append({'expected':condition,'actual':actual[max(0,at-60):at+len(expected)+60] if passed else actual[:160],'passed':passed,'evidence_source':'clipped_visible_DOM_text_not_visual_acceptance'})
+            if not passed:raise ValueError('目标文字未在实际视口内显示：'+expected)
+            continue
+        locator=page.locator(condition['selector']).nth(condition.get('index',0))
+        if not await locator.is_visible():raise ValueError('任务断言目标不在当前可见页面')
+        box=await locator.bounding_box()
+        viewport=page.viewport_size
+        if not box or not viewport or box['x']<0 or box['y']<0 or box['x']+box['width']>viewport['width'] or box['y']+box['height']>viewport['height']:
+            raise ValueError('任务断言目标未完整显示在截图视口，必须先显式滚动')
+        hit=await locator.evaluate('(node)=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);return !!hit&&(hit===node||node.contains(hit));}')
+        if not hit:raise ValueError('任务断言目标被其他元素遮挡')
+        if 'checked' in condition:
+            actual=await locator.evaluate('(node)=>{const control=node.tagName==="LABEL"?node.control:node;if(!control||!control.matches("input[type=radio],input[type=checkbox]"))throw new Error("checked requires a native radio/checkbox or its visible label");return control.checked;}')
+            passed=actual is condition['checked']
+        elif 'disabled' in condition:
+            actual=await locator.is_disabled()
+            passed=actual is condition['disabled']
+        elif 'time_seconds' in condition:
+            import re
+            actual=(await locator.inner_text()).strip()
+            match=re.fullmatch(r'(\d{2}):(\d{2}):(\d{2})',actual)
+            seconds=sum(int(value)*factor for value,factor in zip(match.groups(),[3600,60,1])) if match else -1
+            spec=condition['time_seconds']
+            passed=bool(match) and int(match.group(2))<60 and int(match.group(3))<60 and spec['minimum']<=seconds<=spec['maximum']
+        elif 'numbers' in condition:
+            actual=await locator.inner_text()
+            passed=check_numbers(actual,condition['numbers'])
+        elif 'number' in condition:
+            from decimal import Decimal, InvalidOperation
+            tag=await locator.evaluate('(node)=>node.tagName')
+            actual=await locator.input_value() if tag in {'INPUT','TEXTAREA','SELECT'} else (await locator.inner_text()).strip()
+            try:passed=Decimal(actual)==Decimal(str(condition['number']))
+            except InvalidOperation:passed=False
+        elif 'value' in condition:
+            actual=await locator.input_value()
+            passed=actual==condition['value']
+        else:
+            tag=await locator.evaluate('(node)=>node.tagName')
+            actual=await locator.input_value() if tag in {'INPUT','TEXTAREA','SELECT'} else await locator.inner_text()
+            passed=condition['contains'] in actual
+        results.append({'expected':condition,'actual':actual,'passed':passed})
+        if not passed:raise ValueError('任务结果断言未通过：'+json.dumps(results[-1],ensure_ascii=False))
+    return results
+
+
+def visible_reference(text):
+    if len(text)<=40:return '「'+text+'」'
+    return '以「'+text[:12]+'」开头的文字'
+
+
+def observed_excerpt(text):
+    """Keep a complete observed sentence, or the complete available text block."""
+    import re
+    compact=re.sub(r'\s+',' ',text).strip()
+    sentence=re.search(r'^.*?[。！？]',compact)
+    if not sentence:return compact
+    first=sentence.group()
+    # Closing punctuation belongs to the observed sentence, not the next one.
+    while len(first)<len(compact) and compact[len(first)] in '”’」』）》】)':
+        first+=compact[len(first)]
+    # A short yes/no answer is meaningful only with its following explanation.
+    if len(re.findall(r'[\u4e00-\u9fff]',first))<4:
+        following=re.search(r'^.*?[。！？]',compact[len(first):])
+        if following:return first+following.group()
+    return first
+
+
+def completion_from_assertions(assertions):
+    """Describe verified terminal facts, never unexecuted plan history."""
+    if not assertions or any(row.get('passed') is not True for row in assertions):
+        raise ValueError('缺少全部通过的实际末态证据，不能生成完成判断')
+    facts=[]
+    for row in assertions:
+        condition=row['expected'];actual=row['actual']
+        if 'visible_text' in condition and condition['visible_text'] in actual:
+            facts.append('可见文字「'+condition['visible_text']+'」')
+        elif 'contains' in condition and condition['contains'] in actual:
+            facts.append('结果中可见「'+condition['contains']+'」')
+        elif 'value' in condition and actual==condition['value']:
+            facts.append('控件数值为「'+str(actual)+'」')
+        elif 'checked' in condition:
+            facts.append('末态控件'+('已勾选' if actual else '未勾选'))
+        elif 'disabled' in condition:
+            facts.append('末态控件'+('不可用' if actual else '可用'))
+        else:
+            facts.append('末态数值或时间检查符合要求')
+    return '最终视口已核对：'+'、'.join(dict.fromkeys(facts))+'。'
+
+
+def visible_numeric_context(state):
+    """Bind displayed results to their visible labels/columns, never input values."""
+    import re
+    lines=[text.strip() for text in state.get('visible_text','').splitlines() if text.strip()]
+    elements=state.get('elements',[]);contexts=[]
+    for at,label in enumerate(lines):
+        if label=='结果':
+            # Preserve numeric-only readouts when their visible heading supplies
+            # context. Bare counters elsewhere are not calculation evidence.
+            values=[]
+            for item in lines[at+1:]:
+                if not re.fullmatch(r'[-+]?\d+(?:\.\d+)?',item):break
+                values.append(item)
+            if 2<=len(values)<=8:
+                contexts.append('「结果」之后显示数值'+ '、'.join('「'+value+'」' for value in values))
+        if label in {'输出结果','计算结果'} and at+1<len(lines):
+            result=lines[at+1]
+            witnessed=any(e.get('text')==result and not e.get('clickable') and not e.get('inputable')
+                and e.get('element_type')=='text' for e in elements)
+            if witnessed and re.fullmatch(r'[-+\d.\s,，]+',result) and len(re.findall(r'-?\d+(?:\.\d+)?',result))>=2:
+                contexts.append(f'{label}为「{result}」')
+        if re.fullmatch(r'(?:当前.{0,8}值|.{1,8}范围)[：:]',label):
+            values=[]
+            for item in lines[at+1:]:
+                if not re.fullmatch(r'[-+\d.]+|%|[A-Za-z]+',item):break
+                values.append(item)
+            if values and any(re.search(r'\d',item) for item in values):
+                contexts.append(label+' '.join(values))
+    # The synchronized tree supplies column geometry; every label and value
+    # must also occur in this very frame's clipped visible text.
+    headers=[e for e in elements if e.get('native_role')=='th' and e.get('text') in lines and e.get('bbox')]
+    cells=[e for e in elements if e.get('native_role')=='td' and e.get('text') in lines and e.get('bbox')]
+    groups={}
+    for cell in cells:groups.setdefault(cell['bbox'][1],[]).append(cell)
+    rows=[]
+    for top,cells_in_row in sorted(groups.items()):
+        preceding=[h for h in headers if h['bbox'][1]<top]
+        if not preceding:continue
+        header_top=max(h['bbox'][1] for h in preceding)
+        row_headers=sorted([h for h in preceding if h['bbox'][1]==header_top],key=lambda h:h['bbox'][0])
+        if len(row_headers)<2 or len(cells_in_row)!=len(row_headers):continue
+        pairs=[]
+        for head in row_headers:
+            matches=[c for c in cells_in_row if abs(c['bbox'][0]-head['bbox'][0])<=2 and abs(c['bbox'][2]-head['bbox'][2])<=2]
+            if len(matches)!=1:break
+            pairs.append(head['text']+'='+matches[0]['text'])
+        if len(pairs)==len(row_headers):rows.append('，'.join(pairs))
+    if rows:contexts.append('可见表格行包括'+ '；'.join('「'+row+'」' for row in rows[:4]))
+    return '；'.join(contexts)
+
+
+def visible_paragraph_context(state, goal, before=None):
+    """Select actual prose blocks; goals select evidence but supply no prose."""
+    import re
+    lines=[text.strip() for text in state.get('visible_text','').splitlines() if text.strip()]
+    paragraphs=[]
+    headings=[e for e in state.get('elements',[]) if e.get('native_role')=='h1' and e.get('bbox')]
+    column_x=(headings[0]['bbox'][0]+headings[0]['bbox'][2])/2 if headings else None
+    blocks={b.get('element_id'):b for b in state.get('text_blocks',[]) if isinstance(b,dict)}
+    for element in state.get('elements',[]):
+        text=element.get('text','')
+        if element.get('native_role')!='p' or len(re.findall(r'[\u4e00-\u9fff]',text))<12:continue
+        box=element.get('bbox')
+        if column_x is not None and box and not box[0]<=column_x<=box[2]:continue
+        block=blocks.get(element.get('element_id'))
+        if block and block.get('visible_text'):
+            body=block['visible_text'].strip()
+            if block.get('starts_visible') is False:
+                boundary=re.search(r'[。！？]',body)
+                if not boundary:continue
+                body=body[boundary.end():].lstrip('”’」』）》】) \n')
+            if len(re.findall(r'[\u4e00-\u9fff]',body))<12:continue
+            if block.get('ends_visible') is False and not re.search(r'[。！？]',body):continue
+            excerpt=observed_excerpt(body)
+            if not re.search(r'记者.{0,20}摄|图片来源|图源[：:]|资料图',body):
+                paragraphs.append(excerpt)
+            continue
+        # A p's own text omits inline links. Locate its observed opening and
+        # closing in the separately captured reading-order text instead.
+        prefix=text.split()[0][:24] if text.split() else ''
+        starts=[i for i,line in enumerate(lines) if len(prefix)>=3 and line.startswith(prefix)]
+        if len(starts)!=1:continue
+        start=starts[0];suffix=text.split()[-1]
+        ends=[i for i in range(start,len(lines)) if len(suffix)>=2 and lines[i].endswith(suffix)]
+        if not ends:continue
+        body=' '.join(lines[start:ends[0]+1])
+        body=re.sub(r'\[\s*\d+\s*\]','',body)
+        body=re.sub(r'\s+',' ',body).strip()
+        paragraphs.append(body)
+    if re.search(r'末段|末尾|最后(?:一)?段',goal) and paragraphs:return paragraphs[-1]
+    for body in paragraphs:
+        phrases=re.findall(r'[\u4e00-\u9fff]{3,10}',body)
+        if any(phrase in goal for phrase in phrases):return body
+    previous=re.sub(r'\s+','',(before or {}).get('visible_text',''))
+    new=[body for body in paragraphs if re.sub(r'\s+','',body) not in previous]
+    return observed_excerpt((new or paragraphs)[0]) if paragraphs else None
+
+
+def main_content_image(state):
+    """Real image geometry only; never infer a subject or OCR from alt text."""
+    headings=[e for e in state.get('elements',[]) if e.get('native_role')=='h1' and e.get('bbox')]
+    if not headings:return None
+    x=(headings[0]['bbox'][0]+headings[0]['bbox'][2])/2
+    width,height=state.get('screen_resolution',[1280,720])
+    candidates=[e for e in state.get('elements',[]) if e.get('native_role')=='img'
+        and e.get('bbox') and e['bbox'][0]<=x<=e['bbox'][2]
+        and (e['bbox'][2]-e['bbox'][0])*(e['bbox'][3]-e['bbox'][1])>=width*height*.12]
+    return max(candidates,key=lambda e:(e['bbox'][2]-e['bbox'][0])*(e['bbox'][3]-e['bbox'][1])) if candidates else None
+
+
+def visible_body_for_label(lines, label, metadata=False, elements=()):
+    """A menu label alone is not section evidence; require nearby real prose."""
+    import re
+    candidates=[]
+    positions=[at for at,line in enumerate(lines) if line==label]
+    for at in positions if metadata else positions[-1:]:
+        window=lines[at+1:]
+        levels=[int(e['native_role'][1]) for e in elements
+                if re.fullmatch(r'h[1-6]',e.get('native_role','')) and e.get('text')==label]
+        level=min(levels) if levels and not metadata else 2
+        headings={e['text'] for e in elements if re.fullmatch(r'h[1-6]',e.get('native_role',''))
+                  and int(e['native_role'][1])<=level and e.get('text')}
+        end=next((i for i,text in enumerate(window) if text in headings),len(window))
+        window=window[:end] if not metadata else window[:14]
+        prose=next((i for i,text in enumerate(window)
+                    if len(re.findall(r'[\u4e00-\u9fff]',text))>=12 and re.search(r'[，。；：]',text)),None)
+        if prose is None:continue
+        # Short metadata and split inline text before the first substantial
+        # paragraph are useful evidence; menu/edit/counter chrome is not.
+        prefix=[text for text in window[:prose] if text not in {'编辑','完善','目录','隐藏','参见：','主条目：'}
+                and not re.fullmatch(r'\d+条名句|\[|\]|\d+',text)]
+        body=observed_excerpt(('；' if metadata else '').join(window[prose:]))
+        score=(label in window[prose],len(re.findall(r'[\u4e00-\u9fff]',window[prose])))
+        if metadata:
+            context='；'.join(prefix[:6]+[body])
+        else:
+            # Respect the recorded heading/caption blocks, while retaining
+            # inline links and references in reading order inside each block.
+            boundaries={e['text'] for e in elements if e.get('native_role') in {'h1','h2','h3','h4','h5','h6','figcaption'} and e.get('text')}
+            blocks=[];current=[]
+            for text in window:
+                if text in {'编辑','完善','目录','隐藏','参见：','主条目：'}:continue
+                if text in boundaries and current:
+                    blocks.append(' '.join(current));current=[]
+                current.append(text)
+            if current:blocks.append(' '.join(current))
+            blocks=[re.sub(r'\[\s*\d+\s*\]','',text) for text in blocks]
+            blocks=[text for text in blocks if len(re.findall(r'[\u4e00-\u9fff]',text))>=12]
+            context='；'.join(observed_excerpt(text) for text in blocks[:2])
+            if not context:continue
+        candidates.append((score,context))
+    return max(candidates,key=lambda row:row[0])[1] if candidates else None
+
+
+def describe_change(before, after, op, element):
+    """Describe observed changes; accessible names are not visible text/value evidence."""
+    import re
+    action=op['action_type']
+    if action=='complete':return '最终页面已确认，'+op['goal']
+    if op.get('observation') and op.get('postconditions'):return op['observation']
+    lines=[text.strip() for text in after.get('visible_text','').splitlines() if text.strip()]
+    from urllib.parse import urldefrag,urlsplit
+    before_url,before_fragment=urldefrag(before['url']);after_url,after_fragment=urldefrag(after['url'])
+    before_parts,after_parts=urlsplit(before_url),urlsplit(after_url)
+    paths=(before_parts.path,after_parts.path)
+    # A documentation server may canonicalize an extensionless article to
+    # .html while following its section link. Only that exact path pair, same
+    # origin and unchanged query qualify; matching prose/title across other
+    # URLs is never sufficient evidence of same-article navigation.
+    html_path_pair=any(html==plain+'.html' and plain.rsplit('/',1)[-1]
+        and '.' not in plain.rsplit('/',1)[-1] for plain,html in [paths,paths[::-1]])
+    fragment_link=re.fullmatch(r'''a\[href=(["'])#([^"']+)\1\]''',op.get('selector',''))
+    clicked_fragment_link=(action=='click' and fragment_link is not None and fragment_link.group(2)==after_fragment)
+    same_canonical_article=(before_parts.scheme in {'http','https'} and
+        (before_parts.scheme,before_parts.netloc)==(after_parts.scheme,after_parts.netloc) and
+        before_parts.query==after_parts.query and html_path_pair and clicked_fragment_link)
+    if (before_url==after_url or same_canonical_article) and before['title']==after['title'] and before_fragment!=after_fragment:
+        label=element.get('text','') if element else ''
+        # The persistent table-of-contents link alone does not prove that its
+        # corresponding heading/body has entered the viewport.
+        body=visible_body_for_label(lines,label,elements=after['elements']) if label and lines.count(label)>1 else None
+        if not body and len(label.rstrip('… .'))>=5:
+            prefix=label.rstrip('… .')
+            headings=list(dict.fromkeys(e.get('text','') for e in after['elements']
+                if e.get('native_role') in {'h2','h3','h4','h5','h6'} and e.get('text') in lines and e.get('text','').startswith(prefix)))
+            if len(headings)==1:
+                actual_label=headings[0]
+                body=visible_body_for_label(lines,actual_label,elements=after['elements'])
+                if body:label=actual_label
+        if body:return f'同一页面定位到「{label}」，当前可见内容包括「{body}」'
+        return f'当前仍为「{after["title"]}」页面'+(f'，可见目录项「{label}」' if label and label in lines else '')
+    if before['title']!=after['title'] or before['url']!=after['url']:
+        return f'页面切换为「{after["title"]}」'
+
+    # snapshot elements include accessible labels/title fallbacks. Only the
+    # separately captured, clipped visible text may be called visible prose.
+    old_text=set(before.get('visible_text','').splitlines())
+    visible_added=list(dict.fromkeys(text.strip() for text in after.get('visible_text','').splitlines()
+        if text.strip() and text.strip() not in old_text and (re.search(r'[\u4e00-\u9fff]',text) or re.search(r'\d',text))
+        and not re.match(r'^w:',text.strip())))
+    if action=='scroll':
+        direction={'down':'下','up':'上','left':'左','right':'右'}[op['arguments']['direction']]
+        if before['scroll']!=after['scroll']:
+            target=re.search(r'包含[「“]?(.+?)[」”]?的',op.get('goal',''))
+            observed=re.sub(r'\s+','',after.get('visible_text',''))
+            if target and target.group(1) in observed:
+                phrase=target.group(1);at=observed.index(phrase)
+                context=observed[max(0,at-12):at+len(phrase)+16]
+                return f'页面向{direction}滚动，可见目标文字「{phrase}」，邻近正文为「{context}」'
+            numeric=visible_numeric_context(after)
+            if numeric:return f'页面向{direction}滚动，'+numeric
+            # Select task entities only when the very same visible label and
+            # substantial adjacent prose exist after scrolling. Goal/expected
+            # strings choose evidence; they never supply observed content.
+            generic={'作者','分类','体例','简介','信息','介绍','目录','文字','内容','正文','结果','目标','说明','页面','精度','输入','输出','计算','确认'}
+            labels=list(dict.fromkeys(line for line in lines
+                if 2<=len(line)<=18 and re.fullmatch(r'[\u4e00-\u9fff]+',line)
+                and line not in generic and line in op.get('goal','')
+                and not any(e.get('text')==line and e.get('element_type') in {'button','input','select'} for e in after['elements'])))
+            if re.search(r'课程|公开课|教师|师资',op.get('goal','')):
+                course_phrases=[]
+                for text in visible_added:
+                    phrase=re.split(r'[，。；]',text,1)[0].strip()
+                    if (len(phrase)>=6 and not re.match(r'^[，。；：、）)]',phrase)
+                            and re.search(r'课程|公开课|考研|托福|雅思|GRE|GMAT|直播|录播|一对一|体验营',phrase)
+                            and not re.search(r'https?://|%[0-9a-fA-F]{2}',phrase)):
+                        course_phrases.append(phrase)
+                if course_phrases:
+                    references=[]
+                    for text in course_phrases:
+                        if len(text)>18 or any(text.count(left)!=text.count(right) for left,right in [('（','）'),('(',')')]):
+                            # A clipped course subtitle must not masquerade as
+                            # a complete name. Cite an explicit visible prefix,
+                            # before an open parenthesis or secondary clause.
+                            prefix=re.split(r'[：:·（(，,]',text,1)[0].strip()
+                            if len(prefix)>16:
+                                prefix=prefix[:16]
+                                if '直播' in prefix:prefix=prefix[:prefix.index('直播')+2]
+                            prefix=prefix.rstrip(' /-')
+                            references.append('以「'+prefix+'」开头的课程文字片段')
+                        else:references.append('「'+text+'」')
+                    return f'页面向{direction}滚动，课程区域可见'+ '和'.join(list(dict.fromkeys(references))[:2])
+            contexts=[(label,visible_body_for_label(lines,label,metadata=True,elements=after['elements'])) for label in labels]
+            contexts=[(label,body) for label,body in contexts if body and label in body]
+            if contexts:
+                return f'页面向{direction}滚动，'+ '；'.join(f'可见「{label}」及正文「{body}」' for label,body in contexts[:2])
+            paragraph=visible_paragraph_context(after,op.get('goal',''),before)
+            if paragraph:return f'页面向{direction}滚动，可见正文「{paragraph}」'
+            if main_content_image(after):
+                return f'页面向{direction}滚动，主内容区的图片进入当前视口'
+            long_added=[text for text in visible_added if len(re.findall(r'[\u4e00-\u9fff]',text))>=4]
+            numeric_added=[text for text in visible_added if re.search(r'\d',text)
+                and not re.fullmatch(r'[-+¥￥$]?\d+(?:\.\d+)?(?:%|元)?',text)
+                and not re.search(r'https?://|%[0-9a-fA-F]{2}',text)]
+            prose=[text for text in long_added if len(re.findall(r'[\u4e00-\u9fff]',text))>=8 and re.search(r'[，。；：]',text)]
+            visible_added=list(dict.fromkeys(prose+long_added+numeric_added)) or [text for text in visible_added if len(re.findall(r'[\u4e00-\u9fff]',text))>=2]
+            selected=visible_added[:2]
+            return f'页面向{direction}滚动'+('，可见文字包括'+ '和'.join('「'+observed_excerpt(text)+'」' for text in selected[:4]) if selected else f'，当前页面为「{after["title"]}」')
+
+    def named_values(state):
+        elements={e['element_id']:e for e in state['elements']}
+        result={}
+        for v in state['values']:
+            e=elements[v['element_id']]
+            if e['element_type'] not in {'input','select'} or v['value'] is None or not e['text']:
+                continue
+            if v.get('input_type') in {'range','color','file','password','hidden','checkbox','radio','button','submit','reset','image'}:
+                continue
+            # An editable search combobox is still an input. Its choice flag or
+            # DOM identity can change on focus without a selection/value change.
+            result[v['element_id']]=(e['text'],v.get('display_value',v['value']),bool(v.get('choice')) and not e['inputable'])
+        return result
+    old_values=named_values(before)
+    new_values=named_values(after)
+    focused=next((v for v in after['values'] if v['focused']),None)
+    current=next((e for e in after['elements'] if focused and e['element_id']==focused['element_id']),None)
+    if action=='click' and element and element['inputable'] and current and current['text']==element['text']:
+        return f'「{element["text"]}」输入框获得焦点' if element['text'] else '输入框获得焦点'
+
+    changed=[]
+    for eid,(name,value,choice) in new_values.items():
+        previous=old_values.get(eid)
+        if previous is None:previous=next((v for v in old_values.values() if v[0]==name),None)
+        if previous is not None and previous[:2]==(name,value):continue
+        if previous is None and value=='':continue
+        label=('「'+name+'」') if name in after.get('visible_text','') else ('控件（可访问名称「'+name+'」）')
+        if value=='':changed.append(f'{label}已清空')
+        elif choice and previous is not None:changed.append(f'已选择「{value}」')
+        else:changed.append(f'{label}显示「{value}」')
+    if changed:
+        values={value for name,value,choice in new_values.values()}
+        controls={e['text'] for e in after['elements'] if e['element_type'] in {'button','input','select'}}
+        prose=[text for text in visible_added if text not in controls and text not in values and not text.endswith((':','：'))]
+        suffix=('；页面可见'+ '和'.join(visible_reference(text) for text in prose[:2])) if prose and action=='click' and element and element['element_type']=='button' else ''
+        return '，'.join(dict.fromkeys(changed))+suffix
+    if action=='hotkey':
+        if focused and focused.get('value') and focused.get('selection_start')==0 and focused.get('selection_end')==len(focused['value']):
+            return '输入框中的原有内容已全部选中'
+        keys=[str(key).lower() for key in op.get('arguments',{}).get('keys',[])]
+        previous_focus=next((v for v in before['values'] if v.get('focused')),None)
+        if (set(keys) in ({'ctrl','a'},{'meta','a'}) and len(keys)==2 and focused
+                and focused.get('value') and previous_focus
+                and focused['element_id']==previous_focus.get('element_id')
+                and focused['value']==previous_focus.get('value') and current):
+            label='「'+current['text']+'」输入框' if current.get('text') in after.get('visible_text','') and current.get('text') else '输入框'
+            return f'已在{label}中执行全选快捷键，数值仍为「{focused["value"]}」，输入框保持焦点'
+    if element:
+        current_element=next((e for e in after['elements'] if e['element_id']==element['element_id']),None)
+        states={'selected':'已选中','checked':'已勾选','unchecked':'已取消勾选','expanded':'已展开','collapsed':'已收起'}
+        if current_element and current_element['state']!=element['state'] and current_element['state'] in states:
+            return f'「{current_element["text"]}」'+states[current_element['state']]
+    if action=='click' and element and not any(e['element_id']==element['element_id'] for e in after['elements']):
+        return f'「{element["text"]}」已不在当前视口' if element['text'] else '目标控件已不在当前视口'
+    numeric=visible_numeric_context(after)
+    if action=='click' and numeric and numeric!=visible_numeric_context(before):return '页面显示'+numeric
+    if visible_added:return '页面出现的文字包括'+'和'.join(visible_reference(text) for text in visible_added[:3])
+    if op.get('observation'):return op['observation']
+    return ('页面仍显示「'+element['text']+'」控件' if element and element['text'] else '当前仍位于「'+after['title']+'」页面')
+
+
+def validate_plan(plan):
+    if not isinstance(plan,dict) or not isinstance(plan.get('tasks'),list) or not plan['tasks']:
+        raise ValueError('计划必须包含非空 tasks 数组')
+    task_ids=[task.get('task_id') for task in plan['tasks'] if isinstance(task,dict)]
+    if len(task_ids)!=len(set(task_ids)):raise ValueError('task_id 必须在计划中唯一')
+    required=['task_id','site_uri','site_category','app_name','instruction','task_type','initial_url','operations','final_result','completion_judgement','final_assertions']
+    for task in plan['tasks']:
+        if not isinstance(task,dict) or any(not task.get(k) for k in required):raise ValueError('任务计划缺少必要字段')
+        preparation_settings(task)
+        site_host=verify_public_url(task['site_uri'])
+        verify_public_url(task['initial_url'],{site_host,*task.get('allowed_hosts',[])})
+        if not isinstance(task['operations'],list):raise ValueError('operations 必须为数组')
+        for op in task['operations']:
+            if not isinstance(op,dict) or not all(op.get(k) for k in ['action_type','goal','rationale','expected']):
+                raise ValueError('每步必须包含动作、目标、依据、预期')
+            if op['action_type'] in CONTROL and not op.get('selector'):raise ValueError('控件动作必须有原始定位依据')
+        if sum(op['action_type'] not in ('wait','complete') for op in task['operations'])<5:
+            raise ValueError('M2 任务至少规划 5 个显式有效操作，不允许通过等待凑步')
+        if any(op['action_type']=='complete' for op in task['operations']):raise ValueError('complete 由最终断言成功后添加，不得提前声明完成')
+
+
+async def collect_one(context, task, directory, evidence, ids):
+    directory=Path(directory);evidence=Path(evidence)
+    (directory/'images').mkdir(parents=True)
+    (directory/'ui_tree').mkdir()
+    evidence.mkdir(parents=True)
+    page=await context.new_page()
+    page.set_default_timeout(15000)
+    dialogs=[]
+    page.on('dialog',lambda dialog:dialogs.append({'type':dialog.type,'message':dialog.message}))
+    operations=task['operations']+[{'action_type':'complete','arguments':{'status':'success'},
+                'goal':'确认最终页面符合任务要求','rationale':task['completion_judgement'],'expected':task['final_result']}]
+    steps=[];previous=None;raw_records=[];ground_truth=[];ratios=[]
+    settings=preparation_settings(task)
+    preparation={'schema_version':'content-preparation-v1',
+                 'mode':'disabled' if settings['mode']=='off' else 'enabled',
+                 'settings':settings,'decisions':[]}
+    planned_index=0;preparation_actions=0;preparation_scrolls=0
+    pending_preparation=None;attempted_preparation=set()
+    prepared_locations=set()
+    checkpoint_json(evidence/'preparation_decisions.json',preparation)
+    try:
+        await page.goto(task['initial_url'],wait_until='domcontentloaded',timeout=30000)
+        await page.wait_for_timeout(task.get('initial_settle_ms',1000))
+        write_json(evidence/'initial_navigation.json',{'url':page.url,'timestamp':now(),'task_initial_state':True})
+        while planned_index<len(operations):
+            i=len(steps)+1
+            op=operations[planned_index]
+            operation_origin='planned'
+            completion_trigger='planned_final'
+            if op['action_type']!='complete' and task.get('stop_when_final',True):
+                try:
+                    await assert_state(page,task['final_assertions'])
+                except ValueError:
+                    pass
+                else:
+                    op=operations[-1]
+                    completion_trigger='goal_already_satisfied'
+            # Advice is read-only. The chosen action still goes through the
+            # same capture, target truth, native execution and next-frame chain.
+            location_key=None
+            try:
+                # Fragments share a reading position; a same-URL reload is a
+                # new document and must earn readiness again. Read only.
+                epoch=await asyncio.wait_for(page.evaluate('performance.timeOrigin'),timeout=15)
+                location_key=(urldefrag(page.url)[0],epoch)
+                assessment_operation={**op,'preserve_reading_position':location_key in prepared_locations}
+                assessment=await assess_content(page,task,assessment_operation)
+                assessment['document_identity']={'url_without_fragment':location_key[0],
+                                                 'performance_time_origin':epoch}
+            except Exception as assessment_error:
+                # A failed observer must still retain the first available
+                # pre-action frame, not click/scroll or lose the landing state.
+                assessment={'schema_version':'content-preparation-assessment-1',
+                    'page_url':page.url,'settings':settings,
+                    'decision':{'action':'blocked','reason':'正文与广告判断失败：'+str(assessment_error)},
+                    'observer_error':str(assessment_error)}
+            decision=assessment['decision']
+            if settings['mode']!='off' and decision['action'] in {'ready','not_applicable'} and not assessment.get('obstruction',{}).get('present'):
+                prepared_locations.add(location_key)
+            decision_id=f'D{len(preparation["decisions"])+1:04}'
+            preparation_error=None
+            same_planned_close=False
+            planned_scroll_distance=(op.get('execution') or {}).get('distance',480)
+            same_planned_scroll=(decision['action']=='scroll_to_content' and planned_index==0
+                and op['action_type']=='scroll' and op.get('arguments',{}).get('direction')=='down'
+                and type(planned_scroll_distance) is int
+                and decision['distance']<=planned_scroll_distance<=480)
+            if decision['action']=='close_overlay' and op['action_type']=='click' and op.get('selector'):
+                same_planned_close=await page.evaluate('''({first,second,index})=>{
+                    try{return document.querySelector(first)===document.querySelectorAll(second)[index||0];}
+                    catch{return false;}
+                }''',{'first':decision['selector'],'second':op['selector'],'index':op.get('index',0)})
+            if op['action_type']!='complete' and decision['action'] in {'close_overlay','scroll_to_content'} and not (same_planned_close or same_planned_scroll):
+                operation_origin='preparation'
+                if decision['action']=='close_overlay':
+                    op={'action_type':'click','selector':decision['selector'],'index':0,'arguments':{},
+                        'goal':'关闭遮挡目标内容的可选推广层','rationale':'当前视口可见可正常关闭的推广遮罩，先关闭后继续原任务',
+                        'expected':'推广遮罩关闭，原页面目标内容可见','execution':{'settle_ms':700}}
+                else:
+                    op={'action_type':'scroll','arguments':{'direction':'down'},
+                        'goal':'向下定位当前页面的正文内容','rationale':'当前页面正文位于视口下方，分段滚动使正文进入视口',
+                        'expected':'正文段落进入视口并可阅读',
+                        'execution':{'distance':decision['distance'],'settle_ms':700}}
+                signature=(assessment['page_url'],decision['action'],decision.get('selector'),
+                           assessment.get('scroll_y',assessment.get('viewport',{}).get('scroll_y')))
+                if decision['action']=='close_overlay' and signature in attempted_preparation:
+                    preparation_error='同一推广关闭动作已经执行，遮挡仍在；停止重复点击'
+                if preparation_actions>=settings['max_actions']:
+                    preparation_error='页面准备动作达到上限，目标仍未就绪'
+                if op['action_type']=='scroll' and preparation_scrolls>=settings['max_scrolls']:
+                    preparation_error='正文定位滚动达到上限，目标仍未就绪'
+                attempted_preparation.add(signature)
+            elif op['action_type']!='complete' and decision['action']=='blocked':
+                preparation_error='页面准备被阻断：'+decision['reason']
+            is_final=op['action_type']=='complete'
+            assertion=await assert_state(page,task['final_assertions']) if is_final else []
+            planned_completion=None
+            if is_final:
+                # Planned prose is audit input, never proof of navigation or
+                # earlier reading. Every emitted final fact uses passed checks.
+                planned_completion={'final_result':task['final_result'],
+                    'completion_judgement':task['completion_judgement'],'operation':op}
+                final_description=completion_from_assertions(assertion)
+                op={**op,'rationale':final_description,'expected':final_description}
+            observation=await capture(page,op.get('selector'),op.get('index',0))
+            state=observation['state']
+            if i==1:
+                (evidence/'initial_capture.png').write_bytes(observation['png'])
+                write_json(evidence/'initial_capture.json',{'policy':'content-preparation-v1',
+                    'state':state,'capture':observation['capture'],'first_step_id':1,'pre_action':True,
+                    'settings':settings,'page_url':state['url']})
+            if pending_preparation is not None:
+                pending_preparation.update(after_step_id=i,after_image_sha256=observation['capture']['screenshot_sha256'])
+                pending_preparation=None
+            entry={'decision_id':decision_id,'before_step_id':i,
+                   'before_image_sha256':observation['capture']['screenshot_sha256'],
+                   'kind':decision['action'],'assessment':assessment,
+                   'planned_operation_index':planned_index,'operation_origin':operation_origin,
+                   'performed_by_planned_close':same_planned_close,
+                   'performed_by_planned_scroll':same_planned_scroll}
+            if operation_origin=='preparation':
+                entry.update(intent_step_id=i,action_executed=False)
+            preparation['decisions'].append(entry)
+            checkpoint_json(evidence/'preparation_decisions.json',preparation)
+            image_path=f'images/step_{i:03}.png'
+            (directory/image_path).write_bytes(observation['png'])
+            tree={'image_path':image_path,'screen_resolution':state['screen_resolution'],'elements':state['elements']}
+            write_json(directory/f'ui_tree/step_{i:03}.json',tree)
+            if task.get('require_public_origin'):
+                verify_public_url(state['url'],{verify_public_url(task['site_uri']),*task.get('allowed_hosts',[])})
+            from .production_quality import require_public_task_state
+            require_public_task_state(state)
+            ratios.append(chinese_ratio(state['visible_text']))
+            if ratios[-1]<0.70:
+                write_json(evidence/'eligibility_failure.json',{'rule':'visible_chinese_ratio',
+                    'threshold':0.70,'actual':ratios[-1],'step_id':i,
+                    'screenshot_sha256':observation['capture']['screenshot_sha256'],
+                    'preparation_does_not_waive_language':True})
+                write_json(evidence/'preparation_failure.json',{'policy':'content-preparation-v1',
+                    'reason':'当前完整视口中文比例不足70%，不以正文替换广告首屏','step_id':i,
+                    'decision_id':decision_id,'action_executed':False,'state':state,
+                    'capture':observation['capture']})
+                raise ValueError(f'当前视口中文字符比例初筛不足 70%：{ratios[-1]:.3f}')
+            if preparation_error:
+                entry['blocked_reason']=preparation_error
+                checkpoint_json(evidence/'preparation_decisions.json',preparation)
+                write_json(evidence/'preparation_failure.json',{'policy':'content-preparation-v1','reason':preparation_error,
+                    'step_id':i,'decision_id':decision_id,'action_executed':False,
+                    'state':state,'capture':observation['capture'],
+                    'screenshot_sha256':observation['capture']['screenshot_sha256']})
+                raise ValueError(preparation_error)
+            if assessment['page_url']!=state['url']:
+                raise ValueError('正文判断后页面地址改变，停止使用过期准备判断')
+            if previous:
+                previous['step_result']=describe_change(raw_records[-1]['state'],state,raw_records[-1]['operation'],raw_records[-1]['target_element'])
+                previous['tool_result']['return_value']['screen_changed']=raw_records[-1]['capture']['screenshot_sha256']!=observation['capture']['screenshot_sha256']
+            arguments,element=prepare_action(state,op)
+            action={'action_type':op['action_type'],'target_element_id':element['element_id'] if element else '',
+                    'target_text':element['text'] if element else (op.get('key_name','+'.join({'meta':'Command','ctrl':'Ctrl','enter':'回车键'}.get(key,key.upper()) for key in arguments['keys'])) if op['action_type']=='hotkey' else ''),
+                    'coordinate':[arguments['x'],arguments['y']] if op['action_type'] in POINTER else [],
+                    'input_text':arguments['text'] if op['action_type']=='type' else '+'.join(arguments['keys']) if op['action_type']=='hotkey' else '',
+                    'precondition':op.get('precondition',f'当前页面为「{state["title"]}」'+((f'，可见「{element["text"]}」控件' if element['text'] else '，可见目标控件') if element else '')),
+                    'expected_result':op['expected']}
+            if element:action.update(target_bbox=element['bbox'],target_control_type=element['element_type'])
+            if op['action_type']=='drag':action['end_coordinate']=[arguments['end_x'],arguments['end_y']]
+            step={'step_id':i,'image_path':image_path,'ui_tree_path':f'ui_tree/step_{i:03}.json','page_name':op.get('page_name','网页「'+state['title']+'」'),
+                  'user_goal':op['goal'],'action':action,'tool_call':{'tool_name':op['action_type'],'call_id':f'{ids["sample_id"]}_{i:03}',
+                    'arguments':arguments,'timestamp':now(),'context':'Web / '+task['app_name']},
+                  'tool_result':{'status':'success','return_value':{},'error':''},
+                  'next_step_rationale':op['rationale'],'step_result':op['expected'] if is_final else '', 'exception_evidence':[]}
+            raw={'step_id':i,'state':state,'capture':observation['capture'],'operation':op,'target_element':element,
+                 'started_at':step['tool_call']['timestamp'],'final_assertions':assertion,
+                 'executed_action':{'tool_name':op['action_type'],'arguments':arguments},'completion_trigger':completion_trigger if is_final else None,
+                 'operation_origin':operation_origin,'planned_operation_index':planned_index if operation_origin=='planned' else None,
+                 'preparation_decision_id':decision_id}
+            if planned_completion is not None:
+                raw['planned_completion']=planned_completion
+                raw['completion_description_source']='passed_final_assertions'
+            if same_planned_close:
+                raw['planned_close_preflight']={'matched':True,
+                    'close_selector':decision['selector'],'planned_selector':op['selector'],
+                    'planned_selector_index':op.get('index',0),
+                    'element_id':element['element_id'],'bbox':element['bbox'],
+                    'meaning':'Actual DOM nodes compared equal before capture; normal target preflight still required before click.'}
+            if same_planned_scroll:
+                raw['planned_scroll_preflight']={'matched':True,'direction':'down',
+                    'planned_distance':planned_scroll_distance,'requested_preparation_distance':decision['distance'],
+                    'decision_id':decision_id,'scroll_before':state['scroll'],
+                    'meaning':'First existing planned scroll performs the bounded necessary movement; no duplicate preparation step inserted.'}
+            if element:ground_truth.append({'step_id':i,'element_id':element['element_id'],'text':element['text'],'bbox':element['bbox']})
+            pages_before=set(context.pages)
+            try:
+                if element:
+                    live=await observe(page,op['selector'],op.get('index',0))
+                    if live['target']!=state['target']:
+                        raise ValueError('截图后目标位置、焦点或值发生变化，拒绝用陈旧坐标执行')
+                    raw['target_preflight']={'matched':True,'checked_at':now(),'target':live['target']}
+                execution=op.get('execution') or {}
+                if 'wait_popup' in execution and type(execution['wait_popup']) is not bool:
+                    raise ValueError('wait_popup 必须是显式布尔值')
+                anchor=None
+                if op['action_type']=='click':
+                    # Read the real hit target before clicking. Do not use goto,
+                    # rewrite target/href, or wait on every unrelated click.
+                    anchor=await page.evaluate('''({x,y})=>{
+                        const a=document.elementFromPoint(x,y)?.closest('a');
+                        if(!a)return null;
+                        return {href:a.href,target:a.target||document.querySelector('base[target]')?.target||''};
+                    }''',arguments)
+                expect_popup=execution.get('wait_popup') is True or bool(anchor and anchor['target'].lower()=='_blank')
+                opened_page=None
+                if expect_popup:
+                    if op['action_type'] not in {'click','double_click','hotkey'}:
+                        raise ValueError('该动作不能声明等待弹窗')
+                    if execution.get('wait_navigation'):
+                        raise ValueError('同一步不能同时声明等待原页面导航与新弹窗')
+                    raw['popup_expectation']={'source':'live_anchor_target' if anchor and anchor['target'].lower()=='_blank' else 'plan.execution.wait_popup',
+                                              'anchor':anchor,'timeout_ms':30000,'registered_before_action':True}
+                    # A new target is not necessarily present in context.pages
+                    # before its delayed initial response. Subscribe first.
+                    async with page.expect_popup(timeout=30000) as popup:
+                        await execute(page,op['action_type'],arguments,execution)
+                    opened_page=await popup.value
+                    await opened_page.wait_for_load_state('domcontentloaded',timeout=30000)
+                else:
+                    await execute(page,op['action_type'],arguments,execution)
+                if dialogs:raise ValueError('发生未记录的浏览器原生弹窗：'+str(dialogs))
+                new_pages=set(context.pages)-pages_before
+                if len(new_pages)>1:raise ValueError('一次动作打开多个页面，需单独适配并记录')
+                if opened_page is not None and opened_page not in new_pages:
+                    raise ValueError('等待到的弹窗已关闭或不在本次真实新增页面中')
+                if new_pages:
+                    page=opened_page if opened_page is not None else next(iter(new_pages))
+                    await page.wait_for_load_state('domcontentloaded')
+                    raw['opened_page_url']=page.url
+                if op.get('postconditions'):raw['postconditions']=await assert_state(page,op['postconditions'])
+            except Exception as e:
+                raw['execution_error']=str(e)
+                write_json(evidence/f'step_{i:03}.json',raw)
+                raise
+            if operation_origin=='preparation':
+                entry.update(action_step_id=i,action_executed=True)
+                checkpoint_json(evidence/'preparation_decisions.json',preparation)
+            raw['ended_at']=now()
+            write_json(evidence/f'step_{i:03}.json',raw)
+            raw_records.append(raw);steps.append(step);previous=step
+            if operation_origin=='preparation':
+                preparation_actions+=1
+                if op['action_type']=='scroll':preparation_scrolls+=1
+                pending_preparation=entry
+            else:planned_index+=1
+            if is_final:break
+        annotation={'sample_id':ids['sample_id'],'task_instruction':task['instruction'],'task_type':task['task_type'],
+             'terminal_type':'Web','device_info':{'device_model':'','os_name':'macOS' if platform.system()=='Darwin' else platform.system(),'os_version':(platform.mac_ver()[0] or platform.release()) if platform.system()=='Darwin' else platform.release(),'screen_resolution':state['screen_resolution']},
+             'app_info':{'app_name':task['app_name'],'app_version':'','environment':'真实网站 / 隔离浏览器上下文','ui_language':'zh'},
+             'risk_level':'normal','trajectory_source':{'source_type':'agent','data_type':'webcollect_agent_v1','action_space':'unified_gui_v4'},
+             'steps':steps,'final_state_image':steps[-1]['image_path'],'final_result':final_description,
+             'completion_status':'success','completion_judgement':final_description}
+        write_json(directory/'annotation.json',annotation)
+        write_json(evidence/'ground_truth.json',ground_truth)
+        write_json(evidence/'capture_summary.json',{'snapshot_source':'browser_dom','capture_count':len(steps),
+              'minimum_chinese_character_ratio':min(ratios),'language_check_version':'visible_dom_letters_v2',
+              'chinese_ratio_method':'Han / Unicode letters, deduplicated visible DOM text plus form values; image text needs human review',
+              'human_review':'pending','agent_visual_review':'pending','task_id':task['task_id'],
+              'preparation_policy':'content-preparation-v1','preparation_actions':preparation_actions,
+              'preparation_scrolls':preparation_scrolls})
+        return annotation
+    except Exception as error:
+        if getattr(error,'capture',None):
+            write_json(evidence/'capture_failure.json',{'error':str(error),'capture':error.capture,
+                         'diagnostic_only':True,'accepted_as_formal_frame':False})
+        try:
+            diagnostic=await asyncio.wait_for(capture(page),timeout=5)
+            (evidence/'failure_after.png').write_bytes(diagnostic['png'])
+            write_json(evidence/'failure_after.json',{'state':diagnostic['state'],'capture':diagnostic['capture'],'error':str(error)})
+        except Exception as diagnostic_error:
+            write_json(evidence/'diagnostic_error.json',{'error':str(diagnostic_error),
+                         'capture':getattr(diagnostic_error,'capture',None)})
+        raise
+    finally:
+        for at,p in enumerate(list(context.pages)):
+            try:await asyncio.wait_for(p.close(),timeout=5)
+            except Exception as cleanup_error:
+                write_json(evidence/f'page_cleanup_error_{at}.json',{'error':str(cleanup_error),'not_business_success_evidence':True})
+
+
+def checkpoint_json(path, value):
+    import os
+    import tempfile
+    temporary=None
+    try:
+        path=Path(path)
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,prefix='.'+path.stem+'-',suffix='.tmp',delete=False) as file:
+            temporary=Path(file.name)
+            json.dump(value,file,ensure_ascii=False,indent=2,allow_nan=False)
+            file.write('\n');file.flush();os.fsync(file.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary:temporary.unlink(missing_ok=True)
+
+
+def checkpoint_manifest(output, manifest):
+    checkpoint_json(Path(output)/'manifest.json',manifest)
+
+
+async def collect_plan(plan_path, output, registry, channel='chrome', headless=True):
+    from playwright.async_api import async_playwright
+    plan=read_json(Path(plan_path));validate_plan(plan)
+    if 'media_preflight' in plan:
+        from .preflight import validate_preflight_binding
+        validate_preflight_binding(plan,plan_path)
+    output=Path(output).resolve();registry=Path(registry).resolve()
+    if output.exists():raise FileExistsError('输出批次已存在，拒绝覆盖')
+    verify_existing_registry(registry,output.parent)
+    output.mkdir(parents=True)
+    write_json(output/'plan.json',plan)
+    from .production_quality import contract_identity,sha
+    repository=Path(__file__).resolve().parents[3]
+    contract=contract_identity(repository)
+    manifest={'contract_profile':contract,'plan_sha256':sha(plan_path),'preparation_policy':'content-preparation-v1','generator_files_sha256':{name:sha(Path(__file__).parent/name) for name in ['collect.py','browser.py','snapshot.js','production_quality.py','content_preparation.py','content_preparation.js']},'batch_id':None,'sample_kind':'real','program_version':program_version(),'rule_version':'1.0.0',
+              'configuration':{'viewport':[1280,720],'device_scale_factor':1,'locale':'zh-CN','timezone':'Asia/Shanghai',
+                               'channel':channel,'headless':headless,'default_settle_ms':500,'task_interval_seconds':1},
+              'sites':[],'samples':[],'collection_status':'in_progress','human_review':'pending','created_at':now()}
+    records=[]
+    async with async_playwright() as p:
+        browser=await p.chromium.launch(channel=channel,headless=headless)
+        from importlib.metadata import version
+        manifest['browser_version']=browser.version
+        manifest['playwright_version']=version('playwright')
+        try:
+            for task in plan['tasks']:
+                ids=allocate(registry,task['site_uri'],task['site_category'],'real',batch_id=manifest['batch_id'])
+                manifest['batch_id']=ids['batch_id']
+                site={'site_id':ids['site_id'],'uri':task['site_uri'],'site_category':task['site_category']}
+                if site not in manifest['sites']:manifest['sites'].append(site)
+                manifest['active_task']={**ids,'task_id':task['task_id']}
+                manifest['attempts']=records
+                checkpoint_manifest(output,manifest)
+                sample=output/'samples'/ids['sample_id'];evidence=output/'evidence'/ids['sample_id']
+                context=await browser.new_context(viewport={'width':1280,'height':720},device_scale_factor=1,locale='zh-CN',timezone_id='Asia/Shanghai')
+                try:
+                    await collect_one(context,{**task,'require_public_origin':True},sample,evidence,ids)
+                    proposed={**manifest,'samples':manifest['samples']+[ids['sample_id']]}
+                    report=validate_sample(sample,'delivery',proposed)
+                    write_json(evidence/'structural_report.json',report)
+                    if not report['structural_pass']:raise ValueError('结构检查不通过：'+str(report['issues']))
+                    from .evidence import audit_capture
+                    audited=audit_capture(output,ids['sample_id'])
+                    write_json(evidence/'capture_audit.json',audited)
+                    if not audited['capture_evidence_pass']:raise ValueError('采集证据核对不通过：'+str(audited['issues']))
+                    from .production_quality import exact_conflicts
+                    roots=[output.parent,*[Path(root) for root in plan.get('dedup_roots',[])]]
+                    conflicts=exact_conflicts(sample,roots)
+                    write_json(evidence/'producer_dedup.json',{'roots':[str(p) for p in roots],'exact_conflicts':conflicts,'other_routes':'independent_QC_required','not_qualified':True})
+                    if conflicts:raise ValueError('跨样本截图重复，保留失败证据并需重新规划：'+str(conflicts))
+                    manifest['samples'].append(ids['sample_id'])
+                    records.append({**ids,'task_id':task['task_id'],'status':'collected_pending_review'})
+                except Exception as e:
+                    evidence.mkdir(parents=True,exist_ok=True)
+                    write_json(evidence/'failure.json',{'error':str(e),'timestamp':now(),'task_id':task['task_id']})
+                    if sample.exists():
+                        destination=output/'rejected'/ids['sample_id'];destination.parent.mkdir(exist_ok=True)
+                        shutil.move(str(sample),str(destination))
+                    records.append({**ids,'task_id':task['task_id'],'status':'rejected','error':str(e)})
+                finally:
+                    try:await asyncio.wait_for(context.close(),timeout=10)
+                    except Exception as cleanup_error:write_json(evidence/'context_cleanup_error.json',{'error':str(cleanup_error),'not_business_success_evidence':True})
+                manifest['active_task']=None
+                checkpoint_manifest(output,manifest)
+                print(json.dumps(records[-1],ensure_ascii=False),flush=True)
+                # A bounded pause respects site traffic; no concurrent website jobs.
+                await asyncio.sleep(1)
+        finally:
+            try:await asyncio.wait_for(browser.close(),timeout=10)
+            except Exception as cleanup_error:manifest['browser_cleanup_error']=str(cleanup_error)
+    manifest['collection_status']='finished_pending_review';manifest['attempts']=records
+    checkpoint_manifest(output,manifest)
+    if manifest['samples']:
+        from .metadata import export_metadata
+        export_metadata(output,output/'metadata.csv')
+    return {'batch_id':manifest['batch_id'],'collected':len(manifest['samples']),'rejected':len(records)-len(manifest['samples']),
+            'qualified_samples':0,'human_review':'pending','output':str(output)}

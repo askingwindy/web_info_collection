@@ -1,0 +1,167 @@
+{
+  "schema_version": "qc-requirement-baseline-1",
+  "id": "webcollect-request-traceability-20261022-v1",
+  "source_precedence": [
+    "2026-10-21 confirmed project clarification",
+    "archived request and attachments",
+    "original customer sample observations; documented defects retained"
+  ],
+  "source_documents": [
+    {
+      "path": "request/需求书-Web浏览器自动化操作轨迹数据集.md",
+      "sha256": "44ace260935f969d95f01ce07ff88508e732c2ce7e81e35d666d848e85e6e608"
+    },
+    {
+      "path": "request/需求澄清记录.md",
+      "sha256": "61589d3801a034bfc007c0ca247a82490e9b515ab4a903627000dee309523146"
+    },
+    {
+      "path": "request/web操作采集需求/附件A-字段说明.md",
+      "sha256": "0c3fe9b2050f55c25cec8ef5145ed3ad0d569aa0d0022f0293c21c4406857639"
+    },
+    {
+      "path": "request/web操作采集需求/附件B-动作空间与坐标系.md",
+      "sha256": "564ab9cc7a4297d3966aaebe5e14c4090e0b056da60072e232744a00422f5ed2"
+    },
+    {
+      "path": "request/web操作采集需求/samples/样例说明.md",
+      "sha256": "3de271818ff4b960b366211b4efaf781457d8d12018b3220489d2f56f7564b75"
+    }
+  ],
+  "local_profile": "local-pilot-v1.json",
+  "requirements": [
+    {
+      "requirement": "§7.1 必填及类型；附件A",
+      "checker_scope": "C01/C02/C03/C04，sample",
+      "evidence_and_boundary": "字段合同、字段路径、原样例类型观察；不推断单个值为唯一枚举"
+    },
+    {
+      "requirement": "§7.2 截图数/连续命名/无多余",
+      "checker_scope": "C05，sample",
+      "evidence_and_boundary": "真实文件清单与steps"
+    },
+    {
+      "requirement": "§7.3 路径存在",
+      "checker_scope": "C06，sample",
+      "evidence_and_boundary": "PNG/树实际文件"
+    },
+    {
+      "requirement": "§7.4 尺寸一致",
+      "checker_scope": "C06，sample；PILOT_VIEWPORT_SPECS",
+      "evidence_and_boundary": "解码PNG尺寸；试点≤3不能证明全集≤3"
+    },
+    {
+      "requirement": "§7.5 连续step_id",
+      "checker_scope": "C05，sample",
+      "evidence_and_boundary": "按1至N逐项比较"
+    },
+    {
+      "requirement": "§7.6 有效操作；澄清§有效操作步",
+      "checker_scope": "C11，sample；PILOT_SHORT_FLOW_SHARE",
+      "evidence_and_boundary": "不计wait/complete；短流程原因和比例"
+    },
+    {
+      "requirement": "§7.7 坐标/框；附件B§2",
+      "checker_scope": "C08，sample",
+      "evidence_and_boundary": "截图整数像素、参数、框、同步树对账"
+    },
+    {
+      "requirement": "§7.8 目标引用/原文",
+      "checker_scope": "C07，sample",
+      "evidence_and_boundary": "元素ID、文字及目标真值留档；真实可见性须视觉审核"
+    },
+    {
+      "requirement": "§7.9 动作/参数；附件B§1",
+      "checker_scope": "C09，sample",
+      "evidence_and_boundary": "Web子集、工具名、参数名及值"
+    },
+    {
+      "requirement": "§7.10 成功状态",
+      "checker_scope": "C10，sample",
+      "evidence_and_boundary": "tool_result及completion_status"
+    },
+    {
+      "requirement": "§7.11 最终complete及目标",
+      "checker_scope": "C10/FINAL_MACHINE_EVIDENCE/REVIEW_TERMINAL_SEMANTICS",
+      "evidence_and_boundary": "明确失败不能被审核覆盖；真实最终页面必须证据审核"
+    },
+    {
+      "requirement": "§7.12 任务类型",
+      "checker_scope": "C03，sample",
+      "evidence_and_boundary": "1至3个14类枚举；原sample空数组仅参考例外"
+    },
+    {
+      "requirement": "§7.13 中文/完整叙述；附件A§通用约定",
+      "checker_scope": "C12初筛、REVIEW_LANGUAGE/U03",
+      "evidence_and_boundary": "实际图树审核≥70%可见中文及中文导航/控件、简体叙述、无截断；界面专名按原文保留"
+    },
+    {
+      "requirement": "§7.14 禁元素编号/选择器/编码等",
+      "checker_scope": "C12初筛、REVIEW_LANGUAGE",
+      "evidence_and_boundary": "确定字串检查不能取代真实字段语义审核"
+    },
+    {
+      "requirement": "§7.15 禁采集过程话术",
+      "checker_scope": "C12、REVIEW_LANGUAGE",
+      "evidence_and_boundary": "禁词定位及图树依据，不批量改字绕检查"
+    },
+    {
+      "requirement": "§7.16 相邻动作解释变化；§1/§6",
+      "checker_scope": "CAPTURE_INTEGRITY/REVIEW_VISUAL_ALIGNMENT/U04",
+      "evidence_and_boundary": "采集哈希/原始动作/同步树一致性；逐帧动作、结果、无效往返/多余步骤实际审核"
+    },
+    {
+      "requirement": "§7.17 个人信息；澄清§账号与页面信息",
+      "checker_scope": "REVIEW_PRIVACY/U04",
+      "evidence_and_boundary": "测试账号或声明、来源合规说明，保留AI/人工真实来源"
+    },
+    {
+      "requirement": "§6 四路去重；澄清§重复处理",
+      "checker_scope": "C17/DUPLICATE_SEQUENCE/NEAR_DUPLICATES",
+      "evidence_and_boundary": "实际SHA、完整元组、已配置dHash/SimHash；本地命中FAIL，零未处理候选"
+    },
+    {
+      "requirement": "§6 任务目标和路径实质差异",
+      "checker_scope": "REVIEW_SUBSTANTIVE_DIFFERENCE",
+      "evidence_and_boundary": "真实逐条审核，不只用hash或关键词变化判定"
+    },
+    {
+      "requirement": "§3 批次metadata、qc、校验清单、目标真值",
+      "checker_scope": "C13/C14，batch；ROOT_CHECKSUM",
+      "evidence_and_boundary": "实际对账与完整覆盖；缺失/错误FAIL，不用存在代替内容正确"
+    },
+    {
+      "requirement": "§3 README/字段/合成/合规；§7 qc内容",
+      "checker_scope": "U02/DELIVERY_DOCUMENT_ROLES/DELIVERY_DOCUMENT_REVIEW，batch",
+      "evidence_and_boundary": "文档角色可映射合法名称；内容由绑定完整交付文件哈希和profile的package_review审核"
+    },
+    {
+      "requirement": "§2/§5 规模/站点/类目/视口",
+      "checker_scope": "PILOT_*，pilot；corpus另列UNKNOWN",
+      "evidence_and_boundary": "试点检查真实分母、站点和类目，不以预检或失败样本充数"
+    },
+    {
+      "requirement": "§7 客户程序/2%抽样/淘汰抽查",
+      "checker_scope": "external/corpus UNKNOWN",
+      "evidence_and_boundary": "没有执行外部程序、没有伪造人工结论；AI全量初审按用户授权如实记录"
+    },
+    {
+      "requirement": "澄清§验收范围取消重跑",
+      "checker_scope": "N01，边界",
+      "evidence_and_boundary": "核查已采轨迹逻辑一致，不强制真实网站重放，不索要无法取得的历史动作"
+    },
+    {
+      "requirement": "站点/URI及类目来源不得虚增或虚分（本地佐证规则）",
+      "checker_scope": "PILOT_SOURCE_ATTRIBUTION，pilot；package_review.site_category_attribution，batch",
+      "evidence_and_boundary": "metadata对账manifest.sites并检查跨批一致及同URI多ID；缺原始manifest待审。类目语义由绑定完整包的实际AI/人工审核核对，不把任意标签字符串当业务真值。此为本地可核验佐证方式，不声称客户要求内部manifest格式。"
+    }
+  ],
+  "actual_customer_program_executed": false,
+  "actual_customer_acceptance": "UNKNOWN",
+  "not_inferred_as_requirements": [
+    "internal M1 sample/site ID regex",
+    "single observed source data_type or action_space constant",
+    "external registration approval",
+    "post-collection website replay"
+  ]
+}

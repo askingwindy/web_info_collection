@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "batch_id",
+    "sample_kind",
+    "program_version",
+    "rule_version",
+    "sites",
+    "samples"
+  ],
+  "properties": {
+    "batch_id": {
+      "type": "string",
+      "pattern": "^B\\d{8}_\\d{3,}$"
+    },
+    "sample_kind": {
+      "enum": [
+        "real",
+        "integration"
+      ]
+    },
+    "program_version": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "rule_version": {
+      "const": "1.0.0"
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^S\\d{6}_sample_\\d{6,}$"
+      }
+    },
+    "sites": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "site_id",
+          "uri",
+          "site_category"
+        ],
+        "properties": {
+          "site_id": {
+            "type": "string",
+            "pattern": "^S\\d{6}$"
+          },
+          "uri": {
+            "type": "string",
+            "pattern": "^https?://[^\\s/]+"
+          },
+          "site_category": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        }
+      }
+    }
+  }
+}
