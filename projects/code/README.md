@@ -82,9 +82,13 @@ projects/code/.venv/bin/python -m webcollect package \
 
 ## 人工审核
 
-独立质检生成`review.html`、`review-template.json`和`report.json`。审核人选择“人工”、填写本人姓名与真实来源说明，逐条查看全部步骤，对五项语义审核填写结论和证据理由，然后导出`qc-review.json`并重新运行独立质检。页面记录仅保存在内存中，刷新或关闭前必须导出备份。详见[人工核验SOP](../prd/M2-人工核验SOP.md)。
+独立质检生成`review.html`、`review-template.json`和`report.json`。审核台按单人使用配置，无需重复填写姓名或选择来源；任务目标和完成标准常驻显示。逐步对照动作前后图，用目标红框和触点辅助检查，每步选择正常、有问题或看不清，再回答图文、终态、中文、隐私、任务差异五个中文问题。
 
-`scripts/build_review_bundle.py`及`python -m webcollect.review`保留历史M2三项核验包生成/对账能力，其导出格式与独立QC五项审核格式不同，不能混用。当前独立QC流程以对应输入包生成的页面和模板为准。
+进度自动保存到当前浏览器；右上角可导出带时间的`qc-human-review-*.json`备份，并用“恢复备份”继续。换浏览器或清理本地数据前应先导出，自动保存失败时页面会提示。浏览图片或保存草稿不会自动判通过，实际判断由本人确认。
+
+“最后核对交付资料”提供独立文档/站点类目审核页，和样本结论一起导出，不需手改JSON。导出后通过独立QC的`--reviews`重新检查绑定。完整操作见[人工核验SOP](../prd/M2-人工核验SOP.md)。当前界面更新不签署实际人工记录，不改变候选与报告的既有状态。
+
+`scripts/build_review_bundle.py`及`python -m webcollect.review`保留历史M2三项核验包生成/对账能力，其格式与当前独立QC五项记录不同，不能混用。当前流程以对应输入包生成的审核台和模板为准。
 
 ## 源码与数据边界
 

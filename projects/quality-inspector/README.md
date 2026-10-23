@@ -34,29 +34,33 @@ projects/code/.venv/bin/python projects/quality-inspector/qc.py check \
 
 ## 真实审核与重新检查
 
-本机浏览器直接打开对应报告目录中的`review.html`，逐条查看原图、同步界面树、动作、步骤结果，并结合样本`annotation.json`核对任务和终态。选择真实审核来源，填写审核人/模型名和来源说明。每条五项为：
+本机浏览器打开报告目录中的`review.html`，进入“人工审核台”。单人身份由页面配置，无需每次填写姓名或选择人工来源。上方保留任务目标及完成标准；逐步对照动作前后截图，点击图片放大，按需打开同步树和工具参数。目标红框与触点只辅助定位，不代替实际看图。
 
-| 字段 | 核对内容 |
+每步选择“这步正常，继续”“发现问题”或“看不清 / 不确定”；问题和不确定项写一句具体说明。看完后回答五个中文问题：
+
+| 记录字段 | 页面问题 |
 |---|---|
-| `visual_alignment` | 图、树、控件、坐标和相邻动作是否对应 |
-| `terminal_semantics` | 连续完成真实任务，无凑步或错误终态 |
-| `language` | 简体中文叙述、控件原文和实际页面语言 |
-| `privacy` | 实际来源及个人/账户内容是否符合需求声明 |
-| `substantive_difference` | 与其他轨迹是否有实质差异 |
+| `visual_alignment` | 图、控件和动作是否对应？ |
+| `terminal_semantics` | 最后真的完成任务了吗？ |
+| `language` | 页面和说明是否符合中文要求？ |
+| `privacy` | 是否符合来源和隐私要求？ |
+| `substantive_difference` | 与其他任务有实质区别吗？ |
 
-每项选择`PASS`、`FAIL`或`REVIEW_REQUIRED`；PASS/FAIL都须写具体样本、步骤和证据理由。不确定时保留待审。页面仅在内存中保存，刷新、关闭前导出`qc-review.json`备份。人工审核必须由实际审核人填写，不能将AI记录改名为人工。
+“符合”“有问题”“不确定 / 待核对”分别映射`PASS/FAIL/REVIEW_REQUIRED`。符合项记录本人的明确确认及相关步骤说明，问题项须定位实际证据。打开图片、程序已有AI PASS及导出成功都不会替本人给出结论；未完成项保持待审。
 
-导出模板还含`package_review`，其文档完整性及站点类目归属默认待审，需要实际阅读包内文档并填写绑定当前包的结论和依据。该对象没有页面编辑控件；按[人工核验SOP](../prd/M2-人工核验SOP.md)处理，不能盲目把默认值改为PASS。
+逐步判断、答案、备注和位置自动保存在当前浏览器，保存状态显示在右上角。导出的`qc-human-review-<时间>.json`同时是备份，“恢复备份”可校验同包、同单人配置及图树/标注身份后续审。换浏览器、清理网站数据或自动保存失败前请导出；AI或旧版本记录不能改名套成人工。
+
+左下角“最后核对交付资料”打开独立页面，提供包内文档链接及文档完整性、站点类目归属两项判断。实际读完资料后在页面回答，无需手改`package_review` JSON；仅打开链接不能视作通过，资料未完成仍保留待审。详见[人工核验SOP](../prd/M2-人工核验SOP.md)。
 
 ```sh
 projects/code/.venv/bin/python projects/quality-inspector/qc.py check \
   --baseline projects/quality-inspector/config/customer-samples.json \
   --profile projects/quality-inspector/config/local-pilot-v1.json \
-  --input /path/to/candidate --reviews /path/to/qc-review.json \
+  --input /path/to/candidate --reviews /path/to/qc-human-review.json \
   --output verify_results/new-qc-with-review
 ```
 
-导入检查审核来源、annotation/evidence SHA及包内文件清单；样本或资料变更后旧记录不能自动沿用。报告中的已导入AI记录数不等于人工审核数。
+导入保留`qc-review-1`及`qc-package-review-1`格式，检查审核来源、annotation/evidence SHA及包内文件清单。候选或资料变更后旧记录不能自动沿用。页面进度不是合格数，AI导入数不等于人工审核数；本次界面更新未签署实际人工记录，候选与既有报告结论不变。
 
 ## 核心模块
 

@@ -1,15 +1,195 @@
-import json,html
+import hashlib
+import json
 from pathlib import Path
 from .engine import SEMANTIC
+
+def review_template(report):
+    """Return an untouched, evidence-bound blank review, never an acceptance."""
+    template = {
+        'schema_version': 'qc-review-1',
+        'records': [{
+            'sample_id': sample['sample_id'],
+            'baseline_sha256': report['baseline']['config_sha256'],
+            'annotation_sha256': sample['annotation_sha256'],
+            'evidence_sha256': sample['evidence_sha256'],
+            'reviewer': {'kind': '', 'name': ''},
+            'provenance': {'description': ''},
+            'checks': {name: {'status': 'REVIEW_REQUIRED', 'note': ''} for name in SEMANTIC},
+        } for sample in report['samples']],
+    }
+    if 'local_profile' in report:
+        from .profiles import package_review_template
+        template['package_review'] = package_review_template(report)
+    return template
+
+
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _evidence_path(root, value):
+    """Only resolve local evidence inside the sample declared by the report."""
+    if not isinstance(value, str) or not value:
+        raise ValueError('证据路径缺失')
+    path = (root / value).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError('证据路径超出样本目录')
+    return path
+
+
+def review_samples(report):
+    """Expose the real task and target beside its screenshots, without guessing."""
+    rows = []
+    for source in report['samples']:
+        root = Path(source['sample_path']).resolve()
+        annotation_path = root / 'annotation.json'
+        warnings = []
+        annotation = None
+        try:
+            annotation = json.loads(annotation_path.read_text(encoding='utf-8'))
+            if not isinstance(annotation, dict):
+                raise ValueError('标注必须为对象')
+            if _sha(annotation_path) != source.get('annotation_sha256'):
+                warnings.append('标注文件已变更，与本次质检报告的校验值不一致。')
+        except (OSError, ValueError, UnicodeError) as error:
+            annotation = None
+            warnings.append('无法读取完整任务标注：' + str(error))
+        original = annotation or {}
+        steps = original.get('steps')
+        if not isinstance(steps, list):
+            warnings.append('标注中的步骤缺失或格式不正确，暂用报告中的证据索引。')
+            steps = source.get('steps', [])
+        if not isinstance(steps, list):
+            steps = []
+        if not steps:
+            warnings.append('没有可逐步审核的证据。')
+        device = original.get('device_info') if isinstance(original.get('device_info'), dict) else {}
+        projected = []
+        expected_files = source.get('evidence_sha256', {})
+        if not isinstance(expected_files, dict):
+            expected_files = {}
+            warnings.append('质检报告缺少图树校验清单。')
+        for step in steps:
+            if not isinstance(step, dict):
+                warnings.append('步骤记录格式不正确，无法展示该步骤。')
+                continue
+            row = dict(step)
+            step_warnings = []
+            image_path = tree_path = None
+            for field, value in [('image_path', step.get('image_path')),
+                                 ('tree_path', step.get('ui_tree_path', step.get('tree_path')))]:
+                try:
+                    path = _evidence_path(root, value)
+                    relative = path.relative_to(root).as_posix()
+                    if not path.is_file():
+                        raise ValueError('文件不存在')
+                    if expected_files.get(relative) != _sha(path):
+                        step_warnings.append(('截图' if field == 'image_path' else '界面树') + '已变更或未绑定本次报告。')
+                    if field == 'image_path':
+                        image_path = str(path)
+                    else:
+                        tree_path = str(path)
+                except (OSError, ValueError, TypeError) as error:
+                    step_warnings.append(('截图' if field == 'image_path' else '界面树') + '不可用：' + str(error))
+            tree = None
+            if tree_path:
+                try:
+                    tree = json.loads(Path(tree_path).read_text(encoding='utf-8'))
+                    if not isinstance(tree, dict) or not isinstance(tree.get('elements'), list):
+                        raise ValueError('界面树格式不正确')
+                except (OSError, ValueError, UnicodeError) as error:
+                    tree = None
+                    step_warnings.append('无法解析界面树：' + str(error))
+            action = step.get('action') if isinstance(step.get('action'), dict) else {}
+            target_id = action.get('target_element_id')
+            target = next((element for element in (tree or {}).get('elements', [])
+                           if isinstance(element, dict) and element.get('element_id') == target_id), None) if target_id else None
+            if target_id and tree is not None and target is None:
+                step_warnings.append('同步界面树中未找到动作引用的目标控件。')
+            row.update(image_path=image_path, tree_path=tree_path, target=target,
+                       screen_resolution=(tree or {}).get('screen_resolution', device.get('screen_resolution')),
+                       warnings=step_warnings, binding_valid=not step_warnings)
+            projected.append(row)
+        app = original.get('app_info') if isinstance(original.get('app_info'), dict) else {}
+        row = {
+            'sample_id': source['sample_id'], 'sample_path': str(root),
+            'annotation_path': str(annotation_path), 'annotation': annotation,
+            'task_instruction': original.get('task_instruction', ''),
+            'final_result': original.get('final_result', ''),
+            'completion_judgement': original.get('completion_judgement', ''),
+            'completion_status': original.get('completion_status', ''),
+            'task_type': original.get('task_type', []),
+            'device_info': device,
+            'site': app.get('app_name', ''), 'title': app.get('app_name') or source['sample_id'],
+            'warnings': warnings, 'steps': projected,
+            'binding_valid': not warnings and all(step['binding_valid'] for step in projected),
+        }
+        rows.append(row)
+    return rows
+
+
+def _review_identity(report, template):
+    """Version UI drafts by evidence identity, independent of page rendering."""
+    identity = {
+        'baseline_sha256': report['baseline']['config_sha256'],
+        'records': [{key: row[key] for key in ['sample_id', 'annotation_sha256', 'evidence_sha256']}
+                    for row in template['records']],
+        'package_files_sha256': template.get('package_review', {}).get('package_files_sha256', {}),
+        'profile_sha256': template.get('package_review', {}).get('profile_sha256'),
+    }
+    return hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _package_documents(report):
+    """Index original package documents; never manufacture missing paperwork."""
+    root = Path(report['dataset']).resolve()
+    bound = report.get('package_files_sha256')
+    candidates = sorted(bound) if isinstance(bound, dict) else [p.relative_to(root).as_posix() for p in sorted(root.rglob('*')) if p.is_file()]
+    documents = []
+    for relative in candidates:
+        path = (root / relative).resolve()
+        parts = Path(relative).parts
+        include = (relative in ['README.md', 'candidate_manifest.json', 'document_roles.json'] or
+                   (parts and parts[0] == 'docs' and path.suffix in ['.md', '.json', '.csv', '.txt']) or
+                   (len(parts) == 2 and path.name in ['metadata.csv', 'qc_report.md', 'manifest.json']))
+        if not include or not path.is_relative_to(root):
+            continue
+        warnings = []
+        if not path.is_file():
+            warnings.append('文档文件不存在。')
+        elif isinstance(bound, dict) and _sha(path) != bound[relative]:
+            warnings.append('文档已变更，与报告绑定的文件校验值不一致。')
+        documents.append({'title': relative, 'path': str(path), 'relative_path': relative,
+                          'binding_valid': not warnings, 'warnings': warnings})
+    return documents
+
+
+def review_data(report, template=None, reviewer_name='hemiao'):
+    """Data contract shared by the offline page and preview fixtures."""
+    template = review_template(report) if template is None else template
+    samples = review_samples(report)
+    statistics = report.get('acceptance_scopes', {}).get('pilot', {}).get('statistics', {})
+    summary = dict(statistics) if isinstance(statistics, dict) else {}
+    summary.update(sample_count=len(samples), frame_count=sum(len(row['steps']) for row in samples),
+                   effective_action_count=sum(step.get('action', {}).get('action_type') not in ['wait', 'complete']
+                                              for row in samples for step in row['steps'] if isinstance(step.get('action'), dict)))
+    return {'report': report, 'template': template, 'semantic': SEMANTIC, 'samples': samples,
+            'reviewer': {'kind': 'human', 'name': reviewer_name},
+            'data_id': _review_identity(report, template), 'package_documents': _package_documents(report),
+            'package_summary': summary}
+
+
+def render_review(report, template=None, reviewer_name='hemiao'):
+    data = json.dumps(review_data(report, template, reviewer_name), ensure_ascii=False).replace('<', '\\u003c')
+    return Path(__file__).with_name('review.html').read_text(encoding='utf-8').replace('__DATA__', data)
+
 
 def write_outputs(report,output):
     output=Path(output);output.mkdir(parents=True,exist_ok=False)
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     (output/'rule-catalog.json').write_text(json.dumps(report['rules']+report.get('local_rule_catalog',[]),ensure_ascii=False,indent=2)+'\n')
-    template={'schema_version':'qc-review-1','records':[{'sample_id':s['sample_id'],'baseline_sha256':report['baseline']['config_sha256'],'annotation_sha256':s['annotation_sha256'],'evidence_sha256':s['evidence_sha256'],'reviewer':{'kind':'','name':''},'provenance':{'description':''},'checks':{name:{'status':'REVIEW_REQUIRED','note':''} for name in SEMANTIC}} for s in report['samples']]}
+    template=review_template(report)
     if 'local_profile' in report:
-        from .profiles import package_review_template
-        template['package_review']=package_review_template(report)
         (output/'local-profile.json').write_text(json.dumps(report['local_profile'],ensure_ascii=False,indent=2)+'\n')
         (output/'requirements-baseline.json').write_text(json.dumps(report['requirements_baseline'],ensure_ascii=False,indent=2)+'\n')
     (output/'review-template.json').write_text(json.dumps(template,ensure_ascii=False,indent=2)+'\n')
@@ -22,7 +202,7 @@ def write_outputs(report,output):
         text += ['','## 显式本地验收','', '本地验收：'+report['local_acceptance_status']+'；客户实际验收：UNKNOWN。',
                  '配置：'+report['local_profile']['configuration']['profile_id']+'；SHA256 '+report['local_profile']['sha256']+'。',
                  '样本/批次/试点均须PASS。已配置近似算法命中即FAIL，不以语义审核豁免；外部算法等价性与全集验收另列。',
-                 '文档审核使用review-template.json内package_review，绑定完整交付包与profile；离线页面导出会保留其默认待审，实际审核后再填写。',
+                 '文档审核使用审核台的“最后核对交付资料”，绑定完整交付包与profile；本人实际判断后导出，未完成项保持待审。',
                  '', '|作用域|状态|', '|---|---|']
         text += ['|'+scope+'|'+result['status']+'|' for scope,result in report['acceptance_scopes'].items()]
         text += ['', '本地未通过项：']
@@ -30,7 +210,4 @@ def write_outputs(report,output):
         text += ['- '+c['rule_id']+'='+c['status'] for scope in ['batch','pilot'] for c in report['acceptance_scopes'][scope]['checks'] if c['status']!='PASS']
     text+=['','review.html为离线证据与审核入口，包含截图、树/动作定位、失败和修复建议。review-template.json需由实际审核者填写；默认待审，不能冒充签名。使用--reviews重新运行，哈希/基准不一致的记录将拒绝。已有AI字段证据以partial_ai_evidence附录接入，部分字段复核不自动等同全轨迹视觉通过。','','批次文件、去重算法及逐步骤证据见report.json。程序PASS只表示本质检配置下已执行规则通过，永不代表客户真实程序通过。']
     (output/'报告.md').write_text('\n'.join(text)+'\n')
-    data=json.dumps({'report':report,'template':template,'semantic':SEMANTIC},ensure_ascii=False).replace('<','\\u003c')
-    (output/'review.html').write_text(HTML.replace('__DATA__',data))
-
-HTML='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>独立质检证据审核</title><style>body{font:16px system-ui;margin:24px;background:#f5f7fa}header,article{background:white;padding:20px;margin-bottom:16px;border-radius:8px}button,select,input,textarea{font:inherit;margin:5px;padding:7px}img{max-width:100%;border:1px solid #ddd}pre{white-space:pre-wrap;font-size:13px}.FAIL{color:#b42318}.PASS{color:#067647}.REVIEW_REQUIRED{color:#9a6700}nav{display:flex;flex-wrap:wrap}textarea{width:95%;min-height:55px}label{display:block}</style><header><h1>独立质检证据审核</h1><p id="status"></p><p>程序检查与视觉审核分开。请查看截图及树和动作，填写真实来源。导出不会修改输入或自动标记人工通过。客户程序未执行。</p><label>审核来源<select id="kind"><option value="">请选择</option><option value="ai">AI</option><option value="human">人工</option></select></label><label>审核者/模型名<input id="name"></label><label>来源说明<input id="provenance" placeholder="实际审核过程与证据来源"></label><button onclick="downloadReview()">导出质检审核记录</button><nav id="samples"></nav></header><main id="main"></main><script>const D=__DATA__;let current=0;const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const file=p=>'file://'+p.split('/').map(encodeURIComponent).join('/');document.getElementById('status').textContent='程序状态 '+D.report.status+'，客户实际验收 UNKNOWN';D.report.samples.forEach((s,i)=>{let b=document.createElement('button');b.textContent=s.sample_id+' '+s.status;b.onclick=()=>show(i);document.getElementById('samples').appendChild(b)});function save(){const r=D.template.records[current];D.semantic.forEach(k=>{const el=document.getElementById('r_'+k),n=document.getElementById('n_'+k);if(el)r.checks[k]={status:el.value,note:n.value}})}function show(i){if(document.getElementById('r_visual_alignment'))save();current=i;const s=D.report.samples[i],r=D.template.records[i];document.getElementById('main').innerHTML='<article><h2>'+esc(s.sample_id)+'</h2><p>'+esc(s.status)+'</p>'+s.checks.map(c=>'<details><summary class="'+c.status+'">'+esc(c.rule_id)+' '+c.status+'</summary><p>'+esc(c.reason)+'</p><p>修复建议：'+esc(c.fix_suggestion)+'</p><pre>'+esc(JSON.stringify(c.evidence||c.sources,null,2))+'</pre></details>').join('')+'</article><article><h2>逐步证据</h2>'+s.steps.map(st=>'<details><summary>步骤 '+st.step_id+'</summary><img src="'+file(st.image_path)+'"><p><a href="'+file(st.tree_path)+'" target="_blank">打开同步界面树</a></p><pre>'+esc(JSON.stringify(st.action,null,2))+'</pre><p>'+esc(st.step_result)+'</p></details>').join('')+'</article><article><h2>视觉与语义审核</h2><p>如证据不足，保留REVIEW_REQUIRED。PASS和FAIL均须写具体截图/步骤理由。</p>'+D.semantic.map(k=>'<label>'+esc(k)+'<select id="r_'+k+'">'+['REVIEW_REQUIRED','PASS','FAIL'].map(v=>'<option '+(r.checks[k].status===v?'selected':'')+'>'+v+'</option>').join('')+'</select><textarea id="n_'+k+'">'+esc(r.checks[k].note)+'</textarea></label>').join('')+'</article>'}function downloadReview(){save();let kind=document.getElementById('kind').value,name=document.getElementById('name').value.trim(),source=document.getElementById('provenance').value.trim();if(!kind||!name||!source){alert('请填写真实审核来源、名称及来源说明');return}for(const r of D.template.records){r.reviewer={kind,name};r.provenance={description:source};for(const [k,v] of Object.entries(r.checks))if(v.status!=='REVIEW_REQUIRED'&&!v.note.trim()){alert(r.sample_id+' '+k+'需填写具体证据理由');return}}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(D.template,null,2)],{type:'application/json'}));a.download='qc-review.json';a.click();URL.revokeObjectURL(a.href)}if(D.report.samples.length)show(0);</script></html>'''
+    (output/'review.html').write_text(render_review(report,template),encoding='utf-8')

@@ -10,3 +10,6 @@ dependencies = ["jsonschema>=4.26,<5", "Pillow>=13,<14"]
 webcollect-qc = "quality_inspector.__main__:main"
 [tool.setuptools.packages.find]
 include = ["quality_inspector*"]
+
+[tool.setuptools.package-data]
+quality_inspector = ["review.html"]
