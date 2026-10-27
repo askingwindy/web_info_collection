@@ -8,11 +8,13 @@ import platform
 import shutil
 from urllib.parse import urldefrag
 from zoneinfo import ZoneInfo
-from .browser import capture, execute, prepare_action, observe, CONTROL, POINTER, SNAPSHOT_JS
+from .browser import capture, execute, prepare_action, observe, verify_execution_state, CONTROL, POINTER, SNAPSHOT_JS
 from .scaffold import program_version
 from .storage import allocate, write_json, verify_existing_registry
-from .validate import validate_sample, read_json
+from .validate import validate_sample, read_json, SCHEMAS, StrictValidator
 from .content_preparation import assess_content, preparation_settings
+from .task_instruction import validate_task_instruction
+from .action_normalization import normalize_delivery_step
 
 
 def now():return datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()
@@ -55,57 +57,58 @@ def check_numbers(text, spec):
             (not spec.get('integer') or all(v==v.to_integral_value() for v in values)))
 
 
-async def assert_state(page, conditions):
+async def assert_state(page, conditions, captured_state=None):
+    """Evaluate assertions against one observation, optionally the actual saved frame."""
+    observed=captured_state if captured_state is not None else await observe(page,assertions=conditions)
+    targets=observed.get('assertion_targets',[])
+    if len(targets)!=len(conditions):raise ValueError('末态观察缺少同步断言目标，不能使用先前页面的结论')
     results=[]
-    for condition in conditions:
+    for index,condition in enumerate(conditions):
         if 'visible_text' in condition:
             expected=condition['visible_text']
             if not isinstance(expected,str) or not expected.strip():raise ValueError('可见终态文字断言必须非空')
-            observed=await observe(page)
             actual=observed['visible_text'];passed=expected in actual
             at=actual.find(expected)
-            results.append({'expected':condition,'actual':actual[max(0,at-60):at+len(expected)+60] if passed else actual[:160],'passed':passed,'evidence_source':'clipped_visible_DOM_text_not_visual_acceptance'})
+            actual=actual[max(0,at-60):at+len(expected)+60] if passed else actual[:160]
             if not passed:raise ValueError('目标文字未在实际视口内显示：'+expected)
-            continue
-        locator=page.locator(condition['selector']).nth(condition.get('index',0))
-        if not await locator.is_visible():raise ValueError('任务断言目标不在当前可见页面')
-        box=await locator.bounding_box()
-        viewport=page.viewport_size
-        if not box or not viewport or box['x']<0 or box['y']<0 or box['x']+box['width']>viewport['width'] or box['y']+box['height']>viewport['height']:
-            raise ValueError('任务断言目标未完整显示在截图视口，必须先显式滚动')
-        hit=await locator.evaluate('(node)=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);return !!hit&&(hit===node||node.contains(hit));}')
-        if not hit:raise ValueError('任务断言目标被其他元素遮挡')
-        if 'checked' in condition:
-            actual=await locator.evaluate('(node)=>{const control=node.tagName==="LABEL"?node.control:node;if(!control||!control.matches("input[type=radio],input[type=checkbox]"))throw new Error("checked requires a native radio/checkbox or its visible label");return control.checked;}')
-            passed=actual is condition['checked']
-        elif 'disabled' in condition:
-            actual=await locator.is_disabled()
-            passed=actual is condition['disabled']
-        elif 'time_seconds' in condition:
-            import re
-            actual=(await locator.inner_text()).strip()
-            match=re.fullmatch(r'(\d{2}):(\d{2}):(\d{2})',actual)
-            seconds=sum(int(value)*factor for value,factor in zip(match.groups(),[3600,60,1])) if match else -1
-            spec=condition['time_seconds']
-            passed=bool(match) and int(match.group(2))<60 and int(match.group(3))<60 and spec['minimum']<=seconds<=spec['maximum']
-        elif 'numbers' in condition:
-            actual=await locator.inner_text()
-            passed=check_numbers(actual,condition['numbers'])
-        elif 'number' in condition:
-            from decimal import Decimal, InvalidOperation
-            tag=await locator.evaluate('(node)=>node.tagName')
-            actual=await locator.input_value() if tag in {'INPUT','TEXTAREA','SELECT'} else (await locator.inner_text()).strip()
-            try:passed=Decimal(actual)==Decimal(str(condition['number']))
-            except InvalidOperation:passed=False
-        elif 'value' in condition:
-            actual=await locator.input_value()
-            passed=actual==condition['value']
         else:
-            tag=await locator.evaluate('(node)=>node.tagName')
-            actual=await locator.input_value() if tag in {'INPUT','TEXTAREA','SELECT'} else await locator.inner_text()
-            passed=condition['contains'] in actual
-        results.append({'expected':condition,'actual':actual,'passed':passed})
-        if not passed:raise ValueError('任务结果断言未通过：'+json.dumps(results[-1],ensure_ascii=False))
+            target=targets[index]
+            if not target or target['selector']!=condition['selector'] or target['index']!=condition.get('index',0):
+                raise ValueError('任务断言目标不在同步界面树观察中')
+            if not target['visible']:raise ValueError('任务断言目标未完整显示在截图视口或被其他元素遮挡')
+            if target.get('value') is not None and not any(k in condition for k in ('checked','disabled')) and target.get('value_visible') is False:
+                raise ValueError('任务结果控件的完整值未在实际视口中可见，不能以后台值判定完成')
+            if 'checked' in condition:
+                actual=target['checked'];passed=actual is condition['checked'] and actual is not None
+            elif 'disabled' in condition:
+                actual=target['disabled'];passed=actual is condition['disabled']
+            elif 'time_seconds' in condition:
+                import re
+                actual=target['text'].strip()
+                match=re.fullmatch(r'(\d{2}):(\d{2}):(\d{2})',actual)
+                seconds=sum(int(value)*factor for value,factor in zip(match.groups(),[3600,60,1])) if match else -1
+                spec=condition['time_seconds']
+                passed=bool(match) and int(match.group(2))<60 and int(match.group(3))<60 and spec['minimum']<=seconds<=spec['maximum']
+            elif 'numbers' in condition:
+                actual=target['value'] if target['value'] is not None else target['text']
+                passed=check_numbers(actual,condition['numbers'])
+            elif 'number' in condition:
+                from decimal import Decimal,InvalidOperation
+                actual=target['value'] if target['value'] is not None else target['text'].strip()
+                try:passed=Decimal(actual)==Decimal(str(condition['number']))
+                except InvalidOperation:passed=False
+            elif 'value' in condition:
+                actual=target['value'];passed=actual==condition['value']
+            else:
+                actual=target['value'] if target['value'] is not None else target['text']
+                passed=condition['contains'] in actual
+        row={'expected':condition,'actual':actual,'passed':passed,
+             'evidence_source':'captured_frame_DOM_observation' if captured_state is not None else 'single_visible_DOM_observation'}
+        if 'selector' in condition:
+            row['target_text']=targets[index]['target_text']
+            if targets[index]['display_value'] is not None:row['display_actual']=targets[index]['display_value']
+        results.append(row)
+        if not passed:raise ValueError('任务结果断言未通过：'+json.dumps(row,ensure_ascii=False))
     return results
 
 
@@ -118,16 +121,26 @@ def observed_excerpt(text):
     """Keep a complete observed sentence, or the complete available text block."""
     import re
     compact=re.sub(r'\s+',' ',text).strip()
-    sentence=re.search(r'^.*?[。！？]',compact)
-    if not sentence:return compact
-    first=sentence.group()
+    # Some source pages use 。 inside geographic/decimal numbers. Cutting
+    # between numeric characters produces a false complete quotation.
+    def boundary(value):
+        for match in re.finditer(r'[。！？]',value):
+            i=match.start()
+            if (value[i]=='。' and value[:i].rstrip()[-1:].isdigit() and
+                    value[i+1:].lstrip()[:1].isdigit()):
+                continue
+            return match.end()
+        return None
+    end=boundary(compact)
+    if end is None:return compact
+    first=compact[:end]
     # Closing punctuation belongs to the observed sentence, not the next one.
     while len(first)<len(compact) and compact[len(first)] in '”’」』）》】)':
         first+=compact[len(first)]
     # A short yes/no answer is meaningful only with its following explanation.
     if len(re.findall(r'[\u4e00-\u9fff]',first))<4:
-        following=re.search(r'^.*?[。！？]',compact[len(first):])
-        if following:return first+following.group()
+        following=compact[len(first):];end=boundary(following)
+        if end is not None:return first+following[:end]
     return first
 
 
@@ -137,19 +150,21 @@ def completion_from_assertions(assertions):
         raise ValueError('缺少全部通过的实际末态证据，不能生成完成判断')
     facts=[]
     for row in assertions:
-        condition=row['expected'];actual=row['actual']
+        condition=row['expected'];actual=row['actual'];display=row.get('display_actual',actual)
         if 'visible_text' in condition and condition['visible_text'] in actual:
             facts.append('可见文字「'+condition['visible_text']+'」')
         elif 'contains' in condition and condition['contains'] in actual:
-            facts.append('结果中可见「'+condition['contains']+'」')
+            facts.append('结果中可见「'+condition['contains']+'」' if condition['contains'] in str(display) else '结果显示「'+str(display)+'」')
         elif 'value' in condition and actual==condition['value']:
-            facts.append('控件数值为「'+str(actual)+'」')
+            facts.append('控件显示「'+str(display)+'」')
         elif 'checked' in condition:
-            facts.append('末态控件'+('已勾选' if actual else '未勾选'))
+            facts.append(('「'+row['target_text']+'」' if row.get('target_text') else '末态控件')+('已勾选' if actual else '未勾选'))
         elif 'disabled' in condition:
-            facts.append('末态控件'+('不可用' if actual else '可用'))
+            facts.append(('「'+row['target_text']+'」' if row.get('target_text') else '末态控件')+('不可用' if actual else '可用'))
+        elif any(key in condition for key in ('number','numbers','time_seconds')):
+            facts.append('末态'+('时间' if 'time_seconds' in condition else '数值')+'为「'+str(display)+'」')
         else:
-            facts.append('末态数值或时间检查符合要求')
+            raise ValueError('末态断言类型无法形成可核验的完成描述')
     return '最终视口已核对：'+'、'.join(dict.fromkeys(facts))+'。'
 
 
@@ -210,21 +225,35 @@ def visible_paragraph_context(state, goal, before=None):
     lines=[text.strip() for text in state.get('visible_text','').splitlines() if text.strip()]
     paragraphs=[]
     headings=[e for e in state.get('elements',[]) if e.get('native_role')=='h1' and e.get('bbox')]
+    if not headings:
+        stem=state.get('title','').split(' - ',1)[0]
+        headings=[e for e in state.get('elements',[]) if e.get('native_role')=='span'
+                  and e.get('text')==stem and stem in lines and e.get('bbox')
+                  and e['bbox'][3]-e['bbox'][1]>=24]
     column_x=(headings[0]['bbox'][0]+headings[0]['bbox'][2])/2 if headings else None
+    content_top=headings[0]['bbox'][3] if headings else None
     blocks={b.get('element_id'):b for b in state.get('text_blocks',[]) if isinstance(b,dict)}
     for element in state.get('elements',[]):
         text=element.get('text','')
-        if element.get('native_role')!='p' or len(re.findall(r'[\u4e00-\u9fff]',text))<12:continue
+        if element.get('native_role') not in {'p','li'} or len(re.findall(r'[\u4e00-\u9fff]',text))<8:continue
         box=element.get('bbox')
+        if content_top is not None and box and box[3]<=content_top:continue
         if column_x is not None and box and not box[0]<=column_x<=box[2]:continue
         block=blocks.get(element.get('element_id'))
         if block and block.get('visible_text'):
+            if 'complete_sentences' in block:
+                complete=[sentence for sentence in block['complete_sentences']
+                          if len(re.findall(r'[\u4e00-\u9fff]',sentence))>=8 and
+                          not re.search(r'记者.{0,20}摄|图片来源|图源[：:]|资料图',sentence)]
+                if complete:
+                    paragraphs.extend(complete)
+                    continue
             body=block['visible_text'].strip()
             if block.get('starts_visible') is False:
                 boundary=re.search(r'[。！？]',body)
                 if not boundary:continue
                 body=body[boundary.end():].lstrip('”’」』）》】) \n')
-            if len(re.findall(r'[\u4e00-\u9fff]',body))<12:continue
+            if len(re.findall(r'[\u4e00-\u9fff]',body))<8:continue
             if block.get('ends_visible') is False and not re.search(r'[。！？]',body):continue
             excerpt=observed_excerpt(body)
             if not re.search(r'记者.{0,20}摄|图片来源|图源[：:]|资料图',body):
@@ -242,12 +271,32 @@ def visible_paragraph_context(state, goal, before=None):
         body=re.sub(r'\[\s*\d+\s*\]','',body)
         body=re.sub(r'\s+',' ',body).strip()
         paragraphs.append(body)
+    # Some layouts render paragraph/list text in child spans while the block
+    # container is not emitted as a separate tree element. The observer's
+    # clipped text block remains useful only when its literal text also occurs
+    # in this frame's independently captured visible reading order.
+    known_ids={e.get('element_id') for e in state.get('elements',[])}
+    observed=re.sub(r'\s+','',state.get('visible_text',''))
+    for block in blocks.values():
+        if block.get('element_id') in known_ids:continue
+        complete=block.get('complete_sentences',[])
+        candidates=complete or ([block.get('visible_text','')]
+            if block.get('starts_visible') is True and block.get('ends_visible') is True else [])
+        for body in candidates:
+            if (len(re.findall(r'[\u4e00-\u9fff]',body))>=8
+                    and re.sub(r'\s+','',body) in observed
+                    and not re.search(r'记者.{0,20}摄|图片来源|图源[：:]|资料图',body)):
+                paragraphs.append(body)
+    paragraphs=list(dict.fromkeys(paragraphs))
     if re.search(r'末段|末尾|最后(?:一)?段',goal) and paragraphs:return paragraphs[-1]
-    for body in paragraphs:
-        phrases=re.findall(r'[\u4e00-\u9fff]{3,10}',body)
-        if any(phrase in goal for phrase in phrases):return body
     previous=re.sub(r'\s+','',(before or {}).get('visible_text',''))
     new=[body for body in paragraphs if re.sub(r'\s+','',body) not in previous]
+    candidates=new or paragraphs
+    compact_goal=re.sub(r'核对|查证|查阅|阅读|当前|页面|正文|指定|确认|所需|实际|内容|可见|任务|完成|返回|目录|选择|下一|章节','',goal)
+    goal_words=set(re.findall(r'(?=([\u4e00-\u9fff]{2}))',compact_goal))
+    scored=[(sum(word in body for word in goal_words),index,body) for index,body in enumerate(candidates)]
+    if scored and max(row[0] for row in scored)>0:
+        return max(scored,key=lambda row:(row[0],-row[1]))[2]
     return observed_excerpt((new or paragraphs)[0]) if paragraphs else None
 
 
@@ -261,6 +310,88 @@ def main_content_image(state):
         and e.get('bbox') and e['bbox'][0]<=x<=e['bbox'][2]
         and (e['bbox'][2]-e['bbox'][0])*(e['bbox'][3]-e['bbox'][1])>=width*height*.12]
     return max(candidates,key=lambda e:(e['bbox'][2]-e['bbox'][0])*(e['bbox'][3]-e['bbox'][1])) if candidates else None
+
+
+def visible_navigation_label(state):
+    """A document title may select a painted label, never supply its text."""
+    lines=[text.strip() for text in state.get('visible_text','').splitlines() if text.strip()]
+    stem=state.get('title','').split(' - ',1)[0]
+    if stem in lines:return stem
+    for element in state.get('elements',[]):
+        text=element.get('text','')
+        if element.get('native_role')=='h1' and text in lines:return text
+    return None
+
+
+def visible_content_fragments(context, state):
+    """Keep separately witnessed fragments instead of quoting a composed string."""
+    import re
+    observed=re.sub(r'\s+','',state.get('visible_text',''))
+    result=[]
+    for fragment in (context or '').split('；'):
+        fragment=fragment.strip()
+        if fragment and re.sub(r'\s+','',fragment) in observed and fragment not in result:
+            result.append(fragment)
+    return result
+
+
+def quoted_visible_content(context, state, goal='', before=None):
+    fragments=visible_content_fragments(context,state)
+    if not fragments:
+        paragraph=visible_paragraph_context(state,goal,before)
+        fragments=visible_content_fragments(paragraph,state)
+    return '；'.join('可见文字「'+fragment+'」' for fragment in fragments)
+
+
+def visible_section_text(state, label):
+    """Take a literal reading-order slice after a witnessed section heading."""
+    import re
+    lines=[text.strip() for text in state.get('visible_text','').splitlines() if text.strip()]
+    positions=[i for i,text in enumerate(lines) if text==label]
+    if len(positions)<2:return None
+    window=lines[positions[-1]+1:]
+    while window and window[0] in {'编辑','完善','隐藏','[',']'}:window=window[1:]
+    if not window:return None
+    candidate=observed_excerpt(' '.join(window))
+    if len(re.findall(r'[\u4e00-\u9fff]',candidate))<8 or not re.search(r'[。！？]',candidate):return None
+    return candidate
+
+
+def observed_frame_description(state, goal='', before=None):
+    label=visible_navigation_label(state)
+    content=quoted_visible_content(None,state,goal,before)
+    if not content:
+        import re
+        for line in state.get('visible_text','').splitlines():
+            line=line.strip()
+            if (len(re.findall(r'[\u4e00-\u9fff]',line))>=8 and re.search(r'[。！？]',line)
+                    and not re.match(r'^[，。；：、）)]',line) and useful_added_text(line,state)):
+                content='可见文字「'+observed_excerpt(line)+'」'
+                break
+    parts=(['当前可见「'+label+'」'] if label else [])+([content] if content else [])
+    if parts:return '，'.join(parts)
+    # Do not turn missing observations into an exportable generic success.
+    raise ValueError('NARRATIVE_VISIBLE_EVIDENCE_MISSING: 当前视口没有可绑定的标题或正文，不能生成实际变化说明')
+
+
+def visible_goal_links(state, goal):
+    """Use a goal only to select exact, currently visible navigation labels."""
+    import re
+    labels=re.findall(r'卷[一二三四五六七八九十百零〇\d]+|第[一二三四五六七八九十百零〇\d]+[回篇章]',goal)
+    observed=re.sub(r'\s+','',state.get('visible_text',''))
+    return list(dict.fromkeys(e['text'] for e in state.get('elements',[])
+        if e.get('element_type')=='link' and e.get('text') in labels
+        and re.sub(r'\s+','',e['text']) in observed))
+
+
+def useful_added_text(text, state):
+    """Exclude repeated clipped glyphs and search chrome from fallback prose."""
+    import re
+    han=''.join(re.findall(r'[\u4e00-\u9fff]',text))
+    if len(han)>=3 and re.fullmatch(r'(.{1,3})\1{2,}',han):return False
+    if text in {'搜索','登录','创建账号','编辑','隐藏','目录','添加列表项'}:return False
+    if text.startswith('搜索') and len(text)<=24:return False
+    return True
 
 
 def visible_body_for_label(lines, label, metadata=False, elements=()):
@@ -312,6 +443,19 @@ def describe_change(before, after, op, element):
     import re
     action=op['action_type']
     if action=='complete':return '最终页面已确认，'+op['goal']
+    # Planned postconditions choose which literal to describe, but only text
+    # independently present in this saved frame may become an observation.
+    witnessed=list(dict.fromkeys(condition['visible_text'] for condition in op.get('postconditions',[])
+        if isinstance(condition,dict) and isinstance(condition.get('visible_text'),str)
+        and condition['visible_text'].strip() and condition['visible_text'] in after.get('visible_text','')))
+    if witnessed:
+        prefix='操作后'
+        if before.get('url')!=after.get('url'):
+            label=visible_navigation_label(after)
+            prefix='页面已切换'+('，当前可见「'+label+'」' if label else '')
+        elif action=='scroll':
+            prefix='向'+{'down':'下','up':'上','left':'左','right':'右'}[op['arguments']['direction']]+'滚动后'
+        return prefix+'，'+ '；'.join('可见文字「'+text+'」' for text in witnessed[:3])
     if op.get('observation') and op.get('postconditions'):return op['observation']
     lines=[text.strip() for text in after.get('visible_text','').splitlines() if text.strip()]
     from urllib.parse import urldefrag,urlsplit
@@ -342,10 +486,14 @@ def describe_change(before, after, op, element):
                 actual_label=headings[0]
                 body=visible_body_for_label(lines,actual_label,elements=after['elements'])
                 if body:label=actual_label
-        if body:return f'同一页面定位到「{label}」，当前可见内容包括「{body}」'
-        return f'当前仍为「{after["title"]}」页面'+(f'，可见目录项「{label}」' if label and label in lines else '')
+        if body:
+            section=visible_section_text(after,label)
+            content=('可见正文「'+section+'」') if section else quoted_visible_content(body,after,op.get('goal',''),before)
+            if content:return f'同一页面定位到「{label}」，'+content
+        if label and label in lines:return f'页面链接已定位，当前可见目录项「{label}」'
+        return observed_frame_description(after,op.get('goal',''),before)
     if before['title']!=after['title'] or before['url']!=after['url']:
-        return f'页面切换为「{after["title"]}」'
+        return '页面已切换，'+observed_frame_description(after,op.get('goal',''),before)
 
     # snapshot elements include accessible labels/title fallbacks. Only the
     # separately captured, clipped visible text may be called visible prose.
@@ -355,6 +503,8 @@ def describe_change(before, after, op, element):
         and not re.match(r'^w:',text.strip())))
     if action=='scroll':
         direction={'down':'下','up':'上','left':'左','right':'右'}[op['arguments']['direction']]
+        links=visible_goal_links(after,op.get('goal',''))
+        if links:return f'向{direction}滚动后，当前可见目录项'+ '、'.join('「'+label+'」' for label in links[:2])
         if before['scroll']!=after['scroll']:
             target=re.search(r'包含[「“]?(.+?)[」”]?的',op.get('goal',''))
             observed=re.sub(r'\s+','',after.get('visible_text',''))
@@ -398,11 +548,15 @@ def describe_change(before, after, op, element):
             contexts=[(label,visible_body_for_label(lines,label,metadata=True,elements=after['elements'])) for label in labels]
             contexts=[(label,body) for label,body in contexts if body and label in body]
             if contexts:
-                return f'页面向{direction}滚动，'+ '；'.join(f'可见「{label}」及正文「{body}」' for label,body in contexts[:2])
+                observed_contexts=['可见「'+label+'」，'+quoted_visible_content(body,after,op.get('goal',''),before)
+                                   for label,body in contexts[:2]]
+                if any(observed_contexts):return f'页面向{direction}滚动，'+ '；'.join(text for text in observed_contexts if text)
             paragraph=visible_paragraph_context(after,op.get('goal',''),before)
-            if paragraph:return f'页面向{direction}滚动，可见正文「{paragraph}」'
+            paragraph_fragments=visible_content_fragments(paragraph,after)
+            if paragraph_fragments:return f'页面向{direction}滚动，'+ '；'.join('可见正文「'+text+'」' for text in paragraph_fragments[:2])
             if main_content_image(after):
                 return f'页面向{direction}滚动，主内容区的图片进入当前视口'
+            visible_added=[text for text in visible_added if useful_added_text(text,after)]
             long_added=[text for text in visible_added if len(re.findall(r'[\u4e00-\u9fff]',text))>=4]
             numeric_added=[text for text in visible_added if re.search(r'\d',text)
                 and not re.fullmatch(r'[-+¥￥$]?\d+(?:\.\d+)?(?:%|元)?',text)
@@ -410,7 +564,7 @@ def describe_change(before, after, op, element):
             prose=[text for text in long_added if len(re.findall(r'[\u4e00-\u9fff]',text))>=8 and re.search(r'[，。；：]',text)]
             visible_added=list(dict.fromkeys(prose+long_added+numeric_added)) or [text for text in visible_added if len(re.findall(r'[\u4e00-\u9fff]',text))>=2]
             selected=visible_added[:2]
-            return f'页面向{direction}滚动'+('，可见文字包括'+ '和'.join('「'+observed_excerpt(text)+'」' for text in selected[:4]) if selected else f'，当前页面为「{after["title"]}」')
+            return f'页面向{direction}滚动'+('，可见文字包括'+ '和'.join('「'+observed_excerpt(text)+'」' for text in selected[:4]) if selected else '，'+observed_frame_description(after,op.get('goal',''),before))
 
     def named_values(state):
         elements={e['element_id']:e for e in state['elements']}
@@ -420,6 +574,8 @@ def describe_change(before, after, op, element):
             if e['element_type'] not in {'input','select'} or v['value'] is None or not e['text']:
                 continue
             if v.get('input_type') in {'range','color','file','password','hidden','checkbox','radio','button','submit','reset','image'}:
+                continue
+            if not v.get('value_visible',v.get('display_value',v['value']) in state.get('visible_text','')):
                 continue
             # An editable search combobox is still an input. Its choice flag or
             # DOM identity can change on focus without a selection/value change.
@@ -470,7 +626,9 @@ def describe_change(before, after, op, element):
     if action=='click' and numeric and numeric!=visible_numeric_context(before):return '页面显示'+numeric
     if visible_added:return '页面出现的文字包括'+'和'.join(visible_reference(text) for text in visible_added[:3])
     if op.get('observation'):return op['observation']
-    return ('页面仍显示「'+element['text']+'」控件' if element and element['text'] else '当前仍位于「'+after['title']+'」页面')
+    if element and element['text'] and element['text'] in after.get('visible_text',''):
+        return '页面仍显示「'+element['text']+'」控件'
+    return observed_frame_description(after,op.get('goal',''),before)
 
 
 def validate_plan(plan):
@@ -479,8 +637,13 @@ def validate_plan(plan):
     task_ids=[task.get('task_id') for task in plan['tasks'] if isinstance(task,dict)]
     if len(task_ids)!=len(set(task_ids)):raise ValueError('task_id 必须在计划中唯一')
     required=['task_id','site_uri','site_category','app_name','instruction','task_type','initial_url','operations','final_result','completion_judgement','final_assertions']
+    task_type_schema=json.loads(SCHEMAS.joinpath('annotation.schema.json').read_text(encoding='utf-8'))['properties']['task_type']
     for task in plan['tasks']:
         if not isinstance(task,dict) or any(not task.get(k) for k in required):raise ValueError('任务计划缺少必要字段')
+        type_errors=list(StrictValidator(task_type_schema).iter_errors(task['task_type']))
+        if type_errors:
+            raise ValueError('task_type 不符合合同枚举：'+str(task['task_id'])+'：'+type_errors[0].message)
+        validate_task_instruction(task['instruction'])
         preparation_settings(task)
         site_host=verify_public_url(task['site_uri'])
         verify_public_url(task['initial_url'],{site_host,*task.get('allowed_hosts',[])})
@@ -492,9 +655,15 @@ def validate_plan(plan):
         if sum(op['action_type'] not in ('wait','complete') for op in task['operations'])<5:
             raise ValueError('M2 任务至少规划 5 个显式有效操作，不允许通过等待凑步')
         if any(op['action_type']=='complete' for op in task['operations']):raise ValueError('complete 由最终断言成功后添加，不得提前声明完成')
+    from .task_contract import validate_m4_plan
+    validate_m4_plan(plan)
 
 
 async def collect_one(context, task, directory, evidence, ids):
+    from .task_contract import (is_m4_task, validate_m4_task, completion_decision,
+                                terminal_evidence, narrative_evidence, canonical_sha)
+    m4=is_m4_task(task)
+    if m4:validate_m4_task(task)
     directory=Path(directory);evidence=Path(evidence)
     (directory/'images').mkdir(parents=True)
     (directory/'ui_tree').mkdir()
@@ -506,6 +675,11 @@ async def collect_one(context, task, directory, evidence, ids):
     operations=task['operations']+[{'action_type':'complete','arguments':{'status':'success'},
                 'goal':'确认最终页面符合任务要求','rationale':task['completion_judgement'],'expected':task['final_result']}]
     steps=[];previous=None;raw_records=[];ground_truth=[];ratios=[]
+    contract_result=None
+    task_identity={'task_id':task.get('task_id'),'task_version':task.get('task_version'),
+                   'task_sha256':canonical_sha({k:v for k,v in task.items() if not k.startswith('_')})} if m4 else None
+    if m4:checkpoint_json(evidence/'task_contract.json',{'schema_version':'webcollect-task-contract-evidence-1',
+            **task_identity,'machine_status':'IN_PROGRESS','semantic_status':'REVIEW_REQUIRED'})
     settings=preparation_settings(task)
     preparation={'schema_version':'content-preparation-v1',
                  'mode':'disabled' if settings['mode']=='off' else 'enabled',
@@ -529,8 +703,9 @@ async def collect_one(context, task, directory, evidence, ids):
                 except ValueError:
                     pass
                 else:
-                    op=operations[-1]
-                    completion_trigger='goal_already_satisfied'
+                    if not m4 or completion_decision(task,raw_records,op)=='complete':
+                        op=operations[-1]
+                        completion_trigger='goal_already_satisfied'
             # Advice is read-only. The chosen action still goes through the
             # same capture, target truth, native execution and next-frame chain.
             location_key=None
@@ -589,17 +764,39 @@ async def collect_one(context, task, directory, evidence, ids):
             elif op['action_type']!='complete' and decision['action']=='blocked':
                 preparation_error='页面准备被阻断：'+decision['reason']
             is_final=op['action_type']=='complete'
-            assertion=await assert_state(page,task['final_assertions']) if is_final else []
+            assertion=[]
             planned_completion=None
             if is_final:
                 # Planned prose is audit input, never proof of navigation or
                 # earlier reading. Every emitted final fact uses passed checks.
                 planned_completion={'final_result':task['final_result'],
                     'completion_judgement':task['completion_judgement'],'operation':op}
-                final_description=completion_from_assertions(assertion)
-                op={**op,'rationale':final_description,'expected':final_description}
-            observation=await capture(page,op.get('selector'),op.get('index',0))
+            previous_conditions=(raw_records[-1]['operation'].get('postconditions',[])
+                                 if m4 and raw_records else [])
+            capture_conditions=previous_conditions+(task['final_assertions'] if is_final else [])
+            observation=await capture(page,op.get('selector'),op.get('index',0),
+                                      assertions=capture_conditions or None)
             state=observation['state']
+            if previous_conditions:
+                previous_state={**state,'assertion_targets':state['assertion_targets'][:len(previous_conditions)]}
+                postconditions=await assert_state(page,previous_conditions,captured_state=previous_state)
+                raw_records[-1]['postconditions_saved_frame']={'assertions':postconditions,
+                    'binding':{'image_path':f'images/step_{i:03}.png','ui_tree_path':f'ui_tree/step_{i:03}.json',
+                               'screenshot_sha256':observation['capture']['screenshot_sha256']}}
+                # The action record was already saved. Bind later-frame evidence
+                # in an append-only companion instead of rewriting the original.
+                previous_raw=evidence/f"step_{raw_records[-1]['step_id']:03}.json"
+                write_json(evidence/f"step_{raw_records[-1]['step_id']:03}_postconditions.json",
+                    {'source_step_id':raw_records[-1]['step_id'],
+                     'source_raw_sha256':hashlib.sha256(previous_raw.read_bytes()).hexdigest(),
+                     **raw_records[-1]['postconditions_saved_frame']})
+            if is_final:
+                final_assertion_state={**state,'assertion_targets':state['assertion_targets'][len(previous_conditions):]}
+                assertion=await assert_state(page,task['final_assertions'],captured_state=final_assertion_state)
+                final_description=completion_from_assertions(assertion)
+                heading=next((e['text'] for e in state['elements'] if e.get('native_role')=='h1' and e.get('text')), '')
+                final_goal='确认最终页面'+('「'+heading+'」' if heading else '')+'，'+final_description
+                op={**op,'goal':final_goal,'rationale':final_description,'expected':final_description}
             if i==1:
                 (evidence/'initial_capture.png').write_bytes(observation['png'])
                 write_json(evidence/'initial_capture.json',{'policy':'content-preparation-v1',
@@ -649,6 +846,18 @@ async def collect_one(context, task, directory, evidence, ids):
                 raise ValueError('正文判断后页面地址改变，停止使用过期准备判断')
             if previous:
                 previous['step_result']=describe_change(raw_records[-1]['state'],state,raw_records[-1]['operation'],raw_records[-1]['target_element'])
+                if m4:
+                    observed_result,narrative=narrative_evidence(previous['step_result'],raw_records[-1]['state'],state,raw_records[-1]['operation'])
+                    narrative['after_frame']={'image_path':image_path,'screenshot_sha256':observation['capture']['screenshot_sha256']}
+                    raw_records[-1]['narrative_evidence']=narrative
+                    original=evidence/f"step_{raw_records[-1]['step_id']:03}.json"
+                    write_json(evidence/f"step_{raw_records[-1]['step_id']:03}_narrative.json",
+                        {'source_step_id':raw_records[-1]['step_id'],
+                         'source_raw_sha256':hashlib.sha256(original.read_bytes()).hexdigest(),
+                         **narrative})
+                    if observed_result is None:
+                        raise ValueError('NARRATIVE_EVIDENCE_UNSUPPORTED: 本步结果包含未绑定的引用或待审核占位文案，保留证据并停止保存成功样本')
+                    previous['step_result']=observed_result
                 previous['tool_result']['return_value']['screen_changed']=raw_records[-1]['capture']['screenshot_sha256']!=observation['capture']['screenshot_sha256']
             arguments,element=prepare_action(state,op)
             action={'action_type':op['action_type'],'target_element_id':element['element_id'] if element else '',
@@ -664,6 +873,9 @@ async def collect_one(context, task, directory, evidence, ids):
                     'arguments':arguments,'timestamp':now(),'context':'Web / '+task['app_name']},
                   'tool_result':{'status':'success','return_value':{},'error':''},
                   'next_step_rationale':op['rationale'],'step_result':op['expected'] if is_final else '', 'exception_evidence':[]}
+            # Only the delivery annotation uses Windows names. Actual arguments,
+            # operation and raw.executed_action below retain native key names.
+            step=normalize_delivery_step(step, platform.system())
             raw={'step_id':i,'state':state,'capture':observation['capture'],'operation':op,'target_element':element,
                  'started_at':step['tool_call']['timestamp'],'final_assertions':assertion,
                  'executed_action':{'tool_name':op['action_type'],'arguments':arguments},'completion_trigger':completion_trigger if is_final else None,
@@ -686,11 +898,17 @@ async def collect_one(context, task, directory, evidence, ids):
             if element:ground_truth.append({'step_id':i,'element_id':element['element_id'],'text':element['text'],'bbox':element['bbox']})
             pages_before=set(context.pages)
             try:
-                if element:
-                    live=await observe(page,op['selector'],op.get('index',0))
-                    if live['target']!=state['target']:
-                        raise ValueError('截图后目标位置、焦点或值发生变化，拒绝用陈旧坐标执行')
-                    raw['target_preflight']={'matched':True,'checked_at':now(),'target':live['target']}
+                preflight=await verify_execution_state(page,state,op.get('selector'),op.get('index',0),
+                                                       assertions=capture_conditions or None)
+                raw['state_preflight']={**preflight,'checked_at':now()}
+                if element:raw['target_preflight']=raw['state_preflight']
+                if is_final:
+                    raw['final_assertions_binding']={'image_path':image_path,'ui_tree_path':step['ui_tree_path'],
+                        'screenshot_sha256':observation['capture']['screenshot_sha256'],
+                        'state_fingerprint':preflight['state_fingerprint']}
+                    if m4:
+                        contract_result=terminal_evidence(task,raw_records,assertion,raw['final_assertions_binding'])
+                        raw['task_contract_terminal']={**task_identity,**contract_result}
                 execution=op.get('execution') or {}
                 if 'wait_popup' in execution and type(execution['wait_popup']) is not bool:
                     raise ValueError('wait_popup 必须是显式布尔值')
@@ -753,6 +971,14 @@ async def collect_one(context, task, directory, evidence, ids):
              'steps':steps,'final_state_image':steps[-1]['image_path'],'final_result':final_description,
              'completion_status':'success','completion_judgement':final_description}
         write_json(directory/'annotation.json',annotation)
+        if m4:
+            contract_result.update(task_identity)
+            contract_result['review_binding']={'annotation_sha256':hashlib.sha256((directory/'annotation.json').read_bytes()).hexdigest(),
+                'evidence_sha256':{p.relative_to(directory).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
+                                  for folder in ('images','ui_tree') for p in sorted((directory/folder).iterdir()) if p.is_file()}}
+            contract_result['narrative_review_required_steps']=[r['step_id'] for r in raw_records
+                if r.get('narrative_evidence',{}).get('machine_status')=='REVIEW_REQUIRED']
+            checkpoint_json(evidence/'task_contract.json',contract_result)
         write_json(evidence/'ground_truth.json',ground_truth)
         write_json(evidence/'capture_summary.json',{'snapshot_source':'browser_dom','capture_count':len(steps),
               'minimum_chinese_character_ratio':min(ratios),'language_check_version':'visible_dom_letters_v2',
@@ -762,6 +988,11 @@ async def collect_one(context, task, directory, evidence, ids):
               'preparation_scrolls':preparation_scrolls})
         return annotation
     except Exception as error:
+        if m4:
+            checkpoint_json(evidence/'task_contract.json',{'schema_version':'webcollect-task-contract-evidence-1',
+                **task_identity,'machine_status':'FAIL','semantic_status':'REVIEW_REQUIRED','reason':str(error),
+                'executed_step_ids':[r['step_id'] for r in raw_records],
+                'original_evidence_preserved':True})
         if getattr(error,'capture',None):
             write_json(evidence/'capture_failure.json',{'error':str(error),'capture':error.capture,
                          'diagnostic_only':True,'accepted_as_formal_frame':False})
@@ -799,9 +1030,16 @@ def checkpoint_manifest(output, manifest):
     checkpoint_json(Path(output)/'manifest.json',manifest)
 
 
-async def collect_plan(plan_path, output, registry, channel='chrome', headless=True):
+async def collect_plan(plan_path, output, registry, channel='chrome', headless=True,
+                       *, publication_path=None, policy_path=None, resume=False):
     from playwright.async_api import async_playwright
     plan=read_json(Path(plan_path));validate_plan(plan)
+    if plan.get('schema_version') == 'webcollect-plan-m4-1':
+        from .collect_runtime import collect_m4
+        return await collect_m4(plan_path, output, registry, publication_path=publication_path,
+                                policy_path=policy_path, resume=resume, channel=channel, headless=headless)
+    if publication_path or policy_path or resume:
+        raise ValueError('发布收据、预算和恢复入口仅适用于严格M4计划；旧计划保留原采集行为')
     if 'media_preflight' in plan:
         from .preflight import validate_preflight_binding
         validate_preflight_binding(plan,plan_path)
@@ -813,7 +1051,7 @@ async def collect_plan(plan_path, output, registry, channel='chrome', headless=T
     from .production_quality import contract_identity,sha
     repository=Path(__file__).resolve().parents[3]
     contract=contract_identity(repository)
-    manifest={'contract_profile':contract,'plan_sha256':sha(plan_path),'preparation_policy':'content-preparation-v1','generator_files_sha256':{name:sha(Path(__file__).parent/name) for name in ['collect.py','browser.py','snapshot.js','production_quality.py','content_preparation.py','content_preparation.js']},'batch_id':None,'sample_kind':'real','program_version':program_version(),'rule_version':'1.0.0',
+    manifest={'contract_profile':contract,'plan_sha256':sha(plan_path),'preparation_policy':'content-preparation-v1','generator_files_sha256':{name:sha(Path(__file__).parent/name) for name in ['collect.py','browser.py','snapshot.js','production_quality.py','content_preparation.py','content_preparation.js','action_normalization.py']},'batch_id':None,'sample_kind':'real','program_version':program_version(),'rule_version':'1.0.0',
               'configuration':{'viewport':[1280,720],'device_scale_factor':1,'locale':'zh-CN','timezone':'Asia/Shanghai',
                                'channel':channel,'headless':headless,'default_settle_ms':500,'task_interval_seconds':1},
               'sites':[],'samples':[],'collection_status':'in_progress','human_review':'pending','created_at':now()}

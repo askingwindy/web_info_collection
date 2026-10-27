@@ -8,12 +8,12 @@
   ],
   "source_documents": [
     {
-      "path": "request/需求书-Web浏览器自动化操作轨迹数据集.md",
-      "sha256": "44ace260935f969d95f01ce07ff88508e732c2ce7e81e35d666d848e85e6e608"
+      "path": "request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md",
+      "sha256": "ad69dc7017a4c1faf027cebe7330a5a1aa51fedea7f0e53afc43ca057daba8e0"
     },
     {
       "path": "request/需求澄清记录.md",
-      "sha256": "61589d3801a034bfc007c0ca247a82490e9b515ab4a903627000dee309523146"
+      "sha256": "af11860a434a16f2078c81fa9a344ad1e0f81a337116dfc30d062c65a4cb3326"
     },
     {
       "path": "request/web操作采集需求/附件A-字段说明.md",
@@ -163,5 +163,55 @@
     "single observed source data_type or action_space constant",
     "external registration approval",
     "post-collection website replay"
+  ],
+  "current_delivery_contract": {
+    "version": "webcollect-delivery-contract-2",
+    "authority_resource": "quality_inspector/contract-authority.json",
+    "fingerprint_implementation": "quality_inspector/contract.py:installed_contract",
+    "review_policy": "whole-trajectory-review-2",
+    "semantic_rule_changes_require_explicit_migration": true,
+    "legacy_pilot_matrix_retained_as_historical_compatibility": true
+  },
+  "current_delivery_additions": [
+    {
+      "requirement": "§3 README/fields/synthesis/source roles",
+      "checker_scope": "DELIVERY_DOCUMENT_ROLES; delivery batch",
+      "boundary": "Role presence and real documentary review both required."
+    },
+    {
+      "requirement": "§7 complete actual review coverage",
+      "checker_scope": "qc-review-2 record validation; internal evidence protocol",
+      "boundary": "All steps and five checks; no identity or reading authentication; legacy needs explicit impact assessment."
+    },
+    {
+      "requirement": "§3/7 source population and exclusions",
+      "checker_scope": "DELIVERY_ACCOUNTING",
+      "boundary": "Unique excluded IDs disjoint from selected IDs; actual attempt provenance still needs audit."
+    },
+    {
+      "requirement": "§2/5/6 cumulative scope",
+      "checker_scope": "check-set cumulative-mechanical",
+      "boundary": "Frozen version set, complete-recall four-route index and exhaustive comparison; never release-ready."
+    },
+    {
+      "requirement": "§7.14–15 禁机器标记及采集话术",
+      "checker_scope": "C12 prohibited_narrative",
+      "boundary": "追加元素 ID、CSS ID/selector、控件计数的确定模式；保留真实引号内界面原文。不是完整自然语言审核。"
+    },
+    {
+      "requirement": "附件 B hotkey/open_url 参数",
+      "checker_scope": "C09",
+      "boundary": "keys 非空且每项非空字符串；URL 是无空白绝对 URI，HTTP(S) 有 hostname。未额外加入协议/域名白名单。"
+    },
+    {
+      "requirement": "审核原始记录与变更可追踪性（内部证据协议）",
+      "checker_scope": "qc-review-migration-1 / --review-migration",
+      "boundary": "原记录/原合同/审核文件/current 合同 SHA 显式评估；只允许未变标注与图树，保留原 AI/真人身份与判断。待审模板不签署迁移；本版不自动迁移资料审核。"
+    },
+    {
+      "requirement": "内部 M4 1000 试生产配置边界",
+      "checker_scope": "config/delivery-m4-1000-20261025.json internal_targets",
+      "boundary": "20 URI、任务族、非滚动比例、波次、真人样本数仅信息，不进入客户合同门槛；客户 2% 和 M4 关卡另行验证。"
+    }
   ]
 }

@@ -1,0 +1,50 @@
+{
+  "schema_version": "qc-local-profile-1",
+  "profile_id": "webcollect-delivery-contract-v1",
+  "scope": "delivery",
+  "authority": "Web requirement v3 and annex A/B, with confirmed 2026-10-21 clarifications. No pilot minimum is applied.",
+  "duplicates": {
+    "exact_images": "zero-cross-sample-reuse",
+    "sequence": "exact-action_type+target_text+page_name-list",
+    "dhash": {
+      "bits": 64,
+      "orientation": "horizontal",
+      "grayscale": "Pillow-L",
+      "resize": [
+        9,
+        8
+      ],
+      "resampling": "Pillow-LANCZOS",
+      "comparison": "left>right",
+      "bit_order": "row-major-left-to-right-top-to-bottom-msb-first",
+      "maximum_hamming_each_endpoint": 4
+    },
+    "simhash": {
+      "bits": 64,
+      "tokens": "CJK-bigrams-or-single-character+lowercase-Latin-alphanumeric-underscore",
+      "cjk_range": [
+        "U+4E00",
+        "U+9FFF"
+      ],
+      "latin_regex": "[a-zA-Z0-9_]+",
+      "lowercase": "Python-str.lower",
+      "cjk_window": 2,
+      "single_cjk_token": true,
+      "weight": "term-frequency",
+      "hash": "SHA256-first-8-bytes-big-endian",
+      "tie": 0,
+      "maximum_hamming": 3
+    }
+  },
+  "targets": {
+    "expected_samples": null,
+    "max_category_share": 0.2,
+    "category_share": "enforced",
+    "max_viewport_specs": 3,
+    "max_short_flow_share": 0.02
+  },
+  "attachments": {
+    "附件A-字段说明.md": "0c3fe9b2050f55c25cec8ef5145ed3ad0d569aa0d0022f0293c21c4406857639",
+    "附件B-动作空间与坐标系.md": "564ab9cc7a4297d3966aaebe5e14c4090e0b056da60072e232744a00422f5ed2"
+  }
+}

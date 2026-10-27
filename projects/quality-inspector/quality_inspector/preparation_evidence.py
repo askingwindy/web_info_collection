@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+from .format_checks import delivered_call_matches_capture
 
 POLICY = 'content-preparation-v1'
 PREPARATION_KINDS = {'close_overlay': 'click', 'scroll_to_content': 'scroll'}
@@ -233,7 +234,7 @@ def _audit_preparation(evidence_dir, sample_dir=None, expected_policy=None,
         if steps:
             if type(action_id) is not int or not 1 <= action_id <= len(steps):
                 fail('ACTION_MISSING', identity, 'Preparation action is absent from the formal annotation')
-            elif action != {k: steps[action_id - 1]['tool_call'][k] for k in ('tool_name', 'arguments')}:
+            elif not delivered_call_matches_capture(action, {k: steps[action_id - 1]['tool_call'][k] for k in ('tool_name', 'arguments')}, (annotation or {}).get('device_info', {}).get('os_name')):
                 fail('FORMAL_ACTION', identity, 'Preparation raw and delivered tool call must match')
         after_id = decision.get('after_step_id', before_id + 1 if planned_shared else None)
         following = captures.get(after_id, {})

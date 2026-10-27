@@ -11,6 +11,8 @@ dependencies = ["jsonschema>=4.23,<5", "Pillow>=13,<14", "playwright>=1.64,<2"]
 
 [project.scripts]
 webcollect = "webcollect.__main__:main"
+webcollect-batch = "webcollect.batch:main"
+webcollect-tasks = "webcollect.task_generation:main"
 
 [tool.setuptools.packages.find]
 include = ["webcollect*"]

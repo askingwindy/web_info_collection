@@ -1,0 +1,37 @@
+{
+  "schema_version": "webcollect-site-sources-1",
+  "proposal_status": "S1 proposed only; not executed by the planner",
+  "source_groups_are_final_contract_categories": false,
+  "sources": [
+    {
+      "kind": "directory",
+      "category": "政务与公共服务查询",
+      "uri": "https://gjzwfw.www.gov.cn/col/col611/index.html",
+      "max_candidates": 20
+    },
+    {
+      "kind": "directory",
+      "category": "学习教育",
+      "uri": "https://www.moe.gov.cn/jyb_zzjg/moe_347/",
+      "max_candidates": 20
+    },
+    {
+      "kind": "directory",
+      "category": "科研与科普",
+      "uri": "https://www.cas.cn/zz/jg/ys/yj/",
+      "max_candidates": 20
+    },
+    {
+      "kind": "directory",
+      "category": "图书与文化服务",
+      "uri": "https://www.clcn.net.cn/guide/default/index?page_id=9",
+      "max_candidates": 20
+    },
+    {
+      "kind": "directory",
+      "category": "在线工具",
+      "uri": "https://www.jyshare.com/",
+      "max_candidates": 20
+    }
+  ]
+}

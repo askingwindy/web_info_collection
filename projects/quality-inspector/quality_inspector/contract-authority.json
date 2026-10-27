@@ -1,0 +1,36 @@
+{
+  "schema_version": "qc-installed-authority-1",
+  "source_precedence": [
+    "clarification",
+    "requirement",
+    "annex_a",
+    "annex_b"
+  ],
+  "documents": [
+    {
+      "role": "clarification",
+      "path": "request/需求澄清记录.md",
+      "resource": "authority/需求澄清记录.md",
+      "sha256": "af11860a434a16f2078c81fa9a344ad1e0f81a337116dfc30d062c65a4cb3326"
+    },
+    {
+      "role": "requirement",
+      "path": "request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md",
+      "resource": "authority/需求书-Web浏览器自动化操作轨迹数据集.md",
+      "sha256": "ad69dc7017a4c1faf027cebe7330a5a1aa51fedea7f0e53afc43ca057daba8e0"
+    },
+    {
+      "role": "annex_a",
+      "path": "request/web操作采集需求/附件A-字段说明.md",
+      "resource": "authority/附件A-字段说明.md",
+      "sha256": "0c3fe9b2050f55c25cec8ef5145ed3ad0d569aa0d0022f0293c21c4406857639"
+    },
+    {
+      "role": "annex_b",
+      "path": "request/web操作采集需求/附件B-动作空间与坐标系.md",
+      "resource": "authority/附件B-动作空间与坐标系.md",
+      "sha256": "564ab9cc7a4297d3966aaebe5e14c4090e0b056da60072e232744a00422f5ed2"
+    }
+  ],
+  "internal_workflow_rules_are_not_customer_requirements": true
+}

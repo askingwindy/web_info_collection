@@ -1,0 +1,15 @@
+{
+  "schema_version": "webcollect-batch-config-1",
+  "run_id": "s1-fixed100-no-model-PROPOSED-not-started",
+  "mode": "real",
+  "budget": {
+    "max_discovery_candidates": 100,
+    "max_probe_pages": 220,
+    "max_run_seconds": 3600,
+    "max_concurrent_jobs": 1,
+    "min_domain_interval_seconds": 3,
+    "lease_seconds": 300,
+    "max_job_attempts": 2
+  },
+  "model": null
+}

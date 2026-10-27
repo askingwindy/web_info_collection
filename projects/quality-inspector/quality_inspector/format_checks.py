@@ -7,12 +7,14 @@ import argparse,csv,hashlib,json,re,sys
 from collections import Counter,defaultdict
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 from PIL import Image
 from .checksums import verify_manifest
+from .layout import discover, package_document_paths
 from jsonschema import Draft202012Validator,validators
 
 VERSION='customer-proxy-0.2'
-REQ='request/需求书-Web浏览器自动化操作轨迹数据集.md'
+REQ='request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md'
 A='request/web操作采集需求/附件A-字段说明.md'
 B='request/web操作采集需求/附件B-动作空间与坐标系.md'
 CL='request/需求澄清记录.md'
@@ -31,10 +33,10 @@ CATALOG=[
  ('C06','confirmed','PNG files, identical resolution, image/tree linkage',REQ+'#7.3–4',A+'#界面树文件 / 通用约定'),
  ('C07','confirmed','unique element IDs and resolvable action/parent references; exact target text',A+'#界面树文件',REQ+'#7.8'),
  ('C08','confirmed','integer pixel coordinates, valid boxes, point/arguments consistency',B+'#1–2',REQ+'#4 / #7.7'),
- ('C09','confirmed','Web action/tool equality and documented arguments',B+'#1',REQ+'#7.9'),
+ ('C09','confirmed','Web action/tool equality, documented arguments and canonical Windows shortcut delivery representation',B+'#1',CL+'#快捷键的 Windows 交付表达',REQ+'#7.9'),
  ('C10','confirmed','success states and explicit final complete',REQ+'#6 / #7.10–11',A+'#final_state_image'),
  ('C11','confirmed','five effective steps excluding wait/complete, or short-flow reason',CL+'#有效操作步',REQ+'#2 / #7.6'),
- ('C12','confirmed','text contains prohibited visible-process/selector fragments',REQ+'#7.14–15'),
+ ('C12','confirmed','text has no prohibited process/selector fragments; task titles use corner quotes; step_result excludes observation placeholders and known navigation noise',REQ+'#7.14–15',REQ+'#6.任务指令专有名词',A+'#步骤字段/step_result'),
  ('C13','confirmed','batch metadata rows, qc_report and SHA256SUMS',REQ+'#3 / #7'),
  ('C14','confirmed','source/collection/readme/ground-truth documentation supplied outside samples',REQ+'#3'),
  ('C15','confirmed','IDs unique within inspected package',REQ+'#3',A+'#sample_id'),
@@ -49,6 +51,200 @@ CATALOG=[
  ('U04','unknown','pixel semantic continuity, real viewport/truth/privacy and final result acceptance',REQ+'#1 / #4 / #7.13,16,17',CL+'#账号与页面信息'),
  ('U05','unknown','complete delivery distributions, four-route near-duplicate adjudication and customer sampling',REQ+'#2 / #5–7'),
  ('N01','confirmed','no later website replay required; archived user clarification overrides replay clause',CL+'#验收范围')]
+
+def _task_titles_outside_corner_quotes(text):
+    """Literal task-only check; preserve book marks inside quoted original text.
+
+    Customer references use book marks in ordinary step prose, so this check
+    does not reinterpret those fields or synchronized target/control strings.
+    It is implemented here independently of any producer text transformer.
+    """
+    depth=0;books=[];outside=[]
+    for index,character in enumerate(text):
+        if character=='「':depth+=1
+        elif character=='」':depth=max(0,depth-1)
+        elif character=='《':books.append((index,depth))
+        elif character=='》' and books:
+            start,opening_depth=books.pop()
+            if opening_depth==0:outside.append(text[start:index+1])
+    return outside
+
+
+def prohibited_narrative(text):
+    """Literal contract exclusions only; this is not full language validation.
+
+    Quoted original UI names can contain hashes or technical identifiers. New
+    selector/identifier heuristics inspect unquoted prose and explicit machine
+    labels, rather than rejecting every occurrence of an English word.
+    """
+    reasons=[]
+    if re.search(r'DOM|XPath|红圈|蓝框|触点|按既定流程|回放|脚本|%[0-9a-fA-F]{2}',text):
+        reasons.append('prohibited process/selector text')
+    depth=0;unquoted=[]
+    for character in text:
+        if character=='「':depth+=1;unquoted.append(' ')
+        elif character=='」':depth=max(0,depth-1);unquoted.append(' ')
+        elif not depth:unquoted.append(character)
+    visible_prose=''.join(unquoted)
+    patterns=[
+        (r'(?<![\w#])#[A-Za-z_][\w-]*','unquoted CSS ID selector'),
+        (r'(?:CSS\s*)?(?:选择器|selector)\s*[:：=]?\s*[.#\[]','explicit selector label'),
+        (r'(?<!\w)(?:e\d+|(?:node|element)[_:-]?\d+)(?!\w)','machine element identifier'),
+        (r'(?:元素|控件)\s*(?:编号|[Ii][Dd])\s*[:：=]?\s*[A-Za-z0-9_-]+','machine element ID description'),
+        (r'控件\s*\d+\s*个','DOM/control count description'),
+    ]
+    for pattern,reason in patterns:
+        if re.search(pattern,visible_prose):reasons.append(reason)
+    return reasons
+
+
+def step_observation_issues(text):
+    """Reject explicit non-observations, not infer full pixel semantics.
+
+    This field must describe what changed. Deferring that description to a later
+    reviewer or only reporting that an operation ran does not supply one. Exact
+    quoted UI states remain possible observations and are left to visual review.
+    The repeated numeral rule is intentionally limited to generated scroll prose;
+    it does not ban ordinary numeric content, control labels or quoted source text.
+    """
+    reasons = []
+    quoted_values = re.findall(r'「([^「」]*)」', text)
+    unquoted = re.sub(r'「[^「」]*」', '', text)
+    compact = re.sub(r'[\s，。；：、,.;:!?！？“”\"\'…]+', '', unquoted)
+    if '具体可见变化待独立审核' in compact:
+        reasons.append('step_result defers actual visible observations to a later review')
+    elif not any(value.strip() for value in quoted_values):
+        generic_clauses = [
+            r'(?:已|已经)?(?:成功)?(?:执行|完成)(?:了)?(?:本步|当前|该)?(?:动作|操作|步骤)',
+            r'(?:本步|当前|该)?(?:动作|操作|步骤)(?:已|已经)?(?:执行|完成|成功|结束)',
+            r'(?:已|已经)?(?:点击|输入|滚动|返回)(?:成功|完成|结束)',
+            r'(?:已|已经)?(?:保存|记录)(?:了)?(?:本步|后续|当前|实际|页面|界面|视口|截图|状态|证据|结果|操作后|动作后|的)+',
+            r'(?:具体|实际|可见|详细)?(?:变化|结果|观察|内容|事实)(?:待|等待|留待)(?:独立|人工)?(?:审核|复核|核实|核验|核对)',
+            r'(?:待|等待|留待)(?:独立|人工)?(?:审核|复核|核实|核验|核对)(?:具体|实际|可见|详细)?(?:变化|结果|观察|内容|事实)',
+            r'(?:待|等待|留待)(?:独立|人工)?(?:审核|复核|核实|核验|核对)',
+            r'(?:页面|界面)(?:已|已经)?(?:发生变化|更新|改变)',
+            r'(?:可|将)?(?:继续|进入)(?:下一步|后续步骤)',
+        ]
+        clauses = [re.sub(r'\s+', '', part) for part in re.split(r'[，。；,;.!！?？]+|并且|并', unquoted) if part.strip()]
+        if clauses and all(any(re.fullmatch(pattern, part) for pattern in generic_clauses) for part in clauses):
+            reasons.append('step_result only reports generic execution or deferred review without an actual observation')
+    if re.search(r'滚动.*可见(?:文字|正文)', text):
+        for quoted in re.findall(r'「([^「」]*)」', text):
+            tokens = re.findall(r'[\u4e00-\u9fffA-Za-z0-9]+', quoted)
+            if (len(tokens) >= 4 and len(set(tokens)) == 1
+                    and re.fullmatch(r'[一二三四五六七八九十]', tokens[0])):
+                reasons.append('step_result quotes repeated navigation numerals instead of a meaningful visible change')
+                break
+    return reasons
+
+
+_WINDOWS_MODIFIERS = ('ctrl', 'alt', 'shift', 'win')
+_WINDOWS_ALIASES = {'control': 'ctrl', 'ctl': 'ctrl', 'windows': 'win', 'super': 'win',
+                    'return': 'enter', 'esc': 'escape', 'spacebar': 'space',
+                    'pgup': 'pageup', 'pgdn': 'pagedown', 'del': 'delete', 'ins': 'insert',
+                    'left': 'arrowleft', 'right': 'arrowright', 'up': 'arrowup', 'down': 'arrowdown'}
+_WINDOWS_NAMES = {'enter', 'escape', 'tab', 'backspace', 'delete', 'insert', 'space',
+                  'home', 'end', 'pageup', 'pagedown', 'arrowleft', 'arrowright',
+                  'arrowup', 'arrowdown', 'capslock', 'numlock', 'scrolllock', 'pause',
+                  'printscreen', 'contextmenu'}
+_WINDOWS_LABELS = {'ctrl': 'Ctrl', 'alt': 'Alt', 'shift': 'Shift', 'win': 'Win',
+                   'enter': 'Enter', 'escape': 'Esc', 'tab': 'Tab', 'backspace': 'Backspace',
+                   'delete': 'Delete', 'insert': 'Insert', 'space': 'Space', 'home': 'Home',
+                   'end': 'End', 'pageup': 'PageUp', 'pagedown': 'PageDown', 'arrowleft': 'Left',
+                   'arrowright': 'Right', 'arrowup': 'Up', 'arrowdown': 'Down',
+                   'capslock': 'CapsLock', 'numlock': 'NumLock', 'scrolllock': 'ScrollLock',
+                   'pause': 'Pause', 'printscreen': 'PrintScreen', 'contextmenu': 'ContextMenu'}
+_MAC_COMMAND_KEYS = set('acvxzs fponwtlrdgbiuk'.replace(' ', ''))
+
+
+def canonical_windows_keys(keys, source_os=None):
+    """Independently normalize declared Windows delivery names, never raw logs.
+
+    Only documented common Command chords have a functional Ctrl mapping.
+    Ambiguous macOS shortcuts and unknown key names must be resolved explicitly.
+    """
+    def reject():
+        raise ValueError('WINDOWS_SHORTCUT_MAPPING_REQUIRED')
+    if (not isinstance(keys, list) or not keys or
+            any(not isinstance(key, str) or not key or key != key.strip() for key in keys)):
+        reject()
+    os_name = source_os.casefold() if isinstance(source_os, str) else ''
+    is_mac = os_name in {'mac', 'macos', 'darwin', 'mac os x'}
+    is_windows = os_name in {'win32', 'win64'} or os_name.startswith('windows')
+    modifiers = []; primary = None; command = False
+    for key in keys:
+        name = key.casefold()
+        if name in {'option', 'opt', '⌥'}:
+            reject()
+        if name in {'meta', 'command', 'cmd', '⌘'}:
+            if is_mac:
+                name = 'command'
+            elif is_windows and name == 'meta':
+                name = 'win'
+            else:
+                reject()
+        else:
+            name = _WINDOWS_ALIASES.get(name, name)
+        if name in _WINDOWS_MODIFIERS or name == 'command':
+            if primary is not None or name in modifiers:
+                reject()
+            modifiers.append(name)
+            command = command or name == 'command'
+        else:
+            if primary is not None:
+                reject()
+            if len(key) == 1 and key.isprintable():
+                primary = key
+            elif name in _WINDOWS_NAMES or re.fullmatch(r'f(?:[1-9]|1[0-9]|2[0-4])', name):
+                primary = name
+            else:
+                reject()
+    if primary is None:
+        if len(modifiers) != 1 or command:
+            reject()
+        return modifiers
+    if command:
+        if ('alt' in modifiers or 'win' in modifiers or 'ctrl' in modifiers or
+                not (primary.casefold() in _MAC_COMMAND_KEYS or
+                     (primary in '123456789' and 'shift' not in modifiers))):
+            reject()
+        modifiers[modifiers.index('command')] = 'ctrl'
+    if len(set(modifiers)) != len(modifiers):
+        reject()
+    if modifiers and len(primary) == 1:
+        primary = primary.lower()
+    return [name for name in _WINDOWS_MODIFIERS if name in modifiers] + [primary]
+
+
+def windows_key_label(keys):
+    return '+'.join(_WINDOWS_LABELS.get(key, key.upper() if len(key) == 1 or key.startswith('f') else key)
+                    for key in keys)
+
+
+def is_select_all_combination(keys):
+    # Compatibility query only; every hotkey is now checked under one vocabulary.
+    try:
+        return canonical_windows_keys(keys, 'macOS') == ['ctrl', 'a']
+    except ValueError:
+        return False
+
+
+def delivered_call_matches_capture(executed, delivered, source_os=None):
+    """Preserve exact calls except the declared Windows shortcut mapping."""
+    if executed == delivered:
+        return True
+    if not isinstance(executed, dict) or executed.get('tool_name') != 'hotkey':
+        return False
+    arguments = executed.get('arguments')
+    if not isinstance(arguments, dict):
+        return False
+    try:
+        keys = canonical_windows_keys(arguments.get('keys'), source_os)
+    except ValueError:
+        return False
+    normalized = dict(executed, arguments=dict(arguments, keys=keys))
+    return normalized == delivered
+
 
 def catalog():
     rows=[{'id':r[0],'certainty':r[1],'rule':r[2],'sources':list(r[3:])} for r in CATALOG]
@@ -129,7 +325,7 @@ def sample_check(directory,diagnostic_allow_empty_task_type=False):
             if rel!=canonical:errors.append(problem('C05',label+'/'+kind,'Expected '+canonical))
             try:
                 p=safe_path(directory,rel)
-                if not p.is_file():raise FileNotFoundError(rel)
+                if p.is_symlink() or not p.is_file():raise FileNotFoundError('Missing or symlink evidence: '+rel)
                 if kind=='image_path':
                     with Image.open(p) as im:
                         if im.format!='PNG' or list(im.size)!=res:errors.append(problem('C06',label+'/'+kind,'PNG format/resolution mismatch.'))
@@ -160,8 +356,15 @@ def sample_check(directory,diagnostic_allow_empty_task_type=False):
         if set(args)!=set(spec):errors.append(problem('C09',label+'/tool_call/arguments','Keys must match documented action parameters: '+','.join(spec)))
         for k,typ in spec.items():
             if k not in args:continue
-            v=args[k];valid=type(v)is int if typ=='integer' else isinstance(v,str) if typ=='string' else isinstance(v,list) and bool(v) and all(isinstance(x,str) for x in v) if typ=='strings' else v in ['up','down','left','right'] if typ=='direction' else v in ['success','infeasible']
+            v=args[k];valid=type(v)is int if typ=='integer' else isinstance(v,str) if typ=='string' else isinstance(v,list) and bool(v) and all(isinstance(x,str) and bool(x.strip()) for x in v) if typ=='strings' else v in ['up','down','left','right'] if typ=='direction' else v in ['success','infeasible']
             if not valid:errors.append(problem('C09',label+'/tool_call/arguments/'+k,'Invalid parameter type/value.'))
+        if t=='open_url' and isinstance(args.get('url'),str):
+            try:
+                url=args['url'];parsed=urlsplit(url)
+                valid=bool(url and parsed.scheme and (parsed.netloc or parsed.path)) and not any(c.isspace() for c in url)
+                if parsed.scheme in ('http','https'):valid=valid and bool(parsed.hostname)
+            except ValueError:valid=False
+            if not valid:errors.append(problem('C09',label+'/tool_call/arguments/url','open_url requires an absolute, nonempty URL; no scheme or domain whitelist is imposed.'))
         if tool['timestamp']:
             try:datetime.fromisoformat(tool['timestamp'].replace('Z','+00:00'))
             except ValueError:errors.append(problem('C16',label+'/tool_call/timestamp','Not ISO8601.'))
@@ -184,6 +387,20 @@ def sample_check(directory,diagnostic_allow_empty_task_type=False):
         if t not in CONTROL and t!='hotkey' and (ac['target_element_id'] or ac['target_text']):errors.append(problem('C09',label,'Non-control action must not name/reference a control.'))
         if t=='type' and ac['input_text']!=args.get('text'):errors.append(problem('C09',label+'/input_text','Typed text differs from tool arguments.'))
         if t=='hotkey' and isinstance(args.get('keys'),list) and ac['input_text']!='+'.join(x for x in args['keys'] if isinstance(x,str)):errors.append(problem('C09',label+'/input_text','Hotkey text differs from keys.'))
+        if t=='hotkey':
+            try:
+                canonical_keys = canonical_windows_keys(args.get('keys'), a['device_info'].get('os_name'))
+            except ValueError:
+                errors.append(problem('C09',label+'/tool_call/arguments/keys','WINDOWS_SHORTCUT_MAPPING_REQUIRED: hotkey must use declared Windows key names and an unambiguous platform mapping.'))
+            else:
+                if args['keys'] != canonical_keys:
+                    errors.append(problem('C09',label+'/tool_call/arguments/keys','Hotkey delivery must use canonical Windows keys; raw capture keys stay unchanged.'))
+                if ac['input_text'] != '+'.join(canonical_keys):
+                    errors.append(problem('C09',label+'/input_text','Hotkey delivery input_text must match the canonical Windows keys.'))
+                if ac['target_text'] != windows_key_label(canonical_keys):
+                    errors.append(problem('C09',label+'/target_text','Hotkey delivery target_text must use the canonical Windows display names.'))
+        if t=='hotkey' and (not ac['target_text'].strip() or ac['target_element_id'] or 'target_bbox' in ac):
+            errors.append(problem('C09',label+'/target_text','Hotkey must name the key/combination and must not reference a control or box.'))
         if t not in ('type','hotkey') and ac['input_text']:errors.append(problem('C09',label+'/input_text','Non-input action has input_text.'))
         if t=='drag':
             end=ac.get('end_coordinate',[])
@@ -194,17 +411,30 @@ def sample_check(directory,diagnostic_allow_empty_task_type=False):
         texts={k:st[k] for k in ['page_name','user_goal','next_step_rationale','step_result']};texts.update({k:ac[k] for k in ['precondition','expected_result']})
         for k,v in texts.items():
             if not re.search(r'[\u4e00-\u9fff]',v):errors.append(problem('C12',label+'/'+k,'Narrative has no Chinese characters; full language/semantic acceptance remains UNKNOWN.'))
-            if re.search(r'DOM|XPath|红圈|蓝框|触点|按既定流程|回放|脚本|%[0-9a-fA-F]{2}',v):errors.append(problem('C12',label+'/'+k,'Explicitly prohibited process/selector text.'))
+            forbidden=prohibited_narrative(v)
+            if forbidden:errors.append(problem('C12',label+'/'+k,'Explicitly prohibited machine/process text: '+', '.join(forbidden)))
+        for reason in step_observation_issues(st['step_result']):
+            errors.append(problem('C12',label+'/step_result',reason+'; Annex A requires the actual post-action observation.'))
     if a['steps'][-1]['action']['action_type']!='complete':errors.append(problem('C10','steps','Missing explicit final complete.'))
-    if a.get('final_state_image') not in (None,'') and a['final_state_image']!=a['steps'][-1]['image_path']:errors.append(problem('C10','final_state_image','Web delivery final image must link to final screenshot.'))
+    if a['terminal_type']=='Web' and a.get('final_state_image')!=a['steps'][-1]['image_path']:errors.append(problem('C10','final_state_image','Web delivery final image must link to final screenshot, including when the field is absent or empty.'))
+    if a.get('short_flow') is True and (effective>=5 or not a.get('short_flow_reason','').strip()):errors.append(problem('C11','short_flow','Short-flow declaration must describe fewer than five effective actions with a nonempty reason.'))
     actual={str(p.relative_to(directory)) for p in directory.rglob('*') if p.is_file() or p.is_symlink()}
     for extra in sorted(actual-expected):errors.append(problem('C05',extra,'Extra file inside sample.'))
+    for child in directory.rglob('*'):
+        if child.is_symlink():errors.append(problem('C05',child.relative_to(directory),'Symlink inside sample.'))
+        elif child.is_dir() and child.relative_to(directory).as_posix() not in ['images','ui_tree']:
+            errors.append(problem('C05',child.relative_to(directory),'Extra directory inside sample, including empty directories.'))
     for k in ['task_instruction','final_result','completion_judgement']:
         if not re.search(r'[\u4e00-\u9fff]',a[k]):errors.append(problem('C12',k,'Narrative contains no Chinese characters.'))
-        if re.search(r'DOM|XPath|红圈|蓝框|触点|按既定流程|回放|脚本|%[0-9a-fA-F]{2}',a[k]):errors.append(problem('C12',k,'Prohibited process/selector text.'))
+        forbidden=prohibited_narrative(a[k])
+        if forbidden:errors.append(problem('C12',k,'Prohibited machine/process text: '+', '.join(forbidden)))
+    titles=_task_titles_outside_corner_quotes(a['task_instruction'])
+    if titles:errors.append(problem('C12','task_instruction',
+        'Requirement §6 task titles outside quoted original text must use 「」 instead of 《》.',
+        unquoted_book_titles=titles))
     return {'sample_path':str(directory),'sample_id':a['sample_id'],'confirmed_format_pass':not errors,'errors':errors,'observations':observations,'unknown_rule_ids':['U01','U02','U03','U04'],'customer_acceptance':'UNKNOWN','total_steps':n,'effective_steps':effective,'images':images,'source_identity':a['trajectory_source'],'action_sequence':[(st['action']['action_type'],st['action']['target_text'],st['page_name']) for st in a['steps']]}
 
-def batch_check(batch,samples):
+def batch_check(batch,samples,layout=None):
     errors=[];observations=[];batch=Path(batch);csvp=batch/'metadata.csv';docs={name:(batch/name).is_file() for name in ['metadata.csv','qc_report.md','SHA256SUMS']}
     for k,v in docs.items():
         if not v:errors.append(problem('C13',batch/k,'Required batch delivery file missing.'))
@@ -234,7 +464,7 @@ def batch_check(batch,samples):
     ground_truth_checked=0
     for sample in samples:
         if 'sample_id' not in sample:continue
-        sid=sample['sample_id'];gp=batch/'evidence'/sid/'ground_truth.json'
+        sid=sample['sample_id'];gp=layout.ground_truth(Path(sample['sample_path'])) if layout else batch/'evidence'/sid/'ground_truth.json'
         try:
             a=load(Path(sample['sample_path'])/'annotation.json');expected=[{'step_id':st['step_id'],'element_id':st['action']['target_element_id'],'text':st['action']['target_text'],'bbox':st['action'].get('target_bbox')} for st in a['steps'] if st['action']['action_type'] in CONTROL]
             if load(gp)!=expected:errors.append(problem('C14',gp,'Target truth archive differs from delivered control annotations.'))
@@ -257,11 +487,22 @@ def observations_from_examples(root):
     return [{'path':p,'types':sorted(d['types']),'observed_distinct_value_count':len(d['observed_values']),'observed_values_preview':sorted(d['observed_values'])[:8],'examples':sorted(d['example_ids']),'certainty':'observed_only_NOT_closed_enum_or_requiredness','warning':'Observed values never become hard constants/enums without a prose rule.'} for p,d in sorted(data.items())]
 
 def run(repo,dataset):
-    repo=Path(repo);dataset=Path(dataset);paths=sorted(dataset.glob('*/samples/*/annotation.json'));samples=[sample_check(p.parent) for p in paths];batches=[]
-    for batch in sorted({p.parent.parent.parent for p in paths}):batches.append(batch_check(batch,[s for s in samples if Path(s['sample_path']).parent.parent==batch]))
-    ids=[s.get('sample_id') for s in samples];package_errors=[]
+    repo=Path(repo) if repo is not None else None;dataset=Path(dataset);layout=discover(dataset);paths=layout.annotations;samples=[sample_check(p.parent) for p in paths];batches=[]
+    for batch in layout.batches:batches.append(batch_check(batch,[s for s in samples if layout.batch_for(Path(s['sample_path']))==batch],layout))
+    ids=[s.get('sample_id') for s in samples];package_errors=[problem('C05',dataset,message) for message in layout.errors]
+    if layout.kind=='customer-flat':
+        for name in ['evidence','provenance','reviews','manifest.json','candidate_manifest.json','source_manifest.json','selection-provenance.json']:
+            if (dataset/name).exists():package_errors.append(problem('C05',dataset/name,'Internal capture/review/provenance artifacts belong outside the customer package.'))
+        annex_b=dataset/'附件B-动作空间与坐标系.md';authority_b=repo/B if repo is not None else None
+        if not annex_b.is_file():package_errors.append(problem('C14',annex_b,'Original Annex B is required in the customer package.'))
+        elif authority_b is not None and authority_b.is_file() and sha(annex_b)!=sha(authority_b):package_errors.append(problem('C14',annex_b,'Original Annex B differs from the archived authority; put additions in the separate system-prompt document.'))
+        prompt=dataset/'动作空间与系统提示.md';prompt_text=prompt.read_text() if prompt.is_file() else ''
+        for sample in samples:
+            dtype=sample.get('source_identity',{}).get('data_type')
+            if dtype and not re.search(r'^#{1,6}\s+'+re.escape(dtype)+r'\s*$',prompt_text,re.M):
+                package_errors.append(problem('C14',prompt,'Missing system-prompt chapter named for data_type: '+dtype,sample_id=sample.get('sample_id')))
     # Required document roles, not guessed exclusive customer filenames.
-    choices={'readme':['README.md'],'fields':['docs/字段说明.md','docs/附件A-字段说明.md'],'synthesis':['docs/合成方式说明.md','docs/本候选标注修订说明.md'],'source':['docs/来源与合规说明.md','docs/历史来源与采集方式说明.md','docs/合成方式说明.md']}
+    choices=package_document_paths(dataset)
     declared={}
     for declaration in ['document_roles.json','candidate_manifest.json']:
         if (dataset/declaration).is_file():
@@ -284,14 +525,14 @@ def run(repo,dataset):
             role_results[role]={'path':found,'status':'PASS' if found else 'REVIEW_REQUIRED','scope':'existence_only_not_semantic_acceptance'}
     # Missing conventional names alone do not prove a missing role: the
     # customer's prose does not prescribe exclusive filenames for these docs.
-    if not paths:package_errors.append(problem('C05',dataset,'No sample annotations found under batch/samples/*/annotation.json.'))
+    if not paths:package_errors.append(problem('C05',dataset,'No sample annotations found under samples/<id>/ or <batch>/samples/<id>/.'))
     if len(ids)!=len(set(ids)):package_errors.append(problem('C15','sample_id','Duplicate IDs within inspected package.'))
     exact=defaultdict(set)
     for s in samples:
         for im in s.get('images',[]):exact[im['sha256']].add(s.get('sample_id'))
     duplicate_groups=[{'rule_id':'C17','sha256':h,'sample_ids':sorted(ids),'occurrences':[{'sample_id':s['sample_id'],'step':im['step'],'path':str(Path(s['sample_path'])/f'images/step_{im["step"]:03}.png')} for s in samples for im in s.get('images',[]) if im['sha256']==h]} for h,ids in exact.items() if len(ids)>1]
     pairs=sorted({tuple(sorted((x,y))) for g in duplicate_groups for x in g['sample_ids'] for y in g['sample_ids'] if x<y})
-    return {'tool':VERSION,'customer_program_executed':False,'authority':'archived prose + original examples, not internally fixed M1 constants','dataset':str(dataset),'sample_count':len(samples),'confirmed_sample_format_pass':sum(s['confirmed_format_pass'] for s in samples),'confirmed_sample_format_fail':sum(not s['confirmed_format_pass'] for s in samples),'confirmed_sample_issue_count':sum(len(s['errors']) for s in samples),'batch_count':len(batches),'confirmed_batch_contract_fail':sum(not b['confirmed_batch_contract_pass'] for b in batches),'confirmed_batch_issue_count':sum(len(b['errors']) for b in batches),'package_errors':package_errors,'document_roles':role_results,'samples':samples,'batches':batches,'exact_cross_sample_image_groups':duplicate_groups,'confirmed_duplicate_pair_count':len(pairs),'confirmed_duplicate_pairs':[list(p) for p in pairs],'confirmed_quality_pass':not duplicate_groups,'exact_duplicate_note':'Customer §6 route-1 potential rejection evidence; no near-duplicate algorithm or global adjudication executed. Pilot is not full production delivery.','unknown_rules':[r for r in catalog() if r['certainty']=='unknown'],'inferred_rules':[r for r in catalog() if r['certainty']=='inferred'],'customer_acceptance':'UNKNOWN','delivery_ready':False,'no_replay_requirement':{'source':CL+'#验收范围','M1_replay_missing_is_not_customer_format_blocker':True}}
+    return {'tool':VERSION,'customer_program_executed':False,'authority':'archived prose + original examples, not internally fixed M1 constants','dataset':str(dataset),'layout':layout.kind,'sample_count':len(samples),'confirmed_sample_format_pass':sum(s['confirmed_format_pass'] for s in samples),'confirmed_sample_format_fail':sum(not s['confirmed_format_pass'] for s in samples),'confirmed_sample_issue_count':sum(len(s['errors']) for s in samples),'batch_count':len(batches),'confirmed_batch_contract_fail':sum(not b['confirmed_batch_contract_pass'] for b in batches),'confirmed_batch_issue_count':sum(len(b['errors']) for b in batches),'package_errors':package_errors,'document_roles':role_results,'samples':samples,'batches':batches,'exact_cross_sample_image_groups':duplicate_groups,'confirmed_duplicate_pair_count':len(pairs),'confirmed_duplicate_pairs':[list(p) for p in pairs],'confirmed_quality_pass':not duplicate_groups,'exact_duplicate_note':'Customer §6 route-1 potential rejection evidence; no near-duplicate algorithm or global adjudication executed. Pilot is not full production delivery.','unknown_rules':[r for r in catalog() if r['certainty']=='unknown'],'inferred_rules':[r for r in catalog() if r['certainty']=='inferred'],'customer_acceptance':'UNKNOWN','delivery_ready':False,'no_replay_requirement':{'source':CL+'#验收范围','M1_replay_missing_is_not_customer_format_blocker':True}}
 
 def field_contract_matrix():
     rows=[]

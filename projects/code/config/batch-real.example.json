@@ -1,0 +1,36 @@
+{
+  "schema_version": "webcollect-batch-config-1",
+  "run_id": "REPLACE_WITH_AUTHORIZED_RUN_ID",
+  "mode": "real",
+  "budget": {
+    "max_model_requests": null,
+    "max_reserved_tokens": null,
+    "max_model_cost_micros": null,
+    "currency": "REPLACE_WITH_BILLING_CURRENCY",
+    "max_discovery_candidates": null,
+    "max_probe_pages": null,
+    "max_run_seconds": null,
+    "max_concurrent_jobs": 1,
+    "min_domain_interval_seconds": 2,
+    "min_model_interval_seconds": 1,
+    "lease_seconds": 300
+  },
+  "model": {
+    "provider": "chat-completions",
+    "model": null,
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "api_key_env": "OPENAI_API_KEY",
+    "timeout_seconds": 30,
+    "reserve_input_tokens": null,
+    "max_completion_tokens": null,
+    "max_images": null,
+    "reserve_cost_micros": null,
+    "rates": {
+      "version": null,
+      "source": null,
+      "input": null,
+      "cached_input": null,
+      "output": null
+    }
+  }
+}

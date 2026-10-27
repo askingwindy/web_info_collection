@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from .browser import fingerprint
 from .validate import read_json
+from .action_normalization import normalize_delivery_arguments
 
 
 def audit_capture(batch, sample_id):
@@ -27,7 +28,10 @@ def audit_capture(batch, sample_id):
                 if not attempt['started_ns']<=attempt['ended_ns'] or attempt['ended_ns']/1e9>started+0.001 or started>ended:fail(number,'截图与动作的先后时间不一致')
                 if previous_end and attempt['started_ns']/1e9<previous_end-0.001:fail(number,'本步截图早于上步动作结束')
                 previous_end=ended
-                if raw['executed_action']!={'tool_name':step['tool_call']['tool_name'],'arguments':step['tool_call']['arguments']}:fail(number,'动作标注与实际执行参数不一致')
+                actual=raw['executed_action']
+                expected={'tool_name':step['tool_call']['tool_name'],'arguments':step['tool_call']['arguments']}
+                normalized={**actual,'arguments':normalize_delivery_arguments(actual.get('tool_name'),actual.get('arguments'),data.get('device_info',{}).get('os_name'))}
+                if normalized!=expected:fail(number,'动作标注与实际执行参数不一致（仅允许已声明的Windows快捷键映射）')
                 target=raw.get('target_element')
                 if target:
                     expected_ground.append({'step_id':number,'element_id':target['element_id'],'text':target['text'],'bbox':target['bbox']})

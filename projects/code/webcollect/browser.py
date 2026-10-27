@@ -161,10 +161,12 @@ def fingerprint(state):
     return hashlib.sha256(json.dumps(state,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
 
 
-async def observe(page, selector=None, index=0, timeout=15):
+async def observe(page, selector=None, index=0, timeout=15, assertions=None):
     """A stalled page must reject its task, never stall the entire batch."""
     try:
-        return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,{'selector':selector,'index':index}),timeout=timeout)
+        options={'selector':selector,'index':index}
+        if assertions:options['assertions']=assertions
+        return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,options),timeout=timeout)
     except asyncio.TimeoutError as error:
         raise TimeoutError(f'页面同步观察超过{timeout}秒，停止该任务并保留检查点') from error
 
@@ -194,7 +196,7 @@ async def viewport_png(page):
         return base64.b64decode(result['data'],validate=True),{'method':'chrome_rendered_viewport','font_wait_error':str(error),'device_metrics_reasserted':metrics,'font_rendering_policy':'actual browser fallback; no page content or resource modification'}
 
 
-async def capture(page, selector=None, index=0, retries=8):
+async def capture(page, selector=None, index=0, retries=8, assertions=None):
     """严格匹配前后 DOM；仅在错配后有界自然等待，不修改页面或暂停动画。
 
     retries remains the total number of attempts, including when explicitly
@@ -217,10 +219,10 @@ async def capture(page, selector=None, index=0, retries=8):
         requested_wait+=native_window['requested_wait_ms']/1000
         observed_wait+=native_window['observed_wait_ms']/1000
         started=time.time_ns()
-        before=await observe(page,selector,index)
+        before=await observe(page,selector,index,**({'assertions':assertions} if assertions else {}))
         try:png,screenshot_evidence=await asyncio.wait_for(viewport_png(page),timeout=25)
         except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
-        after=await observe(page,selector,index)
+        after=await observe(page,selector,index,**({'assertions':assertions} if assertions else {}))
         ended=time.time_ns()
         recent_capture_ms=(ended-started)/1e6
         before_fingerprint=fingerprint(before)
@@ -256,6 +258,15 @@ async def capture(page, selector=None, index=0, retries=8):
     raise error
 
 
+async def verify_execution_state(page, state, selector=None, index=0, assertions=None):
+    """Reject any changed captured state before dispatch, including non-control actions."""
+    live=await observe(page,selector,index,assertions=assertions)
+    if fingerprint(live)!=fingerprint(state):
+        changed=[key for key in sorted(live.keys()|state.keys()) if live.get(key)!=state.get(key)]
+        raise ValueError('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'+','.join(changed))
+    return {'matched':True,'state_fingerprint':fingerprint(live),'target':live.get('target')}
+
+
 def prepare_action(state, operation):
     action=operation['action_type']
     target=state['target']
@@ -265,11 +276,22 @@ def prepare_action(state, operation):
         if not target:raise ValueError('目标未出现在当前视口界面树；必须先显式滚动')
         element=next(e for e in state['elements'] if e['element_id']==target['element_id'])
         if not element['enabled']:raise ValueError('目标控件不可用')
+        expected_label=(operation.get('evidence') or {}).get('target_label')
+        if expected_label:
+            import re
+            compact=lambda text:re.sub(r'\s+','',text)
+            labels=target.get('visible_label_evidence',[])
+            if not any(compact(expected_label) in compact(row.get('text','')) for row in labels):
+                raise ValueError('M4_TARGET_LABEL_UNREADABLE: 目标文字未完整可读；可命中裁切框或无障碍名称不能代替可见标签')
         if action in POINTER:
             if not target['hit_valid']:raise ValueError('目标中心被其他元素遮挡')
             parameters.update(x=target['coordinate'][0],y=target['coordinate'][1])
         if action=='type' and (not target['focused'] or not element['inputable']):
             raise ValueError('type 仅对当前已聚焦的输入控件执行；请先显式点击')
+        if action=='type':
+            value=next((v for v in state.get('values',[]) if v['element_id']==element['element_id']),{})
+            if value.get('input_type') in {'date','time','month','week','datetime-local'}:
+                raise ValueError('原生日期时间控件不支持统一 type 的 insert_text 语义；请规划显式按键操作，不以 fill 替代')
     if action=='scroll':
         parameters.setdefault('x',state['screen_resolution'][0]//2)
         parameters.setdefault('y',state['screen_resolution'][1]//2)
@@ -282,6 +304,11 @@ def prepare_action(state, operation):
     for xkey,ykey in [('x','y'),('end_x','end_y')]:
         if xkey in parameters and not (0<=parameters[xkey]<width and 0<=parameters[ykey]<height):
             raise ValueError('执行前发现坐标越界')
+        if xkey in parameters and any(frame['bbox'][0]<=parameters[xkey]<frame['bbox'][2] and
+            frame['bbox'][1]<=parameters[ykey]<frame['bbox'][3] for frame in state.get('embedded_frames',[])):
+            raise ValueError('UNSUPPORTED_FRAME: 动作坐标落在未读取子树的嵌入框内，拒绝执行')
+    if action=='hotkey' and any(frame.get('focused') for frame in state.get('embedded_frames',[])):
+        raise ValueError('UNSUPPORTED_FRAME: 当前焦点位于嵌入框内，不能向未知子树派发按键')
     return parameters,element
 
 
@@ -293,15 +320,24 @@ async def _execute_action(page, action, args, execution=None):
     elif action=='type':
         native_type=await page.evaluate('document.activeElement?.type')
         if native_type in {'date','time','month','week','datetime-local'}:
-            # These native HTML controls do not accept a full normalized date
-            # via insertText. Focus has already been explicitly verified.
-            handle=await page.evaluate_handle('document.activeElement')
-            await handle.as_element().fill(args['text'])
+            raise ValueError('原生日期时间控件不支持统一 type 的 insert_text 语义，不以 fill 替代')
         else:await page.keyboard.insert_text(args['text'])
     elif action=='hotkey':
-        keymap={'meta':'Meta','ctrl':'Control','alt':'Alt','shift':'Shift','enter':'Enter','escape':'Escape',
-                'tab':'Tab','backspace':'Backspace','delete':'Delete','arrowdown':'ArrowDown','arrowup':'ArrowUp'}
-        await page.keyboard.press('+'.join(keymap.get(key.lower(),key) for key in args['keys']))
+        keymap={'meta':'Meta','command':'Meta','cmd':'Meta','⌘':'Meta',
+                'ctrl':'Control','control':'Control','ctl':'Control','alt':'Alt','option':'Alt','opt':'Alt','⌥':'Alt',
+                'shift':'Shift','win':'Meta','windows':'Meta','super':'Meta','enter':'Enter','return':'Enter',
+                'escape':'Escape','esc':'Escape','tab':'Tab','backspace':'Backspace','delete':'Delete','del':'Delete',
+                'insert':'Insert','ins':'Insert','space':'Space','spacebar':'Space','home':'Home','end':'End',
+                'pageup':'PageUp','pgup':'PageUp','pagedown':'PageDown','pgdn':'PageDown',
+                'arrowdown':'ArrowDown','down':'ArrowDown','arrowup':'ArrowUp','up':'ArrowUp',
+                'arrowleft':'ArrowLeft','left':'ArrowLeft','arrowright':'ArrowRight','right':'ArrowRight',
+                'capslock':'CapsLock','numlock':'NumLock','scrolllock':'ScrollLock','pause':'Pause',
+                'printscreen':'PrintScreen','contextmenu':'ContextMenu'}
+        def native_key(key):
+            if key.lower().startswith('f') and key[1:].isdigit() and 1<=int(key[1:])<=24:
+                return 'F'+str(int(key[1:]))
+            return keymap.get(key.lower(),key)
+        await page.keyboard.press('+'.join(native_key(key) for key in args['keys']))
     elif action=='scroll':
         distance=execution.get('distance',480)
         if type(distance) is not int or distance<=0:raise ValueError('滚动距离须为正整数')

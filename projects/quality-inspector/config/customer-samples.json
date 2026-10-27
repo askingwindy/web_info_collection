@@ -52,12 +52,12 @@
   ],
   "supplemental_documents": [
     {
-      "path": "request/需求书-Web浏览器自动化操作轨迹数据集.md",
-      "sha256": "44ace260935f969d95f01ce07ff88508e732c2ce7e81e35d666d848e85e6e608"
+      "path": "request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md",
+      "sha256": "ad69dc7017a4c1faf027cebe7330a5a1aa51fedea7f0e53afc43ca057daba8e0"
     },
     {
       "path": "request/需求澄清记录.md",
-      "sha256": "61589d3801a034bfc007c0ca247a82490e9b515ab4a903627000dee309523146"
+      "sha256": "af11860a434a16f2078c81fa9a344ad1e0f81a337116dfc30d062c65a4cb3326"
     },
     {
       "path": "request/web操作采集需求/附件A-字段说明.md",

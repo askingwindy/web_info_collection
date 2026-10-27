@@ -14,52 +14,69 @@ def write_json(path, data):
         f.write('\n')
 
 
-def allocate(registry, uri, category, sample_kind='integration', day=None, batch_id=None):
-    """事务分配站点、批次与一个样本；失败保留空号，不回收已分配编号。"""
+def ensure_registry_schema(con):
+    """Create the original three tables, before starting a caller transaction."""
+    con.executescript('''
+      CREATE TABLE IF NOT EXISTS sites (
+        id INTEGER PRIMARY KEY, uri TEXT NOT NULL UNIQUE,
+        category TEXT NOT NULL, kind TEXT NOT NULL, next_sample INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS batches (id TEXT PRIMARY KEY, kind TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS allocations (
+        sample_id TEXT PRIMARY KEY, site_id TEXT NOT NULL, batch_id TEXT NOT NULL);
+    ''')
+
+
+def allocate_in_transaction(con, uri, category, sample_kind='integration', day=None, batch_id=None):
+    """Reserve an ID inside an existing write transaction, without committing.
+
+    Runtime callers persist the task/attempt mapping in this same transaction.
+    A committed reservation is never recycled, including an unstarted attempt.
+    """
+    if not con.in_transaction:
+        raise ValueError('编号分配必须处于调用方写事务中')
     if not re.match(r'^https?://[^\s/]+',uri) or not category.strip():
         raise ValueError('站点必须提供 HTTP(S) URI 和类目')
     if sample_kind not in ('integration', 'real'):
         raise ValueError('未知样本性质')
     day = day or datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
     if not re.fullmatch(r'\d{8}',day): raise ValueError('日期编号须为 YYYYMMDD')
+    row=con.execute('SELECT id,category,kind,next_sample FROM sites WHERE uri=?',(uri,)).fetchone()
+    if row:
+        site_number,old_category,kind,seq=row
+        if kind != sample_kind or old_category != category:
+            raise ValueError('已有 URI 的类目或样本性质不同，不允许静默变更')
+    else:
+        site_number=con.execute('SELECT COALESCE(MAX(id),0)+1 FROM sites').fetchone()[0]
+        if site_number > 999999: raise ValueError('站点编号已超出六位范围')
+        seq=1
+        con.execute('INSERT INTO sites VALUES(?,?,?,?,?)',(site_number,uri,category,sample_kind,seq))
+    site_id=f'S{site_number:06}'
+    if batch_id is None:
+        prefix=f'B{day}_'
+        batch_seq=con.execute('SELECT COUNT(*)+1 FROM batches WHERE id LIKE ?',(prefix+'%',)).fetchone()[0]
+        batch_id=f'{prefix}{batch_seq:03}'
+    elif not re.fullmatch(r'B\d{8}_\d{3,}',batch_id):
+        raise ValueError('批次编号格式不正确')
+    sample_id=f'{site_id}_sample_{seq:06}'
+    existing=con.execute('SELECT kind FROM batches WHERE id=?',(batch_id,)).fetchone()
+    if existing and existing[0]!=sample_kind:raise ValueError('批次样本性质不同')
+    if not existing:con.execute('INSERT INTO batches VALUES(?,?)',(batch_id,sample_kind))
+    con.execute('INSERT INTO allocations VALUES(?,?,?)',(sample_id,site_id,batch_id))
+    con.execute('UPDATE sites SET next_sample=? WHERE id=?',(seq+1,site_number))
+    return {'batch_id':batch_id,'sample_id':sample_id,'site_id':site_id}
+
+
+def allocate(registry, uri, category, sample_kind='integration', day=None, batch_id=None):
+    """事务分配站点、批次与一个样本；失败保留空号，不回收已分配编号。"""
     registry = Path(registry)
     registry.parent.mkdir(parents=True, exist_ok=True)
     con=sqlite3.connect(registry,timeout=30)
     try:
-        con.executescript('''
-          CREATE TABLE IF NOT EXISTS sites (
-            id INTEGER PRIMARY KEY, uri TEXT NOT NULL UNIQUE,
-            category TEXT NOT NULL, kind TEXT NOT NULL, next_sample INTEGER NOT NULL);
-          CREATE TABLE IF NOT EXISTS batches (id TEXT PRIMARY KEY, kind TEXT NOT NULL);
-          CREATE TABLE IF NOT EXISTS allocations (
-            sample_id TEXT PRIMARY KEY, site_id TEXT NOT NULL, batch_id TEXT NOT NULL);
-        ''')
+        ensure_registry_schema(con)
         con.execute('BEGIN IMMEDIATE')
-        row=con.execute('SELECT id,category,kind,next_sample FROM sites WHERE uri=?',(uri,)).fetchone()
-        if row:
-            site_number,old_category,kind,seq=row
-            if kind != sample_kind or old_category != category:
-                raise ValueError('已有 URI 的类目或样本性质不同，不允许静默变更')
-        else:
-            site_number=con.execute('SELECT COALESCE(MAX(id),0)+1 FROM sites').fetchone()[0]
-            if site_number > 999999: raise ValueError('站点编号已超出六位范围')
-            seq=1
-            con.execute('INSERT INTO sites VALUES(?,?,?,?,?)',(site_number,uri,category,sample_kind,seq))
-        site_id=f'S{site_number:06}'
-        if batch_id is None:
-            prefix=f'B{day}_'
-            batch_seq=con.execute('SELECT COUNT(*)+1 FROM batches WHERE id LIKE ?',(prefix+'%',)).fetchone()[0]
-            batch_id=f'{prefix}{batch_seq:03}'
-        elif not re.fullmatch(r'B\d{8}_\d{3,}',batch_id):
-            raise ValueError('批次编号格式不正确')
-        sample_id=f'{site_id}_sample_{seq:06}'
-        existing=con.execute('SELECT kind FROM batches WHERE id=?',(batch_id,)).fetchone()
-        if existing and existing[0]!=sample_kind:raise ValueError('批次样本性质不同')
-        if not existing:con.execute('INSERT INTO batches VALUES(?,?)',(batch_id,sample_kind))
-        con.execute('INSERT INTO allocations VALUES(?,?,?)',(sample_id,site_id,batch_id))
-        con.execute('UPDATE sites SET next_sample=? WHERE id=?',(seq+1,site_number))
+        result=allocate_in_transaction(con,uri,category,sample_kind,day,batch_id)
         con.commit()
-        return {'batch_id':batch_id,'sample_id':sample_id,'site_id':site_id}
+        return result
     except Exception:
         con.rollback()
         raise

@@ -1,0 +1,36 @@
+{
+  "schema_version": "webcollect-batch-config-1",
+  "run_id": "e0-e3-synthetic-development-20261026",
+  "mode": "synthetic",
+  "budget": {
+    "max_model_requests": 30,
+    "max_reserved_tokens": 1800000,
+    "max_model_cost_micros": 0,
+    "currency": "SYNTHETIC_ONLY",
+    "max_discovery_candidates": 100,
+    "max_probe_pages": 120,
+    "max_run_seconds": 86400,
+    "max_concurrent_jobs": 2,
+    "min_domain_interval_seconds": 1,
+    "min_model_interval_seconds": 0,
+    "lease_seconds": 300
+  },
+  "model": {
+    "provider": "synthetic",
+    "model": "synthetic-controlled-json-image-1",
+    "endpoint": null,
+    "api_key_env": null,
+    "timeout_seconds": 30,
+    "reserve_input_tokens": 50000,
+    "max_completion_tokens": 6000,
+    "max_images": 12,
+    "reserve_cost_micros": 0,
+    "rates": {
+      "version": "synthetic-zero-provider-fee-1",
+      "source": "Controlled local adapter; no external AI execution or billing",
+      "input": 0,
+      "cached_input": 0,
+      "output": 0
+    }
+  }
+}

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw
 from . import __version__
 from .storage import allocate, write_json
+from .action_normalization import normalize_delivery_step
 
 
 def program_version():
@@ -29,7 +30,7 @@ def make_step(index, action_type, arguments, last=False):
             'expected_result':'联调页面显示下一状态' if not last else '确认联调页面最终状态'}
     if control: action.update(target_bbox=[100,100,400,200],target_control_type='input')
     if action_type=='drag': action['end_coordinate']=[arguments['end_x'],arguments['end_y']]
-    return {'step_id':index,'image_path':f'images/step_{index:03}.png',
+    step={'step_id':index,'image_path':f'images/step_{index:03}.png',
             'ui_tree_path':f'ui_tree/step_{index:03}.json','page_name':'联调测试页面',
             'user_goal':'确认最终页面状态' if last else '验证联调控件操作',
             'action':action,'tool_call':{'tool_name':action_type,'call_id':f'call_{index:03}',
@@ -38,6 +39,7 @@ def make_step(index, action_type, arguments, last=False):
             'next_step_rationale':'页面显示测试控件，执行联调验证' if not last else '最终页面显示联调完成状态，确认结束',
             'step_result':'联调页面显示下一状态' if not last else '联调结束，真实采集尚未开始',
             'exception_evidence':[]}
+    return normalize_delivery_step(step, 'Windows')
 
 
 def scaffold(output, registry=None):

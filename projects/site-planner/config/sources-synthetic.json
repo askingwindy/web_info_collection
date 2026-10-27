@@ -1,0 +1,11 @@
+{
+  "schema_version": "webcollect-site-sources-1",
+  "sources": [
+    {
+      "kind": "synthetic-directory",
+      "category": "工具",
+      "base_uri": "https://example.org/",
+      "html": "<a href='/forms'>受控工具一</a><a href='/forms#same'>同一链接</a><a href='https://example.net/forms'>受控工具二</a><a href='javascript:void(0)'>无效链接</a>"
+    }
+  ]
+}
