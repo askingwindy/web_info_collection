@@ -659,7 +659,7 @@ def validate_plan(plan):
     validate_m4_plan(plan)
 
 
-async def collect_one(context, task, directory, evidence, ids):
+async def collect_one(context, task, directory, evidence, ids, *, navigation=None):
     from .task_contract import (is_m4_task, validate_m4_task, completion_decision,
                                 terminal_evidence, narrative_evidence, canonical_sha)
     m4=is_m4_task(task)
@@ -689,7 +689,10 @@ async def collect_one(context, task, directory, evidence, ids):
     prepared_locations=set()
     checkpoint_json(evidence/'preparation_decisions.json',preparation)
     try:
-        await page.goto(task['initial_url'],wait_until='domcontentloaded',timeout=30000)
+        if navigation is None:
+            await page.goto(task['initial_url'],wait_until='domcontentloaded',timeout=30000)
+        else:
+            await navigation.goto(page, task['initial_url'], purpose='collection:' + ids['sample_id'])
         await page.wait_for_timeout(task.get('initial_settle_ms',1000))
         write_json(evidence/'initial_navigation.json',{'url':page.url,'timestamp':now(),'task_initial_state':True})
         while planned_index<len(operations):

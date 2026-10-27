@@ -43,7 +43,7 @@ def classify_failure(error):
 
 def source_identity():
     base = Path(__file__).parent
-    names = ['collect.py', 'collect_runtime.py', 'runtime.py', 'storage.py', 'planning.py',
+    names = ['collect.py', 'collect_runtime.py', 'navigation.py', 'batch_core.py', 'runtime.py', 'storage.py', 'planning.py',
              'task_contract.py', 'browser.py', 'snapshot.js', 'production_quality.py',
              'content_preparation.py', 'content_preparation.js', 'production_facts.py',
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
@@ -246,7 +246,7 @@ def close_scope_for_replan(output, registry, reason, evidence, *, now=None):
 
 
 async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
-                     policy_path=None, resume=False, channel='chrome', headless=True):
+                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None):
     from playwright.async_api import async_playwright
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
@@ -420,7 +420,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         task = {**attempt['task'], '_plan_schema_version': plan['schema_version'],
                                 'require_public_origin': True}
                         with phase(phase_ledger, 'browser_collection', scope=meter_identity):
-                            await collect_one(context, task, sample, evidence, ids)
+                            await collect_one(context, task, sample, evidence, ids,
+                                **({'navigation': navigation} if navigation is not None else {}))
                         with phase(phase_ledger, 'structural_check', scope=meter_identity):
                             report = await asyncio.to_thread(validate_sample, sample, 'delivery', {**manifest,
                                 'samples': manifest['samples'] + [attempt['sample_id']]})

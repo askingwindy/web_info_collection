@@ -16,7 +16,7 @@ from .content_preparation import assess_content
 from .storage import write_json
 
 ROUTES = ('NORMAL_M1', 'PREPARE_RECHECK', 'DYNAMIC_CONTENT_TRACK', 'REVIEW_REQUIRED')
-SOURCE_FILES = ('preflight.py', 'media_preflight.py', 'media_preflight.js', 'browser.py',
+SOURCE_FILES = ('preflight.py', 'navigation.py', 'media_preflight.py', 'media_preflight.js', 'browser.py',
                 'content_preparation.py', 'content_preparation.js', 'snapshot.js',
                 'collect.py', 'production_quality.py')
 
@@ -251,7 +251,7 @@ def validate_preflight_binding(plan, plan_path=None):
 
 
 async def preflight_plan(plan_path, output, samples=3, interval_ms=400,
-                         preserve_order=False, channel='chrome', headless=True):
+                         preserve_order=False, channel='chrome', headless=True, navigation=None):
     from playwright.async_api import async_playwright
     from .collect import validate_plan, verify_public_url
     from .production_quality import require_public_task_state
@@ -286,15 +286,20 @@ async def preflight_plan(plan_path, output, samples=3, interval_ms=400,
                     device_scale_factor=1, locale='zh-CN', timezone_id='Asia/Shanghai')
                 folder = output / f'task_{index + 1:03d}'
                 page = None
+                navigation_failure = None
                 def check_url(url):
                     verify_public_url(url, {verify_public_url(task['site_uri']), *task.get('allowed_hosts', [])})
                     require_public_task_state({'url': url})
                 try:
                     page = await context.new_page()
-                    await page.goto(task['initial_url'], wait_until='domcontentloaded', timeout=30000)
+                    if navigation is None:
+                        await page.goto(task['initial_url'], wait_until='domcontentloaded', timeout=30000)
+                    else:
+                        await navigation.goto(page, task['initial_url'], purpose='preflight:' + task['task_id'])
                     await asyncio.sleep(task.get('initial_settle_ms', 1000) / 1000)
                     record = await inspect_page(page, task, folder, samples, interval_ms, check_url)
                 except Exception as failure:
+                    navigation_failure = failure
                     folder.mkdir(parents=True, exist_ok=True)
                     record = {'task_id': task['task_id'], 'site_uri': task['site_uri'],
                               'initial_url': task['initial_url'], 'task_sha256': object_digest(task),
@@ -312,6 +317,9 @@ async def preflight_plan(plan_path, output, samples=3, interval_ms=400,
                         record['cleanup_error'] = str(cleanup)
                 records.append({**record, 'evidence_directory': folder.name})
                 checkpoint_json(output / 'progress.json', progress)
+                from .batch_core import BudgetStop
+                if isinstance(navigation_failure, BudgetStop):
+                    raise navigation_failure
                 print(json.dumps({'task_id': task['task_id'], 'routing': record['summary']['routing'],
                                   'error': record.get('error')}, ensure_ascii=False), flush=True)
                 await asyncio.sleep(1)

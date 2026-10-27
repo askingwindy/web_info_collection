@@ -22,8 +22,9 @@ from webcollect.model_gateway import ModelGateway
 from webcollect.planning import object_sha256, validate_capability
 from webcollect.runtime import domain_key
 from webcollect.bmi_strategy import BMI_INVENTORY_JS, ADAPTER_ID as BMI_ADAPTER_ID, matches_uri as bmi_matches_uri
+from webcollect.date_strategy import DATE_INVENTORY_JS, ADAPTER_ID as DATE_ADAPTER_ID, matches_uri as date_matches_uri
 
-VERSION = 'site-supply-5-exact-page-scope'
+VERSION = 'site-supply-6-observed-date-widget'
 
 
 def normalize_uri(value):
@@ -233,12 +234,13 @@ def discover(ledger, sources_path, output):
 # operated. Runtime rechecks original labels, focus, clipping and hit testing.
 INVENTORY_JS = r'''() => {
  const bmi=(''' + BMI_INVENTORY_JS + r''')();
+ const date=(''' + DATE_INVENTORY_JS + r''')();
  const clean=s=>(s||'').replace(/\s+/g,' ').trim();
  const selector=e=>e.id?'#'+CSS.escape(e.id):e.tagName.toLowerCase()+
    (e.name?'[name="'+CSS.escape(e.name)+'"]':':nth-of-type('+([...e.parentNode.children].filter(x=>x.tagName===e.tagName).indexOf(e)+1)+')');
- return {title:document.title,widgets:bmi.widgets,widget_rejections:bmi.widget_rejections,
+ return {title:document.title,widgets:[...bmi.widgets,...date.widgets],widget_rejections:[...bmi.widget_rejections,...date.widget_rejections],
    result_targets:[...document.querySelectorAll('output,[role="status"],[aria-live],#result')]
-   .filter(e=>e.checkVisibility()).map(e=>({selector:selector(e),text:clean(e.innerText)})).concat(bmi.result_targets),
+   .filter(e=>e.checkVisibility()).map(e=>({selector:selector(e),text:clean(e.innerText)})).concat(bmi.result_targets,date.result_targets),
    forms:[...document.forms].map(f=>({
    label:clean(f.getAttribute('aria-label')||f.querySelector('legend,h1,h2,h3')?.innerText||document.title),
    fields:[...f.elements].filter(e=>['INPUT','TEXTAREA','SELECT','BUTTON'].includes(e.tagName)).map(e=>({
@@ -268,8 +270,9 @@ def inventory_support(uri, inventories):
             raise ValueError('Observed inventory is outside the exact candidate page scope')
         widgets = inventory.get('widgets', [])
         for widget in widgets:
-            if (widget.get('adapter_id') != BMI_ADAPTER_ID or
-                    not bmi_matches_uri(uri) or not bmi_matches_uri(widget.get('page_uri', '')) or
+            matcher = {BMI_ADAPTER_ID: bmi_matches_uri, DATE_ADAPTER_ID: date_matches_uri}.get(widget.get('adapter_id'))
+            if (matcher is None or
+                    not matcher(uri) or not matcher(widget.get('page_uri', '')) or
                     normalize_uri(widget['page_uri']) != uri):
                 raise ValueError('Typed widget is unregistered or outside its observed page scope')
             widget_fields.extend(field for field in widget['fields']

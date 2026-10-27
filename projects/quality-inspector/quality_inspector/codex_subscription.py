@@ -6,6 +6,7 @@ and leaves substantive difference pending until independent cumulative review.
 """
 import argparse
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -49,6 +50,283 @@ def write_json(path, value):
         return
     with path.open('x') as handle:
         handle.write(raw)
+
+
+def implementation_sha256():
+    return {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            for name in ('codex_subscription.py', 'ai_worker.py', 'reviews.py')}
+
+
+def run_config(run_id, model, purpose, max_requests, max_wall_seconds, max_images):
+    return {'run_id': run_id, 'model': model, 'purpose': purpose,
+            'max_exec_invocations': max_requests, 'max_wall_seconds': max_wall_seconds,
+            'max_images': max_images, 'auth': 'chatgpt', 'provider': 'openai',
+            'version': VERSION, 'implementation': implementation_sha256()}
+
+
+def ledger_snapshot(db, keys=None):
+    """Stable exact rows, including failures; never infer unknown usage as zero."""
+    run_row = db.execute('SELECT id,config,started FROM run WHERE id=1').fetchone()
+    rows = db.execute('SELECT key,state,started,directory,result,error FROM requests ORDER BY key').fetchall()
+    if keys is not None:
+        rows = [row for row in rows if row[0] in keys]
+        if {row[0] for row in rows} != set(keys):
+            raise ValueError('Original request rows are missing')
+    return {'run': list(run_row) if run_row else None, 'requests': [list(row) for row in rows]}
+
+
+def amendment_tables(db):
+    db.execute('CREATE TABLE IF NOT EXISTS amendments '
+               '(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created REAL NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS amendment_slots '
+               '(amendment_id TEXT NOT NULL, slot INTEGER NOT NULL, request_key TEXT NOT NULL UNIQUE, '
+               'reserved_seconds REAL NOT NULL, PRIMARY KEY(amendment_id,slot))')
+    db.execute('CREATE TABLE IF NOT EXISTS slot_revisions '
+               '(id TEXT PRIMARY KEY, amendment_id TEXT NOT NULL, slot INTEGER NOT NULL, '
+               'sha256 TEXT NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL, UNIQUE(amendment_id,slot))')
+
+
+def validate_amendment(value):
+    if value.get('schema_version') != 'webcollect-subscription-amendment-1':
+        raise ValueError('Explicit subscription amendment schema required')
+    for field in ('amendment_id', 'authorization_source', 'authorization_quote', 'reason'):
+        if not isinstance(value.get(field), str) or not value[field].strip():
+            raise ValueError('Amendment requires '+field)
+    config = value['config']
+    if (config.get('auth') != 'chatgpt' or config.get('provider') != 'openai'
+            or config.get('purpose') != 'transport_smoke' or config.get('max_exec_invocations') != 2
+            or not 0 < config.get('max_wall_seconds', 0) <= MAX_SECONDS
+            or not 1 <= config.get('max_images', 0) <= MAX_IMAGES
+            or not isinstance(config.get('model'), str) or not config['model'].strip()):
+        raise ValueError('Amendment permits only two bounded ChatGPT transport/calibration invocations')
+    original = value['prior_snapshot']
+    if not original.get('run') or digest(original) != value.get('prior_snapshot_sha256'):
+        raise ValueError('Amendment must bind the unchanged prior ledger snapshot')
+    prior_config = json.loads(original['run'][1])
+    if config['run_id'] != prior_config['run_id']:
+        raise ValueError('Amendment must retain the original run_id')
+    uncertain = {row[0] for row in original['requests'] if row[1] != 'complete'}
+    if set(value.get('acknowledged_unresolved_request_keys', [])) != uncertain:
+        raise ValueError('Every prior unresolved request must be explicitly acknowledged, never erased')
+    artifact_hashes = value.get('prior_artifacts_sha256')
+    if not isinstance(artifact_hashes, dict):
+        raise ValueError('Prior artifact SHA bindings are required')
+    for row in original['requests']:
+        for name in ('request.json', 'execution.json'):
+            if str(Path(row[3])/name) not in artifact_hashes:
+                raise ValueError('Every prior request and execution artifact must remain bound')
+    slots = value.get('slots')
+    if not isinstance(slots, list) or [item.get('slot') for item in slots] != [1, 2]:
+        raise ValueError('Amendment must freeze exactly slots 1 and 2')
+    if [item.get('role') for item in slots] != ['positive_transport', 'negative_calibration']:
+        raise ValueError('Transport must precede the frozen negative calibration')
+    if slots[1].get('depends_on') != 1 or slots[0].get('depends_on') is not None:
+        raise ValueError('Negative calibration must depend on successful transport')
+    if slots[0]['candidate'] == slots[1]['candidate']:
+        raise ValueError('Calibration needs a separately bound evidence case')
+    expires = datetime.fromisoformat(value['expires_at'])
+    if expires.tzinfo is None or expires.timestamp() <= time.time():
+        raise ValueError('Amendment must have a future timezone-aware expiry')
+    if value.get('time_accounting') != 'new_per_exec_reservations_preserve_original_start':
+        raise ValueError('Amendment must explicitly grant fresh bounded per-exec time without resetting the original run')
+    return expires.timestamp()
+
+
+def check_amendment_bindings(db, value, *, check_current=True):
+    keys = [row[0] for row in value['prior_snapshot']['requests']]
+    if ledger_snapshot(db, keys) != value['prior_snapshot']:
+        raise ValueError('Original run or failure rows changed after amendment')
+    for path, expected in value.get('prior_artifacts_sha256', {}).items():
+        if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected:
+            raise ValueError('Original failure artifact changed')
+    if check_current and value['config']['implementation'] != implementation_sha256():
+        raise ValueError('Amended implementation differs from the explicitly frozen revision')
+    if check_current and value['contract_sha256'] != fingerprint()[1]:
+        raise ValueError('Amended contract changed')
+
+
+def amend(ledger, authorization, output):
+    """Append one explicit increment; original run/config/start/request rows stay intact."""
+    value = json.loads(Path(authorization).read_text())
+    validate_amendment(value)
+    sha = digest(value)
+    # No silent creation of a replacement empty ledger.
+    db = sqlite3.connect('file:'+str(Path(ledger).resolve())+'?mode=rw', uri=True, timeout=10)
+    try:
+        amendment_tables(db)
+        db.execute('BEGIN IMMEDIATE')
+        old = db.execute('SELECT sha256 FROM amendments WHERE id=?', (value['amendment_id'],)).fetchone()
+        if old:
+            if old[0] != sha:
+                raise ValueError('Amendment identity cannot be reused with changed authorization')
+        elif db.execute('SELECT COUNT(*) FROM amendments').fetchone()[0]:
+            raise ValueError('This pilot permits only one explicit amendment; budgets cannot be stacked')
+        check_amendment_bindings(db, value)
+        for item in value['slots']:
+            prepared = prepare_sample(item['candidate']['path'], value['config']['max_images'])[0]
+            if prepared != item['candidate']:
+                raise ValueError('Frozen amendment candidate changed')
+        if not old:
+            if ledger_snapshot(db) != value['prior_snapshot']:
+                raise ValueError('Unexpected requests already exist; amendment cannot hide them')
+            db.execute('INSERT INTO amendments VALUES (?,?,?,?)',
+                       (value['amendment_id'], sha, json.dumps(value, sort_keys=True), time.time()))
+        db.commit()
+        receipt = {'schema_version': 'webcollect-subscription-amendment-receipt-1',
+                   'amendment_id': value['amendment_id'], 'authorization_sha256': sha,
+                   'prior_exec_invocations': len(value['prior_snapshot']['requests']),
+                   'additional_exec_limit': 2, 'per_exec_seconds': value['config']['max_wall_seconds'],
+                   'additional_reserved_seconds_limit': 2*value['config']['max_wall_seconds'],
+                   'original_run_and_requests_preserved': True, 'model_requests': 0}
+        write_json(output, receipt)
+        return receipt
+    finally:
+        db.close()
+
+
+def load_amendment(db, amendment_id, slot, config, bound):
+    row = db.execute('SELECT sha256,payload FROM amendments WHERE id=?', (amendment_id,)).fetchone()
+    if not row or type(slot) is not int or slot not in (1, 2):
+        raise ValueError('A registered amendment and explicit slot 1 or 2 are required')
+    value = json.loads(row[1])
+    if digest(value) != row[0]:
+        raise ValueError('Stored amendment bytes changed')
+    validate_amendment(value)
+    check_amendment_bindings(db, value)
+    if config != value['config'] or bound != value['slots'][slot-1]['candidate']:
+        raise ValueError('Invocation does not match its explicitly frozen amendment slot')
+    return value
+
+
+def amended_dispatch_check(db, value, slot):
+    amendment_id = value['amendment_id']
+    rows = db.execute('SELECT s.slot,r.state,r.result,r.directory FROM amendment_slots s '
+                      'JOIN requests r ON r.key=s.request_key WHERE s.amendment_id=? ORDER BY s.slot',
+                      (amendment_id,)).fetchall()
+    if any(row[1] != 'complete' for row in rows):
+        raise ValueError('An amended request is unresolved; automatic retry or further dispatch is prohibited')
+    if len(rows) >= 2 or any(row[0] == slot for row in rows):
+        raise ValueError('Amendment slot/invocation limit exhausted')
+    if slot == 2:
+        if not rows or rows[0][0] != 1:
+            raise ValueError('Negative calibration requires completed transport first')
+        first = json.loads(rows[0][2])
+        for name, expected in first['artifact_sha256'].items():
+            if hashlib.sha256((Path(rows[0][3])/name).read_bytes()).hexdigest() != expected:
+                raise ValueError('Completed transport evidence changed')
+        if first['cost']['completed_turns'] != 1 or not isinstance(first['cost']['usage'], dict):
+            raise ValueError('Completed transport with known usage is required')
+    original_keys = {row[0] for row in value['prior_snapshot']['requests']}
+    registered_keys = {row[0] for row in db.execute('SELECT request_key FROM amendment_slots')}
+    all_keys = {row[0] for row in db.execute('SELECT key FROM requests')}
+    if all_keys != original_keys | registered_keys:
+        raise ValueError('Unaccounted requests exist in the persistent ledger')
+
+
+def validate_slot_revision(db, value):
+    """One explicit repurpose of unused slot 2; no allowance is added."""
+    if value.get('schema_version') != 'webcollect-subscription-slot-revision-1' or value.get('slot') != 2:
+        raise ValueError('Explicit unused-slot-2 revision required')
+    for name in ('revision_id', 'authorization_source', 'authorization_quote', 'reason'):
+        if not isinstance(value.get(name), str) or not value[name].strip():
+            raise ValueError('Slot revision requires '+name)
+    row = db.execute('SELECT sha256,payload FROM amendments WHERE id=?', (value['amendment_id'],)).fetchone()
+    if not row or row[0] != value.get('amendment_sha256'):
+        raise ValueError('Slot revision must bind the original explicit amendment')
+    amendment = json.loads(row[1])
+    if digest(amendment) != row[0]:
+        raise ValueError('Original amendment bytes changed')
+    validate_amendment(amendment)
+    check_amendment_bindings(db, amendment, check_current=False)
+    prior = value['prior_snapshot']
+    if len(prior['requests']) != len(amendment['prior_snapshot']['requests'])+1:
+        raise ValueError('Repair can only reuse the single remaining invocation allowance')
+    keys = [item[0] for item in prior['requests']]
+    if digest(prior) != value.get('prior_snapshot_sha256') or ledger_snapshot(db, keys) != prior:
+        raise ValueError('Slot revision must preserve both previous request outcomes exactly')
+    uncertain = {item[0] for item in prior['requests'] if item[1] != 'complete'}
+    if set(value.get('acknowledged_unresolved_request_keys', [])) != uncertain:
+        raise ValueError('Slot revision must acknowledge all unresolved requests')
+    prior_slots = db.execute('SELECT slot,request_key FROM amendment_slots WHERE amendment_id=? AND slot=1',
+                            (value['amendment_id'],)).fetchall()
+    if len(prior_slots) != 1 or prior_slots[0][1] not in keys:
+        raise ValueError('Slot revision requires the first bounded attempt')
+    config = value['config']
+    if {k:v for k,v in config.items() if k != 'implementation'} != {
+            k:v for k,v in amendment['config'].items() if k != 'implementation'}:
+        raise ValueError('Slot repurpose cannot change model, count, time or image limits')
+    if config['implementation'] != implementation_sha256() or value['contract_sha256'] != fingerprint()[1]:
+        raise ValueError('Slot revision implementation or contract changed')
+    if value['candidate'] != amendment['slots'][0]['candidate'] or value.get('role') != 'repair_transport':
+        raise ValueError('Repair must reuse the exact original transport evidence')
+    cli = value['cli']
+    if (not Path(cli['path']).is_absolute() or str(Path(cli['path']).resolve()) != cli['path']
+            or hashlib.sha256(Path(cli['path']).read_bytes()).hexdigest() != cli['sha256']):
+        raise ValueError('Explicit bundled CLI identity changed')
+    for path, expected in value['prior_artifacts_sha256'].items():
+        if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected:
+            raise ValueError('Previous transport failure artifact changed')
+    for item in prior['requests']:
+        for name in ('request.json', 'execution.json'):
+            if str(Path(item[3])/name) not in value['prior_artifacts_sha256']:
+                raise ValueError('Previous transport request/execution evidence must remain bound')
+    return amendment
+
+
+def repurpose(ledger, authorization, output):
+    value = json.loads(Path(authorization).read_text())
+    sha = digest(value)
+    db = sqlite3.connect('file:'+str(Path(ledger).resolve())+'?mode=rw', uri=True, timeout=10)
+    try:
+        amendment_tables(db)
+        db.execute('BEGIN IMMEDIATE')
+        old = db.execute('SELECT sha256 FROM slot_revisions WHERE id=?', (value['revision_id'],)).fetchone()
+        if old and old[0] != sha:
+            raise ValueError('Slot revision cannot be overwritten')
+        amendment = validate_slot_revision(db, value)
+        if not old:
+            if db.execute('SELECT COUNT(*) FROM slot_revisions').fetchone()[0]:
+                raise ValueError('Only one unused-slot repair is permitted')
+            if db.execute('SELECT 1 FROM amendment_slots WHERE amendment_id=? AND slot=2',
+                          (value['amendment_id'],)).fetchone():
+                raise ValueError('Slot 2 has already been consumed')
+            if ledger_snapshot(db) != value['prior_snapshot']:
+                raise ValueError('Unaccounted requests exist before slot repurpose')
+            verify_snapshot(value['candidate'])
+            db.execute('INSERT INTO slot_revisions VALUES (?,?,?,?,?,?)',
+                       (value['revision_id'], value['amendment_id'], 2, sha, json.dumps(value, sort_keys=True), time.time()))
+        db.commit()
+        receipt = {'schema_version': 'webcollect-subscription-slot-revision-receipt-1',
+                   'revision_id': value['revision_id'], 'sha256': sha, 'slot': 2,
+                   'new_role': 'repair_transport', 'old_role_preserved': 'negative_calibration',
+                   'additional_allowance': 0, 'total_amendment_exec_limit': 2,
+                   'per_exec_seconds': amendment['config']['max_wall_seconds'], 'model_requests': 0}
+        write_json(output, receipt)
+        return receipt
+    finally:
+        db.close()
+
+
+def load_slot_revision(db, revision_id, amendment_id, slot, config, bound, codex):
+    row = db.execute('SELECT sha256,payload FROM slot_revisions WHERE id=?', (revision_id,)).fetchone()
+    if not row:
+        raise ValueError('A registered explicit slot revision is required')
+    value = json.loads(row[1])
+    if digest(value) != row[0]:
+        raise ValueError('Stored slot revision bytes changed')
+    amendment = validate_slot_revision(db, value)
+    if (slot != 2 or amendment_id != value['amendment_id'] or config != value['config']
+            or bound != value['candidate'] or str(Path(codex).resolve()) != value['cli']['path']):
+        raise ValueError('Invocation does not match its explicit repair slot')
+    return amendment, value
+
+
+def repair_dispatch_check(db, value):
+    if ledger_snapshot(db) != value['prior_snapshot']:
+        raise ValueError('Repair allowance is already consumed or an unaccounted request exists')
+    if db.execute('SELECT 1 FROM amendment_slots WHERE amendment_id=? AND slot=2',
+                  (value['amendment_id'],)).fetchone():
+        raise ValueError('Repair slot is already consumed; no automatic retry')
 
 
 def subscription_env(environ=None):
@@ -169,13 +447,18 @@ def event_summary(path):
 
 
 def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
-        max_requests=1, max_wall_seconds=120, max_images=8, codex='codex'):
+        max_requests=1, max_wall_seconds=120, max_images=8, codex='codex',
+        amendment_id=None, slot=None, repair_id=None):
     if not run_id.strip() or not model.strip():
         raise ValueError('Explicit run identity and model are required')
     if purpose not in {'transport_smoke', 'visual_review'}:
         raise ValueError('Unsupported purpose')
-    if type(max_requests) is not int or max_requests != 1:
-        raise ValueError('This pilot adapter permits exactly one exec invocation per ledger')
+    if bool(amendment_id) != (slot is not None):
+        raise ValueError('Amendment and slot must be supplied together')
+    if repair_id and (not amendment_id or slot != 2):
+        raise ValueError('Repair requires explicit amendment slot 2')
+    if type(max_requests) is not int or max_requests != (2 if amendment_id else 1):
+        raise ValueError('This pilot permits exactly one legacy exec, or two slots under an explicit amendment')
     if not 0 < max_wall_seconds <= MAX_SECONDS:
         raise ValueError('Wall-clock limit must be in (0, 120] seconds')
     bound, context, images, ids = prepare_sample(sample, max_images)
@@ -183,29 +466,37 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
     if output.is_relative_to(bound['path']) or ledger.is_relative_to(bound['path']):
         raise ValueError('Output and ledger must be outside candidate evidence')
     contract_hash = fingerprint()[1]
-    implementation = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                      for name in ('codex_subscription.py', 'ai_worker.py', 'reviews.py')}
-    config = {'run_id': run_id, 'model': model, 'purpose': purpose,
-              'max_exec_invocations': max_requests, 'max_wall_seconds': max_wall_seconds,
-              'max_images': max_images, 'auth': 'chatgpt', 'provider': 'openai',
-              'version': VERSION, 'implementation': implementation}
+    config = run_config(run_id, model, purpose, max_requests, max_wall_seconds, max_images)
     identity = {'candidate': bound, 'contract_sha256': contract_hash,
                 'config': config, 'schema_sha256': digest(REVIEW_SCHEMA)}
+    if amendment_id:
+        identity['amendment_id'] = amendment_id
+        identity['slot'] = slot
+    if repair_id:
+        identity['repair_id'] = repair_id
     key = digest(identity)
     ledger.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(ledger, timeout=10)
     db.execute('CREATE TABLE IF NOT EXISTS run (id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL, started REAL)')
     db.execute('CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, state TEXT NOT NULL, started REAL NOT NULL, directory TEXT NOT NULL, result TEXT, error TEXT)')
+    amendment_tables(db)
     db.commit()
     requested = False
     metering = None
+    amendment = None
+    repair = None
     directory = output/key
     started = time.time()
     try:
         db.execute('BEGIN IMMEDIATE')
         current = db.execute('SELECT config,started FROM run WHERE id=1').fetchone()
         frozen_config = json.dumps(config, sort_keys=True)
-        if current is None:
+        if amendment_id:
+            if repair_id:
+                amendment, repair = load_slot_revision(db, repair_id, amendment_id, slot, config, bound, codex)
+            else:
+                amendment = load_amendment(db, amendment_id, slot, config, bound)
+        elif current is None:
             db.execute('INSERT INTO run VALUES (1,?,NULL)', (frozen_config,))
         elif current[0] != frozen_config:
             raise ValueError('Run configuration changed; existing ledger cannot reset its budget')
@@ -223,14 +514,19 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
             verify_snapshot(bound)
             db.commit()
             return {**cached, 'cache_reused': True}
-        if db.execute('SELECT COUNT(*) FROM requests').fetchone()[0] >= max_requests:
-            raise ValueError('Persistent invocation limit exhausted')
-        if current and current[1] is not None and started-current[1] >= max_wall_seconds:
-            raise ValueError('Persistent wall-clock limit exhausted')
+        if amendment:
+            repair_dispatch_check(db, repair) if repair else amended_dispatch_check(db, amendment, slot)
+        else:
+            if db.execute('SELECT COUNT(*) FROM requests').fetchone()[0] >= max_requests:
+                raise ValueError('Persistent invocation limit exhausted')
+            if current and current[1] is not None and started-current[1] >= max_wall_seconds:
+                raise ValueError('Persistent wall-clock limit exhausted')
         db.commit()
         auth = preflight(codex)
         # Freeze every input before dispatch. No model request has happened yet.
-        directory.mkdir(parents=True, exist_ok=False)
+        directory.mkdir(parents=True, exist_ok=True)
+        if any((directory/name).exists() for name in ('events.jsonl', 'stderr.txt', 'response.json', 'execution.json')):
+            raise ValueError('Unaccounted execution artifacts exist; manual diagnosis is required')
         write_json(directory/'schema.json', REVIEW_SCHEMA)
         prompt = json.dumps({'instruction':
             'Inspect EVERY attached original frame in the listed order and every adjacent action/result. '
@@ -249,15 +545,27 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
                                                'prompt': json.loads(prompt)})
         verify_snapshot(bound)
         db.execute('BEGIN IMMEDIATE')
-        if db.execute('SELECT COUNT(*) FROM requests').fetchone()[0] >= max_requests:
-            raise ValueError('Another process consumed the persistent invocation limit')
         started = time.time()
-        db.execute('UPDATE run SET started=COALESCE(started,?) WHERE id=1', (started,))
-        first = db.execute('SELECT started FROM run WHERE id=1').fetchone()[0]
-        remaining = max_wall_seconds-(started-first)
+        if amendment:
+            if repair:
+                amendment, repair = load_slot_revision(db, repair_id, amendment_id, slot, config, bound, codex)
+                repair_dispatch_check(db, repair)
+            else:
+                amendment = load_amendment(db, amendment_id, slot, config, bound)
+                amended_dispatch_check(db, amendment, slot)
+            remaining = min(max_wall_seconds, datetime.fromisoformat(amendment['expires_at']).timestamp()-started)
+        else:
+            if db.execute('SELECT COUNT(*) FROM requests').fetchone()[0] >= max_requests:
+                raise ValueError('Another process consumed the persistent invocation limit')
+            db.execute('UPDATE run SET started=COALESCE(started,?) WHERE id=1', (started,))
+            first = db.execute('SELECT started FROM run WHERE id=1').fetchone()[0]
+            remaining = max_wall_seconds-(started-first)
         if remaining <= 0:
             raise ValueError('Persistent wall-clock limit exhausted before dispatch')
         db.execute('INSERT INTO requests VALUES (?,?,?,?,NULL,NULL)', (key, 'requested', started, str(directory)))
+        if amendment:
+            db.execute('INSERT INTO amendment_slots VALUES (?,?,?,?)',
+                       (amendment_id, slot, key, max_wall_seconds))
         db.commit()  # Must reach durable storage BEFORE spawning Codex.
         requested = True
         execution = _execute(exec_command(codex, model, directory, images), prompt, directory, remaining)
@@ -271,6 +579,8 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
         verify_snapshot(bound)
         if fingerprint()[1] != contract_hash:
             raise ValueError('Contract changed during review')
+        if implementation_sha256() != config['implementation']:
+            raise ValueError('Review implementation changed during execution')
         checks = deepcopy(response['checks'])
         checks['substantive_difference'] = {'status': 'REVIEW_REQUIRED',
             'note': 'Standalone visual review supplies no cumulative nearest-task comparison.', 'evidence_steps': []}
@@ -298,6 +608,16 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
                                       for name in ('request.json', 'schema.json', 'response.json',
                                                    'review.json', 'events.jsonl', 'execution.json')},
                   'elapsed_seconds': time.time()-started, 'review_file': str(directory/'review.json')}
+        if amendment:
+            result['budget_amendment'] = {'id': amendment_id, 'slot': slot,
+                'prior_exec_invocations': len(amendment['prior_snapshot']['requests']),
+                'additional_exec_limit': 2, 'original_start_preserved': True,
+                'time_accounting': amendment['time_accounting']}
+            if repair:
+                result['budget_amendment']['slot_revision'] = repair_id
+                result['budget_amendment']['slot_role'] = 'repair_transport'
+                result['budget_amendment']['negative_calibration'] = 'NOT_RUN'
+                result['cli_identity'] = repair['cli']
         write_json(directory/'result.json', result)
         db.execute('UPDATE requests SET state=?,result=? WHERE key=?', ('complete', json.dumps(result), key))
         db.commit()
@@ -321,6 +641,12 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('preflight')
     check.add_argument('--codex', default='codex')
+    amendment = commands.add_parser('amend', help='Append an explicit bounded budget/config revision; no model calls')
+    for option in ('ledger', 'authorization', 'output'):
+        amendment.add_argument('--'+option, required=True)
+    repair = commands.add_parser('repurpose', help='Explicitly repurpose unused slot 2 without adding allowance')
+    for option in ('ledger', 'authorization', 'output'):
+        repair.add_argument('--'+option, required=True)
     command = commands.add_parser('run')
     for option in ('sample', 'output', 'ledger', 'run-id', 'model'):
         command.add_argument('--'+option, required=True)
@@ -329,9 +655,13 @@ def main(argv=None):
     command.add_argument('--max-wall-seconds', type=float, default=120)
     command.add_argument('--max-images', type=int, default=8)
     command.add_argument('--codex', default='codex')
+    command.add_argument('--amendment-id')
+    command.add_argument('--slot', type=int, choices=[1, 2])
+    command.add_argument('--repair-id')
     args = vars(parser.parse_args(argv))
     action = args.pop('command')
-    result = preflight(**args) if action == 'preflight' else run(**args)
+    handlers = {'preflight': preflight, 'amend': amend, 'repurpose': repurpose, 'run': run}
+    result = handlers[action](**args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

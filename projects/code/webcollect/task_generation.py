@@ -20,9 +20,10 @@ from urllib.parse import urlsplit, urlunsplit
 from .batch_core import BudgetStop, BatchLedger, file_sha, load_json, save_json
 from .planning import canonical, object_sha256, timestamp, validate_capability
 from .bmi_strategy import ADAPTER_ID as BMI_ADAPTER_ID, bmi_spec
+from .date_strategy import ADAPTER_ID as DATE_ADAPTER_ID, date_spec
 
-VERSION = 'observed-form-compiler-4-frozen-customer-history'
-STRATEGY_VERSION = 'deterministic-numeric-forms-2-bmi'
+VERSION = 'observed-form-compiler-5-date-difference'
+STRATEGY_VERSION = 'deterministic-business-widgets-3-date'
 FORMAL_LATEST_PATH = Path(__file__).resolve().parents[3] / 'results/delivery/LATEST.md'
 
 # These are deliberately narrow business strategies, not generic guesses about
@@ -94,15 +95,16 @@ def deterministic_specs(capability):
         rejected.extend({'site_uri':capability['site_uri'], **item}
                         for item in page.get('widget_rejections', []))
         for widget in page.get('widgets', []):
-            if widget.get('adapter_id') != BMI_ADAPTER_ID:
+            strategy = {BMI_ADAPTER_ID: bmi_spec, DATE_ADAPTER_ID: date_spec}.get(widget.get('adapter_id'))
+            if strategy is None:
                 rejected.append({'site_uri':capability['site_uri'], 'page_uri':page['page_uri'],
                                  'reason':'No registered adapter for observed non-form widget'})
                 continue
             try:
-                specs.append(bmi_spec(capability, page, widget, STRATEGY_VERSION))
+                specs.append(strategy(capability, page, widget, STRATEGY_VERSION))
             except (ValueError, KeyError, TypeError, InvalidOperation) as error:
                 rejected.append({'site_uri':capability['site_uri'], 'page_uri':page['page_uri'],
-                                 'strategy_id':'body-mass-index-v1', 'reason':str(error)})
+                                 'adapter_id':widget.get('adapter_id'), 'reason':str(error)})
         for form in page['forms']:
             identity={'site_uri':capability['site_uri'],'page_uri':page['page_uri'],'form_label':form['label']}
             matches=[strategy for strategy in STRATEGIES if form['label'] in strategy['forms']]
@@ -379,10 +381,11 @@ def compile_form(capability, spec):
     if spec.get('widget_adapter'):
         forms = [widget for page in inventories for widget in page.get('widgets', [])
                  if widget.get('adapter_id') == spec['widget_adapter'] and widget.get('label') == spec['form_label']]
-        if spec['widget_adapter'] != BMI_ADAPTER_ID or len(forms) != 1 or len(inventories) != 1:
+        strategy = {BMI_ADAPTER_ID: bmi_spec, DATE_ADAPTER_ID: date_spec}.get(spec['widget_adapter'])
+        if strategy is None or len(forms) != 1 or len(inventories) != 1:
             raise ValueError('Task must bind exactly one supported observed non-form widget')
-        if bmi_spec(capability, inventories[0], forms[0], STRATEGY_VERSION) != spec:
-            raise ValueError('BMI task specification changed from the observed business strategy')
+        if strategy(capability, inventories[0], forms[0], STRATEGY_VERSION) != spec:
+            raise ValueError('Widget task specification changed from the observed business strategy')
     else:
         forms = [f for page in inventories for f in page['forms'] if f['label']==spec['form_label']]
     if len(forms)!=1:
@@ -439,6 +442,10 @@ def compile_form(capability, spec):
             final_assertions.extend([
                 {'selector':completion['selector'],'contains':spec['deterministic_strategy']['expected_display']},
                 {'selector':'#resultContainer h2','contains':'您的 BMI 结果'}])
+        elif spec.get('widget_adapter') == DATE_ADAPTER_ID:
+            final_assertions.extend([
+                {'selector':'#betweenDay','contains':'天'},
+                {'selector':forms[0]['result_label_selector'],'contains':'相差'}])
     else:
         expected=completion['contains']
         if not isinstance(expected,str) or not expected.strip():
@@ -595,6 +602,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     from .production_facts import derive
     from .client_package import build_client_package
     from .collect import validate_plan
+    from .navigation import BatchNavigation
     if ledger.config['mode']!='real':
         raise ValueError('Synthetic browser integration uses the controlled fixture runner, never a production CLI bypass')
     plan = load_json(plan_path); catalog = load_json(catalog_path)
@@ -640,6 +648,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     job = ledger.claim('collection',job_id=jid)
     if not job:
         return ledger.get(jid)
+    navigation = BatchNavigation(ledger, job)
     async def renew():
         while True:
             await asyncio.sleep(2)
@@ -649,12 +658,13 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         if not publication.exists():
             if not (pf/'report.json').exists():
                 ledger.consume('probe_pages',jid+':preflight',len(plan['tasks']))
-                await preflight_plan(plan_path,pf,samples=2,interval_ms=100,preserve_order=True)
+                await preflight_plan(plan_path,pf,samples=2,interval_ms=100,preserve_order=True,navigation=navigation)
             scheduled=load_json(pf/'scheduled-plan.json')
             save_json(publication,publish_plan(scheduled,catalog))
         check_live_m4_history(plan, registry, output)
         result=await collect_m4(pf/'scheduled-plan.json',output/'capture',registry,
-            publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists())
+            publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
+            navigation=navigation)
         if result['collection_status']=='paused_pending_resume':
             return {'collection':result,'candidate':None,'stopped':'existing runtime paused; budget and queued work retained'}
         facts_path=output/'facts.json'; client=output/'candidate'
