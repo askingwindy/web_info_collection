@@ -616,7 +616,8 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
                 ['Delivered annotation, screenshots, actions and synchronized trees; 需求书§1/4/5/6/7'],
                 result['note'] if result else 'Actual pixel/semantic inspection has not been supplied; not inferred from producer success.',
                 'Inspect the actual delivered frames and import evidence-bound AI or human decisions.',scope='sample',
-                reviewer=accepted.get(sid,{}).get('reviewer'),provenance=accepted.get(sid,{}).get('provenance')))
+                reviewer=accepted.get(sid,{}).get('reviewer'),provenance=accepted.get(sid,{}).get('provenance'),
+                semantic_reuse=accepted.get(sid,{}).get('semantic_reuse')))
         if sampling_row is not None:
             checks.append(qc_rule('SEMANTIC_SAMPLING_ADMISSION',sampling_row['admission_status'],str(path),
                 ['Explicit versioned delivery sampling clarification'],
@@ -668,6 +669,8 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         'acceptance_scopes':{'sample':{'status':sample_status,'sample_count':len(outputs)},'batch':{'status':batch_status,'checks':batch},
             'pilot':{'status':'NOT_APPLICABLE','checks':[],'reason':'Delivery does not apply a pilot minimum.'},
             'corpus':{'status':'UNKNOWN'},'external':{'status':'UNKNOWN'}}}
+    from .semantic import rule_ids
+    report['semantic_rule_ids']=rule_ids()
     payload_files={key:value for key,value in input_files.items() if key not in ('qc_report.md','SHA256SUMS')}
     report['payload_files_sha256']=payload_files
     report['payload_sha256']=hashlib.sha256(json.dumps(payload_files,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()

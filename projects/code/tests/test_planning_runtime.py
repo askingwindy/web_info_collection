@@ -65,7 +65,9 @@ class PlanningRuntimeTests(unittest.TestCase):
         (package / 'SHA256SUMS').write_text(''.join(sha(path) + '  ' + path.relative_to(package).as_posix() + '\n'
             for path in sorted(package.rglob('*')) if path.is_file()))
         files = {path.relative_to(package).as_posix(): sha(path) for path in sorted(package.rglob('*')) if path.is_file()}
+        from quality_inspector.semantic import rule_ids
         report = {'program': 'quality-inspector', 'test_fixture_only': True, 'qc_program_executed': False,
+                  'semantic_rule_ids': rule_ids(),
                   'dataset': str(package), 'input_files_sha256': files, 'root_checksum': {'pass': True},
                   'samples': rows, 'inspection_stage': stage, 'delivery_status': status, 'release_ready': release_ready}
         return evidence(base / 'bound-report.json', json.dumps(report))
@@ -270,14 +272,17 @@ class PlanningRuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.start(first, now=NOW+122)
 
-    def test_started_crash_counts_failure_and_retries_with_new_id(self):
+    def test_started_crash_preserves_unknown_attempt_without_automatic_retry(self):
         self.enqueue(); first = self.claim(); self.start(first)
         self.store.recover_expired(now=NOW+121)
         ledger = self.store.attempt_ledger()
         self.assertEqual(ledger['actual_attempt_count'], 1)
         self.assertEqual(ledger['attempts'][0]['status'], 'interrupted')
         second = self.claim('second', now=NOW+122)
-        self.assertNotEqual(first['sample_id'], second['sample_id'])
+        self.assertNotEqual(first['task_id'], second['task_id'])
+        self.assertIsNone(second['retry_of'])
+        original = next(task for task in self.store.snapshot()['tasks'] if task['task_id'] == first['task_id'])
+        self.assertEqual(original['status'], 'needs_replan')
         with self.assertRaises(ValueError):
             self.finish(first, now=NOW+122)
 

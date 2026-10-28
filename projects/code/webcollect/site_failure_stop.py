@@ -115,13 +115,205 @@ class SiteFailureStore:
             con.commit()
         return self.status(application)
 
+    @staticmethod
+    def _success_schema(con):
+        con.execute('CREATE TABLE IF NOT EXISTS site_successes ('
+                    'fact_id TEXT PRIMARY KEY,application_key TEXT NOT NULL,fact_json TEXT NOT NULL)')
+        con.execute('CREATE TABLE IF NOT EXISTS site_success_verifications ('
+                    'fact_id TEXT PRIMARY KEY,report_reference_json TEXT NOT NULL,verified_at REAL NOT NULL)')
+
+    @staticmethod
+    def _has_successes(con):
+        return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_successes'").fetchone() is not None
+
+    @staticmethod
+    def _execution_fact(row):
+        identity, app, stage, state, reason, evidence, usage, recorded = row
+        evidence, usage = json.loads(evidence), json.loads(usage)
+        if (len(evidence) == 1 and isinstance(evidence[0], dict)
+                and set(evidence[0]) == {'portable_execution_fact'}):
+            return evidence[0]['portable_execution_fact']
+        source_ids = {str(ref['attempt_id' if stage == 'formal' else 'job_id']) for ref in usage
+                      if isinstance(ref, dict) and ref.get('attempt_id' if stage == 'formal' else 'job_id')}
+        key = stage + ':' + next(iter(source_ids)) if len(source_ids) == 1 else identity
+        digests = sorted({ref['sha256'] for ref in evidence if isinstance(ref, dict)
+                          and isinstance(ref.get('sha256'), str) and len(ref['sha256']) == 64})
+        return {'fact_id': identity, 'execution_key': key, 'application_key': app, 'stage': stage,
+                'state': state, 'reason': reason, 'evidence_sha256': digests,
+                'evidence_binding_sha256': object_sha256(evidence), 'usage_binding_sha256': object_sha256(usage),
+                'recorded_at': recorded}
+
+    def export_facts(self):
+        """Portable immutable facts; local paths are excluded from their identity.
+
+        application_states is advisory. Receivers must import the facts and
+        recompute status; imported success claims never grant local QC PASS.
+        """
+        with self.connect() as con:
+            con.execute('BEGIN')
+            executions = [self._execution_fact(row) for row in con.execute(
+                'SELECT execution_id,application_key,stage,state,reason,evidence_json,usage_refs_json,recorded_at '
+                'FROM site_executions ORDER BY execution_id')]
+            successes = [json.loads(row[0]) for row in con.execute('SELECT fact_json FROM site_successes ORDER BY fact_id')] if self._has_successes(con) else []
+        for fact in executions:
+            self._validate_fact(fact)
+        for fact in successes:
+            self._validate_fact(fact, True)
+        core = {'schema_version': 'webcollect-site-execution-facts-1',
+                'campaign_id': self.binding['campaign_id'], 'formal_since': self.binding['formal_since'],
+                'failure_limit': LIMIT, 'executions': executions, 'successes': successes}
+        apps = sorted({row['application_key'] for row in executions + successes})
+        return {**core, 'facts_sha256': object_sha256(core),
+                'application_states': [self.status('https:' + app) for app in apps]}
+
+    @staticmethod
+    def _validate_fact(fact, success=False):
+        import math
+        if not isinstance(fact, dict):
+            raise ValueError('Portable site fact must be an object')
+        shared = {'fact_id', 'application_key', 'recorded_at'}
+        fields = (shared | {'sample_id', 'attempt_id', 'report_sha256', 'sample_files_sha256', 'verification'}
+                  if success else shared | {'execution_key', 'stage', 'state', 'reason', 'evidence_sha256',
+                                            'evidence_binding_sha256', 'usage_binding_sha256'})
+        if set(fact) != fields or any(not isinstance(fact.get(key), str) or not fact[key].strip()
+                                     for key in fields - {'recorded_at', 'evidence_sha256', 'sample_files_sha256'}):
+            raise ValueError('Portable site fact fields are incomplete or unsupported')
+        if (application_key('https:' + fact['application_key']) != fact['application_key']
+                or type(fact['recorded_at']) not in (int, float) or not math.isfinite(fact['recorded_at'])
+                or fact['recorded_at'] <= 0):
+            raise ValueError('Portable fact application/time is invalid')
+        def digest(value):
+            return isinstance(value, str) and len(value) == 64 and all(ch in '0123456789abcdef' for ch in value)
+        if success:
+            if (fact['verification'] != 'source-bound-independent-qc-pass'
+                    or not digest(fact['report_sha256']) or not isinstance(fact['sample_files_sha256'], dict)
+                    or not fact['sample_files_sha256'] or not all(digest(value) for value in fact['sample_files_sha256'].values())
+                    or any(not isinstance(name, str) or Path(name).is_absolute() or '..' in Path(name).parts
+                           for name in fact['sample_files_sha256'])):
+                raise ValueError('Portable success must retain original QC and saved-file bindings')
+        elif (fact['stage'] not in ('probe', 'observation', 'formal') or fact['state'] not in ('failed', 'unknown')
+              or not isinstance(fact['evidence_sha256'], list) or not all(digest(x) for x in fact['evidence_sha256'])
+              or not digest(fact['evidence_binding_sha256']) or not digest(fact['usage_binding_sha256'])):
+            raise ValueError('Portable execution outcome/evidence is invalid')
+
+    def import_facts(self, payload):
+        """Atomic, idempotent merge; neither reclassify nor reset original facts."""
+        keys = ('schema_version', 'campaign_id', 'formal_since', 'failure_limit', 'executions', 'successes')
+        if not isinstance(payload, dict) or set(payload) - set(keys) - {'facts_sha256', 'application_states'}:
+            raise ValueError('Unsupported portable site ledger fields')
+        core = {key: payload.get(key) for key in keys}
+        if (core['schema_version'] != 'webcollect-site-execution-facts-1'
+                or core['campaign_id'] != self.binding['campaign_id']
+                or core['formal_since'] != self.binding['formal_since'] or core['failure_limit'] != LIMIT
+                or not isinstance(core['executions'], list) or not isinstance(core['successes'], list)
+                or payload.get('facts_sha256') != object_sha256(core)):
+            raise ValueError('Portable ledger campaign/cutoff/policy/hash changed; no implicit new round')
+        incoming = {}
+        for success, facts in ((False, core['executions']), (True, core['successes'])):
+            for fact in facts:
+                self._validate_fact(fact, success)
+                if fact['fact_id'] in incoming:
+                    raise ValueError('Duplicate portable fact identity')
+                incoming[fact['fact_id']] = (success, fact)
+        added = 0
+        with self.connect(True) as con:
+            con.execute('BEGIN IMMEDIATE')
+            self._success_schema(con)
+            existing = {row[0]: self._execution_fact(row) for row in con.execute(
+                'SELECT execution_id,application_key,stage,state,reason,evidence_json,usage_refs_json,recorded_at FROM site_executions')}
+            existing.update({identity: json.loads(body) for identity, body in con.execute('SELECT fact_id,fact_json FROM site_successes')})
+            # Validate the entire import before adding any fact.
+            logical = {fact['execution_key']: identity for identity, fact in existing.items() if 'execution_key' in fact}
+            for identity, (_, fact) in incoming.items():
+                if identity in existing and existing[identity] != fact:
+                    raise ValueError('Original execution/success identity cannot be reclassified or changed')
+                if 'execution_key' in fact:
+                    key = fact['execution_key']
+                    if key in logical and logical[key] != identity:
+                        raise ValueError('Portable logical execution has conflicting fact aliases')
+                    logical[key] = identity
+            for identity, (success, fact) in incoming.items():
+                if identity in existing:
+                    continue
+                if success:
+                    con.execute('INSERT INTO site_successes VALUES(?,?,?)',
+                                (identity, fact['application_key'], canonical(fact)))
+                    # No local verification row: this is only an immutable
+                    # source claim until actual local QC artifacts are checked.
+                else:
+                    con.execute('INSERT INTO site_executions VALUES(?,?,?,?,?,?,?,?)',
+                        (identity, fact['application_key'], fact['stage'], fact['state'], fact['reason'],
+                         canonical([{'portable_execution_fact': fact}]), canonical([]), fact['recorded_at']))
+                added += 1
+            con.commit()
+        return {'imported_facts': added, 'existing_facts': len(incoming) - added,
+                'local_QC_approval_granted': False, 'campaign_id': self.binding['campaign_id']}
+
+    def sync_successes(self, registry, campaign_id):
+        """Register only already-committed, independently bound local QC passes."""
+        from .runtime import _bound_quality_report
+        from .collect_runtime import verify_committed_samples, sample_hashes
+        registry = Path(registry).resolve()
+        with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+            rows = con.execute('SELECT a.attempt_id,a.sample_id,a.status,a.evidence_json,t.task_json,'
+                'r.evidence_json,r.at FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key '
+                'JOIN m4_reviews r ON r.sample_id=a.sample_id '
+                "WHERE a.campaign_id=? AND a.started_at>=? AND r.decision='pass'", (campaign_id, self.binding['formal_since'])).fetchall()
+        for attempt_id, sid, outcome, saved_refs, task, qc_refs, at in rows:
+            identity = 'qc-success:' + object_sha256([self.binding['campaign_id'], attempt_id, sid])
+            with self.connect() as con:
+                if self._has_successes(con) and con.execute('SELECT 1 FROM site_success_verifications WHERE fact_id=?', (identity,)).fetchone():
+                    continue  # An immutable historical success, not a fresh release approval.
+            if outcome != 'collected_pending_review':
+                raise ValueError('A pending/failed capture cannot become a valid site success')
+            evidence = json.loads(qc_refs)
+            report, reference = _bound_quality_report(evidence)
+            matches = [row for row in report['samples'] if row['sample_id'] == sid]
+            if len(matches) != 1 or matches[0].get('status') != 'PASS':
+                raise ValueError('Site success requires the exact independent QC sample PASS')
+            refs = json.loads(saved_refs)
+            receipts = [Path(ref['path']) for ref in refs if Path(ref.get('path', '')).name == 'saved_sample.json']
+            if len(receipts) != 1:
+                raise ValueError('Site success requires the original committed capture receipt')
+            receipt = load_json(receipts[0])
+            source = receipts[0].parents[2]
+            verify_committed_samples(source, [{'attempt_id': attempt_id, 'sample_id': sid,
+                'status': outcome, 'evidence': refs}])
+            if sample_hashes(Path(report['dataset']) / 'samples' / sid) != receipt['sample_files_sha256']:
+                raise ValueError('QC success files differ from the original committed capture')
+            fact = {'fact_id': identity, 'application_key': application_key(json.loads(task)),
+                    'sample_id': sid, 'attempt_id': attempt_id, 'report_sha256': reference['sha256'],
+                    'sample_files_sha256': receipt['sample_files_sha256'],
+                    'verification': 'source-bound-independent-qc-pass', 'recorded_at': at}
+            self._validate_fact(fact, True)
+            with self.connect(True) as con:
+                con.execute('BEGIN IMMEDIATE'); self._success_schema(con)
+                old = con.execute('SELECT fact_json FROM site_successes WHERE fact_id=?', (identity,)).fetchone()
+                if old and json.loads(old[0]) != fact:
+                    raise ValueError('Original QC success fact cannot be changed')
+                con.execute('INSERT OR IGNORE INTO site_successes VALUES(?,?,?)', (identity, fact['application_key'], canonical(fact)))
+                con.execute('INSERT OR IGNORE INTO site_success_verifications VALUES(?,?,?)',
+                            (identity, canonical(reference), time.time()))
+                con.commit()
+        return {'source_reviews_consulted': len(rows), 'local_QC_approval_granted': False}
+
     def status(self, application):
         key = application_key(application)
         with self.connect() as con:
             counts = dict(con.execute('SELECT state,COUNT(*) FROM site_executions WHERE application_key=? GROUP BY state', (key,)))
+            successes = verified = 0
+            if self._has_successes(con):
+                successes = con.execute('SELECT COUNT(*) FROM site_successes WHERE application_key=?', (key,)).fetchone()[0]
+                verified = con.execute('SELECT COUNT(*) FROM site_successes s JOIN site_success_verifications v ON s.fact_id=v.fact_id WHERE s.application_key=?', (key,)).fetchone()[0]
         failed, unknown = counts.get('failed', 0), counts.get('unknown', 0)
+        unavailable = failed >= LIMIT and not verified
+        state = 'unknown_hold' if unknown else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
         return {'application_key': key, 'failure_count': failed, 'unknown_execution_count': unknown,
-                'failure_limit': LIMIT, 'stopped': failed >= LIMIT, 'dispatch_blocked': failed >= LIMIT or bool(unknown)}
+                'failure_limit': LIMIT, 'qualified_success_count': verified,
+                'source_reported_success_count': successes - verified, 'used': bool(failed or unknown or successes),
+                'unavailable_before_first_valid': unavailable, 'state': state,
+                'round_id': self.binding['campaign_id'], 'automatic_round_reentry': False,
+                'stopped': failed >= LIMIT, 'dispatch_blocked': failed >= LIMIT or bool(unknown)}
 
     def guard(self, application):
         state = self.status(application)
@@ -133,15 +325,24 @@ class SiteFailureStore:
         """Merge only committed new failures, including other pages/scopes."""
         registry = Path(registry).resolve()
         with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
-            rows = con.execute('SELECT a.attempt_id,a.status,a.root_cause,a.evidence_json,t.task_json '
+            rows = con.execute('SELECT a.attempt_id,a.status,a.failure_class,a.root_cause,a.evidence_json,t.task_json '
                 'FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key '
                 'WHERE a.campaign_id=? AND a.started_at>=? AND a.finished_at IS NOT NULL '
                 "AND a.status IN ('rejected','interrupted')", (campaign_id, self.binding['formal_since'])).fetchall()
-        for identity, status, reason, evidence, task in rows:
+        existing = {fact['execution_key']: fact for fact in self.export_facts()['executions']}
+        for identity, status, failure_class, reason, evidence, task in rows:
+            state = 'unknown' if status == 'interrupted' or failure_class == 'interrupted' else 'failed'
+            app = application_key(json.loads(task)); key = 'formal:' + identity
+            if key in existing:
+                old = existing[key]
+                if ((old['application_key'], old['stage'], old['state'], old['reason']) != (app, 'formal', state, reason or status)
+                        or json.loads(evidence) and old['evidence_binding_sha256'] != object_sha256(json.loads(evidence))):
+                    raise ValueError('Imported formal execution cannot be reclassified on this machine')
+                continue
             refs = [{'registry': str(registry), 'attempt_id': identity, 'usage': 'UNKNOWN', 'cost': 'UNKNOWN'}]
-            self.record(json.loads(task), execution_id('formal', registry, identity), stage='formal',
-                state='unknown' if status == 'interrupted' else 'failed', reason=reason or status,
-                real_execution=True, evidence=json.loads(evidence) or refs, usage_refs=refs)
+            self.record(json.loads(task), 'formal:' + object_sha256({'attempt_id': identity}), stage='formal',
+                state=state, reason=reason or status, real_execution=True,
+                evidence=json.loads(evidence) or refs, usage_refs=refs)
 
 
 def model_usage_refs(ledger, job_id):
@@ -154,15 +355,28 @@ def model_usage_refs(ledger, job_id):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('init', 'status'))
+    parser.add_argument('command', choices=('init', 'status', 'export', 'import'))
     parser.add_argument('--ledger', required=True); parser.add_argument('--campaign-id', required=True)
     parser.add_argument('--formal-since', type=float, required=True)
     parser.add_argument('--seed-policy', type=Path); parser.add_argument('--source-root', type=Path)
     parser.add_argument('--application')
+    parser.add_argument('--facts', type=Path, help='Portable immutable facts to import')
+    parser.add_argument('--output', type=Path, help='Fresh portable export artifact; otherwise print JSON')
     args = parser.parse_args(argv)
     binding = {key: getattr(args, key) for key in ('ledger', 'campaign_id', 'formal_since')}
     store = SiteFailureStore.initialize(binding, seed_policy=args.seed_policy, source_root=args.source_root) if args.command == 'init' else SiteFailureStore(binding)
-    print(json.dumps(store.status(args.application) if args.application else {'binding': store.binding, 'failure_limit': LIMIT}, ensure_ascii=False))
+    if args.command == 'export':
+        result = store.export_facts()
+        if args.output:
+            from .batch_core import save_json
+            save_json(args.output, result)
+    elif args.command == 'import':
+        if args.facts is None:
+            parser.error('import requires --facts')
+        result = store.import_facts(load_json(args.facts))
+    else:
+        result = store.status(args.application) if args.application else {'binding': store.binding, 'failure_limit': LIMIT}
+    print(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == '__main__': main()

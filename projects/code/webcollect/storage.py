@@ -34,6 +34,8 @@ def allocate_in_transaction(con, uri, category, sample_kind='integration', day=N
     """
     if not con.in_transaction:
         raise ValueError('编号分配必须处于调用方写事务中')
+    from .batch_protocol import guard_registry_site
+    guard_registry_site(con, uri, category)
     if not re.match(r'^https?://[^\s/]+',uri) or not category.strip():
         raise ValueError('站点必须提供 HTTP(S) URI 和类目')
     if sample_kind not in ('integration', 'real'):

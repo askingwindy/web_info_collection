@@ -1,8 +1,9 @@
-"""Opt-in pilot page ownership and action bounds, using the original registry.
+"""Optional page ownership and action bounds for the shared collection path.
 
 These mechanical gates do not grant semantic or visual approval. The new
-identity is frozen in the observation intent and independently reviewed with
-the original workflow packet. Legacy tasks and numbering remain unchanged.
+identity binds original page evidence; it does not require an earlier execution
+or semantic admission. Collection saves pending evidence for independent QC.
+Legacy tasks and numbering remain unchanged.
 """
 import json
 import re
@@ -118,23 +119,21 @@ def validate_identity(task, *, observed_states=None):
             'shared_page_urls': sorted(shared_urls), 'content_key': state_key(state, page['kind'])}
 
 
-def require_actions(task, count, *, final=False):
-    if task.get('pilot_identity') is None:
+def require_actions(task, count, *, final=False, required=False):
+    if task.get('pilot_identity') is None and not required:
         return
-    _require(type(count) is int and count <= 10 and (not final or count >= 5),
-             'pilot requires 5-10 actual necessary operations; wait/complete do not count')
+    if type(count) is not int or count > 10 or final and count < 5:
+        raise ValueError('COLLECTION_ACTION_BOUNDS: collection requires 5-10 actual necessary operations; wait/complete do not count')
 
 
 def before_action(task, raw_records, action_type):
     """Run after automatic preparation chooses the actual next operation."""
-    if task.get('pilot_identity') is None:
-        return
     count = sum(bool(row.get('ended_at')) and not row.get('execution_error')
                 and row.get('operation', {}).get('action_type') not in ('wait', 'complete')
                 for row in raw_records)
     if action_type not in ('wait', 'complete'):
         count += 1
-    require_actions(task, count, final=action_type == 'complete')
+    require_actions(task, count, final=action_type == 'complete', required=True)
 
 
 def state_allowed(task, state):
@@ -169,7 +168,6 @@ def validate_plan(plan, *, required=False):
                  'pilot requires homogeneous strict M4 plans; no legacy direct allocation')
         urls, contents = set(), set()
         for task in pilot:
-            _require('workflow_admission' in task, 'pilot task needs independently reviewed observed workflow admission')
             binding = validate_identity(task)
             require_actions(task, sum(op.get('action_type') not in ('wait', 'complete') for op in task['operations']), final=True)
             _require(not urls.intersection(binding['task_page_urls']), 'same task page appears twice in pilot plan')

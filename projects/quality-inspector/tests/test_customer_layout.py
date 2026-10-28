@@ -20,7 +20,6 @@ from quality_inspector.reporting import review_data, write_outputs
 
 
 REPO = Path(__file__).resolve().parents[3]
-BASELINE = REPO / 'projects/quality-inspector/config/customer-samples.json'
 PROFILE = REPO / 'projects/quality-inspector/config/local-pilot-v1.json'
 
 
@@ -103,7 +102,9 @@ def fixture(temporary, count=1):
         (root / '合成方式说明.md').write_text('## test_agent\nagent / unified_gui_v4\n')
         (root / '来源与合规说明.md').write_text('公开测试内容。\n')
         for name in ['附件A-字段说明.md', '附件B-动作空间与坐标系.md']:
-            shutil.copyfile(REPO / 'request/web操作采集需求' / name, root / name)
+            # Installed authority only; these synthetic fixtures never consult
+            # repository request directories or isolated reference sample data.
+            shutil.copyfile(Path(engine.__file__).parent / 'authority' / name, root / name)
         (root / '动作空间与系统提示.md').write_text('## test_agent\n使用统一动作空间。\n')
         write_manifest(root)
     put(client / 'site-list.json', dict(schema_version='webcollect-site-list-1', sites=[dict(site_id='SITE1', uri='https://example.org/', site_category='学习教育', sample_ids=[r['sample_id'] for r in rows])], samples=[dict(sample_id=r['sample_id'], site_id='SITE1') for r in rows]))
@@ -121,6 +122,12 @@ class CustomerLayoutTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        # Layout regressions bind only an explicit disposable reference scope.
+        # Production authority and historical customer samples are not inputs.
+        self.baseline = self.root / 'synthetic-reference.json'
+        put(self.baseline, {'repository_root': str(REPO), 'samples': [],
+            'supplemental_documents': [],
+            'known_limits': ['Synthetic layout fixture; no historical sample is read.']})
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -136,7 +143,7 @@ class CustomerLayoutTests(unittest.TestCase):
 
     def test_flat_without_raw_is_review_required_and_reviews_bind_client(self):
         _, client, _ = fixture(self.root)
-        report = engine.inspect(BASELINE, client, profile=PROFILE)
+        report = engine.inspect(self.baseline, client, profile=PROFILE)
         sample = report['samples'][0]
         checks = {check['rule_id']: check for check in sample['checks']}
         for name in ['CAPTURE_INTEGRITY', 'FINAL_MACHINE_EVIDENCE', 'PREPARATION_INTEGRITY', 'EXTERNAL_CAPTURE_BINDING']:
@@ -152,7 +159,7 @@ class CustomerLayoutTests(unittest.TestCase):
 
     def test_complete_bound_external_evidence_is_used(self):
         source, client, index = fixture(self.root)
-        report = engine.inspect(BASELINE, client, evidence=index)
+        report = engine.inspect(self.baseline, client, evidence=index)
         checks = {check['rule_id']: check for check in report['samples'][0]['checks']}
         for name in ['EXTERNAL_CAPTURE_BINDING', 'CAPTURE_INTEGRITY', 'FINAL_MACHINE_EVIDENCE']:
             self.assertEqual(checks[name]['status'], 'PASS', name)
@@ -162,7 +169,7 @@ class CustomerLayoutTests(unittest.TestCase):
 
     def test_bound_customer_report_writes_all_cli_outputs(self):
         _, client, index = fixture(self.root)
-        report = engine.inspect(BASELINE, client, evidence=index, profile=PROFILE)
+        report = engine.inspect(self.baseline, client, evidence=index, profile=PROFILE)
         before = {p.relative_to(client).as_posix(): digest(p)
                   for p in client.rglob('*') if p.is_file()}
         output = self.root / 'qc'
@@ -187,7 +194,7 @@ class CustomerLayoutTests(unittest.TestCase):
         annotation = next(client.glob('samples/*/annotation.json'))
         data = json.loads(annotation.read_text()); data['final_result'] = '另一结果'; put(annotation, data)
         self.assertEqual(load_evidence(index, discover(client))['status'], 'FAIL')
-        report = engine.inspect(BASELINE, client, evidence=index)
+        report = engine.inspect(self.baseline, client, evidence=index)
         checks = {check['rule_id']: check['status'] for check in report['samples'][0]['checks']}
         self.assertEqual(checks['EXTERNAL_CAPTURE_BINDING'], 'FAIL')
         self.assertEqual(checks['CAPTURE_INTEGRITY'], 'REVIEW_REQUIRED')
@@ -208,7 +215,7 @@ class CustomerLayoutTests(unittest.TestCase):
         format_result = format_run(REPO, legacy)
         self.assertEqual(format_result['layout'], 'legacy-batches')
         self.assertEqual(format_result['confirmed_sample_format_pass'], 1)
-        report = engine.inspect(BASELINE, legacy)
+        report = engine.inspect(self.baseline, legacy)
         checks = {check['rule_id']: check['status'] for check in report['samples'][0]['checks']}
         self.assertEqual(checks['CAPTURE_INTEGRITY'], 'PASS')
         self.assertEqual(checks['FINAL_MACHINE_EVIDENCE'], 'PASS')
@@ -228,7 +235,7 @@ class CustomerLayoutTests(unittest.TestCase):
     def test_flat_missing_annotation_is_a_failure_not_a_smaller_denominator(self):
         _, client, _ = fixture(self.root)
         (client / 'samples' / 'incomplete-sample').mkdir()
-        report = engine.inspect(BASELINE, client)
+        report = engine.inspect(self.baseline, client)
         self.assertEqual(report['sample_count'], 2)
         self.assertEqual(report['status'], 'FAIL')
         self.assertTrue(report['format_layer_summary']['package_errors'])
@@ -246,7 +253,7 @@ class CustomerLayoutTests(unittest.TestCase):
         _, client, _ = fixture(self.root)
         path = client / 'site-list.json'; data = json.loads(path.read_text())
         data['samples'][0]['site_id'] = 'SOME_OTHER_SITE'; put(path, data)
-        report = engine.inspect(BASELINE, client, profile=PROFILE)
+        report = engine.inspect(self.baseline, client, profile=PROFILE)
         attribution = report['acceptance_scopes']['pilot']['statistics']['source_attribution']
         self.assertEqual(attribution['status'], 'FAIL')
         self.assertTrue(any('mapping mismatch' in error for error in attribution['errors']))
@@ -256,7 +263,7 @@ class CustomerLayoutTests(unittest.TestCase):
         missing = load_evidence(self.root / 'missing.json', discover(client))
         self.assertEqual(missing['status'], 'FAIL')
         manifest = source / 'manifest.json'; manifest.write_text(manifest.read_text() + ' ')
-        report = engine.inspect(BASELINE, client, evidence=index)
+        report = engine.inspect(self.baseline, client, evidence=index)
         checks = {check['rule_id']: check['status'] for check in report['samples'][0]['checks']}
         self.assertEqual(checks['EXTERNAL_CAPTURE_BINDING'], 'FAIL')
         self.assertEqual(checks['FINAL_MACHINE_EVIDENCE'], 'REVIEW_REQUIRED')
@@ -278,7 +285,7 @@ class CustomerLayoutTests(unittest.TestCase):
             (client / 'README.md').write_text('质检进行中被修改。')
             return result
         with patch.object(engine, 'analyze', change_input):
-            report = engine.inspect(BASELINE, client)
+            report = engine.inspect(self.baseline, client)
         self.assertEqual(report['input_integrity']['status'], 'FAIL')
         self.assertEqual(report['status'], 'FAIL')
 

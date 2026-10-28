@@ -127,7 +127,7 @@ class DeliveryContractTests(unittest.TestCase):
 
     def test_expected_site_target_cannot_be_zero_boolean_or_fractional(self):
         original=json.loads(self.profile.read_text())
-        for target in (0,-1,True,1.5,None):
+        for target in (0,-1,True,1.5):
             with self.subTest(target=target):
                 value=json.loads(json.dumps(original));value['targets']['expected_sites']=target;put(self.profile,value)
                 with self.assertRaises(ValueError):load(self.profile)

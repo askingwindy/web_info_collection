@@ -11,8 +11,11 @@ from webcollect.client_reports import finalize_client_package
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'projects/quality-inspector'))
+sys.path.insert(0, str(REPO / 'projects/quality-inspector/tests'))
 from quality_inspector.engine import inspect
 from quality_inspector.checksums import verify_manifest
+from delivery_scope_fixture import freeze_scope
+from quality_inspector.semantic import rule_ids
 
 
 class BoundClientReports(unittest.TestCase):
@@ -26,17 +29,23 @@ class BoundClientReports(unittest.TestCase):
         exported = build_client_package(REPO, self.source, self.client)
         # Tests the actual flat-customer inspection route; this fixture has no
         # complete semantic/raw evidence and is never counted as a real sample.
-        self.report = inspect(REPO / 'projects/quality-inspector/config/customer-samples.json',
+        baseline = self.root / 'synthetic-empty-reference.json'
+        baseline.write_text(json.dumps({'repository_root': str(REPO), 'samples': [],
+            'supplemental_documents': [], 'known_limits': ['Synthetic fixture; no historical reference sample is read.']}))
+        self.report = inspect(baseline,
                               self.client, evidence=Path(exported['evidence_output']),
                               profile=REPO / 'projects/quality-inspector/config/local-pilot-v1.json')
+        self.report['semantic_rule_ids'] = rule_ids()  # Explicit synthetic legacy/report gate fixture.
         self.report_path = self.root / 'qc.json'
+        self.scope_manifest, self.cross_report = freeze_scope(self.root / 'scope', [self.client])
         self.save_report()
 
     def save_report(self):
         self.report_path.write_text(json.dumps(self.report, ensure_ascii=False))
 
     def finalize(self):
-        return finalize_client_package(REPO, self.client, self.report_path, self.root / 'final')
+        return finalize_client_package(REPO, self.client, self.report_path, self.root / 'final',
+            effective_set=self.scope_manifest, cross_package_report=self.cross_report)
 
     def test_actual_customer_input_then_bound_report_then_new_customer_output(self):
         mapping = [c for c in self.report['dataset_checks'] if c['rule_id'] == 'U02' and c['status'] == 'PASS']
@@ -46,6 +55,9 @@ class BoundClientReports(unittest.TestCase):
                         for p in self.client.rglob('*') if p.is_file()}
         # A synthetic mocked PASS tests file binding only, never real visual acceptance.
         self.report.update(delivery_status='PASS', inspection_stage='payload', synthetic_unit_fixture=True)
+        # This explicit mocked delivery PASS must declare the same contract as
+        # its real mechanical scope; an old pilot-contract hash cannot release.
+        self.report['requirements_baseline'] = {'sha256': json.loads(self.cross_report.read_text())['contract_sha256']}
         self.save_report()
         result = self.finalize()
         output = Path(result['output'])

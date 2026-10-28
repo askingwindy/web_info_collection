@@ -21,6 +21,7 @@ from .reporting import write_outputs
 from webcollect.batch_core import BatchLedger
 
 VERSION='delivery-qc-pipeline-1'
+PIPELINE_RULES_VERSION='frozen-sample-slots-human-escalation-final-seal-1'
 KINDS=('ai-visual','ai-difference','ai-documents')
 
 
@@ -144,10 +145,13 @@ class _BoundLedger:
 
 
 def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELIVERY_PROFILE,
-            mode='real',supporting_files=()):
+            mode='real',supporting_files=(),cross_package_report=None,collection_checks=None,document_review_mode='ai'):
+    from .delivery_scope import verify_delivery_scope
     _mode(ledger,mode)
+    if document_review_mode not in ('ai','human'):raise ValueError('Explicit ai or human documentary review mode required')
     dataset=Path(dataset).resolve();plan_path=Path(plan_path).resolve()
     plan=delivery_sampling.verify(plan_path,dataset)
+    scope=verify_delivery_scope(effective_set,cross_package_report,dataset=dataset,phase='payload')
     manifest=_read(effective_set)
     if manifest.get('schema_version')!='qc-cumulative-set-1':raise ValueError('An explicit frozen cumulative set is required')
     roots=[]
@@ -161,14 +165,19 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
     output.mkdir(parents=True,exist_ok=False)
     implementation=_implementation();candidate=package_files(dataset)
     binding={'version':VERSION,'plan':_ref(plan_path),'plan_sha256':plan['plan_sha256'],
-             'pipeline_sha256':_sha(__file__),'mode':mode}
+             'pipeline_rules_version':PIPELINE_RULES_VERSION,'mode':mode}
     proxy=_BoundLedger(ledger,binding)
     selected={slot['current']['sample_id'] for slot in plan['slots'] if slot['ai_selected']}
     try:
-        queued=ai_worker.prepare(proxy,dataset,output/'worker',effective_set=effective_set,sample_ids=selected)
-        document_job=ai_worker.documents_job(proxy,dataset,profile,output/'document-preparation',supporting_files=supporting_files)
+        queued=ai_worker.prepare(proxy,dataset,output/'worker',effective_set=effective_set,sample_ids=selected,
+                                collection_checks=collection_checks)
+        from .profiles import delivery_document_review_template
+        document_template=delivery_document_review_template(inspect(None,dataset,profile=profile,inspection_stage='payload'))
+        document_job=(ai_worker.documents_job(proxy,dataset,profile,output/'document-preparation',supporting_files=supporting_files)
+                      if document_review_mode=='ai' else None)
         queue=_read(queued['queue_file'])
-        job_ids={job for row in queue['jobs'] for job in (row['visual_job'],row['difference_job'])}|{document_job}
+        job_ids={job for row in queue['jobs'] for job in (row['visual_job'],row['difference_job'])}
+        if document_job:job_ids.add(document_job)
         jobs={jid:{'kind':ledger.get(jid)['kind'],'payload_sha256':_digest(ledger.get(jid)['payload'])} for jid in sorted(job_ids)}
         for jid in jobs:
             if ledger.get(jid)['payload'].get('delivery_pipeline_binding')!=binding:
@@ -178,9 +187,13 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
                'plan':binding['plan'],'plan_sha256':plan['plan_sha256'],'binding':binding,
                'ledger':str(ledger.path),'ledger_config_sha256':_digest(ledger.config),
                'effective_set':_ref(effective_set),'profile':_ref(profile),
+               'cross_package_report':_ref(cross_package_report),'delivery_scope':scope,
+               'collection_checks':queue.get('collection_checks'),
                'supporting_files':[_ref(path) for path in supporting_files],
                'implementation_sha256':implementation,'queue':_ref(queued['queue_file']),
+               'pipeline_rules_version':PIPELINE_RULES_VERSION,
                'jobs':jobs,'document_job':document_job,'ai_selected_sample_ids':sorted(selected),
+               'document_review_mode':document_review_mode,'document_template':document_template,
                'original_denominator':plan['original_denominator'],
                'mechanically_blocked':queue['mechanically_blocked'],
                'actual_human_reviews_created':0,'release_ready':False}
@@ -197,13 +210,57 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
         raise
 
 
+def _verify_frozen_cross_scope(receipt):
+    """Validate the already evaluated scope without rerunning global pair search.
+
+    prepare/final/archive run the complete scope checker. During worker leases
+    the exact frozen report, rules, profile and every package byte stay bound;
+    a mutable PASS flag alone is never used as authority.
+    """
+    from .contract import fingerprint
+    saved=receipt['delivery_scope'];manifest=_read(receipt['effective_set']['path'])
+    report=_read(receipt['cross_package_report']['path'])
+    if (saved.get('effective_set')!=receipt['effective_set']
+            or saved.get('cross_package_report')!=receipt['cross_package_report']
+            or saved.get('manifest_sha256')!=_digest(manifest)
+            or report.get('manifest')!=manifest or report.get('manifest_sha256')!=saved['manifest_sha256']
+            or report.get('contract_sha256')!=fingerprint()[1]
+            or report.get('contract_sha256')!=saved.get('contract_sha256')
+            or any(report.get(key)!='PASS' for key in ('status','mechanical_status','cross_package_status'))
+            or saved.get('source_member')!=receipt['dataset']):
+        raise ValueError('Frozen cross-package scope/report binding changed')
+    selected=report.get('local_profile',{})
+    _check_ref({'path':selected['path'],'sha256':selected['sha256']})
+    snapshots={}
+    for item in manifest['packages']:
+        root=Path(item['path']);root=(Path(receipt['effective_set']['path']).parent/root).resolve() if not root.is_absolute() else root.resolve()
+        if str(root) in snapshots:raise ValueError('Frozen scope has duplicate package roots')
+        snapshots[str(root)]=item['package_files_sha256']
+    if (snapshots!=report.get('input_files_sha256')
+            or snapshots.get(receipt['dataset'])!=receipt['candidate_files_sha256']
+            or {key:value for key,value in receipt['candidate_files_sha256'].items() if key not in ('qc_report.md','SHA256SUMS')}
+                !=saved.get('payload_files_sha256')):
+        raise ValueError('Frozen cross-package membership or complete file binding changed')
+
+
 def verify(receipt_path,ledger=None):
     reference=_ref(receipt_path);receipt=_read(receipt_path)
     unsigned={key:value for key,value in receipt.items() if key!='receipt_sha256'}
     if receipt.get('schema_version')!=VERSION or receipt.get('receipt_sha256')!=_digest(unsigned):
         raise ValueError('Pipeline receipt was changed')
-    if receipt['implementation_sha256']!=_implementation():raise ValueError('Pipeline implementation changed; prepare a new version')
+    if 'pipeline_rules_version' in receipt:
+        if receipt['pipeline_rules_version']!=PIPELINE_RULES_VERSION:raise ValueError('Pipeline rules changed; prepare a new version')
+    elif receipt['implementation_sha256']!=_implementation():
+        raise ValueError('Legacy pipeline implementation changed; prepare a new version')
     for ref in [receipt['plan'],receipt['queue'],receipt['effective_set'],receipt['profile'],*receipt['supporting_files']]:_check_ref(ref)
+    if receipt.get('cross_package_report'):
+        _check_ref(receipt['cross_package_report'])
+        _verify_frozen_cross_scope(receipt)
+    else:raise ValueError('Pipeline requires the bound cross-package report')
+    if receipt.get('collection_checks'):
+        _check_ref(receipt['collection_checks'])
+        ai_worker.collection_context(receipt['collection_checks'],{
+            slot['current']['sample_id'] for slot in delivery_sampling.verify(receipt['plan']['path'])['slots']})
     plan=delivery_sampling.verify(receipt['plan']['path'],receipt['dataset'])
     if plan['plan_sha256']!=receipt['plan_sha256']:raise ValueError('Bound delivery sampling plan identity changed')
     if package_files(receipt['dataset'])!=receipt['candidate_files_sha256']:raise ValueError('Pipeline candidate package changed')
@@ -216,7 +273,8 @@ def verify(receipt_path,ledger=None):
         raise ValueError('Pipeline cannot switch model ledger or frozen configuration')
     _mode(ledger,receipt['mode'])
     queue=_read(receipt['queue']['path'])
-    expected={jid for row in queue['jobs'] for jid in (row['visual_job'],row['difference_job'])}|{receipt['document_job']}
+    expected={jid for row in queue['jobs'] for jid in (row['visual_job'],row['difference_job'])}
+    if receipt['document_job']:expected.add(receipt['document_job'])
     if set(receipt['jobs'])!=expected:raise ValueError('Pipeline job population differs from frozen worker queue')
     for jid,expected in receipt['jobs'].items():
         job=ledger.get(jid)
@@ -260,7 +318,7 @@ def _human_events(ledger,receipt,connection=None):
         with ledger.connect() as con:return _human_events(ledger,receipt,connection=con)
     plan=delivery_sampling.verify(receipt['plan']['path'])
     current={row['current']['sample_id']:row['current'] for row in plan['slots']}
-    template=ledger.get(receipt['document_job'])['payload']['template']
+    template=receipt['document_template']
     events=[]
     for row in connection.execute("SELECT seq,detail FROM batch_events WHERE event='delivery_pipeline_human_import' ORDER BY seq"):
         value=json.loads(row['detail']);saved=value.get('event_sha256')
@@ -296,7 +354,7 @@ def _human_materials(ledger,receipt,new_paths,output):
     for source in new_sources:
         if source not in sources:sources.append(source)
     records={};record_sources={};document=None;document_source=None;imports=[]
-    template=ledger.get(receipt['document_job'])['payload']['template']
+    template=receipt['document_template']
     for source in sources:
         raw=_read(source['path'])
         if raw.get('schema_version')!='qc-review-2' or not isinstance(raw.get('records'),list):
@@ -391,7 +449,9 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
     if receipt['mode']=='real':
         try:
             failed=delivery_sampling.export_failures(receipt['plan']['path'],ledger.path,output/'all-current-ledger-failures.json')
-            failed['rows']=[row for row in failed['rows'] if row['job_id'] in receipt['jobs']]
+            from .semantic_runtime import failure_jobs
+            failure_scope=failure_jobs(ledger,receipt['jobs'])
+            failed['rows']=[row for row in failed['rows'] if row['job_id'] in failure_scope]
             if failed['rows']:
                 delivery_sampling.write(output/'ai-failures.json',failed);failure_paths=[output/'ai-failures.json']
         except ValueError as error:
@@ -420,17 +480,17 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
     sampling=report['semantic_sampling']
     human_queue=[row for row in sampling['rows'] if row['status']=='HUMAN_REQUIRED']
     replacements=[row for row in sampling['rows'] if row['status']=='REPLACE_REQUIRED']
-    document=report['delivery_document_review'];doc_job=ledger.get(receipt['document_job'])
+    document=report['delivery_document_review'];doc_job=ledger.get(receipt['document_job']) if receipt['document_job'] else None
     raw_document=_read(worker['review_file']).get('delivery_document_review')
     from .profiles import delivery_document_review
     original_document=delivery_document_review(worker['review_file'],report) if receipt['mode']=='real' and raw_document else None
     raw_states={row.get('status') for row in (raw_document or {}).get('checks',{}).values()}
     doc_ai=('INVALID_REVIEW' if original_document and original_document['status']=='FAIL' and original_document.get('errors') else
             'FAIL' if 'FAIL' in raw_states else 'REVIEW_REQUIRED' if 'REVIEW_REQUIRED' in raw_states else 'PASS' if raw_states=={'PASS'} else
-            'CALL_FAILED' if doc_job['state']=='review_required' else 'NOT_REVIEWED')
+            'CALL_FAILED' if doc_job and doc_job['state']=='review_required' else 'NOT_REVIEWED')
     doc_state=('REVISE_DOCUMENTS_REQUIRED' if human_document is not None and document['status']=='FAIL' else
                'HUMAN_PASS' if human_document is not None and document['status']=='PASS' else
-               'HUMAN_REQUIRED' if human_document is not None or doc_ai in ('FAIL','REVIEW_REQUIRED','CALL_FAILED','INVALID_REVIEW') else
+               'HUMAN_REQUIRED' if receipt['document_review_mode']=='human' or human_document is not None or doc_ai in ('FAIL','REVIEW_REQUIRED','CALL_FAILED','INVALID_REVIEW') else
                'AI_PASS' if doc_ai=='PASS' and document['status']=='PASS' else 'AI_REQUIRED')
     document_queue={'schema_version':VERSION+'-document-human-queue','status':doc_state,
                     'actual_ai_status':doc_ai,'human_pending_count':int(doc_state=='HUMAN_REQUIRED'),
@@ -533,7 +593,9 @@ def _finalize_locked(ledger,receipt,receipt_path,status_path,output,*,archive=No
     if archive:_external(archive,_roots(receipt),[receipt_path,status_path])
     if progress is not None and not request_id:raise ValueError('Final progress import needs an explicit request ID')
     output.mkdir(parents=True,exist_ok=False)
-    result=finalize_client_package(Path(__file__).resolve().parents[3],receipt['dataset'],state['report']['path'],output/'client-final')
+    scope_args={'effective_set':receipt['effective_set']['path'],
+                'cross_package_report':receipt['cross_package_report']['path']}
+    result=finalize_client_package(Path(__file__).resolve().parents[3],receipt['dataset'],state['report']['path'],output/'client-final',**scope_args)
     report=inspect(None,result['output'],profile=receipt['profile']['path'],reviews=state['review_file']['path'],
         inspection_stage='final',delivery_sampling_plan=receipt['plan']['path'],
         human_reviews=[r['path'] for r in state['human_reviews']],ai_failures=[r['path'] for r in state['ai_failure_sources']])
@@ -547,7 +609,7 @@ def _finalize_locked(ledger,receipt,receipt_path,status_path,output,*,archive=No
     if archive:
         if report['delivery_status']!='PASS' or report['release_ready'] is not True:raise ValueError('Final package QC did not pass; archive refused')
         _check_ref(status_reference)
-        archived=archive_client_package(result['output'],output/'final-qc/report.json',archive)
+        archived=archive_client_package(result['output'],output/'final-qc/report.json',archive,**scope_args)
     summary={'schema_version':VERSION+'-final','receipt':_ref(receipt_path),
              'final_package':result['output'],'final_report':_ref(output/'final-qc/report.json'),
              'delivery_status':report['delivery_status'],'release_ready':report['release_ready'],
@@ -559,6 +621,9 @@ def main(argv=None):
     p=sub.add_parser('prepare');p.add_argument('--config',type=Path,required=True);p.add_argument('--ledger',type=Path,required=True)
     p.add_argument('--initialize-ledger',action='store_true');p.add_argument('--input',type=Path,required=True)
     p.add_argument('--plan',type=Path,required=True);p.add_argument('--effective-set',type=Path,required=True)
+    p.add_argument('--cross-package-report',type=Path,required=True)
+    p.add_argument('--collection-checks',type=Path)
+    p.add_argument('--document-review-mode',choices=('ai','human'),required=True)
     p.add_argument('--profile',type=Path,default=DEFAULT_DELIVERY_PROFILE);p.add_argument('--output',type=Path,required=True)
     p.add_argument('--mode',choices=('real','controlled'),required=True);p.add_argument('--supporting-file',type=Path,action='append',default=[])
     for name in ('run','status','import-human'):
@@ -581,7 +646,9 @@ def main(argv=None):
                     raise ValueError('Model ledger must be outside every historical inspected package before initialization')
             ledger=BatchLedger(args.ledger,_read(args.config),initialize=args.initialize_ledger)
             result=prepare(ledger,args.input,args.plan,args.effective_set,args.output,profile=args.profile,
-                           mode=args.mode,supporting_files=args.supporting_file)
+                           mode=args.mode,supporting_files=args.supporting_file,
+                           cross_package_report=args.cross_package_report,collection_checks=args.collection_checks,
+                           document_review_mode=args.document_review_mode)
         elif args.command=='finalize':
             progress=None
             if args.progress_state or args.production_registry:

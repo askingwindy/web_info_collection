@@ -29,11 +29,13 @@ from quality_inspector.sampling import (DEFAULT_POLICY, calibrate, enqueue, expa
 def controlled_reviews(dataset, path, statuses=None):
     """Protocol fixture only: authors pretend decisions, not actual pixel judgment."""
     from quality_inspector.format_checks import run
+    from quality_inspector.semantic import rule_ids
     records=[]
     for sample in run(None,dataset)['samples']:
         root=Path(sample['sample_path']);a=load_json(root/'annotation.json');sid=a['sample_id']
         steps=[s['step_id'] for s in a['steps']]
         records.append({'sample_id':sid,'annotation_sha256':hashlib.sha256((root/'annotation.json').read_bytes()).hexdigest(),
+            'semantic_rule_ids':rule_ids(),
             'evidence_sha256':evidence_files(root),'baseline_sha256':fingerprint()[1],
             'reviewer':{'kind':'ai','name':'CONTROLLED UNIT TEST AUTHOR, NOT ACTUAL AI'},
             'provenance':{'description':'CONTROLLED UNIT TEST authored protocol fixture, no AI judgment', 'frames_viewed':steps},

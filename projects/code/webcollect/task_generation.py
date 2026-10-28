@@ -27,7 +27,7 @@ from .html_table_strategy import ADAPTER_ID as HTML_TABLE_ADAPTER_ID, html_table
 from .qr_strategy import ADAPTER_ID as QR_ADAPTER_ID, qr_spec, compile_qr
 from .placeholder_strategy import ADAPTER_ID as PLACEHOLDER_ADAPTER_ID, placeholder_spec, compile_placeholder
 
-VERSION = 'observed-form-compiler-17-bound-task-admission'
+VERSION = 'observed-form-compiler-18-single-collection-pending-qc'
 STRATEGY_VERSION = 'deterministic-business-widgets-9-business-identity'
 BUSINESS_IDENTITY_VERSION = 'webcollect-business-identity-1'
 FORM_EXECUTION_ID = 'observed-form-result-v1'
@@ -566,7 +566,14 @@ def check_live_m4_history(plan, registry, output):
 
 
 def customer_history_decision(task, records):
-    """Known same business rejects; unresolved same-origin comparisons hold."""
+    """Known duplicates reject; uncertain comparisons belong to independent QC.
+
+    An explicitly empty current population requires no semantic admission.
+    REVIEW_REQUIRED is a post-collection check, not a reason to rehearse or
+    execute the task twice before recording its original evidence.
+    """
+    if not records:
+        return None
     semantic = semantic_signature(task)
     matches = [r for r in records if semantic and r['semantic_signature'] == semantic]
     if matches:
@@ -575,7 +582,7 @@ def customer_history_decision(task, records):
     unresolved = [r for r in records if r['origin'] == _origin(task['site_uri']) and r['strategy_id'] is None]
     if not semantic or unresolved and not any(key in task for key in ('task_admission', 'workflow_admission')):
         return {'status': 'REVIEW_REQUIRED', 'reason': 'Business novelty cannot be determined against frozen customer history',
-                'history_sample_ids': [r['sample_id'] for r in unresolved]}
+                'history_sample_ids': [r['sample_id'] for r in (unresolved if semantic else records)]}
     return None
 
 
@@ -758,7 +765,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     admission_context = task_admission.context(history_scope, customer_history, history_registry) if admission_refs else None
     if generator == 'reviewed' and not admission_refs:
         raise ValueError('Reviewed proposal generator requires explicit frozen admission references')
-    tasks, rejected, pending, actual_prompts = [], [], [], []
+    tasks, rejected, pending, actual_prompts, quality_reviews = [], [], [], [], []
     gateway=None
     if generator=='model':
         from .model_gateway import ModelGateway
@@ -817,8 +824,9 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 history_decision = customer_history_decision(task, customer_history) if history_scope else None
                 if history_decision:
                     entry = {'site_uri': record['site_uri'], 'spec_sha256': object_sha256(spec), **history_decision}
-                    (rejected if history_decision['status']=='REJECTED' else pending).append(entry)
-                    continue
+                    if history_decision['status'] == 'REJECTED':
+                        rejected.append(entry)
+                        continue
                 if _declares_business_identity(task) and not semantic:
                     raise ValueError('Unregistered or uncorroborated business identity; review required')
                 same_structure = signature in signatures and any(
@@ -830,6 +838,9 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 structures.setdefault(signature, []).append(task)
                 if semantic:semantics.add(semantic)
                 tasks.append(task)
+                if history_decision:
+                    quality_reviews.append({'task_id': task['task_id'], 'task_version': task['task_version'],
+                                            'task_sha256': object_sha256(task), **history_decision})
             except (ValueError,KeyError) as error:
                 rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error)})
     template=generator in ('deterministic','reviewed') or ledger.config['mode']=='synthetic'
@@ -848,6 +859,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                       'catalog_sha256':file_sha(catalog_path),'history_sha256':history_hash,'history_scope':history_scope,
                       'mode':ledger.config['mode'],'synthetic_results_are_production':False,
                       'admission_reference_manifests':[{'path':str(Path(path).resolve()),'sha256':file_sha(path)} for path in admission_reviews or []],
+                      'post_collection_quality_reviews':quality_reviews,
                       'capability_review_required':any(task.get('capability_review_required') for task in tasks)},
         'production_facts':{'accounts_and_privacy':'仅使用公开无账号页面；任务中的输入为程序生成的测试值。' if ledger.config['mode']=='real' else '仅受控合成工程页面，无账号，不进入正式交付。',
             'narrative_generation':'采集器根据实际相邻截图和同步观察生成文字，必要修订沿用 narrative_revisions。',
@@ -865,6 +877,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         'generated_tasks':len(tasks),'rejected':rejected,'pending':pending,'sample_ids_allocated':0,
         'plan_file':str(output/'plan.json') if tasks else None,'mode':ledger.config['mode'],'generator':generator,
         'capability_review_required':plan['generation']['capability_review_required'],
+        'post_collection_quality_reviews':quality_reviews,
         'historical_tasks_consulted':len(full_history),'explicit_closed_failed_tasks_for_repair':len(full_history)-len(history),'history_scope':history_scope,
         'historical_customer_samples_consulted':len(customer_history),'real_collection_executed':False}
     save_json(output/('generation-'+object_sha256(result)[:16]+'.json'),result)
@@ -893,8 +906,81 @@ def verify_task_admissions(plan, catalog, registry, output, *, customer_history=
         verify_live(task, live, mode=plan['generation']['mode'])
 
 
-async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False):
-    """Publish once, delegate all IDs/retry/inventory limits to collect_m4, export once."""
+def _without_own_saved_results(plan, registry, output, records):
+    """Exclude only exact committed samples from this immutable resumed output.
+
+    Current-chain registration can happen before QC configuration. It must not
+    turn this run into its own duplicate, while every other current result
+    remains in the comparison population.
+    """
+    capture = Path(output).resolve() / 'capture'
+    bootstrap_path = capture / 'bootstrap.json'
+    if not records or not bootstrap_path.is_file():
+        return records
+    from .collect_runtime import runtime_scope, verify_committed_samples, sample_hashes
+    from .runtime import RuntimeStore
+    bootstrap = load_json(bootstrap_path)
+    original = {k: v for k, v in plan.items() if k != 'media_preflight'}
+    if (bootstrap.get('schema_version') != 'webcollect-bootstrap-m4-1'
+            or bootstrap.get('output_path') != str(capture)
+            or bootstrap.get('registry_path') != str(Path(registry).resolve())
+            or {k: v for k, v in bootstrap.get('plan', {}).items() if k != 'media_preflight'} != original):
+        raise ValueError('Own-result exclusion requires the exact original bootstrap/output/plan')
+    store = RuntimeStore(registry, runtime_scope(capture))
+    binding = store.plan_binding()
+    if binding.get('plan') != bootstrap['plan'] or binding.get('publication') != bootstrap['publication']:
+        raise ValueError('Own-result exclusion requires the original committed plan and publication')
+    attempts = store.attempt_ledger()['attempts']
+    verify_committed_samples(capture, attempts)
+    own = {row['sample_id'] for row in attempts if row['status'] == 'collected_pending_review'}
+    remaining = []
+    for record in records:
+        sid = record['sample_id']
+        if sid not in own:
+            remaining.append(record)
+            continue
+        path = Path(record['annotation_path'])
+        allowed = {capture / 'samples' / sid / 'annotation.json',
+                   Path(output).resolve() / 'candidate' / 'samples' / sid / 'annotation.json'}
+        receipt = load_json(capture / 'evidence' / sid / 'saved_sample.json')
+        if (path not in allowed or path.is_symlink()
+                or any(p.is_symlink() for p in path.parent.rglob('*'))
+                or record.get('annotation_sha256') != receipt['sample_files_sha256'].get('annotation.json')
+                or sample_hashes(path.parent) != receipt['sample_files_sha256']):
+            raise ValueError('Registered own result differs from the original committed sample')
+    return remaining
+
+
+def _qc_policy(value):
+    if value is None:
+        return None
+    policy = load_json(value) if isinstance(value, (str, Path)) else value
+    if (not isinstance(policy, dict) or set(policy) != {'ai_percent', 'human_percent', 'seed'}
+            or not isinstance(policy['seed'], str) or not policy['seed'].strip()):
+        raise ValueError('QC policy requires explicit ai_percent, human_percent and seed')
+    for key in ('ai_percent', 'human_percent'):
+        if type(policy[key]) not in (int, float) or not 0 <= policy[key] <= 100:
+            raise ValueError(key + ' must be a finite percentage from zero to 100')
+    return dict(policy)
+
+
+def _prepare_qc_handoff(candidate, history_set, output, sampling, checks):
+    if candidate is None:
+        return {'qc_status': 'no_pending_candidate', 'qc_inputs': None}
+    if sampling is None:
+        return {'qc_status': 'qc_configuration_required', 'qc_inputs': None}
+    from .qc_handoff import prepare_qc_inputs
+    receipt = prepare_qc_inputs(candidate, history_set, output, **sampling,
+                                collection_checks=checks)
+    return {'qc_status': 'QC_NOT_RUN', 'qc_inputs': receipt}
+
+
+async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False, qc_policy=None):
+    """Collect once into pending evidence; freeze explicit QC inputs without reviewing.
+
+    Pilot and delivery use this same entry. Optional legacy admission receipts
+    remain verifiable, but a new ordinary task does not need an earlier run.
+    """
     from .preflight import preflight_plan
     from .planning import publish_plan
     from .collect_runtime import collect_m4
@@ -904,6 +990,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     from .navigation import BatchNavigation
     if ledger.config['mode']!='real':
         raise ValueError('Synthetic browser integration uses the controlled fixture runner, never a production CLI bypass')
+    sampling = _qc_policy(qc_policy)
     plan = load_json(plan_path); catalog = load_json(catalog_path)
     validate_plan(plan)
     if plan.get('generation',{}).get('mode')!='real' or catalog.get('mode')!='real':
@@ -921,17 +1008,27 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         raise ValueError('Historical set changed since task generation')
     customer_history, current_scope = read_customer_history(history_manifest['path'])
     current_scope = bind_formal_history(current_scope)
-    if current_scope != history_scope:
+    from .current_chain import same_chain
+    if current_scope != history_scope and not same_chain(current_scope, history_scope):
         raise ValueError('Historical package population changed since task generation')
-    verify_task_admissions(plan, catalog, registry, output, customer_history=customer_history, history_scope=current_scope)
+    check_live_m4_history(plan, registry, output)
+    comparison_history = (_without_own_saved_results(plan, registry, output, customer_history)
+        if history_scope['schema_version'] == SCOPE_SCHEMA else customer_history)
+    has_legacy_admissions = any('task_admission' in task for task in plan['tasks'])
+    if has_legacy_admissions:
+        verify_task_admissions(plan, catalog, registry, output, customer_history=customer_history, history_scope=current_scope)
+    quality_reviews = []
     for task in plan['tasks']:
         if _declares_business_identity(task) and validated_business_identity(task) is None:
             raise ValueError('Unregistered or uncorroborated business identity; no dispatch')
-        if customer_history_decision(task, customer_history):
-            raise ValueError('Task duplicate or unresolved against frozen customer history; no preflight or allocation')
+        decision = customer_history_decision(task, comparison_history)
+        if decision and decision['status'] == 'REJECTED':
+            raise ValueError('Task duplicate against frozen customer history; no preflight or allocation')
+        if decision:
+            quality_reviews.append({'task_id': task['task_id'], 'task_version': task['task_version'],
+                                    'task_sha256': object_sha256(task), **decision})
     if not Path(registry).is_file():
         raise ValueError('Existing production registry required; no empty replacement')
-    check_live_m4_history(plan, registry, output)
     supplied_policy=load_json(policy)
     from .task_replanning import validated_replans
     _, repair_campaigns = validated_replans(registry, plan['generation'].get('replan_closures'))
@@ -947,6 +1044,17 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         if attempts>=active_policy['attempt_cap'] or pending>=active_policy['pending_review_cap']:
             raise BudgetStop('Existing campaign attempt/pending-review limit reached; no preflight or collection started')
     output = Path(output).resolve(); output.mkdir(parents=True,exist_ok=True)
+    quality_review_path = output / 'pending-quality-checks.json'
+    quality_review = {'schema_version': 'webcollect-pending-quality-checks-1',
+        'plan_sha256': file_sha(plan_path), 'history_scope': history_scope,
+        'generation_source_sha256': object_sha256(plan['generation']['source_identity']),
+        'source': 'frozen-history-recomputed-at-execution', 'checks': quality_reviews,
+        'requires_independent_QC': True, 'QC_approval': False}
+    if quality_review_path.exists() and load_json(quality_review_path) != quality_review:
+        raise ValueError('Existing pending quality checks changed; preserve the original evidence')
+    if not quality_review_path.exists():
+        save_json(quality_review_path, quality_review)
+    quality_review_ref = {'path': str(quality_review_path), 'sha256': file_sha(quality_review_path)}
     jid = ledger.enqueue('collection', {'plan_sha256':file_sha(plan_path),'catalog_sha256':file_sha(catalog_path),
         'registry':str(Path(registry).resolve()),'output':str(output),'policy_sha256':file_sha(policy)})
     prior=ledger.get(jid)
@@ -958,14 +1066,35 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             ledger.event(con,'collection_reconciliation_requested',{'job_id':jid})
     job = ledger.claim('collection',job_id=jid)
     if not job:
-        return ledger.get(jid)
+        previous = ledger.get(jid)
+        if previous['state'] == 'done':
+            result = previous.get('result')
+            if not isinstance(result, dict):
+                raise ValueError('Completed collection is missing its original result')
+            candidate = result.get('candidate')
+            if candidate is not None:
+                client = output / 'candidate'
+                if Path(candidate).resolve() != client:
+                    raise ValueError('Completed candidate changed its original output path')
+                receipt = load_json(output / 'candidate-receipt.json')
+                actual = {p.relative_to(client).as_posix(): file_sha(p)
+                          for p in sorted(client.rglob('*')) if p.is_file()}
+                if not actual or actual != receipt['files_sha256']:
+                    raise ValueError('Completed customer candidate changed; no new collection or QC handoff')
+            # Supplying QC configuration after collection only freezes inputs;
+            # it never replays a task or asks for a second semantic review.
+            return {**result, **_prepare_qc_handoff(candidate, history_manifest['path'],
+                output / 'qc-inputs', sampling, quality_review_ref),
+                'pending_quality_checks': quality_review_ref}
+        return previous
     navigation = BatchNavigation(ledger, job)
     async def renew():
         while True:
             await asyncio.sleep(2)
             ledger.heartbeat(job)
     async def work():
-        verify_task_admissions(plan, catalog, registry, output)
+        if has_legacy_admissions:
+            verify_task_admissions(plan, catalog, registry, output)
         pf=output/'preflight'; publication=output/'publication.json'
         if not publication.exists():
             if not (pf/'report.json').exists():
@@ -974,7 +1103,8 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             scheduled=load_json(pf/'scheduled-plan.json')
             save_json(publication,publish_plan(scheduled,catalog))
         check_live_m4_history(plan, registry, output)
-        verify_task_admissions(plan, catalog, registry, output)
+        if has_legacy_admissions:
+            verify_task_admissions(plan, catalog, registry, output)
         result=await collect_m4(pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
             navigation=navigation)
@@ -990,8 +1120,11 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             receipt=load_json(output/'candidate-receipt.json')
             actual={p.relative_to(client).as_posix():file_sha(p) for p in sorted(client.rglob('*')) if p.is_file()}
             if actual!=receipt['files_sha256']:raise ValueError('Existing customer candidate is incomplete or changed')
-        return {'collection':result,'candidate':str(client) if client.exists() else None,
-                'QC_approval':False,'human_review':'pending'}
+        candidate = str(client) if client.exists() else None
+        handoff = _prepare_qc_handoff(candidate, history_manifest['path'], output / 'qc-inputs',
+                                      sampling, quality_review_ref)
+        return {'collection':result, 'candidate':candidate, **handoff,
+                'pending_quality_checks': quality_review_ref, 'QC_approval':False,'human_review':'pending'}
     renewal=asyncio.create_task(renew());working=asyncio.create_task(work())
     try:
         done,_=await asyncio.wait((renewal,working),return_when=asyncio.FIRST_COMPLETED)
@@ -1027,11 +1160,12 @@ def main(argv=None):
         else:
             for name in ('plan','registry','policy'):p.add_argument('--'+name,type=Path,required=True)
             p.add_argument('--resume',action='store_true')
+            p.add_argument('--qc-policy',type=Path,help='Explicit ai_percent, human_percent and seed; freezes QC inputs only')
     args=parser.parse_args(argv)
     try:
         ledger=BatchLedger(args.ledger,load_json(args.config))
         result=generate(ledger,args.catalog,args.output,history_registry=args.history_registry,history_set=args.history_set,generator=args.generator,replan_closures=args.replan_closure,admission_reviews=args.admission_reviews) if args.command=='generate' else asyncio.run(
-            execute(ledger,args.plan,args.catalog,args.output,args.registry,args.policy,resume=args.resume))
+            execute(ledger,args.plan,args.catalog,args.output,args.registry,args.policy,resume=args.resume,qc_policy=args.qc_policy))
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0
     except (ValueError,OSError,KeyError,TypeError,sqlite3.Error) as error:
         print(json.dumps({'status':'STOP','reason':str(error)},ensure_ascii=False));return 2

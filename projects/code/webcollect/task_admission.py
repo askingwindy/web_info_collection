@@ -107,13 +107,8 @@ def _frame(frame, mode):
         _require(bitmap.format == 'PNG' and list(bitmap.size) == state.get('screen_resolution'), 'original PNG/tree dimensions differ')
         bitmap.verify()
     if mode == 'real':
-        from .browser import fingerprint
-        state_fingerprint = fingerprint(state)
-        _require(capture.get('attempts') and capture['attempts'][-1].get('before_fingerprint') == state_fingerprint
-                 and capture['attempts'][-1].get('after_fingerprint') == state_fingerprint, 'real PNG/tree capture fingerprints differ')
-        _require(capture.get('snapshot_source') == 'browser_dom'
-                 and capture.get('coordinate_space') == 'screenshot_css_pixels'
-                 and capture.get('attempts') and capture['attempts'][-1].get('dom_stable') is True, 'real frame needs original synchronized capture proof')
+        from .browser import validate_capture_receipt
+        validate_capture_receipt(state,capture,image.read_bytes())
         _require(not state.get('fixture') and state.get('mode') != 'synthetic' and not capture.get('fixture'), 'controlled frame cannot enter real admission')
     return state, capture
 

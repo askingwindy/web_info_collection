@@ -1,5 +1,5 @@
 /* Read-only visible DOM evidence. No page content, attributes or styles are changed. */
-({selector = null, index = 0, assertions = []} = {}) => {
+({selector = null, index = 0, assertions = [], protected_selectors = []} = {}) => {
   const width = innerWidth, height = innerHeight;
   const target = selector ? document.querySelectorAll(selector)[index] : null;
   if(target?.matches('iframe,frame'))throw new Error('UNSUPPORTED_FRAME: task targets inside embedded frames require frame-aware execution');
@@ -887,7 +887,92 @@
         node.src.startsWith('data:image/png;base64,')&&node.src.length<=2000000?
         {src:node.src,complete:node.complete,natural_width:node.naturalWidth,natural_height:node.naturalHeight}:null}:{} )};
   });
+  // This is a deliberately narrow exclusion proof, not an image classifier.
+  // Keep every source and loaded flag in the full snapshot. Only explicitly
+  // decorative, non-hit-testable images can ever receive a pixel exclusion.
+  const protectedNodes=[target,...assertions.filter(c=>c.selector).map(c=>document.querySelectorAll(c.selector)[c.index||0]),
+    ...protected_selectors.flatMap(s=>[...document.querySelectorAll(s)])].filter(Boolean);
+  const intersects=(a,b)=>Math.min(a[2],b[2])>Math.max(a[0],b[0])&&Math.min(a[3],b[3])>Math.max(a[1],b[1]);
+  const rawBox=n=>{const r=n.getBoundingClientRect();return [r.left,r.top,r.right,r.bottom];};
+  const textRects=[];
+  const textWalker=document.createTreeWalker(document.body||document.documentElement,NodeFilter.SHOW_TEXT);
+  while(textWalker.nextNode()) {
+    const n=textWalker.currentNode,p=n.parentElement;
+    if(!clean(n.textContent)||!p||p.closest('script,style,noscript,template')||
+       !p.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+    const range=document.createRange();range.selectNodeContents(n);
+    for(const r of range.getClientRects())if(r.width&&r.height)textRects.push([r.left,r.top,r.right,r.bottom]);
+  }
+  const captureImages=[];
+  for(const image of document.images) {
+    const r=image.getBoundingClientRect();
+    if(!image.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||r.width<=0||r.height<=0||
+       r.right<=0||r.bottom<=0||r.left>=width||r.top>=height)continue;
+    if(!observer.ids.has(image))observer.ids.set(image,`e_${observer.next++}`);
+    const b=rawBox(image),reasons=[],s=getComputedStyle(image),clip=clipFor(image);
+    if(image.getAttribute('alt')!==''||image.getAttribute('aria-hidden')!=='true'||
+       !['presentation','none'].includes(image.getAttribute('role'))||s.pointerEvents!=='none'||
+       image.hasAttribute('title')||image.hasAttribute('aria-label')||image.hasAttribute('aria-labelledby'))reasons.push('not_explicitly_decorative');
+    if(!image.complete||image.naturalWidth<=0||image.naturalHeight<=0)reasons.push('image_not_loaded');
+    if(!b.every(Number.isInteger)||r.left<0||r.top<0||r.right>width||r.bottom>height||
+       r.left<clip.left||r.top<clip.top||r.right>clip.right||r.bottom>clip.bottom)reasons.push('clipped_or_fractional_geometry');
+    for(let p=image;p;p=p.parentElement) {
+      const a=getComputedStyle(p),scale=axisScale(p);
+      if(p.matches('a,button,input,textarea,select,label,summary,figure,[tabindex],[contenteditable=true],[role=button],[role=link],[role=img]')||
+         [...p.attributes].some(x=>/^on/i.test(x.name))||a.cursor==='pointer')reasons.push('interactive_or_semantic_ancestor');
+      if(a.transform!=='none'||scale.a!==1||scale.b!==0||scale.c!==0||scale.d!==1||a.filter!=='none'||
+         a.clipPath!=='none'||a.maskImage!=='none'||Number(a.opacity)!==1||a.mixBlendMode!=='normal'||
+         a.boxShadow!=='none'||a.textShadow!=='none'||a.borderImageSource!=='none'||
+         (parseFloat(a.outlineWidth)>0&&a.outlineStyle!=='none')||
+         !['::before','::after'].every(pseudo=>['none','normal'].includes(getComputedStyle(p,pseudo).content)))reasons.push('unsupported_paint');
+    }
+    if(protectedNodes.some(n=>n===image||n.contains(image)||image.contains(n)||intersects(b,rawBox(n))))reasons.push('task_or_result_related');
+    if(textRects.some(t=>intersects(b,t))||records.some((e,i)=>nodes[i]!==image&&!nodes[i].contains(image)&&
+       (e.clickable||e.inputable||e.element_type==='image'||e.element_type==='window')&&intersects(b,e.bbox)))reasons.push('overlaps_text_or_control');
+    // UI-tree filtering and hit tests cannot exclude pointer-transparent canvas,
+    // SVG, or blank painted overlays. Unknown overlapping DOM regions therefore
+    // disqualify the entire image exclusion, including between the hit samples.
+    const unknownPaintOverlaps=[...document.querySelectorAll('*')].filter(n=>n!==image&&!n.contains(image)&&
+      !image.contains(n)&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&
+      intersects(b,rawBox(n))).map(n=>({tag:n.localName,id:n.id||'',bbox:rawBox(n)}));
+    if(unknownPaintOverlaps.length)reasons.push('unknown_overlapping_paint');
+    // Border boxes do not bound shadows, pseudo-elements, SVG overflow or
+    // opaque custom renderers. Do not guess their paint extents from samples.
+    const unboundedPaintSources=[];
+    for(const n of document.querySelectorAll('*')) {
+      if(n===image||n.contains(image)||!n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+      const paint=getComputedStyle(n),effects={box_shadow:paint.boxShadow,text_shadow:paint.textShadow,
+        filter:paint.filter,backdrop_filter:paint.backdropFilter||'none',border_image:paint.borderImageSource,
+        outline:parseFloat(paint.outlineWidth)>0?paint.outlineStyle:'none',reflection:paint.webkitBoxReflect||'none',
+        before:getComputedStyle(n,'::before').content,after:getComputedStyle(n,'::after').content};
+      const opaque=n instanceof SVGElement||!!n.shadowRoot||n.localName.includes('-');
+      if(opaque||Object.entries(effects).some(([key,value])=>!['none','normal'].includes(value)))
+        unboundedPaintSources.push({tag:n.localName,id:n.id||'',bbox:rawBox(n),opaque,effects});
+    }
+    if(unboundedPaintSources.length)reasons.push('unbounded_external_paint');
+    const hitSamples=[];
+    for(const x of [r.left+.5,(r.left+r.right)/2,r.right-.5])for(const y of [r.top+.5,(r.top+r.bottom)/2,r.bottom-.5]) {
+      const hit=document.elementFromPoint(x,y),ancestor=!!hit&&hit.contains(image);
+      hitSamples.push({point:[x,y],hit_tag:hit?.localName||null,hit_id:hit?.id||'',ancestor});
+      if(!ancestor)reasons.push('covered_or_unknown_hit');
+    }
+    captureImages.push({element_id:observer.ids.get(image),bbox:b,src:image.getAttribute('src')||'',current_src:image.currentSrc||'',
+      complete:image.complete,natural_width:image.naturalWidth,natural_height:image.naturalHeight,
+      exclusion_basis:{schema_version:'webcollect-decorative-image-basis-1',
+        attributes:Object.fromEntries(['alt','aria-hidden','role','title','aria-label','aria-labelledby'].map(k=>[k,image.getAttribute(k)])),
+        pointer_events:s.pointerEvents,clip_bbox:[clip.left,clip.top,clip.right,clip.bottom],hit_samples:hitSamples,
+        protected_regions:protectedNodes.map(n=>({bbox:rawBox(n),contains_image:n===image||n.contains(image),inside_image:image.contains(n)})),
+        unknown_paint_overlaps:unknownPaintOverlaps,
+        unbounded_paint_sources:unboundedPaintSources,
+        ancestor_exclusions:[...new Set(reasons.filter(r=>['interactive_or_semantic_ancestor','unsupported_paint'].includes(r)))],
+        protected_overlap:reasons.includes('task_or_result_related'),
+        text_or_control_overlap:reasons.includes('overlaps_text_or_control')},
+      eligible:reasons.length===0,exclusion_reasons:[...new Set(reasons)]});
+  }
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
+    capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
+      fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
+    capture_images:captureImages,
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,
     embedded_frames:nodes.map((node,i)=>node.matches('iframe,frame')?{

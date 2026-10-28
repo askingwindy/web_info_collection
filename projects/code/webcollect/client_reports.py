@@ -27,6 +27,29 @@ def _aggregate(values):
     return 'FAIL' if 'FAIL' in values else 'REVIEW_REQUIRED' if not values or 'REVIEW_REQUIRED' in values else 'PASS'
 
 
+def _protect_scope_output(output, scope):
+    output = Path(output).resolve()
+    if any(output.is_relative_to(Path(root)) or Path(root).is_relative_to(output)
+           for root in scope['package_roots']):
+        raise ValueError('Release output must be outside every effective-set source package')
+    if any(output == Path(scope[key]['path']) or Path(scope[key]['path']).is_relative_to(output)
+           for key in ('effective_set', 'cross_package_report')):
+        raise ValueError('Release output cannot replace delivery binding evidence')
+
+
+def validate_report_semantic_rules(report):
+    """Reject stale cached PASS without rerunning or inventing a review."""
+    from quality_inspector.semantic import rule_ids
+    current = rule_ids(); saved = report.get('semantic_rule_ids')
+    affected = sorted(set(current) | (set(saved) if isinstance(saved, dict) else set()))
+    if isinstance(saved, dict):
+        affected = [name for name in affected if name not in saved or name not in current or saved[name] != current[name]]
+    if affected:
+        raise ValueError('Cached QC report has missing/changed semantic rules; affected checks: '
+                         + ', '.join(affected) + '; run independent deterministic QC again before packaging')
+    return current
+
+
 def _bound_report(source, report_path):
     report = read_json(report_path)
     if not isinstance(report, dict) or report.get('program') != 'quality-inspector':
@@ -61,6 +84,7 @@ def _bound_report(source, report_path):
             raise ValueError('QC report sample annotation/image/tree binding differs: ' + sid)
         if not isinstance(row.get('sample_path'), str) or Path(row['sample_path']).resolve() != actual[sid]:
             raise ValueError('QC report did not inspect the actual client sample path: ' + sid)
+    validate_report_semantic_rules(report)
     return report, files
 
 
@@ -235,7 +259,7 @@ def _render_summary(source, report_path, report, files, batch_name=None):
     return '\n'.join(lines)
 
 
-def finalize_client_package(repo, source, qc_report, output):
+def finalize_client_package(repo, source, qc_report, output, *, effective_set=None, cross_package_report=None):
     """Create a new customer package with an honest summary of a bound QC run."""
     source = Path(source).resolve()
     report_path = Path(qc_report).resolve()
@@ -249,6 +273,10 @@ def finalize_client_package(repo, source, qc_report, output):
     report, original_files = _bound_report(source, report_path)
     if report.get('delivery_status') != 'PASS' or report.get('inspection_stage') != 'payload':
         raise ValueError('Customer release requires a PASS delivery check; no failed or pending release')
+    from quality_inspector.delivery_scope import verify_delivery_scope
+    scope = verify_delivery_scope(effective_set, cross_package_report, dataset=source,
+        expected_contract=report.get('requirements_baseline', {}).get('sha256'))
+    _protect_scope_output(output, scope)
     report_sha256 = sha(report_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.' + output.name + '.staging-', dir=output.parent) as temporary:
@@ -269,17 +297,22 @@ def finalize_client_package(repo, source, qc_report, output):
                 raise ValueError('Finalization modified an already-reviewed sample')
         if _file_hashes(source) != original_files or sha(report_path) != report_sha256:
             raise ValueError('QC source/report changed during finalization')
+        final_scope = verify_delivery_scope(effective_set, cross_package_report, dataset=staged, phase='final',
+            expected_contract=scope['contract_sha256'])
+        if final_scope != scope:
+            raise ValueError('Effective delivery binding changed during finalization')
         if output.exists():
             raise FileExistsError('Customer output appeared during finalization')
         staged.rename(output)
     return {'output': str(output), 'layout': 'client', 'source_qc_report_sha256': report_sha256,
             'source_customer_manifest_sha256': original_files['SHA256SUMS'],
             'samples': len(report['samples']), 'sample_files_byte_identical': True,
+            'delivery_scope': scope,
             'next_step': 'Run independent QC directly on this new customer directory; existing sample evidence/review bindings remain applicable',
             'customer_acceptance': 'UNKNOWN', 'new_package_qc_status': 'NOT_RUN'}
 
 
-def archive_client_package(source, qc_report, output):
+def archive_client_package(source, qc_report, output, *, effective_set=None, cross_package_report=None):
     """Archive only a final, read-only-QC-verified release without changing it."""
     source=Path(source).resolve();output=Path(output).absolute()
     if output.exists() or output.is_symlink() or output.resolve().is_relative_to(source):
@@ -290,13 +323,23 @@ def archive_client_package(source, qc_report, output):
     report,original=_bound_report(source,Path(qc_report).resolve())
     if report.get('delivery_status')!='PASS' or report.get('inspection_stage')!='final' or report.get('release_ready') is not True:
         raise ValueError('Archive requires a final PASS release-ready QC report')
+    from quality_inspector.delivery_scope import verify_delivery_scope
+    scope = verify_delivery_scope(effective_set, cross_package_report, dataset=source, phase='final',
+        expected_contract=report.get('requirements_baseline', {}).get('sha256'))
+    _protect_scope_output(output, scope)
+    _protect_scope_output(checksum_path, scope)
+    report_hash = sha(qc_report)
     output.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.'+output.stem+'-',dir=output.parent) as temporary:
         candidate=Path(temporary)/output.name
         with zipfile.ZipFile(candidate,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
             for relative in sorted(original):archive.write(source/relative,source.name+'/'+relative)
         if _file_hashes(source)!=original:raise ValueError('Verified input changed during archiving')
+        if (verify_delivery_scope(effective_set, cross_package_report, dataset=source, phase='final') != scope
+                or sha(qc_report) != report_hash):
+            raise ValueError('Effective delivery binding changed during archiving')
         candidate.rename(output)
     digest=sha(output);checksum_path.write_text(digest+'  '+output.name+'\n',encoding='utf-8')
     return {'archive':str(output.resolve()),'archive_sha256':digest,'members':len(original),'source':str(source),
+            'delivery_scope':scope,
             'input_unchanged':True,'customer_acceptance':'UNKNOWN'}

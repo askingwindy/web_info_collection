@@ -158,8 +158,26 @@ class ConcurrentExactImageIndex:
             'files_sha256': dict(sorted(expected.items()))}
 
 def contract_identity(repo):
-    repo=Path(repo);sources=['request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md','request/需求澄清记录.md','request/web操作采集需求/附件A-字段说明.md','request/web操作采集需求/附件B-动作空间与坐标系.md','request/web操作采集需求/samples/样例说明.md']
-    return {'profile':'customer-prose-with-clarifications','version':1,'authority_files_sha256':{s:sha(repo/s) for s in sources},'producer_constants_not_customer_exclusive_enums':True,'customer_actual_program':'NOT_EXECUTED'}
+    """Bind installed requirement documents without opening historical samples."""
+    import json
+    root = Path(repo) / 'projects/quality-inspector/quality_inspector'
+    manifest = json.loads((root / 'contract-authority.json').read_text())
+    rows = manifest.get('documents', [])
+    if (manifest.get('schema_version') != 'qc-installed-authority-1' or len(rows) != 4
+            or {row.get('role') for row in rows} != {'clarification', 'requirement', 'annex_a', 'annex_b'}):
+        raise ValueError('Complete installed four-document authority required')
+    files = {}
+    for row in rows:
+        resource = Path(row['resource'])
+        if resource.is_absolute() or '..' in resource.parts or resource.parts[0] != 'authority':
+            raise ValueError('Installed authority resource is outside its package')
+        path = root / resource
+        if path.is_symlink() or sha(path) != row['sha256']:
+            raise ValueError('Installed authority document changed')
+        files[row['path']] = row['sha256']
+    return {'profile': 'customer-prose-with-clarifications', 'version': 2,
+            'authority_source': 'installed-four-document-authority', 'authority_files_sha256': files,
+            'producer_constants_not_customer_exclusive_enums': True, 'customer_actual_program': 'NOT_EXECUTED'}
 
 def require_public_task_state(state):
     """Stop at explicit auth endpoints; never retry with credentials or evade gates."""

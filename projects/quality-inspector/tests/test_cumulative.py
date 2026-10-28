@@ -32,11 +32,12 @@ class CumulativeTests(unittest.TestCase):
         self.assertEqual(result['mechanical_status'],'FAIL')
         self.assertTrue(any('frozen package hash' in row['reason'] for row in result['errors']))
 
-    def test_cross_package_duplicate_id_cannot_be_silently_merged(self):
+    def test_cross_package_identical_copy_is_explicit_and_counted_once(self):
         other=self.root/'other';shutil.copytree(self.client,other)
         result=inspect_set(build_set_manifest([self.client,other]),self.profile)
-        self.assertEqual(result['mechanical_status'],'FAIL')
-        self.assertTrue(any('repeated sample_id' in row['reason'] for row in result['errors']))
+        self.assertEqual(result['mechanical_status'],'PASS')
+        self.assertEqual(result['sample_count'],1)
+        self.assertEqual(len(result['version_comparison']['identical_copies']),1)
 
     def test_duplicate_and_nested_package_roots_rejected(self):
         with self.assertRaises(ValueError):build_set_manifest([self.client,self.client])

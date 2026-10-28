@@ -10,19 +10,23 @@ from .duplicates import analyze_inputs, analysis_error
 from .format_checks import run as format_run
 from .layout import discover
 from .profiles import load as load_profile, package_files, DEFAULT_DELIVERY_PROFILE
+from .version_compare import compare_versions, POLICY
 
 
-def build_set_manifest(package_paths):
+def build_set_manifest(package_paths, *, supersedes=()):
     """Return facts, not approval. Caller persists this versioned manifest explicitly."""
     paths = [Path(path).resolve() for path in package_paths]
     if not paths or len(paths) != len(set(paths)):
         raise ValueError('Cumulative set needs unique package paths')
     if any(a != b and (a.is_relative_to(b) or b.is_relative_to(a)) for a in paths for b in paths):
         raise ValueError('Cumulative package roots must not overlap')
-    return {'schema_version': 'qc-cumulative-set-1',
+    result = {'schema_version': 'qc-cumulative-set-1',
             'packages': [{'path': str(path), 'package_files_sha256': package_files(path)} for path in paths],
             'scope': 'explicit effective delivery versions only; excludes superseded copies',
             'not_an_acceptance': True}
+    if supersedes:
+        result['version_policy'] = {'schema_version': POLICY, 'supersedes': list(supersedes)}
+    return result
 
 
 def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
@@ -41,12 +45,15 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         raw = manifest; base = Path.cwd()
     if not isinstance(raw, dict) or raw.get('schema_version') != 'qc-cumulative-set-1' or not isinstance(raw.get('packages'), list) or not raw['packages']:
         raise ValueError('Expected a nonempty qc-cumulative-set-1 manifest')
+    versions = compare_versions(raw, base=base)
+    effective_paths = {Path(row['sample_path']) for row in versions['effective_samples']}
     selected = load_profile(profile or DEFAULT_DELIVERY_PROFILE)
     if cache and Path(cache).resolve() == Path(selected['path']):
         raise ValueError('Cache must not overwrite the selected profile')
     if selected['configuration']['scope'] != 'delivery':
         raise ValueError('Cumulative checking needs an explicit delivery profile')
     targets = selected['configuration']['targets']; errors = []; paths = []; snapshots = {}; annotations = []
+    errors.extend(versions['errors'])
     samples = []; rows = []; packages = []; sites = {}; uri_owners = {}; ids = set(); active_sites = set()
     contract, contract_hash = fingerprint()
     if selected['configuration']['attachments'] != contract['attachments']:
@@ -69,16 +76,19 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
                          'format_status': 'FAIL' if package_errors else 'PASS', 'errors': package_errors})
         errors.extend({'package': str(root), 'reason': row['message']} for row in package_errors)
         for sample in formats['samples']:
+            if Path(sample['sample_path']).resolve() not in effective_paths:
+                continue
             sid = sample.get('sample_id')
             if not isinstance(sid, str) or not sid or sid in ids:
                 errors.append({'package': str(root), 'reason': 'missing or repeated sample_id: ' + str(sid)})
             if isinstance(sid, str): ids.add(sid)
             samples.append(sample)
-        annotations.extend(layout.annotations)
+        annotations.extend(path for path in layout.annotations if path.parent.resolve() in effective_paths)
         try:
             with (root / 'metadata.csv').open(encoding='utf-8-sig', newline='') as stream:
                 local_rows = list(csv.DictReader(stream))
-            rows.extend(local_rows)
+            effective_ids = {row['sample_id'] for row in versions['effective_samples'] if row['package'] == str(root)}
+            rows.extend(row for row in local_rows if row['sample_id'] in effective_ids)
             listing = json.loads((root / 'site-list.json').read_text())
             local_sites = {row['site_id']: row for row in listing['sites']}
             assignments = {row['sample_id']: row['site_id'] for row in listing['samples']}
@@ -91,7 +101,8 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
                     or set(assignments) != local_ids):
                 errors.append({'package': str(root), 'reason': 'site-list population must cover local samples exactly once'})
             for row in local_rows:
-                active_sites.add(row['site_id'])
+                if row['sample_id'] in effective_ids:
+                    active_sites.add(row['site_id'])
                 site = local_sites.get(row['site_id'])
                 if not site or site.get('site_category') != row['site_category'] or assignments.get(row['sample_id']) != row['site_id']:
                     errors.append({'package': str(root), 'reason': 'site/category/sample mapping differs: ' + row['sample_id']})
@@ -145,6 +156,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             errors.append({'package': str(root), 'reason': 'input changed during cumulative inspection'})
     return {'schema_version': 'qc-cumulative-report-1', 'scope': 'cumulative-mechanical',
             'status': 'FAIL' if errors else 'PASS', 'mechanical_status': 'FAIL' if errors else 'PASS',
+            'cross_package_status': 'FAIL' if errors else 'PASS', 'version_comparison': versions,
             'release_ready': False, 'local_acceptance_status': 'NOT_EVALUATED',
             'semantic_review_status': 'NOT_EVALUATED', 'delivery_document_review_status': 'NOT_EVALUATED',
             'customer_actual_acceptance': 'UNKNOWN', 'customer_actual_program_executed': False,

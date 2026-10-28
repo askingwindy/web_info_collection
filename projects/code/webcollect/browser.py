@@ -7,14 +7,18 @@ import json
 import math
 import time
 import weakref
+from copy import deepcopy
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 from io import BytesIO
 
 SNAPSHOT_JS=files('webcollect').joinpath('snapshot.js').read_text(encoding='utf-8')
 POINTER={'click','double_click','right_click','drag','select','scroll'}
 CONTROL={'click','double_click','right_click','drag','select','type'}
 _SCREENSHOT_SESSIONS=weakref.WeakKeyDictionary()
+_CAPTURE_FRAMES=weakref.WeakKeyDictionary()
+CAPTURE_VERSION='webcollect-capture-2'
+STABILITY_VERSION='webcollect-related-stability-1'
 _CAPTURE_RETRY_DELAYS=(0.1,0.25,0.5,1.0,1.5,2.0,2.5)
 _CAPTURE_WAIT_BUDGET=8.0
 _ANIMATION_OBSERVATION_JS=r'''() => {
@@ -161,11 +165,123 @@ def fingerprint(state):
     return hashlib.sha256(json.dumps(state,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
 
 
-async def observe(page, selector=None, index=0, timeout=15, assertions=None):
+def _loaded(state):
+    ready=state.get('capture_readiness',{})
+    return (ready.get('schema_version')=='webcollect-capture-readiness-1' and ready.get('document_ready')=='complete'
+            and ready.get('fonts_ready') is True and ready.get('images_ready') is True)
+
+
+def _image_regions(state):
+    width,height=state['screen_resolution'];regions=[]
+    def box_ok(box):
+        return (isinstance(box,list) and len(box)==4 and all(type(n) in (int,float) and math.isfinite(n) for n in box)
+                and box[0]<box[2] and box[1]<box[3])
+    def overlaps(a,b):return box_ok(a) and box_ok(b) and min(a[2],b[2])>max(a[0],b[0]) and min(a[3],b[3])>max(a[1],b[1])
+    for image in state.get('capture_images',[]):
+        box=image.get('bbox')
+        if not box_ok(box) or not all(type(n) is int for n in box) or not (0<=box[0]<box[2]<=width and 0<=box[1]<box[3]<=height):continue
+        basis=image.get('exclusion_basis',{});attributes=basis.get('attributes',{})
+        clip=basis.get('clip_bbox');protected=basis.get('protected_regions')
+        points=[[x,y] for x in (box[0]+.5,(box[0]+box[2])/2,box[2]-.5)
+                for y in (box[1]+.5,(box[1]+box[3])/2,box[3]-.5)]
+        critical=[state.get('target'),*state.get('assertion_targets',[])]
+        critical += [e for e in state.get('elements',[]) if e.get('element_id')!=image.get('element_id') and
+                     (e.get('clickable') or e.get('inputable') or e.get('text') or e.get('element_type') in ('image','window'))]
+        proved=(basis.get('schema_version')=='webcollect-decorative-image-basis-1'
+                and attributes.get('alt')=='' and attributes.get('aria-hidden')=='true'
+                and attributes.get('role') in ('presentation','none')
+                and all(k in attributes and attributes[k] is None for k in ('title','aria-label','aria-labelledby'))
+                and basis.get('pointer_events')=='none' and basis.get('ancestor_exclusions')==[]
+                and basis.get('unknown_paint_overlaps')==[]
+                and basis.get('unbounded_paint_sources')==[]
+                and basis.get('protected_overlap') is False and basis.get('text_or_control_overlap') is False
+                and box_ok(clip) and clip[0]<=box[0] and clip[1]<=box[1] and clip[2]>=box[2] and clip[3]>=box[3]
+                and isinstance(protected,list) and all(isinstance(p,dict) and 'bbox' in p
+                    and p.get('contains_image') is False and p.get('inside_image') is False and not overlaps(box,p['bbox']) for p in protected)
+                and not any(isinstance(e,dict) and overlaps(box,e.get('bbox')) for e in critical)
+                and len(basis.get('hit_samples',[]))==9
+                and [h.get('point') for h in basis['hit_samples']]==points
+                and all(h.get('ancestor') is True and h.get('hit_tag') for h in basis['hit_samples']))
+        if (image.get('eligible') is True and image.get('exclusion_reasons')==[] and image.get('complete') is True
+                and proved
+                and image.get('natural_width',0)>0 and image.get('natural_height',0)>0
+                and isinstance(box,list) and len(box)==4 and all(type(x) is int for x in box)
+                and 0<=box[0]<box[2]<=width and 0<=box[1]<box[3]<=height):
+            regions.append({'element_id':image['element_id'],'bbox':box})
+    return regions
+
+
+def related_projection(state):
+    """Drop only source strings with a complete read-only decorative-image proof."""
+    result=deepcopy(state)
+    allowed={r['element_id'] for r in _image_regions(state)}
+    for image in result.get('capture_images',[]):
+        if image.get('element_id') in allowed:
+            image['src']=image['current_src']='BOUNDED_DECORATIVE_IMAGE_SOURCE'
+    return result
+
+
+def stability_pair(before,after,png_before,png_after):
+    """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
+    loaded=_loaded(before) and _loaded(after)
+    full=fingerprint(before)==fingerprint(after)
+    related=loaded and related_projection(before)==related_projection(after)
+    regions=_image_regions(before) if related else []
+    with Image.open(BytesIO(png_before)) as first,Image.open(BytesIO(png_after)) as last:
+        if first.format!='PNG' or last.format!='PNG' or list(first.size)!=before['screen_resolution'] or first.size!=last.size:
+            raise ValueError('同步像素证明需要相同视口分辨率的完整原始PNG')
+        channels=ImageChops.difference(first.convert('RGBA'),last.convert('RGBA')).split()
+        diff=channels[0]
+        for channel in channels[1:]:diff=ImageChops.lighter(diff,channel)
+        changed=diff.point(lambda value:255 if value else 0)
+        mask=Image.new('L',first.size,0);draw=ImageDraw.Draw(mask)
+        for region in regions:
+            x1,y1,x2,y2=region['bbox'];draw.rectangle((x1,y1,x2-1,y2-1),fill=255)
+        outside=ImageChops.subtract(changed,mask)
+        pixel_change={'changed_pixels':changed.histogram()[255],
+                      'bbox':list(changed.getbbox()) if changed.getbbox() else None,
+                      'outside_allowed_pixels':outside.histogram()[255],
+                      'difference_mask_sha256':hashlib.sha256(changed.tobytes()).hexdigest()}
+    return {'schema_version':STABILITY_VERSION,'accepted':bool(related and not pixel_change['outside_allowed_pixels']),
+            'full_dom_stable':full,'related_dom_stable':bool(related),'loading_complete':bool(loaded),
+            'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
+            'related_fingerprint':fingerprint(related_projection(before)),
+            'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
+            'allowed_image_regions':regions,'pixel_change':pixel_change}
+
+
+def validate_capture_receipt(state,receipt,png):
+    """Validate v2 from preserved bytes, retaining frozen v1's strict DOM rule."""
+    attempt=receipt['attempts'][-1]
+    if receipt.get('snapshot_source')!='browser_dom' or receipt.get('coordinate_space')!='screenshot_css_pixels':
+        raise ValueError('缺少浏览器同步坐标来源')
+    if receipt.get('screenshot_sha256')!=hashlib.sha256(png).hexdigest():raise ValueError('原图与收据不匹配')
+    version=receipt.get('schema_version')
+    if version is None and 'capture_readiness' not in state:
+        if not (attempt.get('dom_stable') is True and attempt.get('before_fingerprint')==fingerprint(state)==attempt.get('after_fingerprint')):
+            raise ValueError('旧收据缺少完整DOM稳定证明')
+        return True
+    if version!=CAPTURE_VERSION:raise ValueError('未知或降级的capture收据版本')
+    middle,final=attempt['snapshot_after'],attempt['snapshot_final']
+    other=base64.b64decode(attempt['comparison_png_base64'],validate=True)
+    if attempt.get('snapshot_before')!=state or base64.b64decode(attempt['original_png_base64'],validate=True)!=png:
+        raise ValueError('完整原图/原状态与capture证明不同')
+    first_proof=stability_pair(state,middle,png,other)
+    last_proof=stability_pair(state,final,png,other)
+    if (not first_proof['accepted'] or not last_proof['accepted'] or attempt.get('stability')!=first_proof
+            or attempt.get('final_stability')!=last_proof or attempt.get('before_fingerprint')!=fingerprint(state)
+            or attempt.get('after_fingerprint')!=fingerprint(final)
+            or attempt.get('dom_stable')!=(first_proof['full_dom_stable'] and last_proof['full_dom_stable'])):
+        raise ValueError('相关稳态证明与完整原图/状态不一致')
+    return True
+
+
+async def observe(page, selector=None, index=0, timeout=15, assertions=None, protected_selectors=None):
     """A stalled page must reject its task, never stall the entire batch."""
     try:
         options={'selector':selector,'index':index}
         if assertions:options['assertions']=assertions
+        if protected_selectors:options['protected_selectors']=protected_selectors
         return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,options),timeout=timeout)
     except asyncio.TimeoutError as error:
         raise TimeoutError(f'页面同步观察超过{timeout}秒，停止该任务并保留检查点') from error
@@ -196,8 +312,8 @@ async def viewport_png(page):
         return base64.b64decode(result['data'],validate=True),{'method':'chrome_rendered_viewport','font_wait_error':str(error),'device_metrics_reasserted':metrics,'font_rendering_policy':'actual browser fallback; no page content or resource modification'}
 
 
-async def capture(page, selector=None, index=0, retries=8, assertions=None):
-    """严格匹配前后 DOM；仅在错配后有界自然等待，不修改页面或暂停动画。
+async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None):
+    """Capture full evidence; only proved unrelated decorative IMG pixels may vary.
 
     retries remains the total number of attempts, including when explicitly
     supplied. The backoff requests at most eight seconds of sleep in total;
@@ -219,17 +335,31 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None):
         requested_wait+=native_window['requested_wait_ms']/1000
         observed_wait+=native_window['observed_wait_ms']/1000
         started=time.time_ns()
-        before=await observe(page,selector,index,**({'assertions':assertions} if assertions else {}))
+        options={**({'assertions':assertions} if assertions else {}),
+                 **({'protected_selectors':protected_selectors} if protected_selectors else {})}
+        before=await observe(page,selector,index,**options)
         try:png,screenshot_evidence=await asyncio.wait_for(viewport_png(page),timeout=25)
         except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
-        after=await observe(page,selector,index,**({'assertions':assertions} if assertions else {}))
+        after=await observe(page,selector,index,**options)
+        extra={};v2='capture_readiness' in before
+        if v2:
+            comparison,comparison_method=await asyncio.wait_for(viewport_png(page),timeout=25)
+            final=await observe(page,selector,index,**options)
+            stability=stability_pair(before,after,png,comparison)
+            final_stability=stability_pair(before,final,png,comparison)
+            extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
+                   'original_png_base64':base64.b64encode(png).decode('ascii'),
+                   'comparison_png_base64':base64.b64encode(comparison).decode('ascii'),
+                   'comparison_screenshot':comparison_method,'stability':stability,'final_stability':final_stability}
         ended=time.time_ns()
         recent_capture_ms=(ended-started)/1e6
         before_fingerprint=fingerprint(before)
         after_fingerprint=fingerprint(after)
         same=before_fingerprint==after_fingerprint
+        if v2:same=same and before_fingerprint==fingerprint(final)
+        accepted=(stability['accepted'] and final_stability['accepted']) if v2 else same
         next_delay=0.0
-        if not same and attempt_index+1<retries:
+        if not accepted and attempt_index+1<retries:
             next_delay=min(_CAPTURE_RETRY_DELAYS[min(attempt_index,len(_CAPTURE_RETRY_DELAYS)-1)],
                            max(0.0,_CAPTURE_WAIT_BUDGET-requested_wait))
         attempts.append({'attempt':attempt_index+1,'started_ns':started,'ended_ns':ended,'dom_stable':same,
@@ -237,13 +367,17 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None):
                          'native_window_wait_ms':round(native_window['requested_wait_ms'],3),
                          'native_window_evidence':native_window,
                          'mismatch_fields':[key for key in sorted(before.keys()|after.keys())
-                                            if key not in before or key not in after or before[key]!=after[key]],
-                         'before_fingerprint':before_fingerprint,'after_fingerprint':after_fingerprint})
-        if same:
+                                            if key not in before or key not in after or before[key]!=after[key]
+                                            or v2 and before.get(key)!=final.get(key)],
+                         'before_fingerprint':before_fingerprint,'after_fingerprint':fingerprint(final) if v2 else after_fingerprint,
+                         **extra})
+        if accepted:
             with Image.open(BytesIO(png)) as im:
                 if list(im.size)!=before['screen_resolution']:
                     raise ValueError('截图像素分辨率与 DOM 坐标系不一致')
-            return {'state':before,'png':png,'capture':{'attempts':attempts,'screenshot_sha256':hashlib.sha256(png).hexdigest(),
+            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png}
+            return {'state':before,'png':png,'capture':{**({'schema_version':CAPTURE_VERSION} if v2 else {}),
+                    'attempts':attempts,'screenshot_sha256':hashlib.sha256(png).hexdigest(),
                     'natural_wait_requested_ms':round(requested_wait*1000),
                     'natural_wait_observed_ms':round(observed_wait*1000),'natural_wait_budget_ms':8000,
                     'coordinate_space':'screenshot_css_pixels','snapshot_source':'browser_dom',
@@ -258,9 +392,23 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None):
     raise error
 
 
-async def verify_execution_state(page, state, selector=None, index=0, assertions=None):
+async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None):
     """Reject any changed captured state before dispatch, including non-control actions."""
-    live=await observe(page,selector,index,assertions=assertions)
+    options={'assertions':assertions,**({'protected_selectors':protected_selectors} if protected_selectors else {})}
+    live=await observe(page,selector,index,**options)
+    if 'capture_readiness' in state:
+        captured=_CAPTURE_FRAMES.get(page)
+        if not captured or captured['state']!=state:raise ValueError('派发缺少本次原始capture像素绑定')
+        png,method=await asyncio.wait_for(viewport_png(page),timeout=25)
+        final=await observe(page,selector,index,**options)
+        proof=stability_pair(state,live,captured['png'],png)
+        final_proof=stability_pair(state,final,captured['png'],png)
+        if not proof['accepted'] or not final_proof['accepted']:
+            raise ValueError('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
+        return {'matched':True,'full_state_matched':proof['full_dom_stable'] and final_proof['full_dom_stable'],
+                'state_fingerprint':fingerprint(state),'live_state_fingerprint':fingerprint(live),
+                'final_state_fingerprint':fingerprint(final),'target':live.get('target'),'stability':proof,'final_stability':final_proof,
+                'live_state':live,'final_state':final,'png_base64':base64.b64encode(png).decode('ascii'),'screenshot':method}
     if fingerprint(live)!=fingerprint(state):
         changed=[key for key in sorted(live.keys()|state.keys()) if live.get(key)!=state.get(key)]
         raise ValueError('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'+','.join(changed))

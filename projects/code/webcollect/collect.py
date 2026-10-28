@@ -21,12 +21,13 @@ from .action_normalization import normalize_delivery_step
 def now():return datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()
 
 
-async def capture_complete(page, evidence, selector=None, index=0, assertions=None):
+async def capture_complete(page, evidence, selector=None, index=0, assertions=None, protected_selectors=None):
     """Refresh only a stale completion candidate; never replay an action.
 
     No formal frame/companion/narrative is published here. Every candidate
     keeps the complete capture and unchanged assertions/fingerprint checks.
     """
+    protection={'protected_selectors':protected_selectors} if protected_selectors else {}
     started=time.monotonic()
     timing={'policy':'complete-full-refresh-1','started_at':now(),'attempt_limit':3,
             'timeout_seconds':12,'quiet_window_ms':1000,'retry_wait_ms':250,
@@ -54,18 +55,18 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
     async def refresh():
         for number in range(1,4):
             attempt={'attempt':number,'started_at':now()};timing['attempts'].append(attempt)
-            observation=await capture(page,selector,index,assertions=assertions)
+            observation=await capture(page,selector,index,assertions=assertions,**protection)
             attempt['screenshot_sha256']=observation['capture']['screenshot_sha256']
             try:
                 attempt['assertions']=await assert_state(page,assertions or [],
-                    captured_state=observation['state'],captured_png=observation['png'])
+                    captured_state=observation['state'],captured_png=observation['png'],**protection)
             except Exception as error:
                 attempt.update(status='assertion_rejected',reason=str(error),finished_at=now())
                 attempt['diagnostic']=reject_candidate(number,observation,attempt)
                 raise
             await natural_wait(1000)
             try:
-                preflight=await verify_execution_state(page,observation['state'],selector,index,assertions=assertions)
+                preflight=await verify_execution_state(page,observation['state'],selector,index,assertions=assertions,**protection)
             except ValueError as error:
                 if not str(error).startswith('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'):
                     raise
@@ -125,16 +126,17 @@ def check_numbers(text, spec):
             (not spec.get('integer') or all(v==v.to_integral_value() for v in values)))
 
 
-async def assert_state(page, conditions, captured_state=None, captured_png=None):
+async def assert_state(page, conditions, captured_state=None, captured_png=None, protected_selectors=None):
     """Evaluate assertions against one observation, optionally the actual saved frame."""
+    protection={'protected_selectors':protected_selectors} if protected_selectors else {}
     if any('visible_text' in condition and set(condition) != {'visible_text'} for condition in conditions):
         raise ValueError('Whole-page visible_text assertion cannot also bind a selector or another predicate')
     if captured_state is None and any('qr_png_payload' in condition or 'placeholder_png_text' in condition for condition in conditions):
         # QR completion cannot be inferred from DOM labels/statistics. Even the
         # early-completion check needs one synchronized, unmodified PNG.
-        observation=await capture(page,assertions=conditions)
+        observation=await capture(page,assertions=conditions,**protection)
         captured_state=observation['state'];captured_png=observation['png']
-    observed=captured_state if captured_state is not None else await observe(page,assertions=conditions)
+    observed=captured_state if captured_state is not None else await observe(page,assertions=conditions,**protection)
     targets=observed.get('assertion_targets',[])
     if len(targets)!=len(conditions):raise ValueError('末态观察缺少同步断言目标，不能使用先前页面的结论')
     results=[]
@@ -791,6 +793,8 @@ def validate_plan(plan):
             if op['action_type'] in CONTROL and not op.get('selector'):raise ValueError('控件动作必须有原始定位依据')
         if sum(op['action_type'] not in ('wait','complete') for op in task['operations'])<5:
             raise ValueError('M2 任务至少规划 5 个显式有效操作，不允许通过等待凑步')
+        if sum(op['action_type'] not in ('wait','complete') for op in task['operations'])>10:
+            raise ValueError('采集任务最多规划 10 个必要有效操作；试点与交付共用 5-10 步口径')
         if any(op['action_type']=='complete' for op in task['operations']):raise ValueError('complete 由最终断言成功后添加，不得提前声明完成')
     from .task_contract import validate_m4_plan
     if any('task_admission' in task for task in plan['tasks']):
@@ -802,11 +806,23 @@ def validate_plan(plan):
     validate_pilot_plan(plan)
 
 
+def task_protected_selectors(task):
+    """Protect future result surfaces without evaluating their assertions early."""
+    conditions = list(task.get('final_assertions', []))
+    conditions += [condition for operation in task.get('operations', [])
+                   for condition in operation.get('postconditions', [])]
+    return sorted({condition['selector'] for condition in conditions
+                   if isinstance(condition, dict) and isinstance(condition.get('selector'), str)
+                   and condition['selector'].strip()})
+
+
 async def collect_one(context, task, directory, evidence, ids, *, navigation=None):
     from .task_contract import (is_m4_task, validate_m4_task, completion_decision,
                                 terminal_evidence, narrative_evidence, canonical_sha)
     m4=is_m4_task(task)
     if m4:validate_m4_task(task)
+    protected_selectors=task_protected_selectors(task)
+    protection={'protected_selectors':protected_selectors} if protected_selectors else {}
     directory=Path(directory);evidence=Path(evidence)
     (directory/'images').mkdir(parents=True)
     (directory/'ui_tree').mkdir()
@@ -845,7 +861,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             completion_trigger='planned_final'
             if op['action_type']!='complete' and task.get('stop_when_final',True):
                 try:
-                    await assert_state(page,task['final_assertions'])
+                    await assert_state(page,task['final_assertions'],**protection)
                 except ValueError:
                     pass
                 else:
@@ -924,8 +940,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             capture_conditions=previous_conditions+(task['final_assertions']
                 if is_final or op.get('completion_view') else [])
             observation=await (capture_complete(page,evidence,op.get('selector'),op.get('index',0),
-                                                assertions=capture_conditions or None) if is_final else
-                               capture(page,op.get('selector'),op.get('index',0),assertions=capture_conditions or None))
+                                                assertions=capture_conditions or None,**protection) if is_final else
+                               capture(page,op.get('selector'),op.get('index',0),assertions=capture_conditions or None,**protection))
             state=observation['state']
             if previous_conditions:
                 previous_state={**state,'assertion_targets':state['assertion_targets'][:len(previous_conditions)]}
@@ -1062,7 +1078,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             pages_before=set(context.pages)
             try:
                 preflight=await verify_execution_state(page,state,op.get('selector'),op.get('index',0),
-                                                       assertions=capture_conditions or None)
+                                                       assertions=capture_conditions or None,**protection)
                 raw['state_preflight']={**preflight,'checked_at':now()}
                 if element:raw['target_preflight']=raw['state_preflight']
                 if is_final:
@@ -1112,7 +1128,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     page=opened_page if opened_page is not None else next(iter(new_pages))
                     await page.wait_for_load_state('domcontentloaded')
                     raw['opened_page_url']=page.url
-                if op.get('postconditions'):raw['postconditions']=await assert_state(page,op['postconditions'])
+                if op.get('postconditions'):raw['postconditions']=await assert_state(page,op['postconditions'],**protection)
             except Exception as e:
                 raw['execution_error']=str(e)
                 write_json(evidence/f'step_{i:03}.json',raw)
@@ -1183,7 +1199,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             write_json(evidence/'capture_failure.json',{'error':str(error),'capture':error.capture,
                          'diagnostic_only':True,'accepted_as_formal_frame':False})
         try:
-            diagnostic=await asyncio.wait_for(capture(page),timeout=5)
+            diagnostic=await asyncio.wait_for(capture(page,**protection),timeout=5)
             (evidence/'failure_after.png').write_bytes(diagnostic['png'])
             write_json(evidence/'failure_after.json',{'state':diagnostic['state'],'capture':diagnostic['capture'],'error':str(error)})
         except Exception as diagnostic_error:

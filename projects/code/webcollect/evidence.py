@@ -2,7 +2,7 @@
 from datetime import datetime
 import hashlib
 from pathlib import Path
-from .browser import fingerprint
+from .browser import validate_capture_receipt
 from .validate import read_json
 from .action_normalization import normalize_delivery_arguments
 
@@ -22,7 +22,7 @@ def audit_capture(batch, sample_id):
                 if capture['snapshot_source']!='browser_dom':fail(number,'界面树不是浏览器 DOM 来源')
                 if tree['elements']!=state['elements'] or tree['screen_resolution']!=state['screen_resolution']:fail(number,'交付树与原始浏览器证据不一致')
                 if hashlib.sha256((sample/step['image_path']).read_bytes()).hexdigest()!=capture['screenshot_sha256']:fail(number,'图片校验值与采集记录不一致')
-                if not attempt['dom_stable'] or attempt['before_fingerprint']!=fingerprint(state) or attempt['after_fingerprint']!=fingerprint(state):fail(number,'无法证明截图前后的 DOM 一致')
+                validate_capture_receipt(state,capture,(sample/step['image_path']).read_bytes())
                 started=datetime.fromisoformat(raw['started_at']).timestamp()
                 ended=datetime.fromisoformat(raw['ended_at']).timestamp()
                 if not attempt['started_ns']<=attempt['ended_ns'] or attempt['ended_ns']/1e9>started+0.001 or started>ended:fail(number,'截图与动作的先后时间不一致')

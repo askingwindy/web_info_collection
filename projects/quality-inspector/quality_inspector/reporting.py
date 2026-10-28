@@ -19,7 +19,9 @@ def review_template(report):
         } for sample in report['samples']],
     }
     if report.get('scope')=='delivery':
+        from .semantic import rule_ids
         for record in template['records']:
+            record['semantic_rule_ids']=rule_ids()
             record['provenance']['frames_viewed']=[]
             record['step_observations']=[]
             for check in record['checks'].values():check['evidence_steps']=[]

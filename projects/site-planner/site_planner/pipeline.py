@@ -37,7 +37,7 @@ from webcollect.hmac_strategy import (HMAC_INVENTORY_JS, ADAPTER_ID as HMAC_ADAP
 from webcollect.pbkdf2_strategy import (PBKDF2_INVENTORY_JS, ADAPTER_ID as PBKDF2_ADAPTER_ID,
     matches_uri as pbkdf2_matches_uri, validate_observation as validate_pbkdf2_observation)
 
-VERSION = 'site-supply-14-native-and-explicit-form-containers'
+VERSION = 'site-supply-15-source-config-provenance'
 
 
 def normalize_uri(value):
@@ -185,7 +185,9 @@ def discover(ledger, sources_path, output):
                             save_json(output/('source-failure-'+str(number)+'.json'),failure)
                             source_errors.append(failure); continue
                 parser = Links(); parser.feed(html); uris = [urljoin(base, href) for href in parser.hrefs]
-                source_ref = {'kind': source['kind'], 'uri': base, 'content_sha256': object_sha256(html)}
+                # The config file identifies the source; observed HTML keeps its own hash.
+                source_ref = {'kind': source['kind'], 'uri': base, 'source_sha256': file_sha(sources_path),
+                              'content_sha256': object_sha256(html)}
             source_selected = 0
             for raw in uris:
                 occurrences += 1

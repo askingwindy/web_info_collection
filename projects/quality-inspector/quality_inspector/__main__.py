@@ -21,6 +21,7 @@ def main(argv=None):
     cumulative.add_argument('--verify-exhaustive',action='store_true')
     manifest=sub.add_parser('set-manifest',help='Freeze current package file hashes without approving them')
     manifest.add_argument('--input',type=Path,action='append',required=True);manifest.add_argument('--output',type=Path,required=True)
+    manifest.add_argument('--version-policy',type=Path,help='Explicit qc-sample-versions-1 supersedes relations; no automatic newest selection')
     migration=sub.add_parser('migration-plan',help='Create pending legacy-review impact assessments only')
     migration.add_argument('--input',type=Path,required=True);migration.add_argument('--source-reviews',type=Path,required=True)
     migration.add_argument('--output',type=Path,required=True)
@@ -46,7 +47,14 @@ def main(argv=None):
             from .format_checks import run
             roots=args.input if isinstance(args.input,list) else [args.input]
             if any(args.output.resolve().is_relative_to(root.resolve()) for root in roots):raise ValueError('Output must be outside inspected packages')
-            value=build_set_manifest(roots) if args.cmd=='set-manifest' else migration_template(args.source_reviews,run(None,args.input)['samples'],fingerprint()[1])
+            supersedes=[]
+            if args.cmd=='set-manifest' and args.version_policy:
+                policy=json.loads(args.version_policy.read_text())
+                if (not isinstance(policy,dict) or set(policy)!={'schema_version','supersedes'}
+                        or policy['schema_version']!='qc-sample-versions-1' or not isinstance(policy['supersedes'],list)):
+                    raise ValueError('Explicit qc-sample-versions-1 policy required')
+                supersedes=policy['supersedes']
+            value=build_set_manifest(roots,supersedes=supersedes) if args.cmd=='set-manifest' else migration_template(args.source_reviews,run(None,args.input)['samples'],fingerprint()[1])
             args.output.parent.mkdir(parents=True,exist_ok=True)
             with args.output.open('x',encoding='utf-8') as stream:json.dump(value,stream,ensure_ascii=False,indent=2);stream.write('\n')
             print(json.dumps({'output':str(args.output),'not_an_acceptance':True},ensure_ascii=False));return 0

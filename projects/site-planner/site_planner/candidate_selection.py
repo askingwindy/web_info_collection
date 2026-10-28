@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-VERSION = 'frozen-link-selection-1'
+VERSION = 'frozen-link-selection-2-source-config-provenance'
 RULE_SCHEMA = 'webcollect-candidate-selection-rules-1'
 
 
@@ -177,7 +177,9 @@ def select_candidates(supply_paths, output, rules=None):
         for source_index, source in enumerate(sources['sources']):
             ref = {'supply_index': supply_index, 'source_index': source_index, 'supply': str(base),
                    'kind': source.get('kind'), 'category': source.get('category'),
-                   'source_config': source, 'sources_sha256': inputs[str(sources_path)]}
+                   'source_config': source, 'source_sha256': inputs[str(sources_path)],
+                   # Preserve the legacy alias; neither field is an HTML/content hash.
+                   'sources_sha256': inputs[str(sources_path)]}
             unavailable = None
             if source.get('kind') == 'seed':
                 links = [{'href': uri, 'text': '', 'title': ''} for uri in source.get('uris', [])]

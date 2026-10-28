@@ -29,8 +29,8 @@ DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_worker
                   'min_free_disk_bytes': None, 'max_output_bytes': None,
                   'max_worker_seconds': None, 'resource_root': None}
 ACTIVE = ('reserved', 'running')
-RETRYABLE = ('network', 'resource', 'interrupted')
-FAILURES = RETRYABLE + ('semantic', 'unsupported', 'privacy', 'duplicate', 'program', 'other')
+RETRYABLE = ('network', 'resource')
+FAILURES = RETRYABLE + ('interrupted', 'semantic', 'unsupported', 'privacy', 'duplicate', 'program', 'other')
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS m4_campaigns (
@@ -234,7 +234,9 @@ class RuntimeStore:
             con.close()
         if policy.get('site_failure_guard'):
             from .site_failure_stop import SiteFailureStore
-            SiteFailureStore(policy['site_failure_guard']).sync_formal(self.registry, policy['campaign_id'])
+            site_store = SiteFailureStore(policy['site_failure_guard'])
+            site_store.sync_formal(self.registry, policy['campaign_id'])
+            site_store.sync_successes(self.registry, policy['campaign_id'])
 
     @staticmethod
     def _guard_site(policy, task):
@@ -977,12 +979,18 @@ class RuntimeStore:
             if old:
                 if (old['decision'], old['evidence_json'], old['reason']) != (decision, canonical(evidence), reason):
                     raise ValueError('已有审核事件不可覆盖；变更需新候选版本与显式裁决')
-                return {**dict(old), **retention}
-            con.execute('INSERT INTO m4_reviews VALUES(?,?,?,?,?)', (sample_id, decision, canonical(evidence), reason, current))
-            status = 'reviewed_pass' if decision == 'pass' else 'needs_replan'
-            con.execute('UPDATE m4_tasks SET status=?,quota_reserved=? WHERE task_key=?', (status, int(decision == 'pass'), row['task_key']))
-            self._event(con, 'review_recorded', current, {'sample_id': sample_id, 'decision': decision, 'evidence': evidence, 'reason': reason, **retention}, row['task_key'], row['attempt_id'])
-        return {'sample_id': sample_id, 'decision': decision, **retention}
+                result = {**dict(old), **retention}
+            else:
+                con.execute('INSERT INTO m4_reviews VALUES(?,?,?,?,?)', (sample_id, decision, canonical(evidence), reason, current))
+                status = 'reviewed_pass' if decision == 'pass' else 'needs_replan'
+                con.execute('UPDATE m4_tasks SET status=?,quota_reserved=? WHERE task_key=?', (status, int(decision == 'pass'), row['task_key']))
+                self._event(con, 'review_recorded', current, {'sample_id': sample_id, 'decision': decision, 'evidence': evidence, 'reason': reason, **retention}, row['task_key'], row['attempt_id'])
+                result = {'sample_id': sample_id, 'decision': decision, **retention}
+            site_guard = self._policy(con).get('site_failure_guard')
+        if decision == 'pass' and site_guard:
+            from .site_failure_stop import SiteFailureStore
+            SiteFailureStore(site_guard).sync_successes(self.registry, self.snapshot()['scope']['campaign_id'])
+        return result
 
     def record_publication(self, release_id, sample_ids, evidence, *, now=None):
         if not isinstance(release_id, str) or not release_id.strip() or not isinstance(sample_ids, list) or not sample_ids or len(set(sample_ids)) != len(sample_ids):

@@ -16,6 +16,8 @@ from test_customer_layout import fixture, put
 from quality_inspector import engine
 from quality_inspector.reporting import review_template
 from quality_inspector.profiles import DEFAULT_DELIVERY_PROFILE
+from quality_inspector.semantic import digest as review_digest
+from delivery_scope_fixture import freeze_scope
 from webcollect.client_package import build_client_package, sample_hashes, sha
 from webcollect.client_reports import finalize_client_package
 
@@ -105,7 +107,14 @@ class V2SelectionFlowTests(unittest.TestCase):
         self.assertEqual(sidecar['excluded_samples'][0]['sample_id'], self.ids[1])
         selected_reviews = json.loads(Path(result['review_output']).read_text())
         originals = json.loads(self.reviews.read_text())['records']
-        self.assertEqual(selected_reviews, {'schema_version': 'qc-review-2', 'records': [originals[0], originals[2]]})
+        self.assertEqual(selected_reviews['schema_version'], 'qc-review-2')
+        self.assertEqual(len(selected_reviews['records']), 2)
+        for derived, original in zip(selected_reviews['records'], [originals[0], originals[2]]):
+            reuse = derived.get('semantic_reuse')
+            self.assertEqual({key: value for key, value in derived.items() if key != 'semantic_reuse'}, original)
+            self.assertEqual(reuse['source_record_sha256'], review_digest(original))
+            self.assertFalse(reuse['original_record_modified'])
+            self.assertEqual(reuse['invalidated_checks'], [])
         self.assertEqual(sha(self.reviews), original_review_sha)
         self.assertEqual(original_hashes, {sid: sample_hashes(self.candidate / 'samples' / sid) for sid in self.ids})
         profile2 = self.write_profile('profile-selected.json', 2)
@@ -115,7 +124,9 @@ class V2SelectionFlowTests(unittest.TestCase):
         put(self.root / 'selected-payload.json', payload)
         self.assertEqual(payload['delivery_status'], 'PASS')
         final = self.root / 'final'
-        finalize_client_package(REPO, selected, self.root / 'selected-payload.json', final)
+        effective, cross = freeze_scope(self.root / 'delivery-scope', [selected])
+        finalize_client_package(REPO, selected, self.root / 'selected-payload.json', final,
+            effective_set=effective, cross_package_report=cross)
         final_report = engine.inspect(None, final, profile=profile2, inspection_stage='final', reviews=fresh)
         put(self.root / 'final-qc.json', final_report)
         self.assertEqual(final_report['delivery_status'], 'PASS')

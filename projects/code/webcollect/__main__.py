@@ -79,14 +79,19 @@ def main(argv=None):
     archive.add_argument('--source',required=True,type=Path)
     archive.add_argument('--qc-report',required=True,type=Path)
     archive.add_argument('--output',required=True,type=Path)
+    for release in (finalize, archive):
+        release.add_argument('--effective-set',required=True,type=Path,help='显式冻结的当前有效交付集合')
+        release.add_argument('--cross-package-report',required=True,type=Path,help='绑定有效集合的独立跨包PASS报告')
     args=parser.parse_args(argv)
     try:
         if args.command=='archive-client':
             from .client_reports import archive_client_package
-            result=archive_client_package(args.source,args.qc_report,args.output)
+            result=archive_client_package(args.source,args.qc_report,args.output,
+                effective_set=args.effective_set,cross_package_report=args.cross_package_report)
         elif args.command=='finalize-client':
             from .client_reports import finalize_client_package
-            result=finalize_client_package(Path(__file__).resolve().parents[3],args.source,args.qc_report,args.output)
+            result=finalize_client_package(Path(__file__).resolve().parents[3],args.source,args.qc_report,args.output,
+                effective_set=args.effective_set,cross_package_report=args.cross_package_report)
         elif args.command=='package':
             if args.layout=='candidate':
                 if args.reviews or args.approved_only or args.evidence_output or args.review_output or args.facts or args.revisions or args.selection_report:

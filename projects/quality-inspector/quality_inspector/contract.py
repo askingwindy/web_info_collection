@@ -45,4 +45,8 @@ def installed_contract():
 
 def fingerprint():
     value = installed_contract()
-    return value, digest(value)
+    # Full source hashes remain in the report for engineering provenance, not
+    # in review acceptance identity. Mechanical checks still run every time.
+    rules = {key: item for key, item in value.items()
+             if key not in ('implementation_sha256', 'rules_version')}
+    return value, digest(rules)

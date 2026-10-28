@@ -213,7 +213,15 @@ def intake(path, samples, contract_hash, migration=None):
             why += coverage_errors(record, annotation, strict=data['schema_version'] == 'qc-review-2')
         except (OSError, ValueError, TypeError, KeyError) as error:
             why.append('Cannot bind review evidence: ' + str(error))
-        legacy = data['schema_version'] == 'qc-review-1' or record.get('baseline_sha256') != contract_hash
+        from .semantic import invalidate_record
+        try:
+            current_record = invalidate_record(record)
+        except ValueError as error:
+            why.append(str(error)); current_record = record
+        modern = data['schema_version'] == 'qc-review-2' and 'semantic_rule_ids' in record
+        # Without per-check identities an old v2 record cannot prove which
+        # semantic rules it reviewed, even when the mechanical contract agrees.
+        legacy = not modern
         assessment = assessments.get(sid)
         if legacy:
             if not assessment or assessment.get('decision') != 'inherit_unchanged':
@@ -231,7 +239,7 @@ def intake(path, samples, contract_hash, migration=None):
                     why.append('migration must explicitly preserve the original review provenance')
         if why:
             errors.append({'sample_id': sid, 'reason': '; '.join(why)}); continue
-        records[sid] = record  # No rewriting baseline, evidence, reviewer, or semantic decisions.
+        records[sid] = current_record  # Derived states never rewrite the source review.
         if legacy:
             migrations.append({'sample_id': sid, 'source_record_sha256': record_hash(record),
                                'source_review_sha256': sha(path), 'migration_sha256': sha(migration),

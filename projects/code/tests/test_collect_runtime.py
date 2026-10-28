@@ -156,7 +156,7 @@ class CollectorIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed['qualified_samples'], 0)
         self.assertEqual(resumed['collection_status'], 'finished_pending_review')
 
-    async def test_interrupted_started_attempt_is_preserved_and_gets_new_id(self):
+    async def test_interrupted_started_attempt_is_preserved_without_automatic_reexecution(self):
         import sqlite3
         from unittest.mock import patch
         class ProcessStopped(BaseException):
@@ -181,12 +181,13 @@ class CollectorIntegrationTests(unittest.IsolatedAsyncioTestCase):
         store.recover_expired(now=time.time()-2)
         with patch('webcollect.collect.collect_one', self.fake_collect):
             resumed = await self.run_collector(resume=True)
-        self.assertEqual(len(self.executed), 2)
-        self.assertNotEqual(*self.executed)
+        self.assertEqual(len(self.executed), 1)
         self.assertTrue((self.output / 'rejected' / self.executed[0] / 'annotation.json').is_file())
-        self.assertEqual(resumed['actual_attempts'], 2)
+        self.assertEqual(resumed['actual_attempts'], 1)
         self.assertEqual(resumed['rejected'], 1)
-        self.assertEqual(resumed['collected'], 1)
+        self.assertEqual(resumed['collected'], 0)
+        self.assertEqual(resumed['qualified_samples'], 0)
+        self.assertEqual(store.snapshot()['tasks'][0]['status'], 'needs_replan')
 
     async def test_semantic_failure_is_not_retried_on_resume(self):
         from unittest.mock import patch

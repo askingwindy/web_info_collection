@@ -11,6 +11,7 @@ sys.path[:0] = [str(REPO / 'projects/quality-inspector'), str(REPO / 'projects/q
 import test_delivery_pipeline as support
 from webcollect.batch_core import BatchLedger, OutcomeUnknown
 from quality_inspector import document_text_qc as lane, delivery_pipeline as pipeline
+from delivery_scope_fixture import freeze_scope
 
 
 class DocumentTextQCTests(unittest.TestCase):
@@ -35,8 +36,10 @@ class DocumentTextQCTests(unittest.TestCase):
             self.case.effective = self.root / 'replacement-effective.json'
             lane._write(self.case.effective, build_set_manifest([self.case.dataset]))
         old = self.case.real_ledger_fixture()
+        self.case.effective,self.case.cross_report=freeze_scope(self.root/'parent-scope',[self.case.dataset])
         prepared = pipeline.prepare(old, self.case.dataset, self.case.plan, self.case.effective, self.root / 'parent-prepared',
-                                    profile=self.case.fixture.profile, mode='real')
+                                    profile=self.case.fixture.profile, cross_package_report=self.case.cross_report,
+                                    mode='real', document_review_mode='ai')
         with patch.object(pipeline.ai_worker, 'ModelGateway', gateway or self.case.PassingProtocolGateway), \
                 patch('urllib.request.build_opener', side_effect=AssertionError('No actual network')):
             state = (lane.run_samples(prepared['receipt'], self.root / 'parent-run')['original_sample_status'] if sample_only else

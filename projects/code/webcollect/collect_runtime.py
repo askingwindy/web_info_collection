@@ -54,7 +54,7 @@ def source_identity():
              'content_preparation.py', 'content_preparation.js', 'production_facts.py',
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
-             'admission_cohort.py', 'production_identity.py']
+             'admission_cohort.py', 'production_identity.py', 'batch_protocol.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}
@@ -269,6 +269,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
 
     plan = read_json(plan_path)
     validate_plan(plan)
+    from .batch_protocol import verify_plan_shard, verify_shard_policy
+    verify_plan_shard(plan, registry)  # Read-only ownership check before any dispatch side effect.
     if publication_path is None:
         raise ValueError('M4采集必须提供 --publication；先发布已预检的计划')
     publication = read_json(publication_path)
@@ -276,10 +278,16 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     if not resume and policy_path is None:
         raise ValueError('首次M4采集必须提供 --policy，明确累计基线类目计数与本波预算；不能默认忽略旧样本')
     output, registry = Path(output).resolve(), Path(registry).resolve()
-    from .task_admission import verify_collection_entry
-    verify_collection_entry(plan, registry, output)
-    from .observed_workflow import verify_entry as verify_workflow_entry
-    verify_workflow_entry(plan, registry, output)
+    # New ordinary plans collect once without any prior workflow execution.
+    # Explicit legacy evidence bindings still need their original validator;
+    # an observation trace alone never becomes a saved production sample.
+    if any('task_admission' in task for task in plan['tasks']):
+        from .task_admission import verify_collection_entry
+        verify_collection_entry(plan, registry, output)
+    if any('observed_workflow' in task or 'workflow_admission' in task
+           or task.get('task_family') == 'observed-workflow' for task in plan['tasks']):
+        from .observed_workflow import verify_entry as verify_workflow_entry
+        verify_workflow_entry(plan, registry, output)
     scope = runtime_scope(output)
     store = RuntimeStore(registry, scope)
     if resume:
@@ -310,8 +318,10 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
             if str(error) != '运行范围尚未初始化' and 'no such table: m4_scopes' not in str(error):
                 raise
             verify_existing_registry(registry, output.parent)
+            verify_shard_policy(registry, validate_policy(bootstrap['policy']))
             store.initialize(bootstrap['policy'])
             snapshot = store.snapshot()
+        verify_shard_policy(registry, snapshot['policy'])
         if policy_path and validate_policy(read_json(policy_path)) != snapshot['policy']:
             raise ValueError('续跑不能静默替换预算，请显式记录预算调整原因')
         store.enqueue_plan(plan, publication)
@@ -358,6 +368,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         if 'baseline_category_counts' not in supplied_policy:
             raise ValueError('M4预算必须显式声明baseline_category_counts；旧基线尚未确认时不能开始采集')
         policy = validate_policy(supplied_policy)
+        verify_shard_policy(registry, policy)
         manifest = {'schema_version': 'webcollect-runtime-manifest-m4-1',
             'runtime_scope_id': scope, 'registry_path': str(registry),
             'contract_profile': contract_identity(Path(__file__).resolve().parents[3]),

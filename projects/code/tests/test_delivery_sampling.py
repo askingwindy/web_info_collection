@@ -172,7 +172,9 @@ class DeliverySamplingTests(unittest.TestCase):
         plan = self.freeze()
         actual_sha=sampling.sha
         with patch.object(sampling,'sha',side_effect=lambda path: '0'*64 if Path(path).resolve()==Path(sampling.__file__).resolve() else actual_sha(path)):
-            with self.assertRaisesRegex(ValueError,'Sampling implementation changed'):
+            sampling.verify(self.plan,self.dataset)  # engineering source drift does not alter frozen sampling
+        with patch.object(sampling,'SAMPLING_RULES_VERSION','changed-rules'):
+            with self.assertRaisesRegex(ValueError,'Sampling rules changed'):
                 sampling.verify(self.plan,self.dataset)
         value = deepcopy(plan); value['slots'].pop(); self.plan.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError, 'changed delivery sampling plan'):
@@ -218,7 +220,9 @@ class DeliverySamplingTests(unittest.TestCase):
         self.assertEqual(result,0)
         report_path=case.root/'payload.json';report_path.write_text(json.dumps(payload))
         final=case.root/'final'
-        finalize_client_package(REPO,case.client,report_path,final)
+        from delivery_scope_fixture import freeze_scope
+        effective,cross_report=freeze_scope(case.root/'scope',[case.client])
+        finalize_client_package(REPO,case.client,report_path,final,effective_set=effective,cross_package_report=cross_report)
         checked=inspect(None,final,profile=case.profile,reviews=reviews,
                         inspection_stage='final',delivery_sampling_plan=plan)
         self.assertEqual(checked['delivery_status'],'PASS')

@@ -89,14 +89,18 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
     Also used against explicitly synthetic local fixtures. Public production
     navigation is validated by preflight_plan, never via a CLI bypass flag.
     """
-    from .media_preflight import probe_media, summarize_preflight
+    from .browser import stability_pair
+    from .media_preflight import probe_media, summarize_preflight, task_media_targets
     _limits(samples, interval_ms)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     probes, assessments, changes, frames = [], [], [], []
+    stability_failures=[]
     previous = None
     operation = task.get('operations', [{}])[0]
+    protected_selectors=sorted({target['selector'] for target in task_media_targets(task)})
+    observation_options={'protected_selectors':protected_selectors} if protected_selectors else {}
     error = None
     entry = None
     try:
@@ -119,28 +123,38 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
                      'diagnostic_only': True, 'accepted_as_formal_frame': False}
             entry['media_before'] = await probe_media(page, task)
             entry['content_before'] = await assess_content(page, task, operation)
-            entry['state_before'] = await observe(page, operation.get('selector'), operation.get('index', 0))
+            entry['state_before'] = await observe(page, operation.get('selector'), operation.get('index', 0), **observation_options)
             png, method = await asyncio.wait_for(viewport_png(page), timeout=25)
             filename = f'probe_{index:03d}.png'
             (directory / filename).write_bytes(png)
             entry['screenshot'] = method
             entry['screenshot_path'] = filename
             entry['screenshot_sha256'] = sha256(png).hexdigest()
-            entry['state_after'] = await observe(page, operation.get('selector'), operation.get('index', 0))
+            entry['state_after'] = await observe(page, operation.get('selector'), operation.get('index', 0), **observation_options)
             entry['media_after'] = await probe_media(page, task)
             if url_check:
                 url_check(page.url)
             entry['before_fingerprint'] = fingerprint(entry['state_before'])
             entry['after_fingerprint'] = fingerprint(entry['state_after'])
             entry['DOM_consistent_in_diagnostic_pair'] = entry['before_fingerprint'] == entry['after_fingerprint']
+            # The repeated PNG checks only DOM/loading around this diagnostic
+            # screenshot. Temporal pixel evidence comes from distinct originals below.
+            entry['diagnostic_dom_loading_proof'] = stability_pair(entry['state_before'],entry['state_after'],png,png)
+            if ('capture_readiness' in entry['state_before'] or 'capture_readiness' in entry['state_after']) and not entry['diagnostic_dom_loading_proof']['accepted']:
+                stability_failures.append({'probe_index':index,'scope':'diagnostic_dom_loading',
+                                           'proof':entry['diagnostic_dom_loading_proof']})
             entry['ended_at_utc'] = now()
             write_json(directory / f'probe_{index:03d}.json', entry)
             probes.extend([entry['media_before'], entry['media_after']])
             assessments.append(entry['content_before'])
             if previous is not None:
+                related=stability_pair(previous['entry']['state_before'],entry['state_after'],previous['png'],png)
                 changes.append({'from_probe': index - 1, 'to_probe': index,
-                                **pixel_change(previous, png)})
-            previous = png
+                                **pixel_change(previous['png'], png),'related_stability':related,
+                                'diagnostic_pair_stability':[previous['entry']['diagnostic_dom_loading_proof'],entry['diagnostic_dom_loading_proof']]})
+                if ('capture_readiness' in previous['entry']['state_before'] or 'capture_readiness' in entry['state_after']) and not related['accepted']:
+                    stability_failures.append({'from_probe':index-1,'to_probe':index,'scope':'temporal_pixels_and_related_state','proof':related})
+            previous = {'png':png,'entry':entry}
             frames.append({'path': filename, 'sha256': entry['screenshot_sha256'],
                            'raw_path': f'probe_{index:03d}.json'})
     except Exception as failure:
@@ -153,6 +167,9 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
             await _failure_viewport(page, directory, 'initial_failure_capture')
         write_json(directory / 'failure.json', error)
     summary = summarize_preflight(probes, assessments, changes)
+    if stability_failures:
+        summary={**summary,'routing':'REVIEW_REQUIRED','related_stability_failures':stability_failures,
+                 'reasons':summary.get('reasons',[])+['New synchronized observations have incomplete loading, changed task evidence or pixels outside proved unrelated IMG regions.']}
     if error:
         summary = {**summary, 'routing': 'REVIEW_REQUIRED', 'incomplete': True,
                    'probe_failure': error, 'routing_override': 'Incomplete evidence is not low risk.'}

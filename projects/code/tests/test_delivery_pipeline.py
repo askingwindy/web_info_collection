@@ -17,6 +17,7 @@ REPO=Path(__file__).resolve().parents[3]
 sys.path[:0]=[str(REPO/'projects/quality-inspector'),str(REPO/'projects/quality-inspector/tests')]
 from webcollect.batch_core import BatchLedger,ModelRateWait
 from quality_inspector.cumulative import build_set_manifest
+from delivery_scope_fixture import freeze_scope
 from quality_inspector import delivery_sampling,delivery_pipeline as pipeline
 
 
@@ -29,7 +30,7 @@ class DeliveryPipelineTests(unittest.TestCase):
         prompt=self.dataset/'动作空间与系统提示.md';prompt.write_text('\n'+prompt.read_text());self.fixture.seal()
         self.plan=self.root/'plan.json'
         delivery_sampling.freeze(self.dataset,self.plan,ai_percent=100,human_percent=0,seed='CONTROLLED-runner')
-        self.effective=self.root/'effective.json';delivery_sampling.write(self.effective,build_set_manifest([self.dataset]))
+        self.effective,self.cross_report=freeze_scope(self.root/'scope',[self.dataset])
         self.config=json.loads((REPO/'projects/code/config/batch-synthetic.json').read_text())
         self.config['run_id']='CONTROLLED-pipeline-integration-no-real-model'
         self.config['model']['reserve_input_tokens']=500000
@@ -38,7 +39,7 @@ class DeliveryPipelineTests(unittest.TestCase):
 
     def prepare(self,**kwargs):
         return pipeline.prepare(self.ledger,self.dataset,self.plan,self.effective,self.root/'prepared',
-                                profile=self.fixture.profile,mode='controlled',**kwargs)
+                                profile=self.fixture.profile,cross_package_report=self.cross_report,mode='controlled',**kwargs)
 
     def real_ledger_fixture(self):
         config=deepcopy(self.config);config['mode']='real'
@@ -80,7 +81,7 @@ class DeliveryPipelineTests(unittest.TestCase):
     def run_mock_real(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'real-prepared',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
             state=pipeline.run(prepared['receipt'],self.root/'real-run',max_jobs=10)
         return ledger,prepared,state
@@ -140,7 +141,7 @@ class DeliveryPipelineTests(unittest.TestCase):
     def test_bad_output_or_mode_is_rejected_before_model_work(self):
         with self.assertRaisesRegex(ValueError,'glm-5.3-flash'):
             pipeline.prepare(self.ledger,self.dataset,self.plan,self.effective,self.root/'bad',
-                             profile=self.fixture.profile,mode='real')
+                             profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         self.assertFalse((self.root/'bad').exists())
         result=self.prepare();(self.root/'existing').mkdir()
         with self.assertRaisesRegex(ValueError,'new output path'):
@@ -176,14 +177,16 @@ class DeliveryPipelineTests(unittest.TestCase):
         path.write_text(saved)
         actual=pipeline._implementation()
         with patch.object(pipeline,'_implementation',return_value={**actual,'CONTROLLED-source-drift':'0'*64}):
-            with self.assertRaisesRegex(ValueError,'implementation changed'):pipeline.run(path,self.root/'drift')
+            pipeline.verify(path)  # unrelated source changes are engineering diagnostics only
+        with patch.object(pipeline,'PIPELINE_RULES_VERSION','changed-explicit-pipeline-rules'):
+            with self.assertRaisesRegex(ValueError,'rules changed'):pipeline.verify(path)
         self.assertEqual(self.ledger.summary()['model_requests'],0)
 
     def test_cli_prepare_status_are_explicit_and_offline(self):
         config=self.root/'config.json';config.write_text(json.dumps(self.config))
         args=['prepare','--config',str(config),'--ledger',str(self.ledger.path),
-              '--input',str(self.dataset),'--plan',str(self.plan),'--effective-set',str(self.effective),
-              '--profile',str(self.fixture.profile),'--output',str(self.root/'cli-prepared'),'--mode','controlled']
+              '--input',str(self.dataset),'--plan',str(self.plan),'--effective-set',str(self.effective),'--cross-package-report',str(self.cross_report),
+              '--profile',str(self.fixture.profile),'--output',str(self.root/'cli-prepared'),'--mode','controlled','--document-review-mode','ai']
         with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(pipeline.main(args),0)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(pipeline.main(['status','--receipt',str(self.root/'cli-prepared/pipeline-receipt.json'),
@@ -193,7 +196,7 @@ class DeliveryPipelineTests(unittest.TestCase):
     def test_mock_glm_protocol_runs_full_payload_final_archive_without_claiming_real_production(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'mock-prepared',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway),\
                 patch('urllib.request.build_opener',side_effect=AssertionError('No actual service')):
             state=pipeline.run(prepared['receipt'],self.root/'mock-run',max_jobs=10)
@@ -207,10 +210,65 @@ class DeliveryPipelineTests(unittest.TestCase):
         self.assertTrue(archive.is_file())
         self.assertEqual(final['customer_acceptance'],'UNKNOWN')
 
+    def test_zero_sample_ai_and_explicit_human_documents_dispatch_nothing(self):
+        plan=self.root/'zero-ai-plan.json'
+        delivery_sampling.freeze(self.dataset,plan,ai_percent=0,human_percent=0,seed='CONTROLLED-zero-AI')
+        ledger=self.real_ledger_fixture()
+        prepared=pipeline.prepare(ledger,self.dataset,plan,self.effective,self.root/'human-doc-prepared',
+            profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real',document_review_mode='human')
+        with patch.object(pipeline.ai_worker,'ModelGateway',side_effect=AssertionError('No AI at zero sample rate with human documents')):
+            state=pipeline.run(prepared['receipt'],self.root/'human-doc-pending',max_jobs=10)
+        self.assertEqual(state['actual_ai_reviewed'],0);self.assertEqual(state['human_document_pending_count'],1)
+        self.assertEqual(state['pipeline_model_usage']['model_requests'],0)
+        reviews=json.loads(self.fixture.reviewed().read_text());reviews['records']=[]
+        reviews['delivery_document_review']['reviewer']={'kind':'human','name':'CONTROLLED HUMAN PROTOCOL FIXTURE ONLY'}
+        path=self.root/'authored-human-document.json';path.write_text(json.dumps(reviews))
+        original=path.read_bytes()
+        with patch.object(pipeline.ai_worker,'ModelGateway',side_effect=AssertionError('Import/final/package must not dispatch AI')):
+            resolved=pipeline.import_human(prepared['receipt'],[path],self.root/'human-doc-resolved')
+            self.assertEqual(resolved['payload_status'],'PASS')
+            final=pipeline.finalize(prepared['receipt'],self.root/'human-doc-resolved/status.json',
+                self.root/'human-doc-final',archive=self.root/'CONTROLLED-human-route.zip')
+        self.assertTrue(final['release_ready']);self.assertEqual(ledger.summary()['model_requests'],0)
+        self.assertEqual(path.read_bytes(),original)
+        report=json.loads(Path(resolved['report']['path']).read_text())
+        self.assertEqual(report['semantic_sampling']['rows'][0]['status'],'NOT_SELECTED')
+        self.assertFalse(report['semantic_sampling']['rows'][0]['semantic_review_claimed'])
+
+    def test_relocated_package_reuses_sample_and_documentary_results(self):
+        ledger,prepared,state=self.run_mock_real();count=ledger.summary()['model_requests']
+        moved=self.root/'relocated-client';shutil.copytree(self.dataset,moved)
+        plan=self.root/'relocated-plan.json'
+        delivery_sampling.freeze(moved,plan,ai_percent=100,human_percent=0,seed='CONTROLLED-runner')
+        effective,cross=freeze_scope(self.root/'relocated-scope',[moved])
+        second=pipeline.prepare(ledger,moved,plan,effective,self.root/'relocated-prepared',
+            profile=self.fixture.profile,cross_package_report=cross,mode='real')
+        with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
+            result=pipeline.run(second['receipt'],self.root/'relocated-run',max_jobs=10)
+        self.assertEqual(result['payload_status'],'PASS');self.assertEqual(ledger.summary()['model_requests'],count)
+        self.assertEqual(result['pipeline_model_usage']['model_requests'],0)
+
+    def test_worker_revalidates_frozen_scope_without_repeating_global_pair_checks(self):
+        from quality_inspector import delivery_scope
+        ledger=self.real_ledger_fixture()
+        with patch.object(delivery_scope,'inspect_set',wraps=delivery_scope.inspect_set) as checks:
+            prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'count-prepared',
+                profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
+            self.assertEqual(checks.call_count,1)
+            with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
+                state=pipeline.run(prepared['receipt'],self.root/'count-run',max_jobs=10)
+            self.assertEqual(state['payload_status'],'PASS');self.assertEqual(checks.call_count,1)
+            pipeline.status(prepared['receipt'],self.root/'count-status')
+            self.assertEqual(checks.call_count,1)
+        value=json.loads(self.cross_report.read_text());value['cross_package_status']='FAIL'
+        self.cross_report.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError,'Bound pipeline input file changed'):
+            pipeline.verify(prepared['receipt'])
+
     def test_unknown_glm_network_result_routes_bound_request_to_human_without_auto_retry(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'failed-prepared',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         class NoNetwork:
             def open(self,*args,**kwargs):raise urllib.error.URLError('CONTROLLED UNKNOWN OUTCOME; NO NETWORK')
         with patch.dict(os.environ,{'CONTROLLED_PIPELINE_KEY':'CONTROLLED-NONCREDENTIAL'}),\
@@ -228,12 +286,24 @@ class DeliveryPipelineTests(unittest.TestCase):
         self.assertEqual(report['semantic_sampling']['rows'][0]['ai_status'],'CALL_FAILED')
         with self.assertRaisesRegex(ValueError,'remain unresolved'):
             pipeline.finalize(prepared['receipt'],self.root/'failed-run/status.json',self.root/'refused-final')
+        moved=self.root/'unknown-relocated';shutil.copytree(self.dataset,moved)
+        plan=self.root/'unknown-relocated-plan.json'
+        delivery_sampling.freeze(moved,plan,ai_percent=100,human_percent=0,seed='CONTROLLED-runner')
+        effective,cross=freeze_scope(self.root/'unknown-relocated-scope',[moved])
+        again=pipeline.prepare(ledger,moved,plan,effective,self.root/'unknown-relocated-prepared',
+            profile=self.fixture.profile,cross_package_report=cross,mode='real')
+        with patch.object(self.PassingProtocolGateway,'call',side_effect=AssertionError('No repeated UNKNOWN request')) as calls,\
+                patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
+            repeated=pipeline.run(again['receipt'],self.root/'unknown-relocated-run',max_jobs=10)
+        self.assertEqual(calls.call_count,0);self.assertEqual(ledger.summary()['model_requests'],2)
+        self.assertEqual(repeated['human_pending_count'],1);self.assertEqual(repeated['ai_pending_count'],0)
+        self.assertEqual(repeated['actual_ai_reviewed'],0);self.assertTrue(repeated['ai_failure_sources'])
 
     def test_human_rejection_replacement_is_bound_and_cannot_escape_reinspection(self):
         from quality_inspector.checksums import write_manifest
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'first-prepared',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
             pipeline.run(prepared['receipt'],self.root/'first-run',max_jobs=10)
         human=self.fixture.reviewed();raw=json.loads(human.read_text());raw.pop('delivery_document_review',None)
@@ -262,9 +332,9 @@ class DeliveryPipelineTests(unittest.TestCase):
         (new_dataset/'SHA256SUMS').unlink();write_manifest(new_dataset)
         new_plan=self.root/'replacement-plan.json'
         delivery_sampling.replace(self.plan,old_id,new,human,new_plan,reason='CONTROLLED fixture failure; replacement protocol only')
-        new_set=self.root/'replacement-set.json';delivery_sampling.write(new_set,build_set_manifest([new_dataset]))
+        new_set,new_cross=freeze_scope(self.root/'replacement-scope',[new_dataset])
         replacement=pipeline.prepare(ledger,new_dataset,new_plan,new_set,self.root/'replacement-prepared',
-                                     profile=self.fixture.profile,mode='real')
+                                     profile=self.fixture.profile,cross_package_report=new_cross,mode='real')
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
             checked=pipeline.run(replacement['receipt'],self.root/'replacement-run',max_jobs=10)
         self.assertEqual(checked['human_pending_count'],1)
@@ -332,14 +402,14 @@ class DeliveryPipelineTests(unittest.TestCase):
         ledger=historical/'must-not-be-created.sqlite3'
         with contextlib.redirect_stdout(io.StringIO()):
             result=pipeline.main(['prepare','--config',str(config),'--ledger',str(ledger),'--initialize-ledger',
-                '--input',str(self.dataset),'--plan',str(self.plan),'--effective-set',str(effective),
-                '--profile',str(self.fixture.profile),'--output',str(self.root/'bad-history'),'--mode','controlled'])
+                '--input',str(self.dataset),'--plan',str(self.plan),'--effective-set',str(effective),'--cross-package-report',str(self.cross_report),
+                '--profile',str(self.fixture.profile),'--output',str(self.root/'bad-history'),'--mode','controlled','--document-review-mode','ai'])
         self.assertEqual(result,2);self.assertFalse(ledger.exists())
 
     def test_documentary_ai_issue_can_be_resolved_by_actual_bound_human_record(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'doc-prepared',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         class DocumentFailGateway(self.PassingProtocolGateway):
             def transform(self,job,result):
                 if job['kind']=='ai-documents':
@@ -364,7 +434,7 @@ class DeliveryPipelineTests(unittest.TestCase):
     def test_schema_success_followed_by_real_worker_validation_failure_routes_to_human(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'post-prepare',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         class WhitespaceGateway(self.PassingProtocolGateway):
             def transform(self,job,result):
                 if job['kind']=='ai-visual':next(iter(result['checks'].values()))['note']=' '
@@ -396,7 +466,7 @@ class DeliveryPipelineTests(unittest.TestCase):
     def test_recovered_unknown_model_request_routes_to_human_with_lease_event_proof(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'expired-prepared',
-                                  profile=self.fixture.profile,mode='real')
+                                  profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         receipt=pipeline.verify(prepared['receipt'],ledger)
         jid=next(jid for jid,item in receipt['jobs'].items() if item['kind']=='ai-visual')
         job=ledger.claim('ai-visual',job_id=jid)
