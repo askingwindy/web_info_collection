@@ -168,10 +168,7 @@
          !['normal','0px'].includes(placeholder.letterSpacing)||!['normal','0px'].includes(placeholder.wordSpacing)||
          placeholder.opacity!=='1'||placeholder.textShadow!=='none'||placeholder.filter!=='none'||
          placeholder.mixBlendMode!=='normal')return false;
-      const rgba=value=>{const match=value.match(/^rgba?\(([^)]+)\)$/);if(!match)return null;
-        const values=match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
-        if(values.length===3)values.push(1);
-        return values.length===4&&values.every(Number.isFinite)?values:null;};
+      const rgba=frameworkColor;
       const foreground=rgba(placeholder.color),fill=rgba(placeholder.webkitTextFillColor);
       if(!foreground||!fill||foreground[3]!==1||fill[3]!==1)return false;
       let background=null;
@@ -189,10 +186,7 @@
         }
       }
       if(!background)return false;
-      const luminance=color=>color.slice(0,3).map(value=>value/255)
-        .map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4)
-        .reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
-      const contrast=color=>{const a=luminance(color),b=luminance(background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);};
+      const contrast=color=>frameworkContrast(color,background);
       if(contrast(foreground)<3||contrast(fill)<3)return false;
       const scale=axisScale(node);
       if(scale.b!==0||scale.c!==0||scale.a<=0||scale.d<=0)return false;
@@ -282,14 +276,78 @@
     textEdges.set(node,{starts_visible:startsVisible,ends_visible:endsVisible});
     textCache.set(node,result);return result;
   };
+  const frameworkColorCache=new Map();let frameworkColorContext=null;
   const frameworkColor = value => {
-    const match=value.match(/^rgba?\(([^)]+)\)$/);if(!match)return null;
-    const values=match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
-    if(values.length===3)values.push(1);
-    return values.length===4&&values.every(Number.isFinite)&&values.slice(0,3).every(v=>v>=0&&v<=255)&&
-      values[3]>=0&&values[3]<=1?values:null;
+    if(typeof value!=='string')return null;
+    const match=value.match(/^rgba?\(([^)]+)\)$/);
+    if(match) {
+      const values=match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+      if(values.length===3)values.push(1);
+      return values.length===4&&values.every(Number.isFinite)&&values.slice(0,3).every(v=>v>=0&&v<=255)&&
+        values[3]>=0&&values[3]<=1?values:null;
+    }
+    if(frameworkColorCache.has(value))return frameworkColorCache.get(value);
+    let result=null;
+    try {
+      // Concrete computed Color4 colors only. No gradients, relative colors,
+      // unresolved components or arbitrary CSS parsing fallback is permitted.
+      if(!/^(?:lab|lch|oklab|oklch|color)\([^()]*\)$/i.test(value)||
+         /\b(?:from|none|var|env|calc|currentcolor)\b/i.test(value)||!CSS.supports('color',value))return null;
+      const parts=value.slice(value.indexOf('(')+1,-1).split('/');
+      if(parts.length>2)return null;
+      let alpha=1;
+      if(parts.length===2) {
+        const token=parts[1].trim(),m=token.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(%)?$/i);
+        if(!m)return null;
+        alpha=Math.max(0,Math.min(1,Number(m[1])/(m[2]?100:1)));
+        if(!Number.isFinite(alpha))return null;
+      }
+      if(!frameworkColorContext) {
+        const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+        frameworkColorContext=canvas.getContext('2d',{colorSpace:'srgb',willReadFrequently:true});
+      }
+      const context=frameworkColorContext;
+      if(!context||context.getContextAttributes?.().colorSpace!=='srgb')return null;
+      // Invalid fillStyle assignments are silently ignored by canvas. Two
+      // different sentinels must therefore converge to the same native color.
+      context.fillStyle='#010203';context.fillStyle=value;const first=context.fillStyle;
+      context.fillStyle='#040506';context.fillStyle=value;
+      if(context.fillStyle!==first)return null;
+      context.globalCompositeOperation='copy';context.fillRect(0,0,1,1);
+      const pixel=context.getImageData(0,0,1,1,{colorSpace:'srgb'}).data;
+      if(pixel.length!==4||Math.abs(pixel[3]/255-alpha)>1/255+1e-12)return null;
+      result=[pixel[0],pixel[1],pixel[2],alpha];
+      // Readback is unpremultiplied 8-bit sRGB. Bound premultiplication,
+      // alpha/readback rounding and unpremultiplication conservatively. Keep
+      // the native CSS alpha exactly: a tiny painted pseudo must not become
+      // falsely transparent just because its 8-bit sample rounded to zero.
+      const error=alpha>0?Math.min(255,2/alpha+1):255;
+      result.bounds=result.slice(0,3).map(v=>[Math.max(0,v-error),Math.min(255,v+error)]).concat([[alpha,alpha]]);
+    } catch {}
+    frameworkColorCache.set(value,result);return result;
   };
-  const compositeColor=(front,back)=>front.slice(0,3).map((v,i)=>v*front[3]+back[i]*(1-front[3])).concat(1);
+  const frameworkBounds=color=>color.bounds||color.map(value=>[value,value]);
+  const compositeColor=(front,back)=>{
+    const result=front.slice(0,3).map((v,i)=>v*front[3]+back[i]*(1-front[3])).concat(1);
+    if(front.bounds||back.bounds) {
+      const f=frameworkBounds(front),b=frameworkBounds(back);
+      result.bounds=f.slice(0,3).map((range,i)=>{
+        const corners=range.flatMap(v=>b[i].flatMap(w=>f[3].map(a=>v*a+w*(1-a))));
+        return [Math.min(...corners),Math.max(...corners)];
+      }).concat([[1,1]]);
+    }
+    return result;
+  };
+  const frameworkContrast=(front,back)=>{
+    const luminance=color=>color.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+      .reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
+    const range=color=>{const bounds=frameworkBounds(color).slice(0,3);
+      return [luminance(bounds.map(v=>v[0])),luminance(bounds.map(v=>v[1]))];};
+    const a=range(front),b=range(back);
+    // Overlapping luminance intervals cannot prove any contrast. Otherwise
+    // compare the closest endpoints, never the favorable quantized samples.
+    return a[1]<b[0]?(b[0]+.05)/(a[1]+.05):b[1]<a[0]?(a[0]+.05)/(b[1]+.05):1;
+  };
   const frameworkLabelPaint = (label,foregroundStyle=null) => {
     const style=foregroundStyle||getComputedStyle(label),fill=frameworkColor(style.webkitTextFillColor);
     if(!fill||fill[3]===0||style.textShadow!=='none'||style.backgroundClip==='text')return false;
@@ -329,10 +387,7 @@
     }
     for(let i=layers.length-1;i>=0;i--)background=compositeColor(layers[i],background);
     const foreground=compositeColor(fill,background);
-    const luminance=color=>color.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
-      .reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
-    const a=luminance(foreground),b=luminance(background);
-    return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=3;
+    return frameworkContrast(foreground,background)>=3;
   };
   let frameworkSurfaces=null;
   const frameworkAreaExposed = (rect,owner,compatibleOwners=[]) => {
