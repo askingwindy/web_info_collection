@@ -43,7 +43,7 @@ def generation_source_identity():
         'snapshot.js', 'browser.py', 'ascii_art_strategy.py', 'loan_strategy.py',
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
-        'preflight.py', 'collect_runtime.py', 'observed_workflow.py')
+        'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'production_identity.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)

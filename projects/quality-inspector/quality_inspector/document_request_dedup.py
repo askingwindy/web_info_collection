@@ -1,8 +1,9 @@
 """Opt-in, lossless references for repeated documentary planning text.
 
-This builder does not edit or replace the frozen document_text_qc v1 lane. It
-has no model, browser, production-registry or approval operations. A future
-explicitly versioned request may use build_request(); old receipts stay valid.
+This module does not edit or replace the frozen document_text_qc v1 lane.
+Its explicit transport entry point accepts only a newly prepared, never-sent
+document job. Preparation and status never call a model; run_transport uses the
+existing gateway and original lane validators. Old receipts remain unchanged.
 All delivered document strings remain verbatim. Only a canonical JSON string
 token inside a supporting facts.json is represented by a checked reference to
 an identical, uniquely located document substring. The original request is
@@ -14,9 +15,12 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import sys
+import time
 
 
 VERSION = 'document-request-dedup-1'
+TRANSPORT_VERSION = 'document-request-dedup-transport-1'
 PROTOCOL = '_webcollect_lossless_references_v1'
 SPLICE = '$webcollect_json_string_splice_v1'
 INSTRUCTION = (
@@ -363,7 +367,201 @@ def compare_ledger_request(ledger, request_id):
     return report, result['text']
 
 
+def _transport_materials(payload):
+    from . import document_text_qc as lane
+    original, schema = lane._request(payload)
+    compacted = compact_request(original)
+    if restore_request(compacted['text'], expected_sha256=_sha(original)) != original:
+        raise ValueError('Transport cannot restore the complete original request')
+    wire = _load(compacted['text'])
+    sources = []
+    support = wire.get('supplementary_evidence', {}).get('supporting_run_files_outside_customer_payload', [])
+    for index in wire.get(PROTOCOL, {}).get('supporting_file_indices', []):
+        item = support[index]
+        for part in item['content'][SPLICE]['parts']:
+            if 'reference' in part:
+                sources.append({'supporting_path': item['path'], 'supporting_sha256': item.get('sha256'),
+                                'json_value_pointer': part['json_value_pointer'], **part['reference']})
+    return original, schema, compacted, {
+        'binding': compacted['binding'], 'metrics': compacted['metrics'],
+        'schema_sha256': _sha(_dump(schema)), 'content_sources': sources,
+        'documentary_material_sha256': payload['documentary_material_sha256']}
+
+
+def _transport_requests(ledger, job_id):
+    with ledger.connect() as con:
+        return [dict(row) for row in con.execute(
+            'SELECT * FROM model_requests WHERE job_id=? ORDER BY started,id', (job_id,))]
+
+
+def _check_wire_request(value, request):
+    if (not isinstance(request, dict) or not isinstance(request.get('text'), str)
+            or request.get('images') != []
+            or _sha(request['text']) != value['request']['binding']['wire_text_sha256']
+            or _sha(_dump(request.get('schema'))) != value['request']['schema_sha256']):
+        raise ValueError('Persisted documentary request differs from frozen wire/schema binding')
+    restore_request(request['text'], expected_sha256=value['request']['binding']['original_text_sha256'])
+
+
+def prepare_transport(document_receipt, output):
+    """Bind one untouched queued job; no credential access or model dispatch."""
+    from . import document_text_qc as lane, delivery_pipeline as pipeline
+    value = lane.verify(document_receipt); ledger = pipeline._ledger(value)
+    parent = pipeline.verify(value['parent_receipt']['path'])
+    output = pipeline._external(output, pipeline._roots(parent), [document_receipt])
+    _, _, _, materials = _transport_materials(ledger.get(value['job_id'])['payload'])
+    receipt = {'schema_version': TRANSPORT_VERSION, 'document_receipt': pipeline._ref(document_receipt),
+        'job_id': value['job_id'], 'payload_sha256': value['payload_sha256'],
+        'ledger': value['ledger'], 'ledger_config_sha256': value['ledger_config_sha256'],
+        'semantic_request_sha256': value['semantic_request_sha256'],
+        'adapter_sha256': pipeline._sha(__file__), 'request': materials, 'created_at': time.time()}
+    receipt['receipt_sha256'] = _sha(_dump(receipt))
+    receipt_path = output / 'transport-receipt.json'
+    # Bind before publication. A crash here is fail-closed: never create a new
+    # binding/output path to bypass a pending transport or an uncertain charge.
+    with ledger.transaction() as con:
+        job = con.execute('SELECT state,attempts FROM jobs WHERE id=?', (value['job_id'],)).fetchone()
+        if tuple(job) != ('queued', 0) or con.execute(
+                'SELECT 1 FROM model_requests WHERE job_id=?', (value['job_id'],)).fetchone():
+            raise ValueError('Transport requires a never-claimed, never-sent queued document job')
+        links = [json.loads(row[0]) for row in con.execute(
+            "SELECT detail FROM batch_events WHERE event='document_transport_bound'")]
+        if any(link['job_id'] == value['job_id'] for link in links):
+            raise ValueError('Document job already has an immutable transport binding')
+        ledger.event(con, 'document_transport_bound', {'job_id': value['job_id'],
+            'receipt_path': str(receipt_path), 'receipt_sha256': receipt['receipt_sha256']})
+    output.mkdir(parents=True, exist_ok=False)
+    with receipt_path.open('x', encoding='utf-8') as stream:
+        json.dump(receipt, stream, ensure_ascii=False, sort_keys=True, indent=2); stream.write('\n')
+    verify_transport(receipt_path)
+    return {'receipt': str(receipt_path), 'job_id': value['job_id'], 'external_model_calls': 0,
+            'request': materials}
+
+
+def verify_transport(receipt_path):
+    from . import document_text_qc as lane, delivery_pipeline as pipeline
+    value = pipeline._read(receipt_path)
+    if (value.get('schema_version') != TRANSPORT_VERSION
+            or value.get('receipt_sha256') != _sha(_dump({k: v for k, v in value.items() if k != 'receipt_sha256'}))
+            or value.get('adapter_sha256') != pipeline._sha(__file__)):
+        raise ValueError('Transport receipt or implementation changed')
+    pipeline._check_ref(value['document_receipt'])
+    original = lane.verify(value['document_receipt']['path']); ledger = pipeline._ledger(original)
+    for key in ('job_id', 'payload_sha256', 'ledger', 'ledger_config_sha256', 'semantic_request_sha256'):
+        if value[key] != original[key]: raise ValueError('Transport original job/ledger binding changed')
+    if _transport_materials(ledger.get(value['job_id'])['payload'])[3] != value['request']:
+        raise ValueError('Transport material/source binding changed')
+    with ledger.connect() as con:
+        links = [json.loads(row[0]) for row in con.execute(
+            "SELECT detail FROM batch_events WHERE event='document_transport_bound'")]
+    expected = {'job_id': value['job_id'], 'receipt_path': str(Path(receipt_path).resolve()),
+                'receipt_sha256': value['receipt_sha256']}
+    if [link for link in links if link['job_id'] == value['job_id']] != [expected]:
+        raise ValueError('Transport lacks its unique original-ledger binding')
+    requests = _transport_requests(ledger, value['job_id'])
+    if len(requests) > 1: raise ValueError('Transport permits only one original request')
+    for row in requests:
+        if row['attempt'] != 0 or not row['purpose'].startswith('document-text-consistency:'):
+            raise ValueError('Unexpected documentary request purpose/attempt')
+        _check_wire_request(value, json.loads(row['request_json']))
+    return value
+
+
+class _WireGateway:
+    def __init__(self, gateway, receipt):
+        self.gateway, self.receipt = gateway, receipt
+
+    def call(self, job, purpose, text, schema, *, images=(), **kwargs):
+        if purpose != 'document-text-consistency' or images or kwargs.get('attempts') != 1:
+            raise ValueError('Transport is only for one text-only documentary request')
+        if _sha(text) != self.receipt['request']['binding']['original_text_sha256']:
+            raise ValueError('Original documentary request changed before send')
+        compacted = compact_request(text)
+        _check_wire_request(self.receipt, {'text': compacted['text'], 'schema': schema, 'images': []})
+        return self.gateway.call(job, purpose, compacted['text'], schema, images=(), **kwargs)
+
+
+def run_transport(receipt_path, output, *, gateway_factory=None):
+    """Explicit first dispatch only. Existing/UNKNOWN requests are never resent."""
+    from . import document_text_qc as lane, delivery_pipeline as pipeline
+    from webcollect.batch_core import BudgetStop
+    from webcollect.model_gateway import ModelGateway
+    value = verify_transport(receipt_path); ledger = pipeline._ledger(value)
+    if _transport_requests(ledger, value['job_id']):
+        raise ValueError('Transport was already dispatched; inspect status without resending')
+    parent = pipeline.verify(lane.verify(value['document_receipt']['path'])['parent_receipt']['path'])
+    pipeline._external(output, pipeline._roots(parent), [receipt_path])
+
+    class WireLedger(pipeline._BoundLedger):
+        def reserve_request(self, job, purpose, attempt, request_json=None):
+            _check_wire_request(value, request_json)
+            if attempt != 0 or _transport_requests(ledger, job['id']):
+                raise ValueError('An existing request blocks a new transport reservation')
+            return super().reserve_request(job, purpose, attempt, request_json=request_json)
+
+    bound = WireLedger(ledger, {}, allowed={value['job_id']: {'payload_sha256': value['payload_sha256']}},
+                       validate=lambda: verify_transport(receipt_path))
+    job = bound.claim(lane.KIND, job_id=value['job_id'])
+    if job:
+        try:
+            comparison = job['payload']['supplementary_evidence']['verified_current_evidence']['engineering_text_comparison']
+            if comparison['status'] == 'FAIL':
+                bound.finish(job, 'review_required', error='mechanical_text_contradiction')
+            else:
+                gateway = (gateway_factory or ModelGateway)(bound)
+                result = lane._response(job, bound, _WireGateway(gateway, value))
+                bound.finish(job, result=result)
+        except BudgetStop as error: bound.finish(job, 'queued', error=str(error))
+        except Exception as error: bound.finish(job, 'review_required', error=type(error).__name__)
+    return status_transport(receipt_path, output)
+
+
+def status_transport(receipt_path, output):
+    """Read existing request/usage bindings and original checks; never dispatch."""
+    from . import document_text_qc as lane, delivery_pipeline as pipeline
+    value = verify_transport(receipt_path); ledger = pipeline._ledger(value)
+    state = lane.status(value['document_receipt']['path'], output)
+    requests = _transport_requests(ledger, value['job_id'])
+    usage = []
+    for row in requests:
+        counts = json.loads(row['usage']) if row['usage'] else {}
+        response = json.loads(row['response']) if row['response'] else {}
+        provider = response.get('provider_response') or {}
+        details = (provider.get('usage') or {}).get('completion_tokens_details') or {}
+        usage.append({'request_id': row['id'], 'job_id': row['job_id'], 'state': row['state'],
+            'model': ledger.config['model']['model'], 'stage': 'document-text-consistency',
+            'provider_request_id': counts.get('provider_request_id', provider.get('id', 'UNKNOWN')),
+            'input_tokens': counts.get('input_tokens', 'UNKNOWN'), 'output_tokens': counts.get('output_tokens', 'UNKNOWN'),
+            'cached_input_tokens': counts.get('cached_input_tokens', 'UNKNOWN'),
+            'reasoning_tokens': counts.get('reasoning_tokens', details.get('reasoning_tokens', 'UNKNOWN')),
+            'reasoning_added_to_output': False,
+            'started': row['started'], 'finished': row['finished'], 'usage_missing': row['usage'] is None})
+    result = {'schema_version': TRANSPORT_VERSION + '-status', 'transport_receipt': pipeline._ref(receipt_path),
+        'original_status': pipeline._ref(Path(output) / 'status.json'), 'request': value['request'],
+        'requests': usage, 'document_review_status': state['document_review_status'],
+        'elapsed_since_transport_prepare_seconds': time.time() - value['created_at'],
+        'release_ready': False, 'actual_token_savings': 'NOT_MEASURED',
+        'model_semantic_equivalence': 'NOT_MEASURED'}
+    lane._write(Path(output) / 'transport-status.json', result)
+    return result
+
+
+def _transport_main(argv):
+    parser = argparse.ArgumentParser(description='Explicit lossless transport for one new document job')
+    parser.add_argument('command', choices=('prepare-transport', 'run-transport', 'status-transport'))
+    parser.add_argument('--receipt', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args(argv)
+    handler = {'prepare-transport': prepare_transport, 'run-transport': run_transport,
+               'status-transport': status_transport}[args.command]
+    result = handler(args.receipt, args.output)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in ('prepare-transport', 'run-transport', 'status-transport'):
+        return _transport_main(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ledger', type=Path, required=True)
     parser.add_argument('--request-id', required=True)

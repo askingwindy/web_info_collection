@@ -63,8 +63,8 @@ def load(path):
     if data['scope']=='delivery':
         if targets['expected_samples'] is not None and (type(targets['expected_samples']) is not int or targets['expected_samples']<1):
             raise ValueError('Delivery expected_samples must be a positive integer or null')
-        if 'expected_sites' in targets and (type(targets['expected_sites']) is not int or targets['expected_sites']<1):
-            raise ValueError('Delivery expected_sites must be a positive integer when supplied')
+        if targets.get('expected_sites') is not None and (type(targets['expected_sites']) is not int or targets['expected_sites']<1):
+            raise ValueError('Delivery expected_sites must be a positive integer or null when supplied')
         if targets['category_share'] not in ('enforced','report-only'):
             raise ValueError('Delivery category_share must declare enforced or report-only')
         if targets['category_share']=='report-only' and not data.get('authority','').strip():

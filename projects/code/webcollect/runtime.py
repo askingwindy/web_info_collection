@@ -80,9 +80,11 @@ CREATE INDEX IF NOT EXISTS m4_exact_digest ON m4_exact_images(digest);
 
 
 def validate_policy(value):
-    if not isinstance(value, dict) or set(value) - set(DEFAULT_POLICY):
+    if not isinstance(value, dict) or set(value) - (set(DEFAULT_POLICY) | {'pilot_identity_required'}):
         raise ValueError('运行预算包含未知字段')
     policy = {**deepcopy(DEFAULT_POLICY), **deepcopy(value)}
+    if 'pilot_identity_required' in value and value['pilot_identity_required'] is not True:
+        raise ValueError('pilot_identity_required只能显式开启，不能关闭已冻结试点门禁')
     if not isinstance(policy['campaign_id'], str) or not policy['campaign_id'].strip():
         raise ValueError('campaign_id必须非空')
     for key in ('max_workers', 'max_domain_workers', 'attempt_cap', 'pending_review_cap', 'lease_seconds', 'target_total'):
@@ -248,6 +250,8 @@ class RuntimeStore:
         with self._transaction() as con:
             old = self._policy(con)
             new = validate_policy({**old, **updates})
+            if old.get('pilot_identity_required') and not new.get('pilot_identity_required'):
+                raise ValueError('不能关闭已开启的试点身份门禁')
             if new['campaign_id'] != old['campaign_id'] or new['baseline_category_counts'] != old['baseline_category_counts']:
                 raise ValueError('已有campaign或基线分母不能通过预算更新替换')
             if old.get('resource_root') is not None and new['resource_root'] != old['resource_root']:
@@ -282,6 +286,8 @@ class RuntimeStore:
         plan_sha = publication['plan_sha256']
         with self._transaction() as con:
             policy = self._policy(con)
+            from .production_identity import validate_plan as pilot_plan
+            pilot_plan(plan, required=policy.get('pilot_identity_required', False))
             if self._scope(con)['state'] == 'closed_replanned':
                 raise ValueError('scope已永久closed_replanned；新任务版本必须使用新scope')
             from .admission_cohort import guard_enqueue
@@ -305,6 +311,8 @@ class RuntimeStore:
                 if active:
                     raise ValueError('同逻辑任务已有在途或已接纳版本')
                 binding = bindings[(task['task_id'], task['task_version'])]
+                from .production_identity import reserve as reserve_page
+                reserve_page(con, key, task)
                 con.execute('INSERT INTO m4_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                             (key, self.scope_id, policy['campaign_id'], task['task_id'], task['task_version'], object_sha256(task),
                              canonical(task), task['site_category'], domain_key(task['site_uri']), 'queued', 1,
@@ -340,7 +348,11 @@ class RuntimeStore:
             if old:
                 if old['worker_id'] != worker_id or (plan_sha256 is not None and old['plan_sha256'] != plan_sha256):
                     raise ValueError('幂等request_id已用于不同worker或计划')
-                return self._view(self._attempt(con, old['attempt_id']))
+                previous = self._attempt(con, old['attempt_id'])
+                from .production_identity import guard as page_guard
+                page_guard(con, previous['task_key'], json.loads(previous['task_json']),
+                           required=policy.get('pilot_identity_required', False))
+                return self._view(previous)
             if self._scope(con)['state'] != 'active':
                 return None
             from .admission_cohort import guard_scope
@@ -370,8 +382,10 @@ class RuntimeStore:
                 if domain and domain[0] > current:
                     continue
                 task = json.loads(row['task_json'])
+                from .production_identity import allocation_uri, guard as page_guard
+                page_guard(con, row['task_key'], task, required=policy.get('pilot_identity_required', False))
                 day = datetime.fromtimestamp(current, ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
-                ids = allocate_in_transaction(con, task['site_uri'], task['site_category'], 'real', day, batch_id)
+                ids = allocate_in_transaction(con, allocation_uri(task), task['site_category'], 'real', day, batch_id)
                 if _fault:
                     _fault('after_allocation_before_attempt')
                 attempt_id, token = str(uuid.uuid4()), str(uuid.uuid4())
@@ -404,6 +418,9 @@ class RuntimeStore:
         current = timestamp(now)
         with self._transaction() as con:
             row = self._owned(con, attempt_id, worker_id, lease_token, current)
+            from .production_identity import guard as page_guard
+            page_guard(con, row['task_key'], json.loads(row['task_json']),
+                       required=self._policy(con).get('pilot_identity_required', False))
             from .admission_cohort import guard_scope
             guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
             if row['capability_expires_at'] <= current:
@@ -466,6 +483,10 @@ class RuntimeStore:
             if outcome == 'collected_pending_review':
                 from .admission_cohort import guard_scope
                 guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
+                from .production_identity import guard as page_guard, verify_saved
+                task = json.loads(row['task_json'])
+                page_guard(con, row['task_key'], task, required=self._policy(con).get('pilot_identity_required', False))
+                verify_saved(task, row['sample_id'], evidence)
             if exact_images is not None:
                 if outcome != 'collected_pending_review':
                     raise ValueError('精确图片声明只允许与成功保存同事务提交')
@@ -911,6 +932,12 @@ class RuntimeStore:
             row = self._attempt(con, attempt[0])
             if row['status'] != 'collected_pending_review':
                 raise ValueError('仅成功保存的实际样本可进入审核')
+            if decision == 'pass':
+                from .production_identity import guard as page_guard, verify_saved, accept
+                task = json.loads(row['task_json'])
+                page_guard(con, row['task_key'], task, required=self._policy(con).get('pilot_identity_required', False))
+                verify_saved(task, sample_id, json.loads(row['evidence_json']))
+                accept(con, row['task_key'], task, sample_id)
             retention = {'raw_retained': True, 'capture_outcome': row['status'],
                          'selection_only': True, 'identity_authenticated': False,
                          'qc_binding': qc_binding, 'qc_sample_status': matching[0]['status']}

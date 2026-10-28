@@ -64,6 +64,8 @@ def _assertions(conditions):
 
 
 def validate_m4_task(task):
+    from .production_identity import validate_identity, require_actions
+    validate_identity(task)
     if 'workflow_admission' in task:
         from .observed_workflow import static_identity as workflow_identity
         workflow_identity({key: value for key, value in task.items()
@@ -93,6 +95,7 @@ def validate_m4_task(task):
     subgoals = task.get('subgoals')
     if not isinstance(operations, list) or not operations or not isinstance(subgoals, list) or not subgoals:
         raise ValueError('M4 requires operations and explicit subgoals')
+    require_actions(task, sum(op.get('action_type') not in NON_EFFECTIVE for op in operations), final=True)
     ids = [op.get('operation_id') for op in operations if isinstance(op, dict)]
     if len(ids) != len(operations) or any(not _text(x) for x in ids) or len(set(ids)) != len(ids):
         raise ValueError('M4 operation_id must be nonempty and unique')

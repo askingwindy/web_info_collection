@@ -20,7 +20,7 @@ SOURCE_FILES = ('preflight.py', 'navigation.py', 'batch_core.py', 'media_preflig
                 'content_preparation.py', 'content_preparation.js', 'snapshot.js',
                 'collect.py', 'production_quality.py', 'task_contract.py', 'html_table_strategy.py',
                 'qr_strategy.py', 'qr_pixel.py', 'placeholder_strategy.py', 'placeholder_pixel.py',
-                'hmac_strategy.py', 'pbkdf2_strategy.py', 'task_generation.py', 'task_admission.py')
+                'hmac_strategy.py', 'pbkdf2_strategy.py', 'task_generation.py', 'task_admission.py', 'production_identity.py')
 
 
 def digest(path):

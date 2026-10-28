@@ -412,9 +412,14 @@
     const direct = [...element.childNodes].filter(n => n.nodeType === Node.TEXT_NODE)
       .map(visibleText).join(' ');
     const interactive = element.matches('a,button,label,summary,[role=button],[role=link],[role=option]');
+    // An unlabelled native SELECT still paints its current selected option.
+    // Use only the existing complete-value paint/occlusion/width proof; do not
+    // expose hidden options or invent a name from a planned selection.
+    const selected = element.tagName==='SELECT'&&nativeValueVisible(element,true)
+      ? [...element.selectedOptions].map(option=>option.label||option.textContent).join(' ') : '';
     return clean(element.getAttribute('aria-label') || labelled || label || (element.matches('input') && (element.closest('.layui-form-select') || element.getAttribute('role')==='combobox') ? element.value : '') || adjacentLabel ||
       (interactive ? visibleText(element) : direct) || element.getAttribute('placeholder') ||
-      element.getAttribute('title') || (element.matches('input[type=submit],input[type=button]') ? element.value : ''));
+      element.getAttribute('title') || selected || (element.matches('input[type=submit],input[type=button]') ? element.value : ''));
   };
   for (const element of document.querySelectorAll('body *')) {
     if (element.matches('script,style,noscript,template,svg,svg *')) continue;

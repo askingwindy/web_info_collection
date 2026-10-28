@@ -122,7 +122,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
     if len(rows) != count: errors.append({'reason': 'cumulative metadata count differs from sample population'})
     if targets['expected_samples'] is not None and count != targets['expected_samples']:
         errors.append({'reason': f'Expected {targets["expected_samples"]} samples; inspected {count}'})
-    if 'expected_sites' in targets and len(active_sites) != targets['expected_sites']:
+    if targets.get('expected_sites') is not None and len(active_sites) != targets['expected_sites']:
         errors.append({'reason': f'Expected {targets["expected_sites"]} sites; inspected {len(active_sites)}'})
     if not resolutions or len(resolutions) > targets['max_viewport_specs']:
         errors.append({'reason': 'cumulative viewport specifications exceed contract limit or are missing'})

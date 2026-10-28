@@ -53,7 +53,8 @@ SELECTOR_JS = r'''id => {
 
 def source_identity():
     root = Path(__file__).parent
-    return {name: file_sha(root / name) for name in ('browser.py', 'snapshot.js')}
+    return {name: file_sha(root / name) for name in
+            ('browser.py', 'snapshot.js', 'production_identity.py', 'browser_planner.py', 'observed_workflow.py')}
 
 
 def save_frame(root, number, observed):
@@ -111,15 +112,27 @@ async def operation_from_decision(page, state, decision):
            for name in ('goal', 'rationale', 'expected')):
         raise ValueError('User-facing action prose cannot contain internal element IDs or selectors')
     if action in ('click', 'type', 'select'):
-        target = next((e for e in state['elements'] if e['element_id'] == decision['target_element_id']), None)
-        if not target or not target.get('text') or not target.get('enabled'):
+        matches = [e for e in state['elements'] if e['element_id'] == decision['target_element_id']]
+        target = matches[0] if len(matches) == 1 else None
+        if not target or target.get('visible') is not True or target.get('enabled') is not True:
             raise ValueError('Target must have a current observed original label and enabled state')
-        if any(word in target['text'] for word in ('支付', '转账', '下单', '交易', '删除', '发送', '购买')):
-            raise ValueError('Public observation planner stops before side-effect/risk controls')
         selector = await page.evaluate(SELECTOR_JS, target['element_id'])
         if not selector:
             raise ValueError('Target has no unique observed DOM selector')
-        operation.update(selector=selector, index=0, evidence={'target_label': target['text']})
+        label = target.get('text')
+        if not label or action == 'select' and target.get('native_role') == 'select':
+            from .observed_workflow import original_control_label, _core
+            if action != 'select' or target.get('element_type') != 'select' or target.get('native_role') != 'select':
+                raise ValueError('Target must have a current observed original label and enabled state')
+            live = await observe(page, selector)
+            if _core(live) != _core(state):
+                raise ValueError('Native select changed after the original observation; no label substitution')
+            label = original_control_label(live, target, action)
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError('Target must have a current observed original label and enabled state')
+        if any(word in label for word in ('支付', '转账', '下单', '交易', '删除', '发送', '购买')):
+            raise ValueError('Public observation planner stops before side-effect/risk controls')
+        operation.update(selector=selector, index=0, evidence={'target_label': label})
     if action == 'scroll':
         if (set(operation['arguments']) - {'direction', 'distance'}
                 or operation['arguments'].get('direction') not in ('up', 'down', 'left', 'right')):
@@ -184,16 +197,26 @@ def validate_observation_intent(intent):
     created = intent.get('created_at')
     if type(created) not in (int, float) or not math.isfinite(created):
         raise ValueError('Observation intent requires finite numeric created_at frozen before actions')
+    if 'natural_settle_ms' in intent and (type(intent['natural_settle_ms']) is not int
+            or not 500 <= intent['natural_settle_ms'] <= 5000):
+        raise ValueError('natural_settle_ms must be an integer from 500 to 5000')
     verify_public_url(intent['site_uri'])
+    from .production_identity import validate_identity
+    validate_identity(intent)
 
 
-async def observe_task(ledger, intent_path, capability_path, output, *, max_actions=12):
+async def observe_task(ledger, intent_path, capability_path, output, *, max_actions=None):
     intent, capability = load_json(intent_path), load_json(capability_path)
     validate_observation_intent(intent)
+    pilot = intent.get('pilot_identity') is not None
+    if max_actions is None:
+        max_actions = 10 if pilot else 12
     if ledger.config['mode'] != 'real':
         raise ValueError('This CLI observes real public pages; controlled tests use mocked helpers')
     if type(max_actions) is not int or not 5 <= max_actions <= 30:
         raise ValueError('max_actions must be between 5 and 30')
+    if pilot and max_actions > 10:
+        raise ValueError('PILOT_IDENTITY: pilot observation maximum is ten necessary actions')
     validate_capability(capability)
     if capability.get('site_qualification', {}).get('access', {}).get('kind') != 'public':
         raise ValueError('Public observation only; authenticated contexts require a separate bound session adapter')
@@ -219,6 +242,8 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
             try:
                 page = await context.new_page()
                 await navigation.goto(page, initial_url, purpose='workflow-initial')
+                if 'natural_settle_ms' in intent:
+                    await page.wait_for_timeout(intent['natural_settle_ms'])
                 for number in range(max_actions + 1):
                     ledger.heartbeat(job)
                     if source_identity() != ledger.get(jid)['payload']['source_identity']:
@@ -264,6 +289,8 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                     if number == max_actions:
                         raise ValueError('Bounded observation action limit reached')
                     operation = await operation_from_decision(page, state, decision)
+                    if 'natural_settle_ms' in intent:
+                        operation.setdefault('execution', {})['settle_ms'] = intent['natural_settle_ms']
                     before = await capture(page, operation.get('selector'), operation.get('index', 0))
                     if operation['action_type'] == 'scroll' and decision['target_element_id'] is not None:
                         operation['arguments'].update(scroll_coordinates(before['state'], decision['target_element_id']))
@@ -277,7 +304,8 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                                  'operation': operation, 'before_frame_sha256': object_sha256(before_ref),
                                  'after_frame_sha256': object_sha256(after_ref), 'started_at': started, 'ended_at': ended,
                                  'status': 'success', 'state_preflight': preflight, 'arguments': parameters,
-                                 'source_identity': source_identity()}
+                                 'source_identity': {key: value for key, value in source_identity().items()
+                                                     if key in ('browser.py', 'snapshot.js')}}
                     execution_path = output / ('execution-' + str(number).zfill(3) + '.json'); save_json(execution_path, execution)
                     transitions.append({'before': before_ref, 'operation': operation,
                                         'execution': {'path': str(execution_path), 'sha256': file_sha(execution_path)}, 'after': after_ref})
@@ -300,7 +328,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('config', 'ledger', 'intent', 'capability', 'output'):
         parser.add_argument('--' + key, type=Path, required=True)
-    parser.add_argument('--max-actions', type=int, default=12)
+    parser.add_argument('--max-actions', type=int, default=None)
     args = parser.parse_args(argv)
     result = asyncio.run(observe_task(BatchLedger(args.ledger, load_json(args.config)), args.intent,
                                      args.capability, args.output, max_actions=args.max_actions))

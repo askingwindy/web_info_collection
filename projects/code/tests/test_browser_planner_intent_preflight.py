@@ -22,6 +22,16 @@ def intent():
 
 
 class IntentValueChecks(unittest.TestCase):
+    def test_natural_settle_is_optional_bounded_and_not_rewritten(self):
+        for value in (500, 1500, 3000, 5000):
+            row = intent(); row['natural_settle_ms'] = value; original = deepcopy(row)
+            planner.validate_observation_intent(row)
+            self.assertEqual(row, original)
+        for value in (0, 499, 5001, True, '3000', 1000.5, None):
+            row = intent(); row['natural_settle_ms'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'natural_settle_ms'):
+                planner.validate_observation_intent(row)
+
     def test_finite_numeric_timestamp_is_accepted_without_modification(self):
         for value in (0, 1, 1.5, 1793150000.25):
             with self.subTest(value=value):
@@ -81,6 +91,10 @@ class IntentPreflightSideEffects(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_timestamp_has_no_side_effects(self):
         row = intent(); row.pop('created_at')
+        await self.check_rejected(row)
+
+    async def test_invalid_natural_settle_stops_before_any_dispatch(self):
+        row = intent(); row['natural_settle_ms'] = 5001
         await self.check_rejected(row)
 
     async def test_created_at_utc_only_is_not_automatically_repaired(self):

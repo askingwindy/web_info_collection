@@ -38,11 +38,45 @@ def _text(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def original_control_label(state, element, action_type):
+    """Read a native select's current painted option, never an option guess.
+
+    The unchanged observer provides both complete-control value visibility and
+    the stricter selected-option target evidence. Neither an accessible name
+    nor the desired option argument can supply this fallback label.
+    """
+    label = element.get('text')
+    if _text(label):
+        return label
+    if (action_type != 'select' or element.get('element_type') != 'select'
+            or element.get('native_role') != 'select' or element.get('visible') is not True
+            or element.get('enabled') is not True):
+        return None
+    values = [row for row in state.get('values', []) if row.get('element_id') == element.get('element_id')]
+    target = state.get('target') or {}
+    if (len(values) != 1 or values[0].get('choice') is not True or values[0].get('value_visible') is not True
+            or values[0].get('input_type') not in ('select-one', 'select-multiple')
+            or not _text(values[0].get('display_value'))
+            or target.get('element_id') != element.get('element_id') or target.get('enabled') is not True
+            or target.get('hit_valid') is not True):
+        return None
+    display = values[0]['display_value']
+    if any(row.get('kind') == 'visible_selected_option' and row.get('text') == display
+           for row in target.get('visible_label_evidence', [])):
+        return display
+    return None
+
+
 def source_identity():
     root = Path(__file__).parent
     return {name: file_sha(root / name) for name in
             ('observed_workflow.py', 'browser.py', 'snapshot.js', 'task_contract.py',
-             'task_admission.py', 'task_generation.py', 'planning.py')}
+             'task_admission.py', 'task_generation.py', 'planning.py', 'production_identity.py')}
+
+
+def _review_checks(task):
+    from .production_identity import REVIEW_CHECKS
+    return CHECKS + REVIEW_CHECKS if task.get('pilot_identity') is not None else CHECKS
 
 
 def _uri(value, mode):
@@ -123,9 +157,14 @@ def _trace(trace_ref):
     _uri(intent['site_uri'], mode)
     created = timestamp(intent.get('created_at'))
     _require(intent.get('created_at') is not None, 'intent must be frozen before the first action')
+    if 'natural_settle_ms' in intent:
+        _require(type(intent['natural_settle_ms']) is int and 500 <= intent['natural_settle_ms'] <= 5000,
+                 'natural_settle_ms must be an integer from 500 to 5000')
     transitions = trace.get('transitions')
     _require(isinstance(transitions, list) and len(transitions) >= 5,
              'at least five actual explicit transitions required; no wait/complete padding')
+    from .production_identity import require_actions
+    require_actions(intent, len(transitions), final=True)
     frames = []; states = []; labels = []
     previous_after = None; first_started = None
     for index, transition in enumerate(transitions):
@@ -152,6 +191,9 @@ def _trace(trace_ref):
         if operation.get('execution'):
             _require(set(operation['execution']) <= {'wait_navigation', 'wait_popup', 'settle_ms', 'distance'},
                      'unsupported hidden execution action')
+        if 'natural_settle_ms' in intent:
+            _require((operation.get('execution') or {}).get('settle_ms') == intent['natural_settle_ms'],
+                     'actual operation must bind the frozen natural settle interval')
         from .browser import fingerprint, prepare_action
         effective = deepcopy(operation)
         target_label = None
@@ -163,7 +205,7 @@ def _trace(trace_ref):
             matches = [row for row in before['elements'] if row.get('element_id') == target.get('element_id')]
             _require(len(matches) == 1 and matches[0].get('visible') is True and matches[0].get('enabled') is True,
                      'target is not a unique visible enabled original tree element')
-            target_label = matches[0].get('text')
+            target_label = original_control_label(before, matches[0], action)
             _require(_text(target_label) and any(row.get('text') == target_label
                      for row in target.get('visible_label_evidence', [])),
                      'original control name must be readable, not merely an accessible/visual guess')
@@ -213,6 +255,8 @@ def _trace(trace_ref):
         states[-1] = (states[-1][0], final_state)
         frames.append(trace['final_observation'])
     _assertions(trace.get('final_assertions'), states[-1][1])
+    from .production_identity import validate_identity
+    validate_identity(intent, observed_states=[row for pair in states for row in pair])
     # A terminal literal already true before the first action is not completion.
     try:
         _assertions(trace['final_assertions'], states[0][0])
@@ -376,6 +420,10 @@ def compile_task(capability, trace_ref, *, require_current_sources=True):
             'allowed_hosts': sorted({urlsplit(uri).hostname for uri in observed}),
             'observed_workflow': {'version': VERSION, 'trace': deepcopy(trace_ref),
                                   'mode': trace['mode'], 'QC_approval': False}}
+    if intent.get('pilot_identity') is not None:
+        task['pilot_identity'] = deepcopy(intent['pilot_identity'])
+    if 'natural_settle_ms' in intent:
+        task['initial_settle_ms'] = intent['natural_settle_ms']
     _require(all(_text(task.get(k)) for k in ('final_result', 'completion_judgement')),
              'concrete terminal descriptions required')
     from .task_contract import validate_m4_task
@@ -421,7 +469,7 @@ def prepare_admission(capability, trace_ref, history_context, output, *, mode, p
     path = output / 'packet.json'; save_json(path, packet)
     template = {'schema_version': SCHEMAS[mode][1], 'packet_sha256': file_sha(path), 'completed': False,
         'reviewer': {'kind': '', 'id': '', 'context_id': ''}, 'reviewed_at': None, 'expires_at': None,
-        'checks': {key: 'NOT_REVIEWED' for key in CHECKS},
+        'checks': {key: 'NOT_REVIEWED' for key in _review_checks(task)},
         'step_observations': [{'transition_index': i, 'before_image_sha256': row['before']['image']['sha256'],
                                'after_image_sha256': row['after']['image']['sha256'], 'observation': ''}
                               for i, row in enumerate(trace['transitions'])],
@@ -457,7 +505,7 @@ def review_schema(packet_ref):
                          'context_id': {'type': 'string', 'minLength': 1, 'not': {'const': packet['producer_context_id']}}}),
         'reviewed_at': {'type': 'number', 'minimum': packet['created_at']},
         'expires_at': {'type': 'number', 'maximum': timestamp(packet['capability']['expires_at'])},
-        'checks': obj({key: {'enum': ['PASS', 'FAIL', 'REVIEW_REQUIRED']} for key in CHECKS}),
+        'checks': obj({key: {'enum': ['PASS', 'FAIL', 'REVIEW_REQUIRED']} for key in _review_checks(packet['task'])}),
         'step_observations': array(observations), 'history_comparisons': array(comparisons), 'reason': text})
 
 
@@ -471,7 +519,7 @@ def _validate(packet_ref, review_ref, task, *, mode=None, current=None, live=Fal
                             'checks', 'step_observations', 'history_comparisons', 'reason', 'provenance'}
              and review.get('completed') is True and review.get('packet_sha256') == packet_ref['sha256'],
              'unreviewed packet or unsupported caller-selected identity field')
-    _require(set(review.get('checks', {})) == set(CHECKS) and all(value == 'PASS' for value in review['checks'].values())
+    _require(set(review.get('checks', {})) == set(_review_checks(task)) and all(value == 'PASS' for value in review['checks'].values())
              and _text(review.get('reason')), 'independent FAIL/uncertainty cannot grant admission')
     compiled = compile_task(packet['capability'], packet['trace'], require_current_sources=live)
     _require(compiled == packet['task'] == _base(task) and packet['meaning'] == meaning(task, packet['trace']),

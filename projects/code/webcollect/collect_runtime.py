@@ -54,7 +54,7 @@ def source_identity():
              'content_preparation.py', 'content_preparation.js', 'production_facts.py',
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
-             'admission_cohort.py']
+             'admission_cohort.py', 'production_identity.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}
@@ -149,8 +149,9 @@ def sync_manifest(store, output, manifest):
          'retry_of', 'status', 'started_at', 'failure_class', 'root_cause')}
         for row in ledger['reserved_attempts']]
     manifest['samples'] = [row['sample_id'] for row in records if row['status'] == 'collected_pending_review']
+    from .production_identity import allocation_uri
     manifest['sites'] = list({row['site_id']: {'site_id': row['site_id'],
-        'uri': row['task']['site_uri'], 'site_category': row['task']['site_category']}
+        'uri': allocation_uri(row['task']), 'site_category': row['task']['site_category']}
         for row in snapshot['attempts']}.values())
     batches = {row['batch_id'] for row in snapshot['attempts']}
     if len(batches) > 1:

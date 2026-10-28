@@ -728,6 +728,8 @@ def validate_plan(plan):
         if plan.get('schema_version') != PLAN_SCHEMA:
             raise ValueError('Reviewed task admission requires the versioned M4 plan contract')
     validate_m4_plan(plan)
+    from .production_identity import validate_plan as validate_pilot_plan
+    validate_pilot_plan(plan)
 
 
 async def collect_one(context, task, directory, evidence, ids, *, navigation=None):
@@ -838,6 +840,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             elif op['action_type']!='complete' and decision['action']=='blocked':
                 preparation_error='页面准备被阻断：'+decision['reason']
             is_final=op['action_type']=='complete'
+            from .production_identity import before_action
+            before_action(task, raw_records, op['action_type'])
             assertion=[]
             planned_completion=None
             if is_final:
@@ -945,6 +949,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     previous['step_result']=observed_result
                 previous['tool_result']['return_value']['screen_changed']=raw_records[-1]['capture']['screenshot_sha256']!=observation['capture']['screenshot_sha256']
             arguments,element=prepare_action(state,op)
+            from .production_identity import state_allowed
+            state_allowed(task, state)
             action={'action_type':op['action_type'],'target_element_id':element['element_id'] if element else '',
                     'target_text':element['text'] if element else (op.get('key_name','+'.join({'meta':'Command','ctrl':'Ctrl','enter':'回车键'}.get(key,key.upper()) for key in arguments['keys'])) if op['action_type']=='hotkey' else ''),
                     'coordinate':[arguments['x'],arguments['y']] if op['action_type'] in POINTER else [],
@@ -994,6 +1000,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     if m4:
                         contract_result=terminal_evidence(task,raw_records,assertion,raw['final_assertions_binding'])
                         raw['task_contract_terminal']={**task_identity,**contract_result}
+                    from .production_identity import actual_proof
+                    actual_proof(task, raw_records, final_state=state)
                 execution=op.get('execution') or {}
                 if 'wait_popup' in execution and type(execution['wait_popup']) is not bool:
                     raise ValueError('wait_popup 必须是显式布尔值')
@@ -1056,6 +1064,10 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
              'steps':steps,'final_state_image':steps[-1]['image_path'],'final_result':final_description,
              'completion_status':'success','completion_judgement':final_description}
         write_json(directory/'annotation.json',annotation)
+        if task.get('pilot_identity') is not None:
+            from .production_identity import actual_proof
+            write_json(evidence/'pilot_identity.json', {**actual_proof(task, raw_records),
+                'annotation_sha256':hashlib.sha256((directory/'annotation.json').read_bytes()).hexdigest()})
         if m4:
             contract_result.update(task_identity)
             contract_result['review_binding']={'annotation_sha256':hashlib.sha256((directory/'annotation.json').read_bytes()).hexdigest(),
