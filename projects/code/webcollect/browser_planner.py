@@ -158,6 +158,30 @@ async def operation_from_decision(page, state, decision):
     return operation
 
 
+def whole_page_literal_assertion(condition, state):
+    """Canonicalize a literal predicate; retain a checked locator as provenance.
+
+    visible_text is a whole-page predicate, not a selector predicate. Models
+    may supply its required target_element_id as a locating hint. That hint
+    cannot invent text: both the original visible page and, if supplied, the
+    unique visible original element must actually contain the same literal.
+    """
+    if set(condition) != {'target_element_id', 'visible_text'}:
+        raise ValueError('Whole-page literal assertion cannot mix predicate types')
+    literal = condition['visible_text']; target_id = condition['target_element_id']
+    if not isinstance(literal, str) or not literal.strip() or literal not in state['visible_text']:
+        raise ValueError('Completion literal is not in the original visible page')
+    hint = None
+    if target_id is not None:
+        rows = [e for e in state['elements'] if e['element_id'] == target_id]
+        if (len(rows) != 1 or rows[0].get('visible') is not True
+                or literal not in rows[0].get('text', '')):
+            raise ValueError('Completion locating hint does not show the original literal')
+        hint = {'element_id': target_id, 'original_text': rows[0]['text'], 'bbox': rows[0]['bbox']}
+    return {'visible_text': literal}, {'literal': literal, 'locator_hint': hint,
+                                     'predicate_scope': 'whole_original_visible_page'}
+
+
 async def control_diagnostics(page, state):
     rows = []
     for element in state['elements']:
@@ -267,13 +291,24 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                         if len(transitions) < 5 or not decision['final_assertions']:
                             raise ValueError('Naturally short or unsupported workflow; do not pad')
                         assertions = []
+                        literal_bindings = []
                         for condition in decision['final_assertions']:
+                            if 'visible_text' in condition:
+                                canonical, binding = whole_page_literal_assertion(condition, state)
+                                assertions.append(canonical); literal_bindings.append(binding)
+                                continue
                             condition = dict(condition); target_id = condition.pop('target_element_id')
                             if target_id:
                                 selector = await page.evaluate(SELECTOR_JS, target_id)
                                 if not selector: raise ValueError('Final assertion target is not observed')
                                 condition['selector'] = selector
                             assertions.append(condition)
+                        if literal_bindings:
+                            save_json(output / 'terminal-literal-bindings.json', {
+                                'decision': {'path': str(output / ('decision-' + str(number).zfill(3) + '.json')),
+                                             'sha256': file_sha(output / ('decision-' + str(number).zfill(3) + '.json'))},
+                                'original_frame': current, 'bindings': literal_bindings,
+                                'QC_approval': False})
                         final = await capture(page, assertions=assertions)
                         final_ref = save_frame(output, number * 3 + 1, final)
                         actual = await assert_state(page, assertions, final['state'], final['png'])

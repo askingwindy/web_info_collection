@@ -59,6 +59,8 @@ def check_numbers(text, spec):
 
 async def assert_state(page, conditions, captured_state=None, captured_png=None):
     """Evaluate assertions against one observation, optionally the actual saved frame."""
+    if any('visible_text' in condition and set(condition) != {'visible_text'} for condition in conditions):
+        raise ValueError('Whole-page visible_text assertion cannot also bind a selector or another predicate')
     if captured_state is None and any('qr_png_payload' in condition or 'placeholder_png_text' in condition for condition in conditions):
         # QR completion cannot be inferred from DOM labels/statistics. Even the
         # early-completion check needs one synchronized, unmodified PNG.
