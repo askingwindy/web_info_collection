@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import platform
 import shutil
+import time
 from urllib.parse import urldefrag
 from zoneinfo import ZoneInfo
 from .browser import capture, execute, prepare_action, observe, verify_execution_state, CONTROL, POINTER, SNAPSHOT_JS
@@ -18,6 +19,73 @@ from .action_normalization import normalize_delivery_step
 
 
 def now():return datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()
+
+
+async def capture_complete(page, evidence, selector=None, index=0, assertions=None):
+    """Refresh only a stale completion candidate; never replay an action.
+
+    No formal frame/companion/narrative is published here. Every candidate
+    keeps the complete capture and unchanged assertions/fingerprint checks.
+    """
+    started=time.monotonic()
+    timing={'policy':'complete-full-refresh-1','started_at':now(),'attempt_limit':3,
+            'timeout_seconds':12,'quiet_window_ms':1000,'retry_wait_ms':250,
+            'natural_wait_requested_ms':0,'natural_wait_observed_ms':0.0,'attempts':[]}
+
+    async def natural_wait(milliseconds):
+        at=time.monotonic()
+        timing['natural_wait_requested_ms']+=milliseconds
+        try:await asyncio.sleep(milliseconds/1000)
+        finally:timing['natural_wait_observed_ms']+=(time.monotonic()-at)*1000
+
+    def reject_candidate(number, observation, attempt):
+        folder=Path(evidence)/'terminal_candidates';folder.mkdir(exist_ok=True)
+        image=folder/f'candidate_{number:03}.png';record=folder/f'candidate_{number:03}.json'
+        with image.open('xb') as stream:stream.write(observation['png'])
+        with record.open('x',encoding='utf-8') as stream:
+            json.dump({'diagnostic_only':True,'accepted_as_formal_frame':False,
+                'state':observation['state'],'capture':observation['capture'],'attempt':attempt,
+                'natural_wait_requested_ms':timing['natural_wait_requested_ms'],
+                'natural_wait_observed_ms':timing['natural_wait_observed_ms']},stream,ensure_ascii=False,indent=2)
+            stream.write('\n')
+        return {'path':str(record),'sha256':hashlib.sha256(record.read_bytes()).hexdigest(),
+                'image_path':str(image),'image_sha256':hashlib.sha256(observation['png']).hexdigest()}
+
+    async def refresh():
+        for number in range(1,4):
+            attempt={'attempt':number,'started_at':now()};timing['attempts'].append(attempt)
+            observation=await capture(page,selector,index,assertions=assertions)
+            attempt['screenshot_sha256']=observation['capture']['screenshot_sha256']
+            try:
+                attempt['assertions']=await assert_state(page,assertions or [],
+                    captured_state=observation['state'],captured_png=observation['png'])
+            except Exception as error:
+                attempt.update(status='assertion_rejected',reason=str(error),finished_at=now())
+                attempt['diagnostic']=reject_candidate(number,observation,attempt)
+                raise
+            await natural_wait(1000)
+            try:
+                preflight=await verify_execution_state(page,observation['state'],selector,index,assertions=assertions)
+            except ValueError as error:
+                if not str(error).startswith('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'):
+                    raise
+                attempt.update(status='stale_rejected',reason=str(error),finished_at=now())
+                attempt['diagnostic']=reject_candidate(number,observation,attempt)
+                if number==3:raise
+                await natural_wait(250)
+                continue
+            attempt.update(status='accepted',state_preflight=preflight,finished_at=now())
+            return observation
+
+    try:
+        observation=await asyncio.wait_for(refresh(),timeout=12)
+    except Exception as error:
+        timing.update(finished_at=now(),elapsed_seconds=time.monotonic()-started,accepted=False)
+        error.terminal_refresh=timing
+        raise
+    timing.update(finished_at=now(),elapsed_seconds=time.monotonic()-started,accepted=True)
+    observation['terminal_refresh']=timing
+    return observation
 
 
 def chinese_ratio(text):
@@ -855,8 +923,9 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                                  if m4 and raw_records else [])
             capture_conditions=previous_conditions+(task['final_assertions']
                 if is_final or op.get('completion_view') else [])
-            observation=await capture(page,op.get('selector'),op.get('index',0),
-                                      assertions=capture_conditions or None)
+            observation=await (capture_complete(page,evidence,op.get('selector'),op.get('index',0),
+                                                assertions=capture_conditions or None) if is_final else
+                               capture(page,op.get('selector'),op.get('index',0),assertions=capture_conditions or None))
             state=observation['state']
             if previous_conditions:
                 previous_state={**state,'assertion_targets':state['assertion_targets'][:len(previous_conditions)]}
@@ -977,6 +1046,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             if planned_completion is not None:
                 raw['planned_completion']=planned_completion
                 raw['completion_description_source']='passed_final_assertions'
+                raw['terminal_refresh']=observation['terminal_refresh']
             if same_planned_close:
                 raw['planned_close_preflight']={'matched':True,
                     'close_selector':decision['selector'],'planned_selector':op['selector'],
@@ -1087,6 +1157,9 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
               'preparation_scrolls':preparation_scrolls})
         return annotation
     except Exception as error:
+        if getattr(error,'terminal_refresh',None):
+            write_json(evidence/'terminal_refresh_failure.json',{'diagnostic_only':True,
+                'accepted_as_formal_frame':False,'error':str(error),'terminal_refresh':error.terminal_refresh})
         if getattr(error,'placeholder_png',None) is not None:
             rejected_png=error.placeholder_png
             (evidence/'placeholder_assertion_failure.png').write_bytes(rejected_png)

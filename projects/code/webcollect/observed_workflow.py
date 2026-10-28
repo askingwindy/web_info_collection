@@ -502,7 +502,7 @@ def review_schema(packet_ref):
         'differences': obj({key: {'type': 'string'} for key in DIFFERENCES}), 'reason': text})
         for row in packet['history_context']['comparisons']]
     def array(items):
-        return {'type': 'array', 'prefixItems': items, 'items': False,
+        return {'type': 'array', **({'prefixItems': items} if items else {}), 'items': False,
                 'minItems': len(items), 'maxItems': len(items)}
     return obj({'schema_version': {'const': SCHEMAS[mode][1]}, 'packet_sha256': {'const': packet_ref['sha256']},
         'completed': {'type': 'boolean'},
