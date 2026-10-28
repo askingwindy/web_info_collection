@@ -10,6 +10,14 @@ from .batch_core import VisitRateWait
 from .runtime import domain_key
 
 
+class NavigationTimeoutError(TimeoutError):
+    """A timeout while dispatching an explicitly accounted initial navigation."""
+    def __init__(self, uri, purpose, timeout_seconds):
+        self.uri, self.purpose, self.timeout_seconds = uri, purpose, timeout_seconds
+        super().__init__(f'Initial navigation timed out after {timeout_seconds:g}s '
+                         f'({purpose}): {uri}')
+
+
 class BatchNavigation:
     def __init__(self, ledger, job):
         self.ledger, self.job = ledger, job
@@ -39,9 +47,12 @@ class BatchNavigation:
         try:
             page.on('request', requested)
             listening = True
-            response = await asyncio.wait_for(page.goto(uri, wait_until='domcontentloaded',
-                timeout=max(1, int(visit['timeout_seconds'] * 1000))),
-                timeout=visit['timeout_seconds'])
+            try:
+                response = await asyncio.wait_for(page.goto(uri, wait_until='domcontentloaded',
+                    timeout=max(1, int(visit['timeout_seconds'] * 1000))),
+                    timeout=visit['timeout_seconds'])
+            except asyncio.TimeoutError as error:
+                raise NavigationTimeoutError(uri, purpose, visit['timeout_seconds']) from error
             if response is not None and response.status >= 400:
                 raise ValueError('Initial navigation HTTP status ' + str(response.status))
         except BaseException as error:

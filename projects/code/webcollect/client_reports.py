@@ -134,9 +134,14 @@ def _render_summary(source, report_path, report, files, batch_name=None):
     if report.get('scope') == 'delivery':
         lines[2] = '本报告记录对本批实际交付内容的全量检查与逐图复核。内容摘要绑定所有样本及配套文件，报告和校验和文件不参与自身内容摘要；最终封包采用只读复验。'
         lines[4] = '- 批次：' + (batch_name or source.name)
+    sampling = report.get('semantic_sampling')
+    if sampling:
+        lines[2] = '本报告记录全量工程检查及按冻结策略进行的语义抽检。未抽中样本不记作AI或人工审核通过；最终封包重新核对实际文件与策略绑定。'
     for number, title, rules in requirements:
         state = _aggregate(checks.get(rule, {}).get('status', 'REVIEW_REQUIRED')
                            for checks in by_sample for rule in rules)
+        if sampling and any(rule.startswith('REVIEW_') for rule in rules):
+            state = '按抽检策略核验，实际覆盖见下表'
         lines.append(f'| {number} | {title} | {state} | {", ".join(rules)} |')
     semantic = ['visual_alignment', 'terminal_semantics', 'language', 'privacy', 'substantive_difference']
     coverage = {'human_complete_samples': 0, 'ai_complete_samples': 0, 'pending_or_missing_samples': 0}
@@ -161,6 +166,17 @@ def _render_summary(source, report_path, report, files, batch_name=None):
     coverage['samples_in_this_output'] = len(samples)
     coverage['reviewer_sources'] = [{'kind': kind, 'name': name, 'samples': count}
                                   for (kind, name), count in sorted(reviewer_counts.items())]
+    if sampling:
+        coverage.update(
+            acceptance_basis='frozen_sampling_policy',
+            policy=sampling.get('policy'),
+            original_denominator=sampling.get('original_denominator'),
+            actual_ai_reviewed=sampling.get('actual_ai_reviewed'),
+            actual_human_reviewed=sampling.get('actual_human_reviewed'),
+            not_selected=sampling.get('not_selected'),
+            human_pending_count=sampling.get('human_pending_count'),
+            replacement_required_count=sampling.get('replacement_required_count'),
+            unselected_is_not_semantic_pass=True)
     duplicates = report.get('duplicates', {})
     distribution = {}
     with (source / 'metadata.csv').open(newline='', encoding='utf-8-sig') as stream:
@@ -182,6 +198,8 @@ def _render_summary(source, report_path, report, files, batch_name=None):
                                       'route1': duplicates.get('route1', {}).get('confirmed_pair_count'),
                                       **{route: duplicates.get(route, {}).get('count')
                                          for route in ['route2', 'route3', 'route4']},
+                                      'resolution':{key:value for key,value in duplicates.get('summary',{}).items()
+                                                    if key not in ('pair_adjudications','current_sample_ids','affected_current_sample_ids')},
                                       'customer_algorithm_equivalence': 'UNKNOWN'},
             'original_source_population': _source_population(report),
             'capture_history_total_rejections': 'UNKNOWN; selection exclusions are recorded separately',
@@ -197,6 +215,10 @@ def _render_summary(source, report_path, report, files, batch_name=None):
         data['rejection_statistics_scope'] = data['original_source_population'].get('scope', '本批已记录的来源筛选总体；未记录的历史尝试不作推断。')
         data['delivery_document_review'] = report.get('delivery_document_review',
             {'status': 'REVIEW_REQUIRED', 'reason': 'Actual delivery-document review was not supplied.'})
+    if sampling:
+        data['semantic_sampling'] = {key: sampling.get(key) for key in (
+            'policy', 'plan_sha256', 'original_denominator', 'actual_ai_reviewed',
+            'actual_human_reviewed', 'not_selected', 'human_pending_count', 'replacement_required_count')}
     # Hash the inspected payload rather than the report/checksum that contain it.
     # This binding survives attaching this report and recomputing SHA256SUMS.
     excluded = {'qc_report.md', 'SHA256SUMS'} if 'delivery_status' in report else {'qc_report.md', 'SHA256SUMS', 'README.md'}
@@ -208,6 +230,8 @@ def _render_summary(source, report_path, report, files, batch_name=None):
               '附件A/B的结构、字段、参数与坐标规则由程序逐项核查；中文可读性、实际图像可见性、'
               '完整语义和隐私结论按绑定样本的实际审核记录导入。没有审核或无法证明的项目仍为待审。'
               '本摘要不新增或更改真人签署，不把导出、文件完整或已有样本审核结论推定为整批分布和客户验收通过。', '']
+    if sampling:
+        lines += ['本批采用显式抽检策略；未抽中只表示按策略准入，不表示逐条语义审核通过。AI问题全部转人工，人工否决后的替换样本须复检。', '']
     return '\n'.join(lines)
 
 

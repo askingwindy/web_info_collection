@@ -57,13 +57,19 @@ def check_numbers(text, spec):
             (not spec.get('integer') or all(v==v.to_integral_value() for v in values)))
 
 
-async def assert_state(page, conditions, captured_state=None):
+async def assert_state(page, conditions, captured_state=None, captured_png=None):
     """Evaluate assertions against one observation, optionally the actual saved frame."""
+    if captured_state is None and any('qr_png_payload' in condition or 'placeholder_png_text' in condition for condition in conditions):
+        # QR completion cannot be inferred from DOM labels/statistics. Even the
+        # early-completion check needs one synchronized, unmodified PNG.
+        observation=await capture(page,assertions=conditions)
+        captured_state=observation['state'];captured_png=observation['png']
     observed=captured_state if captured_state is not None else await observe(page,assertions=conditions)
     targets=observed.get('assertion_targets',[])
     if len(targets)!=len(conditions):raise ValueError('末态观察缺少同步断言目标，不能使用先前页面的结论')
     results=[]
     for index,condition in enumerate(conditions):
+        pixel_oracle=None
         if 'visible_text' in condition:
             expected=condition['visible_text']
             if not isinstance(expected,str) or not expected.strip():raise ValueError('可见终态文字断言必须非空')
@@ -78,7 +84,44 @@ async def assert_state(page, conditions, captured_state=None):
             if not target['visible']:raise ValueError('任务断言目标未完整显示在截图视口或被其他元素遮挡')
             if target.get('value') is not None and not any(k in condition for k in ('checked','disabled')) and target.get('value_visible') is False:
                 raise ValueError('任务结果控件的完整值未在实际视口中可见，不能以后台值判定完成')
-            if 'checked' in condition:
+            if 'qr_png_payload' in condition:
+                from .qr_strategy import URI,SSID,PASSWORD,wifi_payload
+                from .qr_pixel import verify_qr_png
+                if (observed.get('url')!=URI or condition!={'selector':'#rnqr-qrCanvas','qr_png_payload':wifi_payload(SSID,PASSWORD)}):
+                    raise ValueError('QR pixel oracle is limited to its exact observed page and synthetic WiFi payload')
+                if captured_png is None:raise ValueError('QR completion requires the original synchronized PNG, not DOM-only state')
+                try:
+                    pixel_oracle=await asyncio.to_thread(verify_qr_png,captured_png,condition['qr_png_payload'],target['bbox'],
+                                                        viewport=observed['screen_resolution'])
+                except ValueError as error:
+                    error.qr_png=captured_png;error.qr_state=observed
+                    raise
+                actual=pixel_oracle['decoded'][0]['payload'];passed=pixel_oracle['passed']
+            elif 'placeholder_png_text' in condition:
+                from .placeholder_strategy import URI,IMAGE_SELECTOR
+                from .placeholder_pixel import verify_placeholder_png
+                image=target.get('placeholder_image')
+                if (observed.get('url')!=URI or condition!={'selector':IMAGE_SELECTOR,'placeholder_png_text':'预览图'} or
+                    not isinstance(image,dict) or image.get('complete') is not True or
+                    (image.get('natural_width'),image.get('natural_height'))!=(400,200)):
+                    raise ValueError('Placeholder requires exact page, decoded 400x200 PNG and Chinese task text')
+                if captured_png is None:raise ValueError('Placeholder completion requires original synchronized PNG pixels')
+                try:
+                    pixel_oracle=await asyncio.to_thread(verify_placeholder_png,captured_png,condition['placeholder_png_text'],
+                                                        target['bbox'],image['src'],viewport=observed['screen_resolution'])
+                except ValueError as error:
+                    error.placeholder_png=captured_png;error.placeholder_state=observed
+                    raise
+                actual=pixel_oracle['recognized_text'];passed=pixel_oracle['passed']
+            elif 'html_table_matrix' in condition:
+                from .html_table_strategy import (URI, TABLE_SELECTOR, EXPECTED_MATRIX,
+                                                   verify_synchronized_table_result)
+                if (observed.get('url')!=URI or condition!={'selector':TABLE_SELECTOR,'html_table_matrix':EXPECTED_MATRIX}):
+                    raise ValueError('HTML table oracle is limited to its exact observed page and requested matrix')
+                evidence=target.get('html_table_evidence')
+                actual=evidence.get('matrix') if isinstance(evidence,dict) else None
+                passed=verify_synchronized_table_result(evidence)
+            elif 'checked' in condition:
                 actual=target['checked'];passed=actual is condition['checked'] and actual is not None
             elif 'disabled' in condition:
                 actual=target['disabled'];passed=actual is condition['disabled']
@@ -104,9 +147,13 @@ async def assert_state(page, conditions, captured_state=None):
                 passed=condition['contains'] in actual
         row={'expected':condition,'actual':actual,'passed':passed,
              'evidence_source':'captured_frame_DOM_observation' if captured_state is not None else 'single_visible_DOM_observation'}
+        if pixel_oracle is not None:
+            row.update(evidence_source='original_saved_png_pixels',pixel_oracle=pixel_oracle)
         if 'selector' in condition:
             row['target_text']=targets[index]['target_text']
-            if targets[index]['display_value'] is not None:row['display_actual']=targets[index]['display_value']
+            display=targets[index]['display_value']
+            if targets[index].get('value_visible') is True and isinstance(display,str) and display.strip():
+                row['display_actual']=display
         results.append(row)
         if not passed:raise ValueError('任务结果断言未通过：'+json.dumps(row,ensure_ascii=False))
     return results
@@ -150,7 +197,10 @@ def completion_from_assertions(assertions):
         raise ValueError('缺少全部通过的实际末态证据，不能生成完成判断')
     facts=[]
     for row in assertions:
-        condition=row['expected'];actual=row['actual'];display=row.get('display_actual',actual)
+        condition=row['expected'];actual=row['actual'];display=row.get('display_actual')
+        # Older observations recorded HTMLButtonElement.value == '' as a
+        # display string. Its actual visible text remains the grounded fact.
+        if display is None or isinstance(display,str) and not display.strip():display=actual
         if 'visible_text' in condition and condition['visible_text'] in actual:
             facts.append('可见文字「'+condition['visible_text']+'」')
         elif 'contains' in condition and condition['contains'] in actual:
@@ -162,7 +212,24 @@ def completion_from_assertions(assertions):
         elif 'disabled' in condition:
             facts.append(('「'+row['target_text']+'」' if row.get('target_text') else '末态控件')+('不可用' if actual else '可用'))
         elif any(key in condition for key in ('number','numbers','time_seconds')):
+            if actual is None or not str(actual).strip():
+                raise ValueError('实际数值证据为空，不能用计划期望补写完成判断')
             facts.append('末态'+('时间' if 'time_seconds' in condition else '数值')+'为「'+str(display)+'」')
+        elif 'html_table_matrix' in condition:
+            if actual!=condition['html_table_matrix'] or not isinstance(actual,list) or not actual or not actual[0]:
+                raise ValueError('实际表格矩阵缺失或与通过断言不一致')
+            rows=['第'+str(index+1)+'行为'+'、'.join('「'+value+'」' for value in values)
+                  for index,values in enumerate(actual)]
+            facts.append(str(len(actual))+'行'+str(len(actual[0]))+'列表格，'+'，'.join(rows))
+        elif 'qr_png_payload' in condition:
+            if actual!=condition['qr_png_payload'] or row.get('pixel_oracle',{}).get('passed') is not True:
+                raise ValueError('二维码完成描述缺少原PNG独立解码证据')
+            facts.append('原图二维码解码为「'+actual+'」')
+        elif 'placeholder_png_text' in condition:
+            oracle=row.get('pixel_oracle',{})
+            if actual!=condition['placeholder_png_text'] or oracle.get('passed') is not True:
+                raise ValueError('占位图完成描述缺少原PNG独立文字证据')
+            facts.append('原图中'+str(oracle['image_width'])+'×'+str(oracle['image_height'])+'图片显示「'+actual+'」')
         else:
             raise ValueError('末态断言类型无法形成可核验的完成描述')
     return '最终视口已核对：'+'、'.join(dict.fromkeys(facts))+'。'
@@ -656,6 +723,10 @@ def validate_plan(plan):
             raise ValueError('M2 任务至少规划 5 个显式有效操作，不允许通过等待凑步')
         if any(op['action_type']=='complete' for op in task['operations']):raise ValueError('complete 由最终断言成功后添加，不得提前声明完成')
     from .task_contract import validate_m4_plan
+    if any('task_admission' in task for task in plan['tasks']):
+        from .task_contract import PLAN_SCHEMA
+        if plan.get('schema_version') != PLAN_SCHEMA:
+            raise ValueError('Reviewed task admission requires the versioned M4 plan contract')
     validate_m4_plan(plan)
 
 
@@ -776,13 +847,15 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     'completion_judgement':task['completion_judgement'],'operation':op}
             previous_conditions=(raw_records[-1]['operation'].get('postconditions',[])
                                  if m4 and raw_records else [])
-            capture_conditions=previous_conditions+(task['final_assertions'] if is_final else [])
+            capture_conditions=previous_conditions+(task['final_assertions']
+                if is_final or op.get('completion_view') else [])
             observation=await capture(page,op.get('selector'),op.get('index',0),
                                       assertions=capture_conditions or None)
             state=observation['state']
             if previous_conditions:
                 previous_state={**state,'assertion_targets':state['assertion_targets'][:len(previous_conditions)]}
-                postconditions=await assert_state(page,previous_conditions,captured_state=previous_state)
+                postconditions=await assert_state(page,previous_conditions,captured_state=previous_state,
+                    **({'captured_png':observation['png']} if any('qr_png_payload' in c or 'placeholder_png_text' in c for c in previous_conditions) else {}))
                 raw_records[-1]['postconditions_saved_frame']={'assertions':postconditions,
                     'binding':{'image_path':f'images/step_{i:03}.png','ui_tree_path':f'ui_tree/step_{i:03}.json',
                                'screenshot_sha256':observation['capture']['screenshot_sha256']}}
@@ -795,7 +868,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                      **raw_records[-1]['postconditions_saved_frame']})
             if is_final:
                 final_assertion_state={**state,'assertion_targets':state['assertion_targets'][len(previous_conditions):]}
-                assertion=await assert_state(page,task['final_assertions'],captured_state=final_assertion_state)
+                assertion=await assert_state(page,task['final_assertions'],captured_state=final_assertion_state,
+                    **({'captured_png':observation['png']} if any('qr_png_payload' in c or 'placeholder_png_text' in c for c in task['final_assertions']) else {}))
                 final_description=completion_from_assertions(assertion)
                 heading=next((e['text'] for e in state['elements'] if e.get('native_role')=='h1' and e.get('text')), '')
                 final_goal='确认最终页面'+('「'+heading+'」' if heading else '')+'，'+final_description
@@ -847,6 +921,14 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                 raise ValueError(preparation_error)
             if assessment['page_url']!=state['url']:
                 raise ValueError('正文判断后页面地址改变，停止使用过期准备判断')
+            if op.get('completion_view'):
+                from .task_admission import validate_live_completion_scroll
+                completion_view_state={**state,
+                    'assertion_targets':state['assertion_targets'][len(previous_conditions):]}
+                completion_view_proof=validate_live_completion_scroll(task,op,completion_view_state)
+                write_json(evidence/f'completion_view_{i:03}.json',{
+                    **completion_view_proof,'screenshot_sha256':observation['capture']['screenshot_sha256'],
+                    'image_path':image_path,'ui_tree_path':f'ui_tree/step_{i:03}.json'})
             if previous:
                 previous['step_result']=describe_change(raw_records[-1]['state'],state,raw_records[-1]['operation'],raw_records[-1]['target_element'])
                 if m4:
@@ -991,6 +1073,20 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
               'preparation_scrolls':preparation_scrolls})
         return annotation
     except Exception as error:
+        if getattr(error,'placeholder_png',None) is not None:
+            rejected_png=error.placeholder_png
+            (evidence/'placeholder_assertion_failure.png').write_bytes(rejected_png)
+            write_json(evidence/'placeholder_assertion_failure.json',{'error':str(error),'state':error.placeholder_state,
+                'screenshot_sha256':hashlib.sha256(rejected_png).hexdigest(),
+                'accepted_as_formal_frame':False,'evidence_source':'rejected_original_synchronized_png'})
+        if getattr(error,'qr_png',None) is not None:
+            # Preserve the exact rejected pixels, before a later diagnostic
+            # screenshot can see a different canvas render.
+            rejected_png=error.qr_png
+            (evidence/'qr_assertion_failure.png').write_bytes(rejected_png)
+            write_json(evidence/'qr_assertion_failure.json',{'error':str(error),'state':error.qr_state,
+                'screenshot_sha256':hashlib.sha256(rejected_png).hexdigest(),
+                'accepted_as_formal_frame':False,'evidence_source':'rejected_original_synchronized_png'})
         if m4:
             checkpoint_json(evidence/'task_contract.json',{'schema_version':'webcollect-task-contract-evidence-1',
                 **task_identity,'machine_status':'FAIL','semantic_status':'REVIEW_REQUIRED','reason':str(error),

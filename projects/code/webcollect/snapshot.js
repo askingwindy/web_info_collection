@@ -133,12 +133,92 @@
     const ys=[rect.top+insetY,(rect.top+rect.bottom)/2,rect.bottom-insetY];
     return xs.every(x=>ys.every(y=>textHit(x,y,owner)));
   };
-  const nativeValueVisible = node => {
-    if(!node.matches('input,textarea,select')||node.type==='password')return false;
-    if(!exposedRect(node.getBoundingClientRect(),node,clipFor(node)))return false;
+  const nativeValueVisible = (node,allowEmptyPlaceholderTargetEvidence=false) => {
+    if(!node.matches('input,textarea,select'))return false;
+    const password=node.matches('input[type=password]');
+    // Only the target-label call may expose an empty password placeholder.
+    // Native password values and assertion values always keep the default false.
+    if(password&&(!allowEmptyPlaceholderTargetEvidence||node.value!==''||node.disabled||node.readOnly||!node.placeholder))return false;
+    const emptyPlaceholder=node.matches('input,textarea')&&node.value===''&&!!node.placeholder;
+    // DOM values are not visible strings when their actual text fill merges
+    // into the provable background. The same paint rule applies to prose and
+    // labels; complex/unprovable backgrounds supply no native value evidence.
+    if(!frameworkLabelPaint(node,emptyPlaceholder?getComputedStyle(node,'::placeholder'):null))return false;
+    // Preserve the existing complete-control occlusion gate for value evidence.
+    // A target placeholder is instead bound to its fully measured glyph area;
+    // a sibling's shared border does not paint over that text.
+    if((!emptyPlaceholder||!allowEmptyPlaceholderTargetEvidence)&&
+       !exposedRect(node.getBoundingClientRect(),node,clipFor(node)))return false;
     // A visible border box does not prove a native value hidden by internal
     // scrolling. Never promote a clipped textarea/input's full DOM value.
     if(node.scrollWidth>node.clientWidth||node.scrollHeight>node.clientHeight)return false;
+    if(emptyPlaceholder) {
+      if(node.disabled||node.readOnly||!node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
+      const control=node.getBoundingClientRect(),clip=clipFor(node);
+      if(control.width<=0||control.height<=0||control.left<clip.left||control.top<clip.top||
+         control.right>clip.right||control.bottom>clip.bottom)return false;
+      const text=node.placeholder,style=getComputedStyle(node),placeholder=getComputedStyle(node,'::placeholder');
+      // Native placeholder glyphs have no DOM Text Range. Measure their actual
+      // computed font, reject invisible/unsupported paint, then hit-test the
+      // complete measured text rectangle. A visible input box alone is not proof.
+      if(text!==text.trim()||text.length>256||/[\r\n\t]/.test(text)||
+         !placeholder.font||parseFloat(placeholder.fontSize)<10||parseFloat(style.fontSize)<10||
+         placeholder.writingMode!=='horizontal-tb'||placeholder.textTransform!=='none'||
+         style.direction!=='ltr'||!['start','left'].includes(style.textAlign)||parseFloat(style.textIndent)!==0||
+         !['normal','0px'].includes(placeholder.letterSpacing)||!['normal','0px'].includes(placeholder.wordSpacing)||
+         placeholder.opacity!=='1'||placeholder.textShadow!=='none'||placeholder.filter!=='none'||
+         placeholder.mixBlendMode!=='normal')return false;
+      const rgba=value=>{const match=value.match(/^rgba?\(([^)]+)\)$/);if(!match)return null;
+        const values=match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+        if(values.length===3)values.push(1);
+        return values.length===4&&values.every(Number.isFinite)?values:null;};
+      const foreground=rgba(placeholder.color),fill=rgba(placeholder.webkitTextFillColor);
+      if(!foreground||!fill||foreground[3]!==1||fill[3]!==1)return false;
+      let background=null;
+      for(let owner=node;owner;owner=owner.parentElement) {
+        const paint=getComputedStyle(owner);
+        if(paint.opacity!=='1'||paint.filter!=='none'||paint.mixBlendMode!=='normal'||
+           paint.maskImage!=='none'||paint.contentVisibility!=='visible')return false;
+        for(const pseudo of ['::before','::after']) {
+          if(!['none','normal'].includes(getComputedStyle(owner,pseudo).content))return false;
+        }
+        if(!background) {
+          const color=rgba(paint.backgroundColor);
+          if(!color||color[3]!==0&&color[3]!==1)return false;
+          if(color[3]===1) {if(paint.backgroundImage!=='none')return false;background=color;}
+        }
+      }
+      if(!background)return false;
+      const luminance=color=>color.slice(0,3).map(value=>value/255)
+        .map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4)
+        .reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
+      const contrast=color=>{const a=luminance(color),b=luminance(background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);};
+      if(contrast(foreground)<3||contrast(fill)<3)return false;
+      const scale=axisScale(node);
+      if(scale.b!==0||scale.c!==0||scale.a<=0||scale.d<=0)return false;
+      const box=node.getBoundingClientRect(),context=document.createElement('canvas').getContext('2d');
+      if(!context||!document.fonts.check(placeholder.font,text))return false;
+      context.font=placeholder.font;
+      const metrics=context.measureText(text),sx=scale.a,sy=scale.d;
+      const left=box.left+(parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft))*sx;
+      const top=box.top+(parseFloat(style.borderTopWidth)+parseFloat(style.paddingTop))*sy;
+      const contentWidth=box.width/sx-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth)-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);
+      const contentHeight=box.height/sy-parseFloat(style.borderTopWidth)-parseFloat(style.borderBottomWidth)-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
+      const cell=metrics.fontBoundingBoxAscent+metrics.fontBoundingBoxDescent;
+      const line=placeholder.lineHeight==='normal'?cell:parseFloat(placeholder.lineHeight);
+      if(![contentWidth,contentHeight,cell,line,metrics.width,metrics.actualBoundingBoxAscent,metrics.actualBoundingBoxDescent].every(Number.isFinite)||
+         contentWidth<=0||contentHeight<=0||metrics.width>contentWidth||line>contentHeight+.01||
+         metrics.actualBoundingBoxAscent+metrics.actualBoundingBoxDescent<=0)return false;
+      const baseline=top+((contentHeight-cell)/2+metrics.fontBoundingBoxAscent)*sy;
+      const ink={left:left-metrics.actualBoundingBoxLeft*sx,right:left+metrics.actualBoundingBoxRight*sx,
+        top:baseline-metrics.actualBoundingBoxAscent*sy,bottom:baseline+metrics.actualBoundingBoxDescent*sy};
+      ink.width=ink.right-ink.left;ink.height=ink.bottom-ink.top;
+      if(ink.left<left||ink.right>left+contentWidth*sx||ink.top<top||ink.bottom>top+contentHeight*sy||
+         !exposedRect(ink,node,clipFor(node,true)))return false;
+      for(let x=ink.left+.5;x<ink.right;x+=1)for(let y=ink.top+.5;y<ink.bottom;y+=1) {
+        if(!textHit(x,y,node))return false;
+      }
+    }
     if(node.tagName==='SELECT') {
       const style=getComputedStyle(node),canvas=document.createElement('canvas').getContext('2d');
       if(!canvas||!style.font)return false;
@@ -180,6 +260,7 @@
     const rectangles=[...range.getClientRects()];
     const clip=clipFor(owner,true);
     const textStyle=getComputedStyle(owner);
+    if(!frameworkLabelPaint(owner,textStyle))return '';
     if(!rectangles.some(r=>r.right>clip.left&&r.bottom>clip.top&&r.left<clip.right&&r.top<clip.bottom))return '';
     let result='',gap=false,startsVisible=false,endsVisible=false,hasText=false;
     // Grapheme boundaries preserve original surrogate pairs/combining marks.
@@ -201,19 +282,131 @@
     textEdges.set(node,{starts_visible:startsVisible,ends_visible:endsVisible});
     textCache.set(node,result);return result;
   };
+  const frameworkColor = value => {
+    const match=value.match(/^rgba?\(([^)]+)\)$/);if(!match)return null;
+    const values=match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+    if(values.length===3)values.push(1);
+    return values.length===4&&values.every(Number.isFinite)&&values.slice(0,3).every(v=>v>=0&&v<=255)&&
+      values[3]>=0&&values[3]<=1?values:null;
+  };
+  const compositeColor=(front,back)=>front.slice(0,3).map((v,i)=>v*front[3]+back[i]*(1-front[3])).concat(1);
+  const frameworkLabelPaint = (label,foregroundStyle=null) => {
+    const style=foregroundStyle||getComputedStyle(label),fill=frameworkColor(style.webkitTextFillColor);
+    if(!fill||fill[3]===0||style.textShadow!=='none'||style.backgroundClip==='text')return false;
+    const layers=[];let background=null;
+    for(let owner=label;owner;owner=owner.parentElement) {
+      const paint=getComputedStyle(owner);
+      if(Number(paint.opacity)!==1||paint.filter!=='none'||paint.backdropFilter!=='none'||
+         paint.mixBlendMode!=='normal'||paint.maskImage!=='none'||paint.webkitMaskImage!=='none'||
+         paint.contentVisibility!=='visible')return false;
+      // Hit testing reports an ancestor for its generated paint (and omits
+      // pointerless pseudo-elements). An opaque ancestor ::after can cover
+      // every glyph without adding a foreign DOM rectangle. Its geometry is
+      // unproven here. Empty transparent framework clearfixes paint nothing.
+      for(const which of ['::before','::after']) {
+        const pseudo=getComputedStyle(owner,which);
+        if(['none','normal'].includes(pseudo.content)||pseudo.display==='none'||
+           pseudo.visibility!=='visible'||Number(pseudo.opacity)===0)continue;
+        const own=clean(pseudo.content.replace(/^(['"])([\s\S]*)\1$/,'$2'));
+        const color=frameworkColor(pseudo.backgroundColor);
+        if(own||!color||color[3]>0||pseudo.backgroundImage!=='none'||pseudo.boxShadow!=='none'||
+           pseudo.filter!=='none'||pseudo.backdropFilter!=='none'||
+           ['Top','Right','Bottom','Left'].some(side=>parseFloat(pseudo['border'+side+'Width'])>0&&
+             (frameworkColor(pseudo['border'+side+'Color'])?.[3]??1)>0))return false;
+      }
+      if(!background) {
+        const color=frameworkColor(paint.backgroundColor);
+        if(!color||paint.backgroundImage!=='none')return false;
+        layers.push(color);if(color[3]===1)background=color;
+      }
+    }
+    // The unpainted CSS canvas is white only in the known light rendering
+    // mode. A dark/unknown canvas or a complex painted background is unsupported.
+    if(!background) {
+      const scheme=getComputedStyle(document.documentElement).colorScheme;
+      if(matchMedia('(prefers-color-scheme: dark)').matches||!['normal','light','light dark'].includes(scheme))return false;
+      background=[255,255,255,1];
+    }
+    for(let i=layers.length-1;i>=0;i--)background=compositeColor(layers[i],background);
+    const foreground=compositeColor(fill,background);
+    const luminance=color=>color.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+      .reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
+    const a=luminance(foreground),b=luminance(background);
+    return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=3;
+  };
+  let frameworkSurfaces=null;
+  const frameworkAreaExposed = (rect,owner,compatibleOwners=[]) => {
+    const owners=[owner,...compatibleOwners];
+    if(!frameworkSurfaces)frameworkSurfaces=[...document.querySelectorAll('body *')].filter(node=>
+      !node.matches('script,style,noscript,template')).map(node=>({node,style:getComputedStyle(node),rects:[...node.getClientRects()]}));
+    for(const {node,style,rects} of frameworkSurfaces) {
+      if(owners.some(known=>node===known||node.contains(known)||known.contains(node))||style.display==='none'||style.visibility!=='visible')continue;
+      for(const other of rects) {
+        const left=Math.max(rect.left,other.left),right=Math.min(rect.right,other.right),
+          top=Math.max(rect.top,other.top),bottom=Math.min(rect.bottom,other.bottom);
+        if(right<=left||bottom<=top)continue;
+        // As in exposedRect, keep full-sized fragments a CSS pixel inside
+        // their edge: Chromium rounds half-pixel edge hits to the neighbor.
+        // Thin intersections still get interior probes of their own extent.
+        const dx=Math.min(1,(right-left)/4),dy=Math.min(1,(bottom-top)/4);
+        for(const x of [left+dx,(left+right)/2,right-dx])for(const y of [top+dy,(top+bottom)/2,bottom-dy]) {
+          if(!owners.some(known=>textHit(x,y,known)))return false;
+        }
+        // elementsFromPoint ignores pointer-events:none even when it paints
+        // over the field. A possibly painted foreign surface cannot prove
+        // exposure; empty transparent backdrops remain harmless.
+        if(style.pointerEvents==='none'&&Number(style.opacity)!==0) {
+          const color=frameworkColor(style.backgroundColor);
+          const painted=!color||color[3]>0||style.backgroundImage!=='none'||style.boxShadow!=='none'||
+            style.filter!=='none'||style.backdropFilter!=='none'||node.matches('img,svg,canvas,video,iframe,object')||
+            ['Top','Right','Bottom','Left'].some(side=>parseFloat(style['border'+side+'Width'])>0&&
+              (frameworkColor(style['border'+side+'Color'])?.[3]??1)>0)||
+            [...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&clean(child.textContent))||
+            ['::before','::after'].some(p=>!['none','normal'].includes(getComputedStyle(node,p).content));
+          if(painted)return false;
+        }
+      }
+    }
+    return true;
+  };
+  const frameworkUploadLabel = label => {
+    if(!label?.matches('label.layui-form-label')||label.children.length!==2)return null;
+    const button=[...label.children].find(e=>e.matches('button.layui-btn[type=button]'));
+    const file=[...label.children].find(e=>e.matches('input.layui-upload-file[type=file]'));
+    if(!button||!file||getComputedStyle(file).display!=='none'||
+       [...button.children].some(e=>!e.matches('i.layui-icon')||e.children.length))return null;
+    const own=[...label.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE);
+    const source=clean(own.map(n=>n.textContent).join(' '));
+    const text=clean(own.map(visibleText).join(' '));
+    if(!source||source!==text)return null;
+    return {button,file,source,text};
+  };
+  const frameworkLabelCache=new WeakMap();
+  const frameworkLabelText = label => {
+    if(!label.matches('label.layui-form-label'))return visibleText(label);
+    if(frameworkLabelCache.has(label))return frameworkLabelCache.get(label);
+    const upload=frameworkUploadLabel(label),own=[...label.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent));
+    const exposed=own.every(node=>{
+      const range=document.createRange();range.selectNodeContents(node);
+      return [...range.getClientRects()].every(rect=>frameworkAreaExposed(inkRect(rect,node.textContent,getComputedStyle(label)),label));
+    });
+    const value=(!label.children.length||upload)&&frameworkLabelPaint(label)&&exposed?
+      upload?.text||visibleText(label):'';
+    frameworkLabelCache.set(label,value);return value;
+  };
   const name = element => {
     // Image names describe accessible DOM attributes, not pixels/visible prose.
     // Keep empty names empty; never infer a large news image's subject.
     if(element.tagName==='IMG')return clean(element.getAttribute('alt')||element.getAttribute('title'));
     const labelled = (element.getAttribute('aria-labelledby') || '').split(/\s+/)
       .map(id => {const node=document.getElementById(id);return node?visibleText(node):'';}).join(' ').trim();
-    const label = element.labels ? [...element.labels].map(visibleText).join(' ') : '';
+    const label = element.labels ? [...element.labels].map(frameworkLabelText).join(' ') : '';
     let adjacentLabel='';
     if (element.matches('input,textarea,select')) {
       let container=element.parentElement;
       for(let depth=0;container&&container!==document.body&&depth<3;depth++,container=container.parentElement) {
         const labels=[...container.children].filter(node=>node.matches('label'));
-        if(labels.length===1){adjacentLabel=visibleText(labels[0]);break;}
+        if(labels.length===1){adjacentLabel=frameworkLabelText(labels[0]);break;}
       }
     }
     const direct = [...element.childNodes].filter(n => n.nodeType === Node.TEXT_NODE)
@@ -289,6 +482,132 @@
     display_value:node.tagName==='SELECT'?[...node.selectedOptions].map(option=>option.textContent.trim()).join(' '):(typeof node.value==='string'?node.value:null), value_visible:nativeValueVisible(node),focused:document.activeElement===node,
     choice:node.tagName==='SELECT'||node.getAttribute('role')==='combobox'||!!node.closest('.layui-form-select'),selection_start:typeof node.selectionStart==='number'?node.selectionStart:null,
     selection_end:typeof node.selectionEnd==='number'?node.selectionEnd:null,input_type:node.type||'',readonly:!!node.readOnly,checked:typeof node.checked==='boolean'?node.checked:null})).filter(x=>x.value!==null||x.focused||x.checked!==null);
+    // This separately scoped visual adapter never invents a readable label for
+    // a blank tile/cell. Identity comes from the complete observed grid/table,
+    // ordered geometry, clipped/painted rectangles and original frame binding.
+    const htmlTableVisualTarget=(target,coordinate)=>{
+      const canHit=([x,y])=>{const hit=document.elementFromPoint(x,y);return !!hit&&(hit===target||target.contains(hit));};
+      if(location.href!=='https://www.jyshare.com/front-end/7688/'||width!==1280||height!==720||scrollX||scrollY)return null;
+      const one=(s,r=document)=>r.querySelectorAll(s).length===1?r.querySelector(s):null;
+      const box=n=>{const r=n.getBoundingClientRect();return [r.left,r.top,r.right,r.bottom];};
+      const painted=n=>{
+        if(!n?.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||n.closest('[inert],[aria-hidden=true]'))return false;
+        for(let p=n;p;p=p.parentElement){const s=getComputedStyle(p),a=axisScale(p);
+          if(s.visibility!=='visible'||Number(s.opacity)!==1||s.filter!=='none'||s.clipPath!=='none'||
+             s.borderImageSource!=='none'||s.maskImage!=='none'||s.webkitMaskImage!=='none'||
+             (s.maskBorderSource&&s.maskBorderSource!=='none')||
+             !['::before','::after'].every(pseudo=>['none','normal'].includes(getComputedStyle(p,pseudo).content))||
+             a.a!==1||a.b!==0||a.c!==0||a.d!==1)return false;}
+        const r=n.getBoundingClientRect(),c=clipFor(n,true);
+        return r.width>0&&r.height>0&&r.left>=c.left&&r.top>=c.top&&r.right<=c.right&&r.bottom<=c.bottom;
+      };
+      const surface=(n,allowedOverlay=null)=>{
+        if(!painted(n))return false;const r=n.getBoundingClientRect();
+        for(let x=r.left+1;x<r.right-1;x+=4)for(let y=r.top+1;y<r.bottom-1;y+=4){
+          const h=document.elementFromPoint(x,y);
+          if(!h||!(h===n||n.contains(h)||allowedOverlay&&(h===allowedOverlay||allowedOverlay.contains(h))))return false;
+        }
+        return true;
+      };
+      const color=value=>{
+        const m=value.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
+        return m?[Number(m[1]),Number(m[2]),Number(m[3]),m[4]===undefined?1:Number(m[4])]:null;
+      };
+      const background=n=>{
+        for(let p=n;p;p=p.parentElement){const s=getComputedStyle(p),c=color(s.backgroundColor);
+          if(s.backgroundImage!=='none'||!c||c[3]!==0&&c[3]!==1)return null;
+          if(c[3]===1)return c;
+        }
+        return [255,255,255,1];
+      };
+      const luminance=c=>c.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+        .reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+      const contrast=(a,b)=>{const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);};
+      const border=n=>{const s=getComputedStyle(n),bg=background(n),selected=n.matches('.tg__cell_selected');
+        if(!bg)return false;
+        return ['Top','Right','Bottom','Left'].every(side=>{
+          const c=color(s['border'+side+'Color']),expected=selected?[145,207,255]:[207,207,207];
+          return parseFloat(s['border'+side+'Width'])===1&&s['border'+side+'Style']==='solid'&&c&&c[3]===1&&
+            c.slice(0,3).every((v,i)=>v===expected[i])&&contrast(c,bg)>=1.15;
+        });};
+      const root=one('#content');if(!root||root.children.length!==1)return null;
+      if(target.matches('.tg__cell')){
+        const container=one('#content > .tg__container'),grid=one('#content > .tg__container > .tg__cells');
+        const title=container&&one(':scope > h3.tg__title',container),size=container&&one(':scope > .tg__size > p',container);
+        if(!container||container.children.length!==3||!grid||target.parentElement!==grid||grid.children.length!==100||
+           !title||!size||!painted(title)||!painted(size)||clean(visibleText(title))!=='选择表格大小'||
+           clean(title.textContent)!=='选择表格大小'||clean(visibleText(size))!=='1 x 1'||clean(size.textContent)!=='1 x 1'||
+           document.querySelector('table.tbl,.tbl__area'))return null;
+        const boxes=[];
+        for(let i=0;i<100;i++){
+          const tile=grid.children[i],r=Math.floor(i/10)+1,c=i%10+1;
+          if(!tile.matches('div.tg__cell')||tile.children.length||clean(tile.textContent)||
+             tile.getAttribute('row')!==String(r)||tile.getAttribute('col')!==String(c)||
+             tile.classList.contains('tg__cell_selected')!==(i===0)||!surface(tile)||!border(tile))return null;
+          const b=box(tile);boxes.push(b);
+          if(Math.abs(b[1]-boxes[Math.floor(i/10)*10][1])>.5||Math.abs(b[0]-boxes[i%10][0])>.5||
+             i%10&&boxes[i-1][2]>=b[0]||i>=10&&boxes[i-10][3]>=b[1])return null;
+        }
+        const position=[...grid.children].indexOf(target);
+        return {adapter_id:'jyshare-html-table-visual-1',kind:'jyshare-table-size-cell',row:Math.floor(position/10)+1,
+          column:position%10+1,rows:10,columns:10,matrix:null,geometry:boxes,known_menu_rect:null,
+          source:'synchronized_browser_dom_geometry',full_viewport:true,occlusion_checked:true};
+      }
+      if(!target.matches('div.tbl__area[contenteditable=true]'))return null;
+      const table=one('#content > .tbl__container > table.tbl'),container=table?.parentElement;
+      const body=table&&one(':scope > tbody',table),cols=table&&one(':scope > colgroup',table);
+      if(!table||!container||!body||!cols||table.children.length!==2||cols.children.length!==2||
+         [...cols.children].some(n=>n.localName!=='col'||n.span!==1)||table.rows.length!==2||body.children.length!==2||
+         table.querySelectorAll('.tbl__area').length!==4||document.querySelector('.tg__container')||!painted(table))return null;
+      const siblingRoles=['table.tbl','div.cm','div.toolbar__horizontal-line','div.toolbar__vertical-line',
+        'div.cm__open-btn','div.toolbar.toolbar_v','div.toolbar.toolbar_h'];
+      if(container.children.length!==siblingRoles.length||[...container.children].some((n,i)=>!n.matches(siblingRoles[i])))return null;
+      const contextMenu=container.children[1];
+      if(!contextMenu.classList.contains('hidden')||contextMenu.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return null;
+      // The site's observed chevron is a sibling of the table and overlays the
+      // last 25px of a selected cell. Permit only this exact helper footprint;
+      // no arbitrary overlay, text-covered area or action coordinate is exempt.
+      const menus=container.querySelectorAll(':scope > .cm__open-btn'),menu=menus.length===1?menus[0]:null;
+      let overlay=null,menuBox=null;
+      if(menu&&menu.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})){
+        const svg=one(':scope > svg.feather.feather-chevron-down',menu),poly=svg&&one(':scope > polyline',svg);
+        if(!svg||!poly||menu.children.length!==1||svg.children.length!==1||clean(menu.textContent)||
+           poly.getAttribute('points')!=='6 9 12 15 18 9'||!painted(menu))return null;
+        menuBox=box(menu);if(Math.abs(menuBox[2]-menuBox[0]-25)>.1||Math.abs(menuBox[3]-menuBox[1]-25)>.1)return null;
+        overlay=menu;
+      }
+      const geometry=[],matrix=[];let found=null,overlayCell=null;
+      for(let r=0;r<2;r++){
+        const row=table.rows[r];if(row.parentElement!==body||row.children.length!==2||row.cells.length!==2)return null;
+        const values=[];
+        for(let c=0;c<2;c++){
+          const td=row.cells[c],area=one(':scope > div.tbl__area[contenteditable=true]',td);
+          if(td.localName!=='td'||td.rowSpan!==1||td.colSpan!==1||!border(td)||!area||!area.isContentEditable||
+             area.children.length||td.querySelectorAll('[contenteditable]').length!==1)return null;
+          const other=[...td.children].filter(n=>n!==area);
+          if(other.length>1||other.some(n=>!n.matches('div.tbl__resizer')||n.children.length||clean(n.textContent)))return null;
+          const b=box(area);let helper=null;
+          if(menuBox&&menuBox[0]>=b[2]-35&&menuBox[2]<=b[2]&&menuBox[1]>=b[1]&&menuBox[3]<=b[3]){
+            if(overlayCell)return null;overlayCell=[r+1,c+1];helper=overlay;
+            if(!area.classList.contains('tbl__area_selected')||document.activeElement!==area||
+               Math.abs(b[2]-menuBox[2]-5)>1||Math.abs((menuBox[1]+menuBox[3]-b[1]-b[3])/2)>1)return null;
+          }
+          if(!surface(area,helper)||clean(visibleText(area))!==clean(area.textContent))return null;
+          if(area.textContent){const style=getComputedStyle(area);
+            const fg=color(style.webkitTextFillColor),bg=background(area);
+            if(parseFloat(style.fontSize)<10||style.textTransform!=='none'||
+               !fg||fg[3]!==1||!bg||contrast(fg,bg)<3)return null;}
+          geometry.push(b);values.push(area.textContent);
+          if(area===target)found={row:r+1,column:c+1};
+          if(c&&Math.abs(b[1]-geometry[r*2][1])>.5||r&&Math.abs(b[0]-geometry[c][0])>.5||
+             c&&geometry[r*2][2]>b[0]+.5||r&&geometry[c][3]>b[1]+.5)return null;
+        }
+        matrix.push(values);
+      }
+      if(!found||overlay&&!overlayCell||!canHit(coordinate))return null;
+      return {adapter_id:'jyshare-html-table-visual-1',kind:'jyshare-table-editor-cell',...found,rows:2,columns:2,
+        matrix,geometry,html:table.outerHTML,known_menu_rect:menuBox,source:'synchronized_browser_dom_geometry',full_viewport:true,occlusion_checked:true};
+    };
   const targetIndex=nodes.indexOf(target);
   let targetInfo=null;
   if (targetIndex>=0) {
@@ -306,10 +625,10 @@
     const labelSources=[];
     const addLabel=(kind,text)=>{text=clean(text||'');if(text)labelSources.push({kind,text});};
     addLabel('rendered_target_text',visibleText(target));
-    for(const label of target.labels||[])addLabel('rendered_associated_label',visibleText(label));
+    for(const label of target.labels||[])addLabel('rendered_associated_label',frameworkLabelText(label));
     for(const id of (target.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean)) {
       const label=document.getElementById(id);
-      if(label)addLabel('rendered_labelledby_text',visibleText(label));
+      if(label)addLabel('rendered_labelledby_text',label.matches('label.layui-form-label')?frameworkLabelText(label):visibleText(label));
     }
     // Bootstrap-style input groups sometimes have a visible addon rather than
     // an HTML-associated label. Accept only an unambiguous two-branch group;
@@ -317,24 +636,46 @@
     const adjacentInputGroupLabel=()=>{
       if(!target.matches('input,textarea,select')||target.readOnly||target.disabled||
          target.matches('input[type=hidden],input[type=range],input[type=color],input[type=file],input[type=checkbox],input[type=radio],input[type=button],input[type=submit],input[type=reset],input[type=image]'))return '';
-      const group=target.parentElement;
-      if(!group?.matches('.input-group')||group.children.length!==2||group.querySelector('.input-group'))return '';
-      const controls=group.querySelectorAll('input,textarea,select,button,[contenteditable],[role=textbox],[role=combobox],[role=spinbutton],[role=button]');
-      const labels=group.querySelectorAll('.input-group-text');
-      if(controls.length!==1||controls[0]!==target||labels.length!==1)return '';
-      const label=labels[0],branch=label.parentElement===group?label:label.parentElement;
-      if(!label.matches('span')||label.children.length||branch.parentElement!==group)return '';
-      if(branch!==label&&(!branch.matches('.input-group-prepend,.input-group-append')||branch.children.length!==1))return '';
+      const parent=target.parentElement;
+      let group,label,branch,uploadLabel=null;
+      if(parent?.matches('.input-group')) {
+        group=parent;
+        if(group.children.length!==2||group.querySelector('.input-group'))return '';
+        const labels=group.querySelectorAll('.input-group-text');
+        if(labels.length!==1)return '';
+        label=labels[0];branch=label.parentElement===group?label:label.parentElement;
+        if(!label.matches('span')||label.children.length||branch.parentElement!==group)return '';
+        if(branch!==label&&(!branch.matches('.input-group-prepend,.input-group-append')||branch.children.length!==1))return '';
+      } else if(parent?.matches('.layui-input-block,.layui-input-inline')&&parent.parentElement?.matches('.layui-form-item')) {
+        group=parent.parentElement;
+        if(parent.children.length!==1||parent.firstElementChild!==target)return '';
+        const labels=[...group.children].filter(e=>e.matches('label.layui-form-label'));
+        if(labels.length!==1)return '';
+        label=labels[0];branch=label;
+        uploadLabel=frameworkUploadLabel(label);
+        if(label.children.length&&!uploadLabel)return '';
+        // A framework's plain, noninteractive inline hint is a separate third
+        // branch. It never supplies the target name. All other extra branches
+        // remain ambiguous, including a second control or unrelated prose.
+        const hints=[...group.children].filter(e=>e!==label&&e!==parent);
+        if(hints.length>1||hints.some(e=>!e.matches('div.layui-form-mid.layui-word-aux')||
+           e.children.length||e.hasAttribute('onclick')||e.hasAttribute('role')||
+           e.hasAttribute('tabindex')||getComputedStyle(e).cursor==='pointer'))return '';
+        if(label.hasAttribute('for')&&label.control!==target)return '';
+        if([...parent.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent)))return '';
+      } else return '';
+      const controls=[...group.querySelectorAll('input,textarea,select,button,[contenteditable],[role=textbox],[role=combobox],[role=spinbutton],[role=button]')]
+        .filter(e=>!uploadLabel||e!==uploadLabel.button&&e!==uploadLabel.file);
+      if(controls.length!==1||controls[0]!==target)return '';
       const hasOwnText=node=>[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&clean(child.textContent));
       if(hasOwnText(group)||(branch!==label&&hasOwnText(branch)))return '';
       // Full original text must survive the existing per-grapheme clipping and
       // occlusion checks. Partial visible fragments cannot name the control.
-      const source=clean(label.textContent),text=clean(visibleText(label));
+      const source=uploadLabel?.source||clean(label.textContent),text=uploadLabel?.text||clean(visibleText(label));
       if(!source||text!==source)return '';
       const style=getComputedStyle(label);
       if(parseFloat(style.fontSize)<10||style.textTransform!=='none'||
-         /^(transparent|rgba\([^)]*,\s*0\))$/.test(style.color)||
-         /^(transparent|rgba\([^)]*,\s*0\))$/.test(style.webkitTextFillColor)||
+         !frameworkLabelPaint(label)||
          !['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(label,p).content)))return '';
       for(let parent=label;parent;parent=parent.parentElement) {
         const painted=getComputedStyle(parent);
@@ -345,8 +686,11 @@
       // Bootstrap's shared 1px border, but no wider overlap or distant text.
       const gap=Math.max(a.left,b.left)-Math.min(a.right,b.right);
       const overlap=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);
-      if(gap < -1||gap>16||overlap<0.8*Math.min(a.height,b.height)||
-         Math.abs((a.top+a.bottom-b.top-b.bottom)/2)>8)return '';
+      const stacked=group.matches('.layui-form-item.layui-form-text')&&target.tagName==='TEXTAREA'&&
+        a.bottom<=b.top+1&&b.top-a.bottom<=20&&Math.abs(a.left-b.left)<=16&&
+        Math.min(a.right,b.right)-Math.max(a.left,b.left)>=0.8*Math.min(a.width,b.width);
+      if(!stacked&&(gap < -1||gap>16||overlap<0.8*Math.min(a.height,b.height)||
+         Math.abs((a.top+a.bottom-b.top-b.bottom)/2)>8))return '';
       // The later-painted neighbor can own that shared border's hit point.
       // Exclude only their measured <=1px intersection from box probes; all
       // original label graphemes above must still be fully exposed.
@@ -355,8 +699,17 @@
         if(gap<0) {if(left<other.left)right=other.left;else left=other.right;}
         return {left,right,top:rect.top,bottom:rect.bottom,width:right-left,height:rect.height};
       };
-      const labelBox=unsharedBox(a,b),targetBox=unsharedBox(b,a);
+      const stackedBox=(rect,other)=>{
+        const top=rect.top>=other.top?Math.max(rect.top,other.bottom):rect.top;
+        const bottom=rect.top<other.top?Math.min(rect.bottom,other.top):rect.bottom;
+        return {left:rect.left,right:rect.right,top,bottom,width:rect.width,height:bottom-top};
+      };
+      const labelBox=stacked?stackedBox(a,b):unsharedBox(a,b),targetBox=stacked?stackedBox(b,a):unsharedBox(b,a);
       if(!exposedRect(labelBox,label,clipFor(label))||!exposedRect(targetBox,target,clipFor(target)))return '';
+      if(!frameworkAreaExposed(labelBox,label)||!frameworkAreaExposed(targetBox,target))return '';
+      const shared={left:Math.max(a.left,b.left),right:Math.min(a.right,b.right),
+        top:Math.max(a.top,b.top),bottom:Math.min(a.bottom,b.bottom)};
+      if(shared.right>shared.left&&shared.bottom>shared.top&&!frameworkAreaExposed(shared,label,[target]))return '';
       // The generic 3x3 hit probes can miss an overlay between the center and
       // edge of a wide input. This new inference additionally checks its area
       // on a 4 CSS-pixel grid; no existing visibility rule is relaxed.
@@ -365,14 +718,20 @@
       }
       return text;
     };
-    addLabel('rendered_adjacent_input_group_label',adjacentInputGroupLabel());
-    if(nativeValueVisible(target)) {
+    const adjacentText=adjacentInputGroupLabel();
+    const frameworkTarget=target.parentElement?.matches('.layui-input-block,.layui-input-inline')&&
+      target.parentElement.parentElement?.matches('.layui-form-item');
+    // An explicit framework label/placeholder must not bypass its stricter
+    // complete-field checks after the adjacent inference rejected the surface.
+    if(frameworkTarget&&!adjacentText)labelSources.length=0;
+    addLabel('rendered_adjacent_input_group_label',adjacentText);
+    if((!frameworkTarget||adjacentText)&&nativeValueVisible(target,true)) {
       if(target.tagName==='SELECT')addLabel('visible_selected_option',[...target.selectedOptions].map(o=>o.label||o.textContent).join(' '));
       else if(target.matches('input,textarea'))addLabel(target.value?'visible_native_value':'visible_placeholder',target.value||target.placeholder);
     }
     targetInfo={element_id:e.element_id,coordinate,hit_valid:canHit(coordinate),bbox:e.bbox,text:e.text,enabled:e.enabled,
       focused:document.activeElement===target,value:typeof target.value==='string'?target.value:null,
-      visible_label_evidence:labelSources};
+      visible_label_evidence:labelSources,visual_target_evidence:htmlTableVisualTarget(target,coordinate)};
   }
   const visiblePieces=[];
   const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
@@ -382,7 +741,13 @@
     const text=clean(visibleText(node));if(text)visiblePieces.push(text);
   }
   for(const node of nodes) {
-    if(!node.matches('input,textarea')||node.type==='password'||node.type==='range'||node.type==='file')continue;
+    if(!node.matches('input,textarea')||node.type==='range'||node.type==='file')continue;
+    if(node.type==='password') {
+      // A proven empty placeholder is painted text, not a password value.
+      // Once typing masks the field, neither value nor placeholder is exposed.
+      if(node.value===''&&node.placeholder&&nativeValueVisible(node,true))visiblePieces.push(node.placeholder);
+      continue;
+    }
     // Native input values have no DOM Text Range. Retain the value only if the
     // whole control box is exposed; partial occlusion cannot prove its string.
     const value=node.value||node.placeholder;
@@ -439,6 +804,13 @@
     if(node.matches('iframe,frame'))throw new Error('UNSUPPORTED_FRAME: task completion cannot rely on an unread embedded document');
     const rect=node.getBoundingClientRect(),style=getComputedStyle(node),hit=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);
     const control=node.tagName==='LABEL'?node.control:node;
+    let tableEvidence=null;
+    if('html_table_matrix' in condition&&condition.selector==='#content > .tbl__container > table.tbl'&&
+       location.href==='https://www.jyshare.com/front-end/7688/'&&node.matches('table.tbl')){
+      const area=node.querySelector(':scope > tbody > tr:first-child > td:first-child > div.tbl__area[contenteditable=true]');
+      if(area){const a=area.getBoundingClientRect();tableEvidence=htmlTableVisualTarget(area,
+        [Math.floor((a.left+a.right-1)/2),Math.floor((a.top+a.bottom-1)/2)]);}
+    }
     return {selector:condition.selector,index:condition.index||0,
       visible:(!node.checkVisibility||node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))&&
         style.visibility==='visible'&&rect.width>0&&rect.height>0&&rect.left>=0&&rect.top>=0&&rect.right<=width&&rect.bottom<=height&&
@@ -448,7 +820,12 @@
         (typeof node.value==='string'?node.value:null),
       checked:control?.matches('input[type=radio],input[type=checkbox]')?control.checked:null,
       disabled:node.matches(':disabled')||node.getAttribute('aria-disabled')==='true',
-      bbox:[rect.left,rect.top,rect.right,rect.bottom]};
+      bbox:[rect.left,rect.top,rect.right,rect.bottom],...('html_table_matrix' in condition?{html_table_evidence:tableEvidence}:{}),
+      ...('placeholder_png_text' in condition?{placeholder_image:
+        location.href==='https://www.jyshare.com/front-end/9355/'&&condition.selector==='#placeholderResult > img.holderjs-placeholder'&&
+        document.querySelectorAll(condition.selector).length===1&&node.matches('img.holderjs-placeholder')&&node.parentElement.children.length===1&&
+        node.src.startsWith('data:image/png;base64,')&&node.src.length<=2000000?
+        {src:node.src,complete:node.complete,natural_width:node.naturalWidth,natural_height:node.naturalHeight}:null}:{} )};
   });
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,

@@ -21,7 +21,7 @@ DATE_INVENTORY_JS = r'''() => {
  const id='lddgo-date-difference-widget-1',clean=s=>(s||'').replace(/\s+/g,' ').trim();
  const fail=reason=>({...empty,widget_rejections:[{adapter_id:id,page_uri:location.href,reason}]});
  const one=s=>document.querySelectorAll(s).length===1?document.querySelector(s):null;
- const visible=e=>{if(!e||!e.checkVisibility())return false;const r=e.getBoundingClientRect();
+ const visible=e=>{if(!e||!e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;const r=e.getBoundingClientRect();
   const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);
   return r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&!!hit&&(hit===e||e.contains(hit));};
  const first=one('#date1'),last=one('#date2'),button=one('#startCalculate'),result=one('#betweenDay');
@@ -40,7 +40,7 @@ DATE_INVENTORY_JS = r'''() => {
   fields.push({selector:'#'+el.id,tag:'input',type:'text',label,visible:true,enabled:true,value:el.value,
    label_source:'same_form_item_label',min:'',max:'',options:[]});
  }
- if(button.localName!=='button'||button.disabled||!visible(button)||clean(button.innerText)!=='计算'||
+ if(button.localName!=='button'||!['submit','button'].includes(button.type)||button.disabled||!visible(button)||clean(button.innerText)!=='计算'||
     result.localName!=='input'||!result.readOnly||result.type!=='text'||!result.closest('#resultContainer')||
     clean(result.closest('.layui-form-item')?.querySelector('.layui-form-label')?.innerText)!=='相差')
    return fail('Date submit or readonly result binding changed');
@@ -67,18 +67,20 @@ def date_spec(capability, page, widget, strategy_version):
         if (f.get('tag'), f.get('type'), f.get('label'), f.get('visible'), f.get('enabled'), f.get('label_source')) != (
                 'input', 'text', label, True, True, 'same_form_item_label'):
             raise ValueError('Date observed input role/visibility changed')
-        date.fromisoformat(f['value'])
+        if date.fromisoformat(f['value']).isoformat() != f['value']:
+            raise ValueError('Date observed input must use the exact YYYY-MM-DD format')
         if f['value'] == value:
             raise ValueError('Date input already requested; do not add redundant actions')
         inputs.append({'selector': selector, 'label': label, 'value': value})
     button = by_id['#startCalculate']
-    if (button.get('tag'), button.get('label'), button.get('visible'), button.get('enabled')) != ('button', '计算', True, True):
+    if (button.get('tag'), button.get('label'), button.get('visible'), button.get('enabled')) != ('button', '计算', True, True) or button.get('type') not in ('button', 'submit'):
         raise ValueError('Date calculate control changed')
     if (widget.get('result_selector'), widget.get('result_label'), widget.get('result_label_selector')) != (
             '#betweenDay', '相差', '#resultContainer .layui-form-item:first-child .layui-form-label'):
         raise ValueError('Date result role changed')
     results = [x for x in page['result_targets'] if x['selector'] == '#betweenDay']
-    if len(results) != 1 or results[0].get('readonly') is not True or results[0].get('business_label') != '日期相差天数':
+    if len(results) != 1 or results[0].get('readonly') is not True or (
+            results[0].get('label'), results[0].get('business_label')) != ('相差', '日期相差天数'):
         raise ValueError('Date readonly result evidence missing')
     days = (date.fromisoformat(inputs[1]['value']) - date.fromisoformat(inputs[0]['value'])).days
     return {'page_uri': page['page_uri'], 'form_label': widget['label'], 'widget_adapter': ADAPTER_ID,

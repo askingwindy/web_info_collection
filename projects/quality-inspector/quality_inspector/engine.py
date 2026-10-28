@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import Counter
 from . import __version__
 from .format_checks import run as format_run,sample_check,catalog,observations_from_examples,delivered_call_matches_capture
-from .duplicates import analyze
+from .duplicates import analyze, analysis_error
 from .checksums import verify_manifest
 from .preparation_evidence import audit_preparation
 from .layout import discover
@@ -158,12 +158,13 @@ def capture_integrity(sample,a,evidence_dir=_NATIVE_EVIDENCE):
 
 def qc_rule(rule_id,status,location,sources,reason,suggestion,**extras):return {'rule_id':rule_id,'status':status,'location':location,'sources':sources,'reason':reason,'fix_suggestion':suggestion,**extras}
 
-def inspect(config=None,dataset=None,reviews=None,ai_evidence=None,samples_override=None,profile=None,evidence=None,inspection_stage='final',review_migration=None):
+def inspect(config=None,dataset=None,reviews=None,ai_evidence=None,samples_override=None,profile=None,evidence=None,inspection_stage='final',review_migration=None,delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
     """Inspect delivered files; explicit pilot profiles retain the legacy audit."""
     from .profiles import DEFAULT_DELIVERY_PROFILE,load as profile_load
     selected=profile_load(profile or DEFAULT_DELIVERY_PROFILE) if profile or config is None else None
     if selected and selected['configuration']['scope']=='delivery':
-        return _inspect_delivery(dataset,selected,reviews,config,evidence,samples_override,ai_evidence,inspection_stage,review_migration)
+        return _inspect_delivery(dataset,selected,reviews,config,evidence,samples_override,ai_evidence,inspection_stage,review_migration,delivery_sampling_plan,human_reviews,ai_failures)
+    if delivery_sampling_plan or human_reviews or ai_failures:raise ValueError('Delivery sampling is only available under the explicit delivery contract')
     if config is None:
         raise ValueError('A legacy pilot audit needs its explicit --baseline')
     return _inspect_legacy(config,dataset,reviews,ai_evidence,samples_override,profile,evidence)
@@ -180,7 +181,9 @@ def _inspect_legacy(config,dataset,reviews=None,ai_evidence=None,samples_overrid
         try:contexts[row.get('sample_id') or Path(row['sample_path']).name]=capture_context(layout,row['sample_path'],external)
         except (OSError,ValueError,TypeError,KeyError):pass
     try:dup=analyze(dataset,contexts)
-    except (OSError,ValueError,TypeError,KeyError,IndexError) as e:dup={'route1':{'pairs':[]},'route2':{'confirmed_pairs':[]},'route3':{'candidates':[]},'route4':{'candidates':[]},'status':'REVIEW_REQUIRED','error':str(e)}
+    except (OSError,ValueError,TypeError,KeyError,IndexError) as e:
+        dup=analysis_error(e,sample_count=len(f['samples']),dataset_label=dataset)
+        dup['status']='REVIEW_REQUIRED'
     rules={r['id']:r for r in catalog()};samples=f['samples'];accepted,review_errors=review_intake(reviews,samples,base['config_sha256']);partial=partial_ai(ai_evidence,samples);outputs=[]
     badpairs={sid for pair in dup['route1']['pairs'] for sid in pair['sample_ids']};badseq={sid for pair in dup['route2']['confirmed_pairs'] for sid in pair['sample_ids']};batchmap={Path(b['batch']):b for b in f['batches']}
     for s in samples:
@@ -458,12 +461,16 @@ def _verify_delivery_qc_report(dataset,report):
         cells=[cell.strip() for cell in line.strip().strip('|').split('|')]
         if cells and cells[0].isdigit():
             state=next((cell for cell in cells[1:] if cell in STATES),None)
+            if report.get('semantic_sampling') and '按抽检策略核验，实际覆盖见下表' in cells:
+                state='按抽检策略核验，实际覆盖见下表'
             if state:declarations[int(cells[0])]=state
     mappings={1:['C01'],2:['C05','C06'],3:['C06'],4:['C06'],5:['C05'],6:['C11'],7:['C08'],8:['C07'],9:['C09'],
         10:['C10'],11:['C10'],12:['C03'],13:['REVIEW_LANGUAGE'],14:['C12'],15:['C12'],
         16:['REVIEW_VISUAL_ALIGNMENT','REVIEW_TERMINAL_SEMANTICS'],17:['REVIEW_PRIVACY']}
     for number,rules in mappings.items():
         expected=aggregate(check['status'] for sample in report['samples'] for check in sample['checks'] if check['rule_id'] in rules)
+        if report.get('semantic_sampling') and any(rule.startswith('REVIEW_') for rule in rules):
+            expected='按抽检策略核验，实际覆盖见下表'
         if declarations.get(number)!=expected:errors.append(f'Requirement {number} summary differs or is missing: expected {expected}.')
     summary=None
     for block in re.findall(r'```json\s*\n(.*?)\n```',text,re.S):
@@ -489,6 +496,20 @@ def _verify_delivery_qc_report(dataset,report):
         coverage=summary.get('review_coverage',{})
         for key,value in expected_coverage.items():
             if coverage.get(key)!=value:errors.append('QC actual review coverage differs: '+key)
+        if report.get('semantic_sampling'):
+            sampling=report['semantic_sampling']
+            expected_sampling={key:sampling.get(key) for key in (
+                'policy','plan_sha256','original_denominator','actual_ai_reviewed',
+                'actual_human_reviewed','not_selected','human_pending_count','replacement_required_count')}
+            if summary.get('semantic_sampling')!=expected_sampling:
+                errors.append('QC frozen sampling policy or coverage summary differs.')
+            for key in ('policy','original_denominator','actual_ai_reviewed','actual_human_reviewed',
+                        'not_selected','human_pending_count','replacement_required_count'):
+                if coverage.get(key)!=sampling.get(key):errors.append('QC sampling review coverage differs: '+key)
+            if coverage.get('acceptance_basis')!='frozen_sampling_policy' or coverage.get('unselected_is_not_semantic_pass') is not True:
+                errors.append('QC sampling summary must distinguish policy admission from actual semantic review.')
+            if '全量检查与逐图复核' in text:
+                errors.append('Sampling QC summary cannot claim universal visual review.')
         reviewers=Counter()
         for sample in report['samples']:
             checks=[check for check in sample['checks'] if check['rule_id'].startswith('REVIEW_')]
@@ -506,6 +527,10 @@ def _verify_delivery_qc_report(dataset,report):
         for route in ('route1','route2','route3','route4'):
             expected=report['duplicates'][route].get('confirmed_pair_count' if route=='route1' else 'count')
             if duplicate.get(route)!=expected:errors.append('QC duplicate candidate count differs: '+route)
+        resolution={key:value for key,value in report['duplicates'].get('summary',{}).items()
+                    if key not in ('pair_adjudications','current_sample_ids','affected_current_sample_ids')}
+        if duplicate.get('resolution')!=resolution:
+            errors.append('QC duplicate union/rates/unadjudicated resolution differs or is missing.')
         selection=report['statistics']['source_population'];declared=summary.get('original_source_population',{})
         if 'total_samples' in selection:
             expected={key:selection[key] for key in ('total_samples','selected_count','excluded_count')}
@@ -518,7 +543,7 @@ def _verify_delivery_qc_report(dataset,report):
         'Generate the complete existing qc_report.md from the payload QC report, seal once, and inspect final read-only.',scope='batch',evidence=errors)
 
 
-def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,samples_override=None,ai_evidence=None,inspection_stage='final',review_migration=None):
+def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,samples_override=None,ai_evidence=None,inspection_stage='final',review_migration=None,delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
     """Contract checks use only delivered files plus installed rule resources.
 
     Historical baselines/raw logs are optional engineering diagnostics. Their
@@ -538,11 +563,24 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         initial_errors.append('Profile attachments differ from the installed four-document authority.')
     base={'status':'PASS','integrity':'PASS','config_sha256':fingerprint,'scope':'installed-delivery-contract',
           'samples':[],'known_limits':[],'note':'No external reference sample, baseline or raw log is required.'}
-    accepted,review_errors,review_migrations=delivery_review_intake(reviews,formats['samples'],fingerprint,review_migration)
+    semantic_sampling=None
+    if delivery_sampling_plan:
+        if review_migration:raise ValueError('Frozen delivery sampling requires current-version reviews, not legacy migration')
+        from .delivery_sampling import evaluate as evaluate_sampling
+        human_paths=[human_reviews] if isinstance(human_reviews,(str,Path)) else list(human_reviews or [])
+        failure_paths=[ai_failures] if isinstance(ai_failures,(str,Path)) else list(ai_failures or [])
+        semantic_sampling,accepted=evaluate_sampling(delivery_sampling_plan,dataset,
+            ai_reviews=[reviews] if reviews else [],human_reviews=human_paths,ai_failures=failure_paths)
+        review_errors=[];review_migrations=[]
+    else:
+        if human_reviews or ai_failures:raise ValueError('Separate human/failure inputs require an explicit delivery sampling plan')
+        accepted,review_errors,review_migrations=delivery_review_intake(reviews,formats['samples'],fingerprint,review_migration)
     try:duplicates=analyze(dataset)
     except (OSError,ValueError,TypeError,KeyError,IndexError) as error:
-        duplicates={'error':str(error),'pair_comparisons':0,'route1':{'pairs':[],'confirmed_pair_count':0},
-            'route2':{'confirmed_pairs':[],'count':0},'route3':{'candidates':[],'count':0},'route4':{'candidates':[],'count':0}}
+        duplicates=analysis_error(error,sample_count=len(formats['samples']),dataset_label=dataset)
+    resolution=duplicates.get('summary',{})
+    if resolution.get('analysis_status')!='COMPLETE' or resolution.get('unadjudicated_pair_count')!=0:
+        initial_errors.append('Four-route evaluation or deterministic resolution is incomplete; unknown counts are not zero.')
     if duplicates.get('search',{}).get('exhaustive_verification',{}).get('status')=='FAIL':
         initial_errors.append('Duplicate index/cache disagrees with independent exhaustive validation.')
     outputs=[];byrule={row['id']:row for row in catalog()}
@@ -570,14 +608,23 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
             hit=any(sid in row['sample_ids'] for row in duplicates[route][key])
             checks.append(qc_rule(rid,'FAIL' if hit else 'REVIEW_REQUIRED' if duplicates.get('error') else 'PASS',str(path),['需求书§6：四路去重'],
                 'Any configured route hit is a near duplicate; no semantic exemption.','Resolve by repair/recollection, never by changing the denominator or labels.',scope='sample',route=route))
-        for name in SEMANTIC:
+        sampling_row=next((row for row in semantic_sampling['rows'] if row['sample_id']==sid),None) if semantic_sampling else None
+        semantic_names=SEMANTIC if sampling_row is None or sid in accepted else []
+        for name in semantic_names:
             result=accepted.get(sid,{}).get('checks',{}).get(name)
             checks.append(qc_rule('REVIEW_'+name.upper(),result['status'] if result else 'REVIEW_REQUIRED',str(path),
                 ['Delivered annotation, screenshots, actions and synchronized trees; 需求书§1/4/5/6/7'],
                 result['note'] if result else 'Actual pixel/semantic inspection has not been supplied; not inferred from producer success.',
                 'Inspect the actual delivered frames and import evidence-bound AI or human decisions.',scope='sample',
                 reviewer=accepted.get(sid,{}).get('reviewer'),provenance=accepted.get(sid,{}).get('provenance')))
+        if sampling_row is not None:
+            checks.append(qc_rule('SEMANTIC_SAMPLING_ADMISSION',sampling_row['admission_status'],str(path),
+                ['Explicit versioned delivery sampling clarification'],
+                'Frozen sampling decision: '+sampling_row['status']+'. NOT_SELECTED is not an AI/human semantic PASS.',
+                'Complete actual human escalation/replacement inspection when required.',scope='sample',
+                semantic_review_status=sampling_row['status'],sampling_plan_sha256=semantic_sampling['plan_sha256']))
         outputs.append({'sample_id':sid,'sample_path':str(path),'annotation_sha256':sha(path/'annotation.json') if (path/'annotation.json').is_file() else None,
+            **({'semantic_sampling':sampling_row} if sampling_row is not None else {}),
             'evidence_sha256':evidence_files(path),'checks':checks,'local_checks':checks,'status':aggregate(row['status'] for row in checks),
             'local_acceptance_status':aggregate(row['status'] for row in checks),
             'steps':[{'step_id':row['step_id'],'image_path':str(path/row['image_path']),'tree_path':str(path/row['ui_tree_path']),
@@ -610,9 +657,11 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         'dataset_checks':batch,'batch_results':formats['batches'],'format_layer_summary':{key:value for key,value in formats.items() if key not in ('samples','batches','existing_internal_quality_layer')},
         'review_import':{'accepted_count':len(accepted),'invalid_records':review_errors,'source':str(reviews) if reviews else None,
             'migrated_records':review_migrations,'identity_authenticated':False,'actual_reading_authenticated':False},
-        'rules':catalog()+[{'id':'REVIEW_'+name.upper(),'certainty':'evidence_bound_review','rule':name,'sources':['Delivered sample evidence']} for name in SEMANTIC],
+        'rules':catalog()+[{'id':'REVIEW_'+name.upper(),'certainty':'evidence_bound_review','rule':name,'sources':['Delivered sample evidence']} for name in SEMANTIC]
+            +([{'id':'SEMANTIC_SAMPLING_ADMISSION','certainty':'explicit_policy_admission','rule':'Frozen sampling selection and actual human escalation; NOT_SELECTED is not semantic PASS','sources':['2026-10-27 sampling clarification']}] if semantic_sampling else []),
         'package_files_sha256':input_files,'input_files_sha256':input_files,'partial_ai_artifact':{'status':'not_used_for_whole_trajectory_acceptance'},
         'external_evidence':{'status':'NOT_REQUIRED_FOR_DELIVERY'},'customer_actual_program_executed':False,'customer_actual_acceptance':'UNKNOWN',
+        **({'semantic_sampling':semantic_sampling,'acceptance_basis':'explicit-frozen-sampling-policy'} if semantic_sampling else {}),
         'local_sample_status':sample_status,'sample_status_counts':dict(Counter(row['status'] for row in outputs)),
         'local_sample_status_counts':dict(Counter(row['status'] for row in outputs)),
         'package_review':{'status':batch_status,'method':'Delivered document content checks; no implied human sign-off'},
@@ -660,6 +709,11 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
     if initial_errors:
         changed=qc_rule('INPUT_CHANGED_DURING_QC','FAIL',str(dataset),['Read-only delivery QC'], '; '.join(initial_errors),'Inspect a stable final package.',scope='batch')
         batch.append(changed);report['acceptance_scopes']['batch']['status']='FAIL'
+    if semantic_sampling:
+        # Revalidate the immutable plan, every current sample and every actual
+        # review at the exit boundary; no time-of-check/time-of-use acceptance.
+        rechecked,_=evaluate_sampling(delivery_sampling_plan,dataset,ai_reviews=[reviews] if reviews else [],human_reviews=human_paths,ai_failures=failure_paths)
+        if rechecked!=semantic_sampling:raise ValueError('Sampling evidence changed during delivery QC')
     report['status']=report['contract_status']=report['delivery_status']=report['local_acceptance_status']=aggregate([sample_status,report['acceptance_scopes']['batch']['status']])
     report['release_ready']=inspection_stage=='final' and report['delivery_status']=='PASS'
     return report

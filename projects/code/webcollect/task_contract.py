@@ -52,7 +52,7 @@ def validate_prompt_stages(declaration):
 def _assertions(conditions):
     if not isinstance(conditions, list) or not conditions:
         raise ValueError('M4 evidence requires nonempty assertions')
-    value_keys = {'contains', 'value', 'number', 'numbers', 'time_seconds', 'checked', 'disabled'}
+    value_keys = {'contains', 'value', 'number', 'numbers', 'time_seconds', 'checked', 'disabled', 'html_table_matrix', 'qr_png_payload', 'placeholder_png_text'}
     for condition in conditions:
         if not isinstance(condition, dict):
             raise ValueError('M4 assertion must be an object')
@@ -64,11 +64,31 @@ def _assertions(conditions):
 
 
 def validate_m4_task(task):
+    if 'workflow_admission' in task:
+        from .observed_workflow import static_identity as workflow_identity
+        workflow_identity({key: value for key, value in task.items()
+                           if key not in ('_plan_schema_version', 'require_public_origin')})
+    if 'task_admission' in task:
+        from .task_admission import static_identity
+        # The collector adds these two execution-only fields to the frozen
+        # task. All business, operation and assertion bytes remain bound.
+        static_identity({key: value for key, value in task.items()
+                         if key not in ('_plan_schema_version', 'require_public_origin')})
     if not _text(task.get('task_version')):
         raise ValueError('M4 task_version is required')
     if task.get('stop_when_final') is not True:
         raise ValueError('M4 stop_when_final must be true; do not disable natural completion to add steps')
     _assertions(task.get('final_assertions'))
+    for condition in task['final_assertions']:
+        if 'html_table_matrix' in condition:
+            from .html_table_strategy import validate_table_assertion_scope
+            validate_table_assertion_scope(task, condition)
+        if 'qr_png_payload' in condition:
+            from .qr_strategy import validate_qr_assertion_scope
+            validate_qr_assertion_scope(task, condition)
+        if 'placeholder_png_text' in condition:
+            from .placeholder_strategy import validate_placeholder_assertion_scope
+            validate_placeholder_assertion_scope(task, condition)
     operations = task.get('operations')
     subgoals = task.get('subgoals')
     if not isinstance(operations, list) or not operations or not isinstance(subgoals, list) or not subgoals:
@@ -81,20 +101,33 @@ def validate_m4_task(task):
         raise ValueError('M4 subgoal IDs must be nonempty and unique')
     by_id = dict(zip(ids, operations))
     for op in operations:
+        if op.get('completion_view') and not task.get('task_admission'):
+            raise ValueError('Completion-view scroll requires current independently reviewed task admission')
         if op.get('subgoal_id') not in goals:
             raise ValueError('M4 operation must reference an existing subgoal')
         if op.get('observation'):
             raise ValueError('M4 cannot promote planned observation prose to an actual result')
         if op.get('postconditions') is not None:
             _assertions(op['postconditions'])
+            for condition in op['postconditions']:
+                if 'html_table_matrix' in condition:
+                    from .html_table_strategy import validate_table_assertion_scope
+                    validate_table_assertion_scope(task, condition)
+                if 'qr_png_payload' in condition:
+                    from .qr_strategy import validate_qr_assertion_scope
+                    validate_qr_assertion_scope(task, condition)
+                if 'placeholder_png_text' in condition:
+                    from .placeholder_strategy import validate_placeholder_assertion_scope
+                    validate_placeholder_assertion_scope(task, condition)
         if op.get('action_type') in CONTROL_ACTIONS:
             evidence = op.get('evidence', {})
             if not isinstance(evidence, dict):
                 raise ValueError('M4 target evidence must be an object')
             kind = evidence.get('target_visual_kind', 'text')
             if kind != 'text':
-                raise ValueError('M4_CAPABILITY_REVIEW_REQUIRED: icon targets need a separately verified visual adapter; not a customer prohibition')
-            if not _text(evidence.get('target_label')):
+                from .html_table_strategy import validate_visual_operation
+                validate_visual_operation(task, op)
+            elif not _text(evidence.get('target_label')):
                 raise ValueError('M4 control action requires actual visible target_label evidence')
     required = task.get('required_actions')
     if not isinstance(required, list) or any(not _text(x) for x in required) or len(set(required)) != len(required):
@@ -154,6 +187,26 @@ def completion_decision(task, raw_records, next_operation):
 
 
 def terminal_evidence(task, raw_records, assertions, final_binding):
+    def verify_pixel_binding(result,binding):
+        if 'placeholder_png_text' in result.get('expected',{}):
+            oracle=result.get('pixel_oracle',{})
+            if (result.get('evidence_source')!='original_saved_png_pixels' or oracle.get('passed') is not True or
+                not binding.get('screenshot_sha256') or oracle.get('image_sha256')!=binding['screenshot_sha256'] or
+                oracle.get('expected_text_supplied_to_decoder') is not False or oracle.get('screenshot_crop_equals_generated_png') is not True or
+                (oracle.get('image_width'),oracle.get('image_height'))!=(400,200) or oracle.get('minimum_confidence')!=0.9 or
+                oracle.get('confidence',0)<0.9 or oracle.get('recognized_text')!=result.get('actual') or
+                result.get('actual')!=result['expected']['placeholder_png_text']):
+                raise ValueError('M4 placeholder result must bind independent OCR and image pixels to the actual saved PNG hash')
+            return
+        if 'qr_png_payload' not in result.get('expected',{}):return
+        oracle=result.get('pixel_oracle',{})
+        if (result.get('evidence_source')!='original_saved_png_pixels' or oracle.get('passed') is not True or
+            not binding.get('screenshot_sha256') or oracle.get('image_sha256')!=binding['screenshot_sha256'] or
+            oracle.get('expected_text_supplied_to_decoder') is not False or
+            len(oracle.get('decoded',[]))!=1 or oracle['decoded'][0].get('payload')!=result.get('actual') or
+            result.get('actual')!=result['expected']['qr_png_payload']):
+            raise ValueError('M4 QR result must bind independent decoded pixels to the actual saved PNG hash')
+    for result in assertions:verify_pixel_binding(result,final_binding)
     executed = executed_action_ids(raw_records)
     missing = set(task['required_actions']) - executed
     if missing:
@@ -177,6 +230,7 @@ def terminal_evidence(task, raw_records, assertions, final_binding):
                 binding = bound['binding']
             if result.get('passed') is not True:
                 raise ValueError('M4 subgoal evidence did not pass: ' + goal['id'])
+            verify_pixel_binding(result,binding)
             references.append({'reference': reference, 'observation': result, 'binding': binding})
         observations.append({'subgoal_id': goal['id'], 'evidence': references})
     return {'schema_version': 'webcollect-task-contract-evidence-1',

@@ -79,7 +79,7 @@ def _history(roots, candidate_ids):
     annotations = [path for root in roots for path in discover(root).annotations]
     ids = [load_json(path)['sample_id'] for path in annotations]
     if len(ids) != len(set(ids)): raise ValueError('Effective set has repeated sample IDs')
-    duplicates = analyze_inputs(annotations, dataset_label='internal-batch-effective-set')
+    duplicates = analyze_inputs(annotations, dataset_label='internal-batch-effective-set', current_sample_ids=candidate_ids)
     hits = {}; historical = {}
     for route, key in (('route1', 'pairs'), ('route2', 'confirmed_pairs'), ('route3', 'candidates'), ('route4', 'candidates')):
         pairs = duplicates[route][key]
@@ -255,14 +255,18 @@ def prepare_plan(dataset, effective_set, output, *, profile=DEFAULT_DELIVERY_PRO
             'risk_required': sum(r['risk_required'] for r in plan['rows']), 'release_ready': False}
 
 
-def decide(dataset, effective_set, *, profile=DEFAULT_DELIVERY_PROFILE, reviews=None, sampling_plan=None, calibration=None):
+def decide(dataset, effective_set, *, profile=DEFAULT_DELIVERY_PROFILE, reviews=None, sampling_plan=None, calibration=None,delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
+    if delivery_sampling_plan and sampling_plan:raise ValueError('Choose either legacy internal sampling or explicit delivery sampling')
+    human_paths=[human_reviews] if isinstance(human_reviews,(str,Path)) else list(human_reviews or [])
+    failure_paths=[ai_failures] if isinstance(ai_failures,(str,Path)) else list(ai_failures or [])
     dataset, selected, roots, snapshots, supported, automatic, expected_plan, machine = _context(dataset, effective_set, profile, calibration)
     input_paths = [Path(effective_set).resolve(), Path(selected['path'])]
-    input_paths += [Path(path).resolve() for path in (reviews, sampling_plan) if path]
+    input_paths += [Path(path).resolve() for path in (reviews, sampling_plan,delivery_sampling_plan,*human_paths,*failure_paths) if path]
     bindings = {str(path): file_sha(path) for path in input_paths}; bindings.update(supported['bindings'])
     if sampling_plan and load_json(sampling_plan) != expected_plan:
         raise ValueError('Sampling plan differs from recomputed bytes, calibration, policy, risk or selection')
-    checked = inspect(None, dataset, profile=selected['path'], reviews=reviews, inspection_stage='payload')
+    checked = inspect(None, dataset, profile=selected['path'], reviews=reviews, inspection_stage='payload',
+                      delivery_sampling_plan=delivery_sampling_plan,human_reviews=human_paths,ai_failures=failure_paths)
     history = _history(roots, {r['sample_id'] for r in checked['samples']})
     selection = {r['sample_id']: r for r in expected_plan['rows']}
     rows = []; reasons = []; validator_failed = []
@@ -275,12 +279,18 @@ def decide(dataset, effective_set, *, profile=DEFAULT_DELIVERY_PROFILE, reviews=
         machine_pass = bool(result) and set(covered) == set(SEMANTIC) and all(c['status'] == 'PASS' for c in result['checks'].values())
         required = not sampling_plan or selection[sid]['selected']
         admitted = review_status == 'PASS' or (not required and machine_pass and review_status != 'FAIL')
+        sampling_row=sample.get('semantic_sampling')
+        if sampling_row is not None:
+            required=bool(sampling_row['ai_selected'] or sampling_row['human_required'])
+            admitted=sampling_row['admission_status']=='PASS'
+            if sampling_row['status']=='NOT_SELECTED':review_status='NOT_SELECTED'
         if not admitted and review_status != 'FAIL': reasons.append({'code': 'MISSING_REQUIRED_EVIDENCE', 'sample_id': sid, 'selected_or_full_review_required': required})
         rows.append({'sample_id': sid, 'mechanical_status': aggregate(c['status'] for c in mechanical),
                      'review_status': review_status, 'review_required_by_plan': required,
-                     'actual_ai_reviewed': review_status in ('PASS', 'FAIL') and all((c.get('reviewer') or {}).get('kind') == 'ai' for c in semantic),
-                     'actual_human_reviewed': review_status in ('PASS', 'FAIL') and all((c.get('reviewer') or {}).get('kind') == 'human' for c in semantic),
-                     'batch_evidence_basis': 'complete-bound-review' if review_status == 'PASS' else 'validated-machine-checks-and-sampling' if admitted else 'unresolved-or-failed',
+                     'actual_ai_reviewed': bool(sampling_row['ai_source']) if sampling_row else review_status in ('PASS', 'FAIL') and all((c.get('reviewer') or {}).get('kind') == 'ai' for c in semantic),
+                     'actual_human_reviewed': bool(sampling_row['human_source']) if sampling_row else review_status in ('PASS', 'FAIL') and all((c.get('reviewer') or {}).get('kind') == 'human' for c in semantic),
+                     'batch_evidence_basis': 'explicit-frozen-sampling-policy' if sampling_row and admitted else 'complete-bound-review' if review_status == 'PASS' else 'validated-machine-checks-and-sampling' if admitted else 'unresolved-or-failed',
+                     **({'semantic_sampling':sampling_row} if sampling_row else {}),
                      'machine_evidence': machine[sid], 'selection': selection[sid]})
     failures = [c for sample in checked['samples'] for c in sample['checks'] if c['status'] == 'FAIL']
     failures += [c for c in checked['dataset_checks'] if c['status'] == 'FAIL' and c['rule_id'] not in DISTRIBUTION_RULES]
@@ -310,6 +320,7 @@ def decide(dataset, effective_set, *, profile=DEFAULT_DELIVERY_PROFILE, reviews=
             'calibration': supported, 'reasons': reasons, 'candidate_qc': checked, 'cumulative_duplicates': history,
             'delivery_distribution': {'scope': str(dataset), 'status': aggregate(c['status'] for c in distribution), 'checks': distribution},
             'unchanged_delivery_status': checked['delivery_status'], 'release_ready': False,
+            **({'semantic_sampling':checked['semantic_sampling']} if 'semantic_sampling' in checked else {}),
             'customer_actual_acceptance': 'UNKNOWN', 'identity_authenticated': False, 'actual_reading_authenticated': False,
             'input_integrity_checked_before_and_after': True, 'actual_model_requests': 0, 'actual_network_requests': 0,
             'usage_and_cost': {'this_read_only_command_external_cost': 0, 'upstream_review_usage': 'UNKNOWN', 'upstream_review_cost': 'UNKNOWN'},
@@ -324,7 +335,10 @@ def _protect(output, roots, inputs):
 
 def write_decision(output, dataset, effective_set, **kwargs):
     roots, _ = _set_inputs(effective_set, dataset); supported = _calibration(kwargs.get('calibration'))
-    inputs = [Path(effective_set).resolve()] + [Path(value).resolve() for value in kwargs.values() if value]
+    paths=[]
+    for value in kwargs.values():
+        if value:paths.extend(value if isinstance(value,(list,tuple)) else [value])
+    inputs = [Path(effective_set).resolve()] + [Path(value).resolve() for value in paths]
     _protect(Path(output).resolve(), roots + list(supported['roots']), inputs + list(supported['bindings']))
     result = decide(dataset, effective_set, **kwargs); save_json(output, result); return result
 
@@ -335,6 +349,9 @@ def main(argv=None):
     parser.add_argument('--effective-set', type=Path)
     parser.add_argument('--profile', default=DEFAULT_DELIVERY_PROFILE, type=Path)
     parser.add_argument('--reviews', type=Path); parser.add_argument('--sampling-plan', type=Path)
+    parser.add_argument('--delivery-sampling-plan',type=Path)
+    parser.add_argument('--human-reviews',type=Path,action='append',default=[])
+    parser.add_argument('--ai-failures',type=Path,action='append',default=[])
     parser.add_argument('--calibration', type=Path); parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--prepare-plan', action='store_true')
     parser.add_argument('--prepare-calibration', action='store_true'); parser.add_argument('--validator')
@@ -350,7 +367,8 @@ def main(argv=None):
         else:
             if not args.effective_set: raise ValueError('Decision requires a frozen effective set')
             result = write_decision(args.output, args.input, args.effective_set, profile=args.profile,
-                                    reviews=args.reviews, sampling_plan=args.sampling_plan, calibration=args.calibration)
+                                    reviews=args.reviews, sampling_plan=args.sampling_plan, calibration=args.calibration,
+                                    delivery_sampling_plan=args.delivery_sampling_plan,human_reviews=args.human_reviews,ai_failures=args.ai_failures)
         print(json.dumps({key: result[key] for key in ('internal_batch_decision', 'review_status_counts', 'release_ready', 'reasons', 'status', 'plan_file', 'selected') if key in result}, ensure_ascii=False))
         return {'PASS': 0, 'HOLD': 2, 'FAIL': 1}.get(result.get('internal_batch_decision'), 0)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:

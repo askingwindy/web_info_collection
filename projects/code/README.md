@@ -242,3 +242,97 @@ Git保留核心源码、JS/Schema资源、通用脚本、运行依赖配置和�
 `generate` 默认 `--generator deterministic`，现支持购物合计、行程速度、矩形面积三种明确业务策略；未知表单保留拒绝，不臆造结果。结构签名忽略参数，同origin同策略跨路径/换控件也不能多产一条；无效范围、无变化输入和结果歧义在编号前拒绝。`review_required` 能力只产待复核提案，发布/执行门禁保留。数值断言不等于视觉、单位和业务终态已通过独立审核。显式 `--generator model` 保留旧模型路径，启用时才依赖模型配置。
 
 当前命令、验证与边界见[S0运行记录](../prd/三程序S0运行记录-20261026.md)及[执行入口](../prd/三程序计划执行入口.md)。定向复验：`projects/code/.venv/bin/python projects/code/scripts/verify_s0.py --output <新目录>`；可用 `--components runtime tasks qc compat` 选择受影响范围，`--browser` 另启本地受控Chrome。统一无浏览器路径与各受控浏览器用例已分别实跑，组合 `--browser` 命令尚未单独运行。旧[E0–E3记录](../prd/三程序E0-E3运行记录-20261026.md)继续保留。测试/报告按既有规则留在本地。
+
+## DeepSeek / GLM 辅助判断接口（2026-10-27）
+
+模型配置支持显式 `provider=deepseek` 或 `provider=glm`，分别使用厂商 Chat Completions 协议。[DeepSeek配置示例](config/batch-deepseek.example.json)和[GLM配置示例](config/batch-glm.example.json)保留未填写的型号、费率和预算，不能直接发送请求。启用前一次性补齐：确切模型版本与端点、凭据环境变量、币种及有来源和版本的输入/缓存/输出费率、请求/Token/时长上限和金额控制方式，以及视觉能力和每张图片的保守Token预留。金额控制默认要求硬上限；显式只统计模式见下文。原 `model:null`、`synthetic`、`chat-completions` 配置继续沿用原表示，既有账本不能通过更改配置扩容。
+
+新厂商配置必须显式填写 `supports_vision`、`image_tokens_per_image`、`request_overhead_tokens`。纯文本模型在图片请求预留和派发前即被拒绝；视觉模型的文本、完整Schema、系统消息、消息开销和逐张图片预留合计超限也在请求前拒绝。视觉审核仍传原PNG，不以树文字、OCR文本或拼图替代全帧证据。是否具备视觉能力应按所选版本核验，不能仅从厂商名称推断。
+
+DeepSeek 和 GLM 文本模型使用 `max_tokens` 与 `json_object`，完整Schema写入系统指令，返回结果仍经本地JSON Schema验证。GLM视觉模型按官方限制不发送 `response_format`，同样必须返回满足本地Schema的JSON；不会在一次失败后自动换协议或换模型重发。缓存用量接受 `prompt_tokens_details.cached_tokens`，DeepSeek同时支持其 `prompt_cache_hit_tokens`；缺失、冲突或非法用量继续记为 `UNKNOWN` 并保留预留，不把未知计为0。
+
+同一AI worker运行账仍绑定一个确切模型；文本资料判断和原图判断若选择不同模型，应使用各自冻结的配置与独立账本，不能修改旧账模型或借文本结果填满视觉审核。DeepSeek兼容验证仍为离线HTTP夹具。GLM已完成下述首条真实验证，真实总体误判率仍未校准。人工审核、正式放行与客户验收继续单独记录。
+
+协议依据（2026-10-27核对）：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)、[DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)、[GLM对话补全](https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8)、[GLM-4.6V图像输入](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-4.6v)。厂商能力和参数仍以未来实际选用版本及小样本校准为准。
+
+2026-10-27已按用户指定的[GLM-5.3-Flash文档](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)实跑首站首条。该型号使用显式`image_encoding=data_url`；旧GLM不填时保留raw base64表示。可选`reasoning_effort=low/high/max`仅供GLM/DeepSeek，GLM显式启用thinking；本轮使用high。GLM完整单一JSON代码围栏可规范化解析，前后解释、多块、非法JSON或Schema错误仍拒绝，原始响应不改写，完整系统指令继续绑定缓存身份。
+
+本轮GLM完成站点图像筛选、11原帧五语义审核、3个近邻完整轨迹比较和资料审核。9次真实请求折算费用0.200977元；单条PASS、资料分布项FAIL，整包及GLM内部批次FAIL，未正式放行。资料通用worker原先只传Markdown/CSV，本次运行脚本另提供真实站点/标注JSON、文件库存、采集普查及修订sidecar，并对最终引用施加路径/SHA成对Schema约束；这些补证均有新请求身份和原失败记录，尚未将该补证流程泛化为通用无人值守能力。实际证据在`verify_results/production-day-20261027/glm-first-run-r01/`。
+
+## 按数据审计 AI 请求、Token 与费用（2026-10-27）
+
+`python -m webcollect.model_audit`只读现有运行账，不读取凭据、不调用模型，也不修改生产注册表、原账或原审核结果。先冻结账本逻辑指纹，再把实际 job 与样本、精确页面或批次绑定：
+
+```sh
+PYTHONPATH=projects/code projects/code/.venv/bin/python -m webcollect.model_audit fingerprint \
+  --ledger /path/to/finished-run/operations.sqlite3
+
+PYTHONPATH=projects/code projects/code/.venv/bin/python -m webcollect.model_audit export \
+  --ledger /path/to/finished-run/operations.sqlite3 \
+  --attribution /path/to/attribution.json \
+  --output /path/to/new-audit-directory
+```
+
+`attribution.json`使用`schema_version=webcollect-model-attribution-1`，`ledger_binding`填写指纹命令返回的`logical_sha256`和`config_sha256`，`jobs`按实际 job ID 映射，例如：
+
+```json
+{
+  "schema_version": "webcollect-model-attribution-1",
+  "ledger_binding": {"logical_sha256": "<实际指纹>", "config_sha256": "<实际配置指纹>"},
+  "jobs": {
+    "<样本视觉审核job_id>": {"scope": "sample", "scope_id": "<sample_id>", "classification": "production"},
+    "<站点筛选job_id>": {
+      "scope": "site", "scope_id": "<精确页面URI>", "classification": "production",
+      "related_sample_ids": ["<sample_id>"],
+      "allocation": {"method": "equal_weight", "sample_ids": ["<sample_id>"]}
+    }
+  }
+}
+```
+
+`scope`支持`sample/site/batch/engineering`。只有显式提供`allocation`才把站点或批次共享费用等权分摊；`related_sample_ids`仅说明关联。分摊金额与Token按排序后的样本ID分配整数余数，合计严格守恒，并标明它们是估算分摊、不是厂商逐样本实测。未绑定的请求留在`UNATTRIBUTED`，失败/重试、修补请求和工程开销不会自动删除。可选`request_classifications`仅覆盖请求的`classification/note`，不能改金额、归属或原结论。
+
+输出`audit.json`、`summary.json`及`requests.csv`、`sample-summary.csv`、`stages.csv`、`scopes.csv`。逐请求保留厂商请求ID、模型、阶段、时间、attempt、请求状态和job状态、输入/输出/缓存/图片/推理Token、厂商总Token、冻结费率和费用复算，以及提示、Schema、原图记录的哈希；不导出提示、响应正文、图片内容或凭据。推理Token是输出的子集，不重复计费；厂商总Token需与输入+输出核对，缺失或不一致仍UNKNOWN。图片哈希是原请求所记录的值，导出不重新检查原图字节。
+
+异常类型采用已知类型集合；未知异常文本仅保留哈希。厂商模型/请求ID采用有界单行标识符，purpose仅显示已知阶段标签并保留原值哈希。费率来源及归属清单的scope/备注仍是显式审计声明，按其实际内容保留；导出不是对任意恶意声明文本的通用敏感信息识别器。CSV另中和公式形式的文本，JSON保留声明原值。
+
+逐样本区分直接请求数、分摊共享请求引用数与共享请求等价量；共享引用数不可跨样本相加当作新API调用。账中已预留但未确认返回的请求保持不确定状态；现有账未单独记录本地缓存命中事件，不能据此宣称缓存节省了多少调用。图片Token未单列、缓存用量缺失、实际扣费或端到端成本缺失时如实保留`UNKNOWN`和未决预留；已知费用只是冻结费率下的估算，不是账单。费率复算不一致、绑定漂移或已有输出目录会拒绝导出。
+
+首条实际审计在`verify_results/production-day-20261027/glm-first-run-r01/model-audit-r02/`：样本直接4次，站点共享2次，批次资料共享3次；由于本轮仅此一条，显式等权分摊后共9次、输入193708、输出16431（含推理5390）、厂商总计210139、缓存0、估算0.200977元。原始失败、资料补证和站点首次重试均保留，整体交付仍FAIL。r01导出继续保留；r02绑定异常类型脱敏收紧后的源码，原账和对账总数不变。
+
+离线查询不需要原数据库或凭据，也不调用模型。`query`先从请求行复算费率与全部归属/阶段/共享分摊视图，拒绝不一致的导出，再输出实际费用；`--compact`提供便于查看的摘要，省略`--sample-id`可查整批：
+
+```sh
+PYTHONPATH=projects/code projects/code/.venv/bin/python -m webcollect.model_audit query \
+  --audit verify_results/production-day-20261027/glm-first-run-r01/model-audit-r02/audit.json \
+  --sample-id S000030_sample_000001 --compact
+```
+
+完整查询仍保留全部细节。查询只核对导出内的schema、算术与守恒，返回审计文件SHA；它不重新认证生产现场或厂商账单。单样本的共享引用不可跨样本当新调用累加，推理/缓存/图片Token均是原总量中的子集。费用应分别看直接、共享分摊、工程/未归属池及UNKNOWN预留，不把“每条分摊费用”和“全批共享费用”再相加。
+
+2026-10-27用户明确选择“不设定上限，直接统计”。新的工程配置只有同时设置`budget.cost_control="observe_only"`和`budget.max_model_cost_micros=null`才表示不设金额硬限；缺少模式的null仍是未配置并拒绝，不会误变成无限预算。默认或显式`capped`继续要求正整数金额上限。只统计模式保留实际Token、费用、失败和UNKNOWN预留，审计显示`observe_only`及金额上限`NOT_APPLICABLE`；请求数、Token、时长、并发、图像和生产准入限制仍按冻结范围执行。旧首条账仍保持原12请求/3元配置，不能改旧配置或时钟续用。
+
+## 可配置跨站并发与共享提交（2026-10-27）
+
+`python -m webcollect.site_scheduler`调度已经生成并发布的M4计划，不自行发现站点、创建生产账本、增加预算或授予质检通过。[配置示例](config/site-schedule.example.json)保留占位路径，须替换为真实计划、发布收据、原活动生产账本及新输出路径后使用：
+
+```sh
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+projects/code/.venv/bin/python -m webcollect.site_scheduler \
+  --config /absolute/path/to/site-schedule.json \
+  --output /absolute/path/to/new-schedule-evidence
+```
+
+配置的`sites`按稳定的`site_key`分组，每组`batches`依次执行；同一应用的不同URI应放在同一组。不同站点可并行运行，每条轨迹使用独立浏览器上下文，各批使用独立输出目录。`max_parallel_sites`指定全局站点并发上限；当前每站只有一个执行worker，因此它必须与共享policy的`max_workers`相等，配置不一致在派发前拒绝，不能悄悄退成串行。全部站点必须共享完整一致的campaign policy及同一个原生产账本；修改并发限额需先在原campaign记录明确的policy调整原因，不能换账本或目录重置尝试及待审预算。
+
+同域和子域继续共享`max_domain_workers`、域间隔及原子编号/尝试/配额约束，不因URI不同获得额外并发额度。待审积压、尝试上限和资源检查会阻止继续派发。`max_schedule_seconds`限定本次调度的总运行时间；取消或超时关闭当前浏览器工作并保留已启动失败、半轨迹和编号，不能将半条轨迹拼成成功。
+
+生产端新增共享精确图片索引：历史原图重新计算SHA登记，正在采集或已失败的目录不作为已接纳历史。精确截图声明与`collected_pending_review`在同一SQLite事务提交，两个并发样本命中同图时最多接纳一个；浏览器执行期间不持有全局串行锁。运行边界重新核对图片及登记状态，检测文件漂移。该保护只覆盖生产端精确截图路线，客户目录仍须执行完整四路去重和最终QC。
+
+调度证据保留冻结配置、输入文件SHA、采集及调度实现SHA、追加事件和每次运行独立报告。续跑显式增加`--resume`，输入或代码漂移时拒绝沿用旧范围；已提交且证据完整的成功任务不会重采，中断重试使用新编号。报告中的`COLLECTED_PENDING_REVIEW`只表示计划样本已保存，`qualified_samples`保持0，最终合格及交付状态由独立QC和发布流程决定。
+
+新`observed_workflow`准入任务并发时，调度器先逐条验证独立准入及共同冻结历史，再在原账本中一次性预留整个cohort的scope、计划、发布收据、任务全文和参数无关语义/结构签名。预留不会提前写入`m4_tasks`或分配站点、批次、样本编号。运行中只允许精确绑定在该cohort中的peer新增历史行；批次外新增任务、peer全文/范围改变、原历史缺失及冻结调度证据漂移都会停止。入队、领取编号、开始、心跳和成功提交都在各自短事务内复查，不把浏览器执行串行化。失败和取消不会自动释放预留，换scope不能重用其语义；原范围可显式续跑。旧任务独立调度保持原路，新workflow与旧任务/普通form混合调度暂时明确拒绝。`admission-cohort.json`中的`ENGINEERING_SIGNATURE_GUARDS_ONLY`只代表工程签名保护，不能计作peer间AI语义比较；独立QC仍比较本批和全部累计数据。
+
+客户历史完整文件SHA校验在入队、领取、开始和成功提交的SQLite写事务之前进行；内容身份由完整历史上下文及校验前后文件元数据绑定，写事务只复核小型manifest/正式入口引用、文件身份和精确队列关系。心跳不重复读取全部客户图片SHA。校验后文件变动使本次proof失效；没有仅按时间复用的缓存。该校验仍有实际I/O成本，受控测试不证明大客户历史目录上的吞吐。
+
+本实现已用受控双站及两个调度实例验证并发上限、同域限制、独立上下文、同图竞争、积压反压、取消和恢复；这些测试不代表真实站点吞吐或多机长期稳定性。生产并发数须根据实际任务、质检积压、资源和访问限制测量选择。

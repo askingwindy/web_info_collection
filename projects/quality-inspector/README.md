@@ -1,5 +1,30 @@
 # WebCollect 独立质检器
 
+2026-10-28认证恢复：新增独立`python -m quality_inspector.document_auth_recovery`，只为已持久记录的资料HTTP401/provider1000提供一次明确有界的恢复增量，不改原请求、UNKNOWN费用、原预算和冻结源码。`prepare`需要绑定原资料receipt/原request ID的单次授权JSON及独立同模型/同一请求预算配置；只生成control receipt，不生成可直接派发的资料receipt。`run`还必须接收`--auth-proof`：`webcollect-model-authentication-evidence-1`的`ledger`、`config:{path,sha256}`、`request_id`，程序从原SQLite重核同服务、同模型的一次真实成功认证诊断及其原响应/usage，不能用手写PASS或凭据重发声明替代。凭据是否改变不作推定，仍401时不能重发完整资料。
+
+该入口的`prepare --original-receipt ... --authorization ... --config ... --ledger ... --initialize-ledger --output ...`、`run --receipt ... --auth-proof ... --output ...`、`status --receipt ... --output ...`和`finalize --receipt ... --status ... --output ... [--archive ...]`复用原资料run/status/finalizer。相同失败request只有一个恢复scope；复制原receipt、换输出/ledger/授权文本不能增加请求。prepare中断可在原scope完成；已激活但尚未派发时可追加新的成功诊断证据，保留旧证据，仍只允许一次资料请求。请求已持久成功而job写入中断时，过期租约后的`run/status`可严格重验原响应/usage/资料引用并恢复结果，不发新请求、不重置尝试数；活租约不抢占。新输出的`recovery-accounting.json`分别列原pipeline、原401资料请求、恢复请求及认证诊断账本，UNKNOWN预留始终保留，实际扣费仍为UNKNOWN。资料人工始终0，原样本人审和正式分布门禁继续核验；底层原件改变会阻止后续状态/封包。
+
+2026-10-28资料政策更新：新流程使用`python -m quality_inspector.document_text_qc`。资料按完整文本做工程对比与专用AI核对，资料AI比例100%、资料人工比例0%；样本仍执行原冻结计划中的AI/人工比例、AI失败转人工、真人失败重采替换及复检。资料FAIL进入`REVISE_DOCUMENTS_REQUIRED`，缺证/未知进入`AI_REVIEW_REQUIRED`，均不得自动通过或生成真人审核记录。新lane的`human_document_pending_count`恒0。
+
+已有receipt通过`prepare --parent-receipt ... --parent-status ...`接续，旧receipt、旧软件哈希、原模型jobs/费用、原AI FAIL与真人历史全部保留。父status必须为原账实际发行、仍匹配当前真人历史且能按现有工程重算；手写status不能作为事实。新ledger必须单独有界、与父账追加的policy-amendment关联，不能重置父账预算。相同文本/事实/政策/模型在换输出目录或刷新父status后复用同一job；换ledger重复派费会被拒绝。未知请求留原账，不自动重试。
+
+资料完整输入包含全部交付MD/CSV及非UI-tree的JSON、完整文件SHA清单、原始运行资料、已完成样本QC、原AI记录、真人原导出与冻结抽检计划。图片/UI树仅按路径、SHA、字节数列册；专用资料AI不重新裁决样本视觉或任务语义。README明确结构化统计先与实际包、annotation和format检查实算比对，矛盾会在模型派费前拦截。原始提示词中的规划示例不作为实际统计。包内历史导出stub与包外后续QC分阶段核对，不要求回写原包或形成资料审核自引用。
+
+新生产入口先执行`run-samples`，只派发旧receipt中的visual/difference，不派发旧documents job，并追加superseded事件保留该旧job及已产生费用。随后创建新有界资料scope，顺序运行：
+
+```sh
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.document_text_qc run-samples \
+  --parent-receipt /path/to/pipeline-receipt.json --output /path/to/new-sample-qc
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.document_text_qc prepare \
+  --parent-receipt /path/to/pipeline-receipt.json --parent-status /path/to/new-sample-qc/status.json \
+  --config /path/to/bounded-document-config.json --ledger /path/to/document-scope.sqlite3 \
+  --initialize-ledger --supporting-file /path/to/actual-facts.json --output /path/to/new-document-prepare
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.document_text_qc run \
+  --receipt /path/to/new-document-prepare/document-text-receipt.json --output /path/to/new-document-qc
+```
+
+已完成旧visual/difference及真人审核的批次直接从`prepare`接续；旧documents已完成的结果与费用保留为历史，不覆盖。`status`只重算报告不派发模型。`text_consistency`与`formal_blockers`分别报告：如实说明单站类目100%可以文本一致，但原类目≤20%门禁仍FAIL，正式放行仍为false。新`finalize --receipt ... --status ... --output ... [--archive ...]`先验证新lane发行记录，再交由未改动的原finalizer重新检查全部资料、样本、分布、当前真人历史、文件哈希和最终包；离线正例可封包，类目超限反例不能封包。受控/模拟协议测试不证明真实模型审核或生产交付。
+
 2026-10-26新增独立订阅适配入口`python -m quality_inspector.codex_subscription preflight/run`，使用现有ChatGPT登录、完整原帧和既有审核schema，独立持久请求账限制1次exec及最长120秒，未知结果不自动重试，禁止API回退。它尚未接通现有批量worker：25项离线定向测试通过，但首次真实冒烟因CLI内置provider配置覆盖被拒，修复后未补发，真实传输与usage仍未验证。单包视觉结果强制保留实质差异待定；受控传输输出不能导入为正式审核。结果见`verify_results/three-program-acceleration-20261026/subscription-r01/result-summary.json`，不要直接对生产批量调用。
 
 依据需求书、附件A/B及已确认的澄清，直接读取程序已经导出的完整客户文件，检查目录、字段、动作与图树、分布和四路重复。实际像素与任务语义接受绑定当前交付文件的AI或真人审核，来源类型保持原样；未检查不推定通过。
@@ -202,6 +227,39 @@ projects/code/.venv/bin/python projects/quality-inspector/qc.py check-set \
 
 仓库启动器自动引用`projects/code`；安装CLI `webcollect-ai-qc`时同时安装webcollect（可用本地`ai` extra）。真实凭据/试验金额/费率未配置，真实正反例检出率与usage尚未验证。具体命令和证据见[三程序运行记录](../prd/三程序E0-E3运行记录-20261026.md)。
 
+2026-10-27新增DeepSeek/GLM厂商协议适配，字段、未配置模板及用量边界见[采集程序接入说明](../code/README.md#deepseek--glm-辅助判断接口2026-10-27)。`ai-visual`与近邻原图比较必须使用已明确配置视觉能力的模型；纯文本模型可承担资料/文本辅助判断，不能代替原图审核。同一worker账只绑定一个模型，使用不同模型时分别冻结配置和账本。GLM视觉请求省略其不支持的`response_format`，输出仍须通过本地Schema和证据绑定；接口兼容的离线通过不增加真实AI审核数。
+
+日期视觉验收器的`vision_ocr.swift`已纳入安装包资源。对保留原帧运行安装包时，原固定0.9置信度门槛继续生效；安装可用不表示日期限定验收器已完成真实校准或可自动PASS。
+
+同日GLM首条真实运行已完成：模型`glm-5.3-flash`对`S000030_sample_000001`全部11原帧及3个历史近邻作真实判断，五语义PASS，资料4PASS/分布项FAIL。最终导入引用均匹配实际payload，单条PASS；整包仍FAIL。独立会话复核的资料分布项PASS与GLM的FAIL并存于`cross-review-comparison.json`，保守保留整包FAIL，不用一个来源覆盖另一个。首次资料输入不足及后续引用到非payload绑定的QC存根被拒收也保留；补证及白名单Schema由本次`run_phase.py`明确实现，后续通用worker仍应完善实际JSON/来源证明输入与引用约束。真实运行不增加人工审核数。
+
+2026-10-27后续工程已将上述文档补证机制加入通用worker，资料提示版本为`independent-documentary-full-payload-2`：完整传入实际MD/CSV及文档JSON（站点、标注、ground truth等），原图和UI树只列路径/SHA/字节库存，不能据此宣称看图通过。`qc_report.md`、`SHA256SUMS`作为当前导出状态旁证，排除出可签署引用；共享`$defs/$ref`仅允许真实payload路径与SHA配对，五项原判据和类目门槛不变。
+
+实际facts、采集manifest和修订sidecar须显式提供，完整内容与SHA进入job身份；缺失的普查、人工判断或客户验收不猜测、不补成0。命令模板如下：
+
+```sh
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python \
+  projects/quality-inspector/ai_worker.py documents \
+  --config <本次冻结模型配置> --ledger <本次独立工程账> \
+  --input <实际客户候选> --profile projects/quality-inspector/quality_inspector/delivery.json \
+  --output <包外新目录> \
+  --supporting-file <实际facts.json> \
+  --supporting-file <实际采集manifest.json> \
+  --supporting-file <实际修订sidecar.json>
+```
+
+没有某项真实支持文件时省略该参数，不能编造文件或指向不相关批次。材料及支持文件在准备、派发前和返回后复核哈希。完整输入超单文件字节或模型输入预留时，在API前拒绝；不截断材料、不自动分片或称部分内容为整批审核。正常文档job最多发1次请求；模型无效响应保留待定，不自动补发。旧文档job不因本次代码更新获得更完整的证据，须以新材料身份重新准备。此工程验证不增加真实AI、人审或合格产量，实际节费仍待有界实测。
+
+### 三近邻完整原帧合并实验（2026-10-27）
+
+独立`quality_inspector.difference_batch`用于成本对照，未改正式`ai_worker.do_difference`。相同本条11帧与三个邻居8/6/11帧共36张原PNG全部发送，本条不再在三个请求里重复；原图、图树和标注逐文件SHA绑定，每对有独立身份、完整step覆盖及必要证据。超限停止，不缩图、不删帧或少比较对象。输入文字复用原worker的精简动作/结果/目标树上下文，不声称传输了全部UI树JSON。
+
+实验v1未明确定义状态极性，真实回执理由均说有实质差异却返回三个FAIL；原回执及0.051042元费用保留。v2明确PASS=实质不同、FAIL=同业务/仅参数变体、REVIEW_REQUIRED=不确定，并用独立关系枚举与状态的Schema配对拒绝矛盾，不解析理由替模型改签。42项定向及独立13项/极性矩阵通过，随后另作唯一一次v2真实请求，三个结论与原逐对基线一致。
+
+v2同材料结果：3→1请求、总Token88569→60944（少31.2%）、估算费用0.072651→0.050466元（少30.5%），完整36原帧保留。两轮工程合计新增0.101508元，账本分别在`verify_results/production-day-20261027/near-neighbor-batching-calibration-r01/`与`verify_results/production-day-20261027/near-neighbor-batching-calibration-r02/`，各有配置、不可覆盖scope/freeze、原请求/响应、audit、对照统计及凭据清理检查。只测一个正例与三个邻居，不能证明总体误判率；提示、Schema和输出结构也变了，不能把节省完全归因于图片共享。
+
+该模块输出独立calibration schema，显式`QC_approval=false`、`production_review_import_allowed=false`，不能导入正式review records或增加合格产量。当前正式生产仍用原审核路径；推广前还需更多独立正反例及当前实际候选验证。
+
 ### S0 全量自动检查与分层/风险抽检
 
 `PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.sampling --help` 提供 `prepare/enqueue/report/expand/calibrate`。`prepare` 支持 `mode=real, model=null` 的真实无模型作业配置，无需凭据或费率，仍使用原预算账的时长、并发、租约和恢复限制。它运行现有全量交付QC和当前候选＋显式有效集合的四路检查，冻结候选分母、文件摘要、合同/采集/抽检实现指纹、profile、种子、分层和风险原因。它不发模型请求。
@@ -223,3 +281,28 @@ PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/pyth
 未抽中保留`ai_status=NOT_REVIEWED`；自动检查不能证明的必要项保持`REVIEW_REQUIRED`，不会因抽检通过补成AI PASS。清单内`coverage_map`逐条列出需求§7的17项、中文/导航、任务终态/差异/四路、附件/澄清及资料检查的证据和边界。当前语言、相邻帧动作解释、隐私和自然完成仍依赖实际审核证据，故没有这些证据的未抽中样本不能放行；20%不意味着其余80%已合格。`report`单列抽中/风险/实际AI/未审核/缺失证据、审核来源和停止状态，且只产生payload阶段结果。正式放行仍由原最终密封交付QC决定，客户验收保持`UNKNOWN`。受控fixture和手写协议正反例不构成真实AI质量证据。
 
 无模型会话审核包用 `python -m quality_inspector.sampling_packet --config <无模型配置> --ledger <同运行账> --plan <冻结plan> --output <包外新目录>`。它复用E3队列及`compact_trajectory`，导出全部选中原帧的路径/摘要、实际动作和近邻全帧比较，以及空白`review-template.json`；不预填观察、身份或通过结论。复制模板另存实际审核记录，如实填写会话来源，再交原`sampling report --reviews`/`expand`验证。新实际审核数及模型请求数均为0；该命令已在2条受控浏览器样本上运行并复跑，12个焦点原帧全部保留。程序化模型和会话审核仍须分别记账。
+
+
+## 显式交付抽检、人工转审及替换复检（2026-10-27）
+
+旧 `quality_inspector.sampling` 保留风险抽样及逐条证据门禁。用户新确认的交付抽检通过独立的 `delivery_sampling` 显式启用；默认 `check` 行为不变。全量机械、四路去重、分布及整包资料门禁均保持，抽检仅控制逐样本语义检查覆盖。
+
+```sh
+# 冻结样本位置、原始分母、比例、种子及标注/原图/树字节。0%不抽，正比例ceil，100%全量。
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.delivery_sampling freeze --input <实际客户候选目录> --output <包外sampling-plan.json> --ai-percent 50 --human-percent 0 --seed <固定种子> --stratify site
+# --reviews为实际AI样本/资料记录；人工独立记录使用可重复的--human-reviews。
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector check --input <实际客户候选目录> --stage payload --delivery-sampling-plan <sampling-plan.json> --reviews <实际AI记录.json> --human-reviews <实际人工记录.json> --output <包外新报告目录>
+# 仅为待人工样本建立空白、隔离的审核台；中性context只含source_statement/input_statement。
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.delivery_sampling human-workspace --report <实际report.json> --output <新人工目录> --context <中性说明.json> --receipt <包外新收据.json> --reviewer <实际审核人>
+# 原样本实际人工FAIL后，用新采集/新sample_id关联替换；原件、原人工决定和父计划保持。
+PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/python -m quality_inspector.delivery_sampling replace --plan <原sampling-plan.json> --sample-id <被否决ID> --replacement <新采集样本目录> --human-reviews <实际人工FAIL记录.json> --reason <实际原因> --output <包外后继sampling-plan.json>
+```
+
+默认按整个批次抽样；`--stratify site`按站点分别ceil，例如100站各20条、50%时每站10条共1000条。AI比例、人工随机比例不包括强制转审及替换复检；这些可能使实际人工覆盖率高于配置比例。抽中的是完整轨迹，不是截图或API请求次数。
+
+AI FAIL、未决、无效或缺失回复全部转人工；有效人工PASS可以裁决AI语义分歧，原AI失败仍保留。人工FAIL输出 `REPLACE_REQUIRED`；替换使用新编号、继承原位置AI选择，并强制人工复检，不能通过重新抽签逃检。未抽中输出 `NOT_SELECTED`，只产生 `SEMANTIC_SAMPLING_ADMISSION`，不生成伪造的 `REVIEW_* PASS`。报告 `semantic_sampling` 单列原始分母、比例、实际AI/人工覆盖、未抽中、人工待审、替换缺额和来源SHA。
+
+封包继续使用payload检查→`finalize-client`新目录→final检查→归档；两次检查均需显式使用同一绑定抽检计划及实际审核输入。最终摘要必须写明按策略验收和真实覆盖，冒称全量逐图或篡改覆盖计数会拒绝。说明资料仍按包检查，抽样通过不能证明所有未抽中样本已经逐条语义验证。该模块不发送模型请求、不认证审核者身份或实际阅读，受控协议夹具不构成真实AI/人工判断。
+
+
+尚未调用/尚无完整AI记录的选中样本输出 `AI_REQUIRED`，单列 `ai_pending_count`，不虚增人工积压，人工PASS也不能冒充未执行的AI检查。实际模型调用的网络未知/非法回复可通过只读 `delivery_sampling export-ai-failures --plan <计划> --ledger <原模型SQLite> --output <新失败收据>` 导出。收据逐条绑定原real模型账的job、request ID、已结算失败状态、请求行SHA、合同及样本哈希，`check --ai-failures <收据>`/`status --ai-failures <收据>`会回查原账再转人工；手写布尔或不绑定原账的错误声明不能替代。未知费用保持原预留，不由转人工触发自动重发。原账终结请求、合同、计划或样本改变会使该收据失效。

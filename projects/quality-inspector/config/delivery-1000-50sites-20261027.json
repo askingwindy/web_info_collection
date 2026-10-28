@@ -1,0 +1,51 @@
+{
+  "attachments": {
+    "附件A-字段说明.md": "0c3fe9b2050f55c25cec8ef5145ed3ad0d569aa0d0022f0293c21c4406857639",
+    "附件B-动作空间与坐标系.md": "564ab9cc7a4297d3966aaebe5e14c4090e0b056da60072e232744a00422f5ed2"
+  },
+  "authority": "2026-10-27 user authorized a separately frozen real cohort of 1000 trajectories, 50 exact-URI sites with 20 tasks each, followed by one read-only full QC. Preserve all failures/retries and original quality/duplicate thresholds. Formal QC completion ends repair/replacement/scale-up; user decides next round. This profile defines targets, not actual collection or release.",
+  "duplicates": {
+    "dhash": {
+      "bit_order": "row-major-left-to-right-top-to-bottom-msb-first",
+      "bits": 64,
+      "comparison": "left>right",
+      "grayscale": "Pillow-L",
+      "maximum_hamming_each_endpoint": 4,
+      "orientation": "horizontal",
+      "resampling": "Pillow-LANCZOS",
+      "resize": [
+        9,
+        8
+      ]
+    },
+    "exact_images": "zero-cross-sample-reuse",
+    "sequence": "exact-action_type+target_text+page_name-list",
+    "simhash": {
+      "bits": 64,
+      "cjk_range": [
+        "U+4E00",
+        "U+9FFF"
+      ],
+      "cjk_window": 2,
+      "hash": "SHA256-first-8-bytes-big-endian",
+      "latin_regex": "[a-zA-Z0-9_]+",
+      "lowercase": "Python-str.lower",
+      "maximum_hamming": 3,
+      "single_cjk_token": true,
+      "tie": 0,
+      "tokens": "CJK-bigrams-or-single-character+lowercase-Latin-alphanumeric-underscore",
+      "weight": "term-frequency"
+    }
+  },
+  "profile_id": "webcollect-fixed1000-sites50-delivery-20261027",
+  "schema_version": "qc-local-profile-1",
+  "scope": "delivery",
+  "targets": {
+    "category_share": "enforced",
+    "expected_samples": 1000,
+    "expected_sites": 50,
+    "max_category_share": 0.2,
+    "max_short_flow_share": 0.02,
+    "max_viewport_specs": 3
+  }
+}

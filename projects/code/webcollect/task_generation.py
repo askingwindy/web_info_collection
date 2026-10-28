@@ -21,10 +21,35 @@ from .batch_core import BudgetStop, BatchLedger, file_sha, load_json, save_json
 from .planning import canonical, object_sha256, timestamp, validate_capability
 from .bmi_strategy import ADAPTER_ID as BMI_ADAPTER_ID, bmi_spec
 from .date_strategy import ADAPTER_ID as DATE_ADAPTER_ID, date_spec
+from .ascii_art_strategy import ADAPTER_ID as ASCII_ART_ADAPTER_ID, ascii_art_spec, compile_ascii_art
+from .loan_strategy import ADAPTER_ID as LOAN_ADAPTER_ID, loan_spec, compile_loan
+from .html_table_strategy import ADAPTER_ID as HTML_TABLE_ADAPTER_ID, html_table_spec, compile_html_table
+from .qr_strategy import ADAPTER_ID as QR_ADAPTER_ID, qr_spec, compile_qr
+from .placeholder_strategy import ADAPTER_ID as PLACEHOLDER_ADAPTER_ID, placeholder_spec, compile_placeholder
 
-VERSION = 'observed-form-compiler-5-date-difference'
-STRATEGY_VERSION = 'deterministic-business-widgets-3-date'
+VERSION = 'observed-form-compiler-17-bound-task-admission'
+STRATEGY_VERSION = 'deterministic-business-widgets-9-business-identity'
+BUSINESS_IDENTITY_VERSION = 'webcollect-business-identity-1'
+FORM_EXECUTION_ID = 'observed-form-result-v1'
+FORM_EXECUTION_VERSION = 'observed-form-result-1'
 FORMAL_LATEST_PATH = Path(__file__).resolve().parents[3] / 'results/delivery/LATEST.md'
+
+
+def generation_source_identity():
+    base = Path(__file__).parent
+    names = (
+        'task_generation.py', 'history_business.py', 'date_strategy.py',
+        'bmi_strategy.py', 'planning.py', 'task_contract.py', 'task_replanning.py',
+        'snapshot.js', 'browser.py', 'ascii_art_strategy.py', 'loan_strategy.py',
+        'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
+        'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
+        'preflight.py', 'collect_runtime.py', 'observed_workflow.py')
+    # A newly implemented adapter changes the frozen implementation identity.
+    if (base / 'hmac_strategy.py').is_file():
+        names += ('hmac_strategy.py',)
+    if (base / 'pbkdf2_strategy.py').is_file():
+        names += ('pbkdf2_strategy.py',)
+    return {name: file_sha(base / name) for name in names}
 
 # These are deliberately narrow business strategies, not generic guesses about
 # arbitrary forms. Result values are rechecked by the existing saved-frame
@@ -68,25 +93,160 @@ def _page_identity(uri):
     return urlunsplit((parsed.scheme.lower(),parsed.netloc.lower(),parsed.path or '/','',''))
 
 
+def _form_business_definition(strategy):
+    """Registered business meaning excludes URI, selectors and parameter values."""
+    return {'business_id': strategy['id'], 'business_goal': strategy['result'],
+            'necessary_input_roles': [list(role) for role in strategy['fields']],
+            'operator': strategy['operator'],
+            'state_path': ['input-required', 'inputs-complete', 'visible-result'],
+            'completion_criterion': {'result_role': strategy['result'], 'unit': strategy['unit']}}
+
+
+def _form_identity(task, strategy):
+    return {'schema_version': BUSINESS_IDENTITY_VERSION, 'business_id': strategy['id'],
+            'execution_capability_id': FORM_EXECUTION_ID,
+            'definition': _form_business_definition(strategy),
+            'observation_binding': {'capability_id': task['capability_id'],
+                                    'capability_version': task['capability_version']}}
+
+
+def validated_business_identity(task):
+    """Return only an independently registered, operation-corroborated identity.
+
+    Declaration alone is not proof. A new executor must register its business
+    validator here; unknown declarations stay unknown rather than falling back
+    to an execution ID. Full capability evidence is separately revalidated by
+    publication. This identity does not grant trajectory or semantic QC PASS.
+    """
+    if 'workflow_admission' in task:
+        from .observed_workflow import static_identity
+        return {'business_id': 'workflow:' + static_identity(task),
+                'execution_capability_id': 'observed-workflow-v1'}
+    if 'task_admission' in task:
+        from .task_admission import static_identity
+        return {'business_id': 'admitted:' + static_identity(task),
+                'execution_capability_id': FORM_EXECUTION_ID}
+    identity = task.get('business_identity')
+    execution = task.get('execution_capability')
+    if not isinstance(identity, dict) or not isinstance(execution, dict):
+        return None
+    business = identity.get('business_id')
+    matches = [strategy for strategy in STRATEGIES if strategy['id'] == business]
+    if len(matches) == 1:
+        strategy = matches[0]
+        try:
+            if (execution != {'id': FORM_EXECUTION_ID, 'version': FORM_EXECUTION_VERSION}
+                    or identity != _form_identity(task, strategy)):
+                return None
+            if any(not isinstance(task.get(key), str) or not task[key].strip()
+                   for key in ('capability_id', 'capability_version')):
+                return None
+            operations = task['operations']
+            if not isinstance(operations, list) or not operations or any(not isinstance(op, dict) for op in operations):
+                return None
+            inputs = [op for op in operations if op.get('action_type') == 'type']
+            if len(inputs) != 2 or any(op.get('evidence', {}).get('target_label') not in aliases
+                                      for op, aliases in zip(inputs, strategy['fields'])):
+                return None
+            # Exactly the compiler's necessary focus/(replace)/type pairs,
+            # followed by one actual submit. No extra or reordered business acts.
+            offset = 0
+            for request in inputs:
+                focus = operations[offset]
+                if (focus.get('action_type') != 'click' or focus.get('selector') != request.get('selector')
+                        or focus.get('evidence') != request.get('evidence')):
+                    return None
+                offset += 1
+                if operations[offset].get('action_type') == 'hotkey':
+                    if operations[offset].get('arguments', {}).get('keys') != ['meta', 'a']:
+                        return None
+                    offset += 1
+                if operations[offset] is not request:
+                    return None
+                offset += 1
+            if (offset != len(operations) - 1 or operations[-1].get('action_type') != 'click'
+                    or operations[-1].get('evidence', {}).get('target_label') not in strategy['submit']
+                    or operations[-1].get('postconditions') != task.get('final_assertions')
+                    or not isinstance(task.get('final_assertions'), list) or len(task['final_assertions']) != 1):
+                return None
+            condition = task['final_assertions'][0]
+            if (not isinstance(condition, dict) or set(condition) != {'selector', 'numbers'}
+                    or not isinstance(condition['selector'], str) or not condition['selector'].strip()
+                    or not isinstance(condition['numbers'], dict)
+                    or set(condition['numbers']) != {'count', 'minimum', 'maximum_exclusive', 'integer'}
+                    or condition['numbers']['count'] != 1 or condition['numbers']['integer'] is not True
+                    or type(condition['numbers']['minimum']) is not int
+                    or condition['numbers']['maximum_exclusive'] != condition['numbers']['minimum'] + 1):
+                return None
+            return identity
+        except (KeyError, TypeError, IndexError, AttributeError):
+            return None
+    # The adapter owns validation of its observed states, controls and terminal
+    # oracle. Import only after its source exists during staged development.
+    adapter = Path(__file__).with_name('hmac_strategy.py')
+    if adapter.is_file():
+        from . import hmac_strategy
+        if business == hmac_strategy.BUSINESS_ID:
+            try:
+                verified = hmac_strategy.validated_business_identity(task)
+                if (not isinstance(verified, dict) or verified.get('business_id') != business
+                        or execution.get('id') != hmac_strategy.EXECUTION_ID):
+                    return None
+                return verified
+            except (ValueError, KeyError, TypeError, IndexError):
+                return None
+    if Path(__file__).with_name('pbkdf2_strategy.py').is_file():
+        from . import pbkdf2_strategy
+        if business == pbkdf2_strategy.BUSINESS_ID:
+            try:
+                verified = pbkdf2_strategy.validated_business_identity(task)
+                if (not isinstance(verified, dict) or verified.get('business_id') != business
+                        or execution.get('id') != pbkdf2_strategy.EXECUTION_ID):
+                    return None
+                return verified
+            except (ValueError, KeyError, TypeError, IndexError):
+                return None
+    return None
+
+
+def _declares_business_identity(task):
+    return any(key in task for key in ('business_identity', 'execution_capability', 'task_admission', 'workflow_admission'))
+
+
+def _different_verified_business(left, right):
+    left_identity, right_identity = validated_business_identity(left), validated_business_identity(right)
+    return bool(left_identity and right_identity and
+                left_identity['business_id'] != right_identity['business_id'])
+
+
 def semantic_signature(task):
-    strategy=task.get('deterministic_strategy',{}).get('id')
-    if not strategy:
-        # Earlier E2 tasks have no strategy metadata. Recover only an exact
-        # registered role/submit match, never free-text similarity as proof.
-        operations=task.get('operations',[])
-        labels={op.get('evidence',{}).get('target_label') for op in operations if op.get('action_type')=='type'}
-        submits={op.get('evidence',{}).get('target_label') for op in operations if op.get('action_type')=='click'}
-        matches=[item['id'] for item in STRATEGIES if len(labels)==2 and
-                 all(len(labels & set(role))==1 for role in item['fields']) and submits & set(item['submit'])]
-        strategy=matches[0] if len(matches)==1 else None
+    if 'workflow_admission' in task:
+        from .observed_workflow import static_identity
+        return static_identity(task)
+    if 'task_admission' in task:
+        from .task_admission import static_identity
+        return static_identity(task)
+    if _declares_business_identity(task):
+        identity = validated_business_identity(task)
+        if identity is None:
+            return None
+        strategy = identity['business_id']
+    else:
+        strategy=task.get('deterministic_strategy',{}).get('id')
+        if not strategy:
+            # Earlier E2 tasks have no strategy metadata. Recover only an exact
+            # registered role/submit match, never free-text similarity as proof.
+            operations=task.get('operations',[])
+            labels={op.get('evidence',{}).get('target_label') for op in operations if op.get('action_type')=='type'}
+            submits={op.get('evidence',{}).get('target_label') for op in operations if op.get('action_type')=='click'}
+            matches=[item['id'] for item in STRATEGIES if len(labels)==2 and
+                     all(len(labels & set(role))==1 for role in item['fields']) and submits & set(item['submit'])]
+            strategy=matches[0] if len(matches)==1 else None
     if not strategy:
         return None
-    # For this narrow strategy set, a second calculator on the same origin is
-    # still the same business task even on a different URI/path. More capacity
-    # requires an independently defined business strategy, not another route.
-    parsed=urlsplit(task['site_uri'])
-    return object_sha256({'origin':urlunsplit((parsed.scheme.lower(),parsed.netloc.lower(),'','','')),
-                         'strategy':strategy})
+    # Keep the legacy hash contract so frozen historical identities still match.
+    # Execution capability, URI, parameters and selectors cannot create novelty.
+    return object_sha256({'strategy':strategy})
 
 
 def deterministic_specs(capability):
@@ -95,7 +255,16 @@ def deterministic_specs(capability):
         rejected.extend({'site_uri':capability['site_uri'], **item}
                         for item in page.get('widget_rejections', []))
         for widget in page.get('widgets', []):
-            strategy = {BMI_ADAPTER_ID: bmi_spec, DATE_ADAPTER_ID: date_spec}.get(widget.get('adapter_id'))
+            strategy = {BMI_ADAPTER_ID: bmi_spec, DATE_ADAPTER_ID: date_spec,
+                        ASCII_ART_ADAPTER_ID: ascii_art_spec, LOAN_ADAPTER_ID: loan_spec,
+                        HTML_TABLE_ADAPTER_ID: html_table_spec, QR_ADAPTER_ID: qr_spec,
+                        PLACEHOLDER_ADAPTER_ID: placeholder_spec}.get(widget.get('adapter_id'))
+            if widget.get('adapter_id') == 'jyshare-hmac-widget-1' and Path(__file__).with_name('hmac_strategy.py').is_file():
+                from .hmac_strategy import hmac_spec
+                strategy = hmac_spec
+            if widget.get('adapter_id') == 'jyshare-pbkdf2-widget-1' and Path(__file__).with_name('pbkdf2_strategy.py').is_file():
+                from .pbkdf2_strategy import pbkdf2_spec
+                strategy = pbkdf2_spec
             if strategy is None:
                 rejected.append({'site_uri':capability['site_uri'], 'page_uri':page['page_uri'],
                                  'reason':'No registered adapter for observed non-form widget'})
@@ -161,16 +330,20 @@ def register_task(ledger, task, job_id):
     semantic=semantic_signature(task)
     if semantic:
         keys.append('semantic:'+semantic)
+    elif _declares_business_identity(task):
+        raise ValueError('Unregistered or uncorroborated business identity; review required before registration')
     with ledger.transaction() as con:
         for signature in keys:
             old=con.execute('SELECT job_id,task_json FROM generated_task_index WHERE signature=?',(signature,)).fetchone()
             if old and (old['job_id']!=job_id or json.loads(old['task_json'])!=task):
+                if signature == keys[0] and _different_verified_business(task, json.loads(old['task_json'])):
+                    continue
                 raise ValueError('Business goal or form/action structure already generated; parameter/selector substitutions rejected')
         for signature in keys:
             con.execute('INSERT OR IGNORE INTO generated_task_index VALUES(?,?,?)',(signature,job_id,canonical(task)))
 
 
-def read_history(registry):
+def read_history(registry, *, include_scopes=False):
     if not registry:
         return []
     path = Path(registry).resolve()
@@ -178,7 +351,13 @@ def read_history(registry):
         raise ValueError('Historical registry missing; never create an empty production replacement')
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as con:
         exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_tasks'").fetchone()
-        return [json.loads(row[0]) for row in con.execute('SELECT task_json FROM m4_tasks')] if exists else []
+        if not exists:
+            return []
+        if include_scopes:
+            columns = {row[1] for row in con.execute('PRAGMA table_info(m4_tasks)')}
+            return [(row[0], json.loads(row[1])) for row in con.execute(
+                'SELECT ' + ('scope_id' if 'scope_id' in columns else 'NULL') + ',task_json FROM m4_tasks')]
+        return [json.loads(row[0]) for row in con.execute('SELECT task_json FROM m4_tasks')]
 
 
 def _origin(uri):
@@ -188,12 +367,17 @@ def _origin(uri):
     return urlunsplit((p.scheme.lower(), p.netloc.lower(), '', '', ''))
 
 
-def annotation_business_strategy(annotation):
+def annotation_business_strategy(annotation, sample_root=None):
     """Recover only registered business roles plus their actual ordered actions.
 
     Task names, prose keywords and parameter values alone are not identities.
     Unknown business types stay unknown, including reading about BMI.
     """
+    if sample_root is not None:
+        from .history_business import annotation_business_strategy as classify_original
+        return classify_original(annotation, sample_root)
+    # Legacy controlled in-memory fixtures have no original tree directory.
+    # Real customer histories always take the strict evidence-backed path above.
     def label(value):
         return ''.join(unicodedata.normalize('NFKC', str(value)).split()).lower()
     inputs, clicks = [], []
@@ -201,7 +385,7 @@ def annotation_business_strategy(annotation):
         action, tool = step.get('action', {}), step.get('tool_call', {})
         kind = action.get('action_type')
         if tool.get('tool_name') != kind or step.get('tool_result', {}).get('status') != 'success':
-            continue
+            return None
         if kind == 'type' and action.get('target_control_type') in ('input', 'textarea'):
             if str(action.get('input_text', '')).strip():
                 inputs.append((index, label(action.get('target_text', ''))))
@@ -275,7 +459,7 @@ def read_customer_history(manifest_path):
             if sid != path.parent.name or sid in seen or assignments[sid] not in sites:
                 raise ValueError('Historical sample identity missing, repeated or misassigned')
             seen.add(sid); site = sites[assignments[sid]]
-            strategy = annotation_business_strategy(annotation)
+            strategy = annotation_business_strategy(annotation, path.parent)
             records.append({'sample_id': sid, 'annotation_path': str(path),
                 'annotation_sha256': expected[path.relative_to(root).as_posix()],
                 'site_uri': site['uri'], 'origin': _origin(site['uri']),
@@ -294,7 +478,7 @@ def read_customer_history(manifest_path):
         'packages': packages, 'package_count': len(packages), 'customer_samples': len(records),
         'known_strategy_samples': sum(r['strategy_id'] is not None for r in records),
         'unknown_strategy_samples': sum(r['strategy_id'] is None for r in records),
-        'parsed_content': 'original annotations and site-list only; no AI/human judgments',
+        'parsed_content': 'original annotations, target UI trees and site-list; no AI/human judgments',
         'coverage': manifest.get('scope', 'explicit supplied customer packages; not an inferred complete universe')}
     return records, scope
 
@@ -327,6 +511,8 @@ def check_live_m4_history(plan, registry, output):
     registry, capture = Path(registry).resolve(), Path(output).resolve() / 'capture'
     own_scope = runtime_scope(capture)
     own_tasks = set()
+    from .task_replanning import validated_replans
+    repairs, _ = validated_replans(registry, plan.get('generation', {}).get('replan_closures'))
     with closing(sqlite3.connect(registry.as_uri()+'?mode=ro', uri=True)) as con:
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if 'm4_tasks' not in tables:
@@ -351,9 +537,12 @@ def check_live_m4_history(plan, registry, output):
             signature, semantic = task_signature(task), semantic_signature(task)
             for scope_id, value in rows:
                 old = json.loads(value)
+                if object_sha256(old) in repairs.get(scope_id, set()):
+                    continue
                 if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
                     continue
-                if task_signature(old) == signature or semantic and semantic_signature(old) == semantic:
+                same_structure = task_signature(old) == signature and not _different_verified_business(task, old)
+                if same_structure or semantic and semantic_signature(old) == semantic:
                     raise ValueError('Current M4 history contains the same business/structure outside this exact bound resume; no dispatch')
     return {'m4_tasks_checked': len(rows), 'own_resume_tasks': len(own_tasks)}
 
@@ -366,15 +555,31 @@ def customer_history_decision(task, records):
         return {'status': 'REJECTED', 'reason': 'Same registered business in frozen customer history; parameter/path substitutions are not new tasks',
                 'history_sample_ids': [r['sample_id'] for r in matches], 'strategy_id': task.get('deterministic_strategy', {}).get('id')}
     unresolved = [r for r in records if r['origin'] == _origin(task['site_uri']) and r['strategy_id'] is None]
-    if not semantic or unresolved:
+    if not semantic or unresolved and not any(key in task for key in ('task_admission', 'workflow_admission')):
         return {'status': 'REVIEW_REQUIRED', 'reason': 'Business novelty cannot be determined against frozen customer history',
                 'history_sample_ids': [r['sample_id'] for r in unresolved]}
     return None
 
 
-def compile_form(capability, spec):
+def compile_form(capability, spec, *, _observer_sha256=None):
     from .collect import validate_plan
     from .task_instruction import validate_task_instruction
+    if spec.get('widget_adapter') == 'jyshare-hmac-widget-1':
+        from .hmac_strategy import compile_hmac
+        return compile_hmac(capability, spec, VERSION)
+    if spec.get('widget_adapter') == 'jyshare-pbkdf2-widget-1':
+        from .pbkdf2_strategy import compile_pbkdf2
+        return compile_pbkdf2(capability, spec, VERSION)
+    if spec.get('widget_adapter') == ASCII_ART_ADAPTER_ID:
+        return compile_ascii_art(capability, spec, VERSION)
+    if spec.get('widget_adapter') == LOAN_ADAPTER_ID:
+        return compile_loan(capability, spec, VERSION)
+    if spec.get('widget_adapter') == HTML_TABLE_ADAPTER_ID:
+        return compile_html_table(capability, spec, VERSION)
+    if spec.get('widget_adapter') == QR_ADAPTER_ID:
+        return compile_qr(capability, spec, VERSION)
+    if spec.get('widget_adapter') == PLACEHOLDER_ADAPTER_ID:
+        return compile_placeholder(capability, spec, VERSION)
     inventories = [page for page in capability['capabilities'] if page['page_uri']==spec['page_uri']]
     if not inventories:
         raise ValueError('Task starting page absent from observed capability')
@@ -401,7 +606,8 @@ def compile_form(capability, spec):
     for number, request in enumerate(spec['inputs'],1):
         target = fields.get(request['selector'])
         if (not target or target['label']!=request['label'] or target['tag'] not in ('input','textarea')
-                or target['type'] not in ('text','number','textarea','search','email','url','tel')):
+                or target['type'] not in ('text','number','textarea','search','email','url','tel')
+                or target.get('editable', True) is not True or target.get('enabled', True) is not True):
             raise ValueError('Unsupported/unobserved form target or original visible label')
         if not isinstance(request['value'],str) or not request['value'].strip() or request['value']==target['value']:
             raise ValueError('Input is empty or already has the requested value; no useful state change')
@@ -423,7 +629,8 @@ def compile_form(capability, spec):
         subgoals.append({'id':name,'description':'填写「'+target['label']+'」',
                          'evidence':[{'operation_id':name+'-type','postcondition_index':0}]})
     submit = fields.get(spec['submit']['selector'])
-    if not submit or submit['label']!=spec['submit']['label'] or submit['type'] not in ('submit','button'):
+    if (not submit or submit['label']!=spec['submit']['label'] or submit['type'] not in ('submit','button')
+            or submit.get('enabled', True) is not True):
         raise ValueError('Submit target missing from actual form')
     results=[target for page in inventories for target in page.get('result_targets',[])
              if target['selector']==spec['completion']['selector']]
@@ -459,6 +666,14 @@ def compile_form(capability, spec):
         'goal':'点击「'+submit['label']+'」','rationale':'输入完成后提交以得到所需结果',
         'expected':expected,'postconditions':final_assertions})
     subgoals.append({'id':'result','description':'核对实际显示的结果','evidence':[{'final_assertion_index':0}]})
+    if spec.get('completion_view'):
+        from .task_admission import completion_scroll
+        reveal = completion_scroll(capability, spec, operations, final_assertions,
+                                   _observer_sha256=_observer_sha256)
+        operations[-1].pop('postconditions')
+        operations[-1]['expected'] = '计算结果已生成，完整查看需按实际观测滚动'
+        operations.append(reveal)
+        subgoals[-1]['evidence'] = [{'operation_id': reveal['operation_id'], 'postcondition_index': 0}]
     task = {'task_id':'form-'+object_sha256({'capability':capability['capability_id'],'spec':spec})[:24],
         'task_version':VERSION,'capability_id':capability['capability_id'],'capability_version':capability['version'],
         'task_family':'form-workflow','site_uri':capability['site_uri'],'site_category':capability['site_category'],
@@ -471,23 +686,32 @@ def compile_form(capability, spec):
         task['deterministic_strategy']=spec['deterministic_strategy']
         task['capability_screen_status']=capability['status']
         task['capability_review_required']=capability['status']!='ready'
+    if not spec.get('widget_adapter'):
+        strategies = [strategy for strategy in STRATEGIES
+                      if strategy['id'] == spec.get('deterministic_strategy', {}).get('id')]
+        if len(strategies) == 1:
+            task['execution_capability'] = {'id': FORM_EXECUTION_ID, 'version': FORM_EXECUTION_VERSION}
+            task['business_identity'] = _form_identity(task, strategies[0])
+            if validated_business_identity(task) is None:
+                raise ValueError('Registered form business is not corroborated by necessary operations')
     validate_task_instruction(task['instruction'])
     validate_plan({'tasks':[task]})
     return task
 
 
-def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None):
+def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None):
     from .task_contract import validate_m4_plan
     from .collect import validate_plan
     # Explicit fixture responses preserve the old controlled/model test API.
     # Ordinary API and CLI calls default to the no-model strategy path.
     generator=generator or ('model' if synthetic_specs is not None else 'deterministic')
-    if generator not in ('deterministic','model'):
+    if generator not in ('deterministic','model','reviewed'):
         raise ValueError('Unknown task generator')
     if generator=='model' and ledger.config.get('model') is None:
         raise ValueError('Model task generator requires an explicitly enabled model branch')
     if synthetic_specs is not None and (generator!='model' or ledger.config['mode']!='synthetic'):
         raise ValueError('Synthetic responses are only allowed by the explicit synthetic model fixture')
+    sources = generation_source_identity()
     catalog = load_json(catalog_path)
     if catalog.get('schema_version')!='webcollect-capability-catalog-1' or catalog.get('mode')!=ledger.config['mode']:
         raise ValueError('Capability catalog schema/mode mismatch')
@@ -496,13 +720,26 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     if ledger.config['mode']=='real' and history_set is None:
         raise ValueError('Real generation requires --history-set with frozen customer packages; M4 registry alone is incomplete')
     customer_history, history_scope = read_customer_history(history_set) if history_set else ([], None)
-    if ledger.config['mode']=='real':
+    if ledger.config['mode']=='real' or admission_reviews:
         history_scope = bind_formal_history(history_scope)
     output = Path(output).resolve(); output.mkdir(parents=True,exist_ok=True)
-    history = read_history(history_registry)
-    history_hash = object_sha256({'m4_tasks': history, 'customer_history': history_scope})
+    scoped_history = read_history(history_registry, include_scopes=True)
+    from .task_replanning import closure_references, validated_replans
+    repair_refs = closure_references(replan_closures)
+    repairs, _ = validated_replans(history_registry, repair_refs)
+    full_history = [task for _, task in scoped_history]
+    history = [task for scope, task in scoped_history if object_sha256(task) not in repairs.get(scope, set())]
+    history_hash = object_sha256({'m4_tasks': history, 'customer_history': history_scope, 'replan_closures': repair_refs})
     signatures = {task_signature(task) for task in history}
+    structures = {}
+    for historical_task in history:
+        structures.setdefault(task_signature(historical_task), []).append(historical_task)
     semantics={semantic_signature(task) for task in history if semantic_signature(task)}
+    from . import task_admission
+    admission_refs = task_admission.load_reviews(admission_reviews)
+    admission_context = task_admission.context(history_scope, customer_history, history_registry) if admission_refs else None
+    if generator == 'reviewed' and not admission_refs:
+        raise ValueError('Reviewed proposal generator requires explicit frozen admission references')
     tasks, rejected, pending, actual_prompts = [], [], [], []
     gateway=None
     if generator=='model':
@@ -521,7 +758,9 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                   'capability':{'site_uri':record['site_uri'],'pages':record['capabilities']}}
         if generator=='model':actual_prompts.append(prompt)
         jid = ledger.enqueue('task-generation', {'capability_sha256':object_sha256(record),'version':VERSION,
+            'source_identity':sources,
             'generator':generator,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
+            'admission_inputs_sha256':object_sha256(admission_refs) if admission_refs else None,
             'history_sha256':history_hash,'mode':ledger.config['mode']})
         try:
             job = ledger.claim('task-generation',job_id=jid)
@@ -535,9 +774,13 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 pending.append({'job_id':jid,'state':prior['state']}); continue
         else:
             try:
-                specs=deterministic_specs(record) if generator=='deterministic' else gateway.call(
-                    job,'task-generation-'+VERSION,json.dumps(prompt,ensure_ascii=False),SPEC_SCHEMA,
-                    synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])})
+                if generator == 'reviewed':
+                    specs = {'tasks': [load_json(ref['packet']['path'])['spec'] for ref in admission_refs.values()
+                                       if load_json(ref['packet']['path'])['capability'] == record]}
+                else:
+                    specs=deterministic_specs(record) if generator=='deterministic' else gateway.call(
+                        job,'task-generation-'+VERSION,json.dumps(prompt,ensure_ascii=False),SPEC_SCHEMA,
+                        synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])})
                 ledger.finish(job,result={'specs':specs})
             except BudgetStop as error:
                 ledger.finish(job,'queued',error=str(error)); pending.append({'job_id':jid,'state':'budget_stopped'}); break
@@ -547,21 +790,31 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         rejected.extend(specs.get('strategy_rejections',[]))
         for spec in specs['tasks']:
             try:
-                task = compile_form(record,spec); signature=task_signature(task);semantic=semantic_signature(task)
+                task = compile_form(record,spec)
+                admission_ref = admission_refs.get(object_sha256({'capability': record, 'spec': spec}))
+                if admission_ref:
+                    task = task_admission.attach(task, admission_ref['packet'], admission_ref['review'],
+                                                  admission_context, mode=ledger.config['mode'])
+                signature=task_signature(task);semantic=semantic_signature(task)
                 history_decision = customer_history_decision(task, customer_history) if history_scope else None
                 if history_decision:
                     entry = {'site_uri': record['site_uri'], 'spec_sha256': object_sha256(spec), **history_decision}
                     (rejected if history_decision['status']=='REJECTED' else pending).append(entry)
                     continue
-                if signature in signatures or semantic and semantic in semantics:
+                if _declares_business_identity(task) and not semantic:
+                    raise ValueError('Unregistered or uncorroborated business identity; review required')
+                same_structure = signature in signatures and any(
+                    not _different_verified_business(task, old) for old in structures.get(signature, []))
+                if same_structure or semantic and semantic in semantics:
                     raise ValueError('Same business goal or form/action structure in history/current task set; parameter changes rejected')
                 register_task(ledger,task,jid)
                 signatures.add(signature)
+                structures.setdefault(signature, []).append(task)
                 if semantic:semantics.add(semantic)
                 tasks.append(task)
             except (ValueError,KeyError) as error:
                 rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error)})
-    template=generator=='deterministic' or ledger.config['mode']=='synthetic'
+    template=generator in ('deterministic','reviewed') or ledger.config['mode']=='synthetic'
     planning_stage=({'mode':'template','template_version':STRATEGY_VERSION,
         'description':'固定业务策略匹配实际控件标签与字段范围，确定性计算完成数值，再由原表单编译器生成操作；未调用模型。'}
         if generator=='deterministic' else
@@ -569,16 +822,22 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
          'description':'合成适配器返回冻结任务规格，未进行真实模型调用。'} if ledger.config['mode']=='synthetic' else
         {'mode':'model','description':'根据实际能力库存生成表单任务，再按固定编译器生成显式操作。',
          'prompt':json.dumps(actual_prompts,ensure_ascii=False)})
+    if generator == 'reviewed':
+        planning_stage = {'mode': 'template', 'template_version': task_admission.VERSION,
+                          'description': '复用普通控件编译器，消费实际独立准入review；未调用GLM，不授最终QC通过。'}
     plan = {'schema_version':'webcollect-plan-m4-1','tasks':tasks,
-        'generation':{'version':VERSION,'generator':generator,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
+        'generation':{'version':VERSION,'generator':generator,'source_identity':sources,'replan_closures':repair_refs,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
                       'catalog_sha256':file_sha(catalog_path),'history_sha256':history_hash,'history_scope':history_scope,
                       'mode':ledger.config['mode'],'synthetic_results_are_production':False,
+                      'admission_reference_manifests':[{'path':str(Path(path).resolve()),'sha256':file_sha(path)} for path in admission_reviews or []],
                       'capability_review_required':any(task.get('capability_review_required') for task in tasks)},
         'production_facts':{'accounts_and_privacy':'仅使用公开无账号页面；任务中的输入为程序生成的测试值。' if ledger.config['mode']=='real' else '仅受控合成工程页面，无账号，不进入正式交付。',
             'narrative_generation':'采集器根据实际相邻截图和同步观察生成文字，必要修订沿用 narrative_revisions。',
             'narrative_mode':'template' if template else 'mixed','prompt_stages':{
                 'planning':planning_stage,'narrative':{'mode':'template','template_version':'actual-state-describe_change',
                              'description':'沿用采集器实际可见状态及相邻截图对应的叙述生成。'}}}}
+    if generation_source_identity() != sources:
+        raise ValueError('Generation implementation changed during work; no plan publication')
     if tasks:
         validate_m4_plan(plan); validate_plan(plan)
         save_json(output/'plan.json',plan)
@@ -588,10 +847,32 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         'generated_tasks':len(tasks),'rejected':rejected,'pending':pending,'sample_ids_allocated':0,
         'plan_file':str(output/'plan.json') if tasks else None,'mode':ledger.config['mode'],'generator':generator,
         'capability_review_required':plan['generation']['capability_review_required'],
-        'historical_tasks_consulted':len(history),'history_scope':history_scope,
+        'historical_tasks_consulted':len(full_history),'explicit_closed_failed_tasks_for_repair':len(full_history)-len(history),'history_scope':history_scope,
         'historical_customer_samples_consulted':len(customer_history),'real_collection_executed':False}
     save_json(output/('generation-'+object_sha256(result)[:16]+'.json'),result)
     return result
+
+
+def verify_task_admissions(plan, catalog, registry, output, *, customer_history=None, history_scope=None):
+    admitted = [task for task in plan['tasks'] if 'task_admission' in task]
+    if not admitted:
+        return
+    from .task_admission import context, verify_live
+    from .collect_runtime import runtime_scope
+    if customer_history is None or history_scope is None:
+        manifest = plan['generation']['history_scope']['manifest']
+        customer_history, history_scope = read_customer_history(manifest['path'])
+        history_scope = bind_formal_history(history_scope)
+    if history_scope != plan['generation']['history_scope']:
+        raise ValueError('Admission historical package population drifted before dispatch')
+    check_live_m4_history(plan, registry, output)
+    live = context(history_scope, customer_history, registry,
+                   exclude_scope=runtime_scope(Path(output).resolve() / 'capture'), own_tasks=plan['tasks'])
+    for task in admitted:
+        packet = load_json(task['task_admission']['packet']['path'])
+        if packet['capability'] not in catalog['records']:
+            raise ValueError('Admission capability differs from dispatch catalog')
+        verify_live(task, live, mode=plan['generation']['mode'])
 
 
 async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False):
@@ -609,6 +890,8 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     validate_plan(plan)
     if plan.get('generation',{}).get('mode')!='real' or catalog.get('mode')!='real':
         raise ValueError('Only real capability-generated tasks can enter production')
+    if plan['generation'].get('source_identity') != generation_source_identity():
+        raise ValueError('Generation/history implementation changed or was not bound; regenerate before dispatch')
     history_scope = plan.get('generation', {}).get('history_scope')
     if not isinstance(history_scope, dict) or history_scope.get('schema_version') != 'webcollect-task-history-scope-1':
         raise ValueError('Real execution requires explicit frozen customer history coverage; regenerate legacy M4-only plans')
@@ -619,13 +902,20 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     current_scope = bind_formal_history(current_scope)
     if current_scope != history_scope:
         raise ValueError('Historical package population changed since task generation')
+    verify_task_admissions(plan, catalog, registry, output, customer_history=customer_history, history_scope=current_scope)
     for task in plan['tasks']:
+        if _declares_business_identity(task) and validated_business_identity(task) is None:
+            raise ValueError('Unregistered or uncorroborated business identity; no dispatch')
         if customer_history_decision(task, customer_history):
             raise ValueError('Task duplicate or unresolved against frozen customer history; no preflight or allocation')
     if not Path(registry).is_file():
         raise ValueError('Existing production registry required; no empty replacement')
     check_live_m4_history(plan, registry, output)
     supplied_policy=load_json(policy)
+    from .task_replanning import validated_replans
+    _, repair_campaigns = validated_replans(registry, plan['generation'].get('replan_closures'))
+    if repair_campaigns and repair_campaigns != {supplied_policy.get('campaign_id')}:
+        raise ValueError('Repair must use the original campaign and cumulative budget')
     with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
         campaign=con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',
                              (supplied_policy.get('campaign_id'),)).fetchone()
@@ -654,6 +944,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             await asyncio.sleep(2)
             ledger.heartbeat(job)
     async def work():
+        verify_task_admissions(plan, catalog, registry, output)
         pf=output/'preflight'; publication=output/'publication.json'
         if not publication.exists():
             if not (pf/'report.json').exists():
@@ -662,6 +953,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             scheduled=load_json(pf/'scheduled-plan.json')
             save_json(publication,publish_plan(scheduled,catalog))
         check_live_m4_history(plan, registry, output)
+        verify_task_admissions(plan, catalog, registry, output)
         result=await collect_m4(pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
             navigation=navigation)
@@ -707,7 +999,9 @@ def main(argv=None):
         if command=='generate':
             p.add_argument('--history-registry',type=Path)
             p.add_argument('--history-set',type=Path,help='Frozen qc-cumulative-set-1 customer-package history; required in real mode')
-            p.add_argument('--generator',choices=('deterministic','model'),default='deterministic',
+            p.add_argument('--replan-closure',type=Path,action='append',help='Committed rejected-only scope closure; keeps failures and original campaign budget')
+            p.add_argument('--admission-reviews',type=Path,action='append',help='Frozen packet+independent review reference manifest; never grants QC PASS')
+            p.add_argument('--generator',choices=('deterministic','model','reviewed'),default='deterministic',
                            help='Registered no-model strategies by default; model is an explicit budgeted option')
         else:
             for name in ('plan','registry','policy'):p.add_argument('--'+name,type=Path,required=True)
@@ -715,7 +1009,7 @@ def main(argv=None):
     args=parser.parse_args(argv)
     try:
         ledger=BatchLedger(args.ledger,load_json(args.config))
-        result=generate(ledger,args.catalog,args.output,history_registry=args.history_registry,history_set=args.history_set,generator=args.generator) if args.command=='generate' else asyncio.run(
+        result=generate(ledger,args.catalog,args.output,history_registry=args.history_registry,history_set=args.history_set,generator=args.generator,replan_closures=args.replan_closure,admission_reviews=args.admission_reviews) if args.command=='generate' else asyncio.run(
             execute(ledger,args.plan,args.catalog,args.output,args.registry,args.policy,resume=args.resume))
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0
     except (ValueError,OSError,KeyError,TypeError,sqlite3.Error) as error:

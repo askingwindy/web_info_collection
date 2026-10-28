@@ -99,9 +99,18 @@ def validate_config(value, *, credentials=False, require_model=False):
                     'currency', 'min_model_interval_seconds'}
     model_enabled = value['model'] is not None
     fields = runtime_fields | (model_fields if model_enabled else {'max_job_attempts'})
-    if not isinstance(budget, dict) or not fields <= set(budget) or set(budget) - fields - {'max_job_attempts', 'max_top_level_visits'}:
+    if not isinstance(budget, dict) or not fields <= set(budget) or set(budget) - fields - {'max_job_attempts', 'max_top_level_visits', 'cost_control'}:
         raise ValueError('Explicit independent budget fields required: ' + ', '.join(sorted(fields)))
+    cost_control = budget.get('cost_control', 'capped')
+    if cost_control not in ('capped', 'observe_only'):
+        raise ValueError('cost_control must be capped or observe_only')
+    if 'cost_control' in budget and not model_enabled:
+        raise ValueError('cost_control requires the explicit model branch')
+    if cost_control == 'observe_only' and budget['max_model_cost_micros'] is not None:
+        raise ValueError('observe_only requires explicit max_model_cost_micros:null')
     for key in fields - {'currency'}:
+        if key == 'max_model_cost_micros' and cost_control == 'observe_only':
+            continue
         _integer(budget[key], key, 0 if key=='min_model_interval_seconds' or key.startswith('max_') and key not in
                  ('max_run_seconds', 'max_concurrent_jobs') else 1)
     if 'max_job_attempts' in budget:
@@ -121,10 +130,30 @@ def validate_config(value, *, credentials=False, require_model=False):
     model = value['model']
     fields = {'provider', 'model', 'endpoint', 'api_key_env', 'timeout_seconds', 'reserve_input_tokens',
               'max_completion_tokens', 'max_images', 'reserve_cost_micros', 'rates'}
-    if not isinstance(model, dict) or set(model) != fields:
+    capability_fields = {'supports_vision', 'image_tokens_per_image', 'request_overhead_tokens'}
+    optional_fields = capability_fields | {'image_encoding', 'reasoning_effort'}
+    if not isinstance(model, dict) or not fields <= set(model) or set(model) - fields - optional_fields:
         raise ValueError('Explicit model adapter fields required: ' + ', '.join(sorted(fields)))
-    if model['provider'] not in ('synthetic', 'chat-completions'):
+    if model['provider'] not in ('synthetic', 'chat-completions', 'deepseek', 'glm'):
         raise ValueError('Unsupported model provider')
+    if set(model) & capability_fields and not capability_fields <= set(model):
+        raise ValueError('Vision and request token allowance fields must be supplied together')
+    if model['provider'] in ('deepseek', 'glm') and not capability_fields <= set(model):
+        raise ValueError('Provider requires explicit vision and request token allowances')
+    if 'supports_vision' in model and type(model['supports_vision']) is not bool:
+        raise ValueError('supports_vision must be an explicit boolean')
+    if 'image_tokens_per_image' in model:
+        _integer(model['image_tokens_per_image'], 'image_tokens_per_image')
+        if model.get('supports_vision', True) != (model['image_tokens_per_image'] > 0):
+            raise ValueError('Vision needs positive image tokens; text-only models require zero image tokens')
+    if 'request_overhead_tokens' in model:
+        _integer(model['request_overhead_tokens'], 'request_overhead_tokens', 1)
+    if 'image_encoding' in model:
+        if model['provider'] != 'glm' or model['image_encoding'] not in ('raw_base64', 'data_url'):
+            raise ValueError('image_encoding must be raw_base64 or data_url for the GLM provider')
+    if 'reasoning_effort' in model:
+        if model['provider'] not in ('glm', 'deepseek') or model['reasoning_effort'] not in ('low', 'high', 'max'):
+            raise ValueError('reasoning_effort must be low, high or max for GLM/DeepSeek')
     if (value['mode'] == 'synthetic') != (model['provider'] == 'synthetic'):
         raise ValueError('Synthetic and real modes cannot share model results')
     for key in ('timeout_seconds', 'reserve_input_tokens', 'max_completion_tokens', 'max_images'):
@@ -148,8 +177,8 @@ def validate_config(value, *, credentials=False, require_model=False):
                 or endpoint.query or endpoint.fragment):
             raise ValueError('Real model endpoint must be an explicit credential-free HTTPS URL')
         if (not isinstance(model['api_key_env'], str) or not model['api_key_env'].isidentifier()
-                or not budget['max_model_cost_micros'] or not model['reserve_cost_micros']):
-            raise ValueError('Real calls need credential environment name and nonzero monetary limits')
+                or (cost_control == 'capped' and not budget['max_model_cost_micros']) or not model['reserve_cost_micros']):
+            raise ValueError('Real calls need credential environment name, nonzero reservation and an explicit cost-control mode')
         if not rates['input'] or not rates['output']:
             raise ValueError('Real calls need nonzero verified input/output rates')
         if budget['min_model_interval_seconds']<1:
@@ -436,14 +465,16 @@ class BatchLedger:
                 FROM model_requests''').fetchone()
             if used[0] + 1 > budget['max_model_requests']:
                 raise BudgetStop('max_model_requests reached')
-            if used[1] + model['reserve_cost_micros'] > budget['max_model_cost_micros']:
+            if budget.get('cost_control', 'capped') == 'capped' and used[1] + model['reserve_cost_micros'] > budget['max_model_cost_micros']:
                 raise BudgetStop('max_model_cost_micros reached (including uncertain reservations)')
             if used[2] + tokens > budget['max_reserved_tokens']:
                 raise BudgetStop('max_reserved_tokens reached')
             started=con.execute('SELECT started FROM batch_meta').fetchone()[0]
             if started+budget['max_run_seconds']-time.time()<model['timeout_seconds']:
                 raise BudgetStop('Insufficient remaining run time for the next bounded model request')
-            if con.execute("SELECT 1 FROM model_requests WHERE cost>reserved_cost OR error='reservation_exceeded'").fetchone():
+            exceeded = ("error='reservation_exceeded'" if budget.get('cost_control', 'capped') == 'observe_only'
+                        else "cost>reserved_cost OR error='reservation_exceeded'")
+            if con.execute('SELECT 1 FROM model_requests WHERE ' + exceeded).fetchone():
                 raise BudgetStop('Provider usage exceeded conservative reservation; reconcile before further dispatch')
             last=con.execute('SELECT MAX(started) FROM model_requests').fetchone()[0]
             if last is not None:
@@ -514,6 +545,12 @@ class BatchLedger:
                 for name in ('input_tokens','output_tokens','cached_input_tokens'):stage[name]+=usage[name]
         return {'schema_version': 'webcollect-batch-summary-1', 'run_id': self.config['run_id'],
                 'mode': self.config['mode'], 'jobs': jobs, 'resources': resources,
+                'cost_control': self.config['budget'].get('cost_control', 'capped'),
+                'max_model_cost_micros': ('NOT_APPLICABLE' if self.config['budget'].get('cost_control', 'capped') == 'observe_only'
+                                          else self.config['budget'].get('max_model_cost_micros', 'UNKNOWN')),
+                'monetary_limit_applied': self.config['model'] is not None and self.config['budget'].get('cost_control', 'capped') == 'capped',
+                'cost_reservation_exceeded_requests': sum(r['cost'] is not None and r['cost'] > r['reserved_cost'] for r in requests),
+                'token_reservation_exceeded_requests': sum(r['error'] == 'reservation_exceeded' for r in requests),
                 'top_level_visits_attempted':len(visits) if visit_history['history_complete'] else 'UNKNOWN',
                 'top_level_visits_recorded_since_accounting_start':len(visits),
                 'top_level_visit_history':visit_history,

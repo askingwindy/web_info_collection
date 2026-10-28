@@ -6,6 +6,8 @@
 .env
 .env.*
 !.env.example
+/request/token
+/request/token/
 /results/
 /verify_results/
 *.zip

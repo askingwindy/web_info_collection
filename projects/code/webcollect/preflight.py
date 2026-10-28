@@ -16,9 +16,11 @@ from .content_preparation import assess_content
 from .storage import write_json
 
 ROUTES = ('NORMAL_M1', 'PREPARE_RECHECK', 'DYNAMIC_CONTENT_TRACK', 'REVIEW_REQUIRED')
-SOURCE_FILES = ('preflight.py', 'navigation.py', 'media_preflight.py', 'media_preflight.js', 'browser.py',
+SOURCE_FILES = ('preflight.py', 'navigation.py', 'batch_core.py', 'media_preflight.py', 'media_preflight.js', 'browser.py',
                 'content_preparation.py', 'content_preparation.js', 'snapshot.js',
-                'collect.py', 'production_quality.py')
+                'collect.py', 'production_quality.py', 'task_contract.py', 'html_table_strategy.py',
+                'qr_strategy.py', 'qr_pixel.py', 'placeholder_strategy.py', 'placeholder_pixel.py',
+                'hmac_strategy.py', 'pbkdf2_strategy.py', 'task_generation.py', 'task_admission.py')
 
 
 def digest(path):

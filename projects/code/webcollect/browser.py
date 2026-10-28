@@ -276,6 +276,10 @@ def prepare_action(state, operation):
         if not target:raise ValueError('目标未出现在当前视口界面树；必须先显式滚动')
         element=next(e for e in state['elements'] if e['element_id']==target['element_id'])
         if not element['enabled']:raise ValueError('目标控件不可用')
+        visual_kind=(operation.get('evidence') or {}).get('target_visual_kind','text')
+        if visual_kind!='text':
+            from .html_table_strategy import validate_visual_target
+            validate_visual_target(state,operation)
         expected_label=(operation.get('evidence') or {}).get('target_label')
         if expected_label:
             import re

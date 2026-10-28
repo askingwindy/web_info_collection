@@ -86,6 +86,77 @@ class ExactImageIndex:
             'image_count': len(self.files),
             'files_sha256': {str(p): digest for p, digest in sorted(self.files.items())}}
 
+
+class ConcurrentExactImageIndex:
+    """Shared exact-image claims, committed atomically with a capture outcome.
+
+    Browsers run independently. Only baseline registration, successful capture
+    commits and boundary integrity snapshots serialize through the existing
+    production ledger. In-flight/failed directories are not accepted history.
+    """
+    def __init__(self, roots, store):
+        self.roots = tuple(sorted({Path(root).resolve() for root in roots}))
+        self.store = store
+        with store.exact_image_snapshot() as (states, _):
+            baseline = {str(path): sha(path) for path in self._paths(states)}
+        store.register_exact_baseline(baseline)
+
+    def _paths(self, states):
+        return sorted({p.resolve() for root in self.roots for p in _sample_images(root)
+                       if states.get(p.parent.parent.name, 'legacy') in ('legacy', 'collected_pending_review')})
+
+    def _covered(self, path):
+        path = Path(path)
+        for root in self.roots:
+            try:
+                parts = path.relative_to(root).parts
+            except ValueError:
+                continue
+            if ((len(parts) == 4 and parts[0] == 'samples' and parts[2] == 'images')
+                    or (len(parts) == 5 and parts[1] == 'samples' and parts[3] == 'images')):
+                return True
+        return False
+
+    def conflicts(self, sample):
+        sample = Path(sample).resolve()
+        own = {sha(path): path.name for path in sorted((sample / 'images').glob('*.png'))}
+        result = []
+        for row in self.store.exact_image_claims():
+            if row['sample_id'] != sample.name and row['digest'] in own:
+                result.append({'rule': 'customer exact screenshot route', 'sha256': row['digest'],
+                    'current_step_image': own[row['digest']], 'other_sample': str(Path(row['path']).parent.parent),
+                    'other_image': row['path'], 'not_full_trajectory_equivalence': True})
+        return result
+
+    def sample_images(self, sample):
+        return {str(path.resolve()): sha(path) for path in sorted((Path(sample) / 'images').glob('*.png'))}
+
+    def add_sample(self, sample):
+        expected = self.sample_images(sample)
+        actual = {row['path']: row['digest'] for row in self.store.exact_image_claims()
+                  if row['sample_id'] == Path(sample).name}
+        if any(actual.get(path) != digest for path, digest in expected.items()):
+            raise ValueError('成功保存的样本缺少同事务精确图片声明')
+
+    def verify_snapshot(self):
+        with self.store.exact_image_snapshot() as (states, rows):
+            expected = {row['path']: row['digest'] for row in rows if self._covered(row['path'])}
+            current = {str(path): sha(path) for path in self._paths(states)}
+            if current != expected:
+                changed = sorted(path for path in current.keys() | expected.keys()
+                                 if current.get(path) != expected.get(path))
+                raise ValueError('并发去重集合存在未登记变化：' + str(changed[:10]))
+            # Check claims outside the scanned roots too: they participate in
+            # the global conflict check and must not become a stale cache.
+            for row in rows:
+                if sha(row['path']) != row['digest']:
+                    raise ValueError('已登记精确图片发生变化：' + row['path'])
+        return {'schema': 'webcollect-exact-index-concurrent-1',
+            'scope': 'producer-exact-images-only', 'independent_final_qc_required': True,
+            'atomic_capture_commit': True, 'registry_path': str(self.store.registry),
+            'roots': [str(root) for root in self.roots], 'image_count': len(expected),
+            'files_sha256': dict(sorted(expected.items()))}
+
 def contract_identity(repo):
     repo=Path(repo);sources=['request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md','request/需求澄清记录.md','request/web操作采集需求/附件A-字段说明.md','request/web操作采集需求/附件B-动作空间与坐标系.md','request/web操作采集需求/samples/样例说明.md']
     return {'profile':'customer-prose-with-clarifications','version':1,'authority_files_sha256':{s:sha(repo/s) for s in sources},'producer_constants_not_customer_exclusive_enums':True,'customer_actual_program':'NOT_EXECUTED'}

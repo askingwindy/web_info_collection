@@ -1,4 +1,4 @@
-"""Read-only four-route diagnostics; near hashes are explicit proxies, not client algorithms."""
+"""Read-only exact four-route predicates with explicit population/rate accounting."""
 import argparse,json,re,hashlib,itertools
 from collections import Counter,defaultdict
 from pathlib import Path
@@ -25,6 +25,77 @@ def simhash(text):
         for bit in range(64):vector[bit]+=weight if h&(1<<bit) else -weight
     return sum(1<<i for i,v in enumerate(vector) if v>0)
 def distance(a,b):return (a^b).bit_count()
+
+
+def summarize(result, current_sample_ids=None):
+    """OR every route; semantic DISTINCT cannot clear a deterministic hit.
+
+    A batch rate uses only the explicit current population. Historical-only
+    matches stay visible in diagnostics but do not enter the batch numerator.
+    """
+    ids=[row['sample_id'] for row in result['rows']]
+    if len(ids)!=len(set(ids)):raise ValueError('Repeated duplicate-summary population')
+    all_ids=set(ids)
+    current=all_ids if current_sample_ids is None else set(current_sample_ids)
+    if not current<=all_ids:raise ValueError('Current duplicate-summary IDs are outside the inspected population')
+    routes={};route_keys=(('route1','confirmed_pair_count','pairs'),('route2','count','confirmed_pairs'),
+                         ('route3','count','candidates'),('route4','count','candidates'))
+    for route,count_key,rows_key in route_keys:
+        pairs=set()
+        for row in result[route][rows_key]:
+            pair=row.get('sample_ids')
+            if (not isinstance(pair,list) or len(pair)!=2 or len(set(pair))!=2
+                    or any(not isinstance(sid,str) or sid not in all_ids for sid in pair)):
+                raise ValueError('Invalid four-route pair identity: '+route)
+            pairs.add(tuple(sorted(pair)))
+        if len(pairs)!=len(result[route][rows_key]) or result[route][count_key]!=len(pairs):
+            raise ValueError('Four-route count/pair records disagree: '+route)
+        routes[route]=pairs
+    pairs=set().union(*routes.values())
+    adjudications=[{'sample_ids':list(pair),'matched_routes':[route for route,values in routes.items() if pair in values],
+        'status':'RESOLVED','classification':'NEAR_DUPLICATE','semantic_exemption_allowed':False}
+        for pair in sorted(pairs)]
+    unresolved=[row for row in adjudications if row['status']!='RESOLVED']
+    batch_pairs=[row for row in adjudications if set(row['sample_ids'])&current]
+    historical=[row for row in adjudications if not set(row['sample_ids'])&current]
+    affected=sorted({sid for row in batch_pairs for sid in row['sample_ids'] if sid in current})
+    count=len(current);history_count=len(all_ids-current)
+    pair_domain=count*history_count+count*(count-1)//2
+    sample_rate=len(affected)/count if count else None
+    pair_rate=len(batch_pairs)/pair_domain if pair_domain else (0.0 if count else None)
+    return {'schema_version':'qc-four-route-resolution-1','analysis_status':'COMPLETE' if count else 'PENDING',
+        'population_scope':'all-inspected-samples' if current_sample_ids is None else 'explicit-current-batch-plus-history',
+        'current_sample_ids':sorted(current),'current_sample_count':count,'history_sample_count':history_count,
+        'all_inspected_sample_count':len(all_ids),'all_inspected_pair_domain':len(all_ids)*(len(all_ids)-1)//2,
+        'current_involved_pair_domain':pair_domain,
+        'route_pair_counts':{route:len(values) for route,values in routes.items()},
+        'current_route_pair_counts':{route:sum(bool(set(pair)&current) for pair in values) for route,values in routes.items()},
+        'historical_only_route_pair_counts':{route:sum(not bool(set(pair)&current) for pair in values) for route,values in routes.items()},
+        'all_inspected_union_pair_count':len(adjudications),'current_union_pair_count':len(batch_pairs),
+        'historical_only_union_pair_count':len(historical),'pair_adjudications':adjudications,
+        'unadjudicated_pair_count':len(unresolved) if count else None,
+        'affected_current_sample_ids':affected,'affected_current_sample_count':len(affected),
+        'near_duplicate_sample_rate':sample_rate,
+        'sample_rate_definition':'unique current samples involved in any four-route hit / current_sample_count; historical samples never dilute this denominator',
+        'near_duplicate_pair_rate':pair_rate,
+        'pair_rate_definition':'unique current-involved hit pairs / (current*history + current*(current-1)/2)',
+        'maximum_near_duplicate_sample_rate':0.001,
+        'sample_rate_within_requested_limit':sample_rate<=0.001 if sample_rate is not None else None,
+        'strict_zero_hit_gate':'FAIL' if batch_pairs else 'PASS' if count and not unresolved else 'PENDING',
+        'decision_policy':'Any configured route hit is a near duplicate. No semantic/AI/human DISTINCT exemption. Existing zero-hit gate remains stricter than the requested rate cap.'}
+
+
+def analysis_error(error, *, sample_count=None, dataset_label='unreadable-input-set'):
+    """A failed scan has unknown counts, never a fabricated four-route zero."""
+    return {'dataset':str(dataset_label),'sample_count':sample_count,'pair_comparisons':None,'error':str(error),
+        'analysis_status':'FAILED','route1':{'groups':[],'pairs':[],'confirmed_pair_count':None},
+        'route2':{'confirmed_pairs':[],'count':None},'route3':{'candidates':[],'count':None},
+        'route4':{'candidates':[],'count':None},
+        'summary':{'schema_version':'qc-four-route-resolution-1','analysis_status':'FAILED',
+            'current_sample_count':sample_count,'current_union_pair_count':None,
+            'unadjudicated_pair_count':None,'unadjudicated_status':'UNKNOWN_CHECK_FAILED',
+            'near_duplicate_sample_rate':None,'near_duplicate_pair_rate':None,
+            'strict_zero_hit_gate':'PENDING','reason':'Four-route evaluation did not complete; unknown is not zero or PASS.'}}
 def minimum_removal_sets(pairs):
     vertices=sorted({v for p in pairs for v in p})
     if len(vertices)>16:
@@ -86,7 +157,8 @@ def exhaustive_routes(rows):
 CACHE_VERSION='qc-fingerprints-1'
 
 
-def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, verify_exhaustive=False, dataset_label='explicit-input-set'):
+def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, verify_exhaustive=False,
+                   dataset_label='explicit-input-set', current_sample_ids=None):
     """Read-only samples; optional cache is outside all samples and never acceptance evidence.
 
     Final validation can force raw recomputation and compare the exact-recall
@@ -148,15 +220,15 @@ def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, veri
         a,b=byid[first],byid[second]
         pair_records.append({'sample_ids':[first,second],'shared_steps':shared_steps[(first,second)],'task_instructions':[a['task_instruction'],b['task_instruction']],'steps':[len(a['annotation']['steps']),len(b['annotation']['steps'])],'final_results':[a['annotation']['final_result'],b['annotation']['final_result']],'final_image_sha256':[a['frame_sha256'][-1],b['frame_sha256'][-1]],'final_images_equal':a['frame_sha256'][-1]==b['frame_sha256'][-1],'action_sequence_equal':a['sequence']==b['sequence'],'all_image_sequence_equal':a['frame_sha256']==b['frame_sha256'],'same_action_type_skeleton':[x[0] for x in a['sequence']]==[x[0] for x in b['sequence']],'classification':'confirmed_route1_violation_even_if_only_common_initial_state'})
     sequence_pairs=[{'sample_ids':[rows[i]['sample_id'],rows[j]['sample_id']],'sequence_sha256':rows[i]['sequence_sha256']} for i,j in sorted(indexed['route2'])]
-    near_image=[{'sample_ids':[rows[i]['sample_id'],rows[j]['sample_id']],'first_hamming':distance(rows[i]['first_dhash'],rows[j]['first_dhash']),'last_hamming':distance(rows[i]['last_dhash'],rows[j]['last_dhash']),'classification':'proxy_algorithm_candidate_not_client_result'} for i,j in sorted(indexed['route3'])]
-    near_text=[{'sample_ids':[rows[i]['sample_id'],rows[j]['sample_id']],'hamming':distance(rows[i]['instruction_simhash'],rows[j]['instruction_simhash']),'classification':'proxy_algorithm_candidate_not_client_result'} for i,j in sorted(indexed['route4'])]
+    near_image=[{'sample_ids':[rows[i]['sample_id'],rows[j]['sample_id']],'first_hamming':distance(rows[i]['first_dhash'],rows[j]['first_dhash']),'last_hamming':distance(rows[i]['last_dhash'],rows[j]['last_dhash']),'classification':'confirmed_route3_threshold_hit'} for i,j in sorted(indexed['route3'])]
+    near_text=[{'sample_ids':[rows[i]['sample_id'],rows[j]['sample_id']],'hamming':distance(rows[i]['instruction_simhash'],rows[j]['instruction_simhash']),'classification':'confirmed_route4_threshold_hit'} for i,j in sorted(indexed['route4'])]
     if cache:
         import os,tempfile
         target=Path(cache);target.parent.mkdir(parents=True,exist_ok=True)
         with tempfile.NamedTemporaryFile(mode='w',dir=target.parent,delete=False,encoding='utf-8') as stream:
             json.dump({'schema_version':CACHE_VERSION,'implementation_sha256':implementation,'records':updated},stream,ensure_ascii=False);temporary=stream.name
         os.replace(temporary,target)
-    return {'dataset':str(dataset_label),'sample_count':len(rows),'pair_comparisons':len(rows)*(len(rows)-1)//2,
+    result={'dataset':str(dataset_label),'sample_count':len(rows),'pair_comparisons':len(rows)*(len(rows)-1)//2,
             'pair_comparisons_meaning':'complete logical unordered-pair domain, not physical index comparisons',
             'search':{'method':'exact-recall Hamming partition index with exact threshold filtering','recall_guarantee':'r+1 disjoint blocks: <=r bit differences share at least one complete block',**candidate_stats,'exhaustive_verification':comparison,'cache_hits':hits,'cache_is_not_review_evidence':True},
             'route1':{'groups':exact,'confirmed_pair_count':len(exact_pairs),'pairs':pair_records},
@@ -168,6 +240,12 @@ def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, veri
             'insufficient_rules':['Local hashes do not prove customer algorithm equivalence.','Substantive differences require actual review.'],
             'minimum_removal_for_route1_only':minimum_removal_sets(exact_pairs),'not_removed_or_recaptured':True,
             'rows':[{'sample_id':x['sample_id'],'task_instruction':x['task_instruction'],'sequence_sha256':x['sequence_sha256'],'first_sha256':x['frame_sha256'][0],'last_sha256':x['frame_sha256'][-1]} for x in rows]}
+    result['summary']=summarize(result,current_sample_ids)
+    if comparison['status']=='FAIL':
+        result['summary'].update(analysis_status='FAILED',strict_zero_hit_gate='PENDING',
+            unadjudicated_pair_count=None,unadjudicated_status='UNKNOWN_INDEX_OR_CACHE_DISAGREEMENT',
+            near_duplicate_sample_rate=None,near_duplicate_pair_rate=None,sample_rate_within_requested_limit=None)
+    return result
 
 
 def analyze(dataset,evidence_contexts=None,*,cache=None,verify_exhaustive=True):

@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .contract import digest, fingerprint
-from .duplicates import analyze_inputs
+from .duplicates import analyze_inputs, analysis_error
 from .format_checks import run as format_run
 from .layout import discover
 from .profiles import load as load_profile, package_files, DEFAULT_DELIVERY_PROFILE
@@ -138,6 +138,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         if duplicate['search']['exhaustive_verification']['status'] == 'FAIL':
             errors.append({'reason': 'index/exhaustive or cached/raw fingerprint disagreement'})
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        duplicate = analysis_error(error,sample_count=count,dataset_label='cumulative:' + digest(raw))
         errors.append({'reason': 'cumulative duplicate inspection failed: ' + str(error)})
     for root in paths:
         if package_files(root) != snapshots[str(root)]:

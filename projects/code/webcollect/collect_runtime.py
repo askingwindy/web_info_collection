@@ -11,9 +11,10 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 
-from .production_quality import ExactImageIndex, contract_identity, sha
+from .production_quality import ConcurrentExactImageIndex, contract_identity, sha
 from .storage import write_json, verify_existing_registry
 from .validate import read_json, validate_sample
+from .navigation import NavigationTimeoutError
 
 
 class CollectionFailure(ValueError):
@@ -30,6 +31,11 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
+    from .runtime import ImageCommitConflict
+    if isinstance(error, ImageCommitConflict):
+        return 'duplicate'
+    if isinstance(error, NavigationTimeoutError):
+        return 'network'
     message = str(error)
     if any(token in message for token in ('net::ERR_CONNECTION', 'net::ERR_TIMED_OUT',
                                           'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_NETWORK')):
@@ -47,8 +53,10 @@ def source_identity():
              'task_contract.py', 'browser.py', 'snapshot.js', 'production_quality.py',
              'content_preparation.py', 'content_preparation.js', 'production_facts.py',
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
-             'action_normalization.py']
+             'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
+             'admission_cohort.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
+    names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}
 
 
@@ -108,6 +116,8 @@ def _evidence(path):
 
 def _root_cause(error):
     import re
+    if isinstance(error, NavigationTimeoutError):
+        return 'navigation_timeout'
     match = re.search(r'net::ERR_[A-Z_]+', str(error))
     return match.group() if match else 'navigation_timeout' if 'Page.goto: Timeout' in str(error) else classify_failure(error)
 
@@ -265,6 +275,10 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     if not resume and policy_path is None:
         raise ValueError('首次M4采集必须提供 --policy，明确累计基线类目计数与本波预算；不能默认忽略旧样本')
     output, registry = Path(output).resolve(), Path(registry).resolve()
+    from .task_admission import verify_collection_entry
+    verify_collection_entry(plan, registry, output)
+    from .observed_workflow import verify_entry as verify_workflow_entry
+    verify_workflow_entry(plan, registry, output)
     scope = runtime_scope(output)
     store = RuntimeStore(registry, scope)
     if resume:
@@ -373,7 +387,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     quarantine_interrupted(output, attempts)
     snapshot = sync_manifest(store, output, manifest)
     roots = [output.parent, *[Path(path) for path in plan.get('dedup_roots', [])]]
-    index = ExactImageIndex(roots)
+    index = ConcurrentExactImageIndex(roots, store)
     worker_id = 'serial-' + str(uuid.uuid4())
     phase_ledger = output / 'metering' / 'phases.jsonl'
     async with worker_measurement(store, worker_id, output), async_playwright() as playwright:
@@ -446,8 +460,34 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             'capture_files_sha256': await asyncio.to_thread(sample_hashes, evidence),
                             'semantic_review': 'REVIEW_REQUIRED'})
                         store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
-                                             'collected_pending_review', evidence=_evidence(saved))
+                                             'collected_pending_review', evidence=_evidence(saved),
+                                             exact_images=index.sample_images(sample))
                         index.add_sample(sample)
+                    except asyncio.CancelledError:
+                        # A normal stop owns its lease and can close its partial
+                        # attempt immediately. If lease ownership was lost,
+                        # recover_expired remains authoritative instead.
+                        committed = next(row for row in store.attempt_ledger()['attempts']
+                                         if row['attempt_id'] == attempt['attempt_id'])
+                        if committed['status'] == 'running':
+                            evidence.mkdir(parents=True, exist_ok=True)
+                            failure = evidence / 'failure.json'
+                            if not failure.exists():
+                                write_json(failure, {'error': 'runner cancelled; partial trajectory is not success',
+                                    'timestamp': now(), 'attempt_id': attempt['attempt_id'],
+                                    'task_id': attempt['task_id'], 'failure_class': 'interrupted'})
+                            quarantine_interrupted(output, [{**attempt, 'status': 'interrupted'}])
+                            try:
+                                store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
+                                    'rejected', failure_class='interrupted', root_cause='runner_cancelled',
+                                    evidence=_evidence(failure))
+                            except ValueError as cancellation_error:
+                                if not str(cancellation_error).startswith(('worker/lease fencing不匹配',
+                                        '租约已过期', 'attempt已结束', '已终结attempt不可覆盖')):
+                                    raise
+                                # A revoked/expired lease must never be revived
+                                # merely to write a cancellation outcome.
+                        raise
                     except Exception as error:
                         # If success already committed, never reinterpret it as a failed attempt.
                         committed = next(row for row in store.attempt_ledger()['attempts']

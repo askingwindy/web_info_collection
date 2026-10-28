@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS m4_publications (
  PRIMARY KEY(campaign_id,release_id));
 CREATE INDEX IF NOT EXISTS m4_attempt_campaign ON m4_attempts(campaign_id,status);
 CREATE INDEX IF NOT EXISTS m4_attempt_task ON m4_attempts(task_key,created_at);
+CREATE TABLE IF NOT EXISTS m4_exact_images (
+ path TEXT PRIMARY KEY, digest TEXT NOT NULL, sample_id TEXT NOT NULL,
+ attempt_id TEXT, created_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS m4_exact_digest ON m4_exact_images(digest);
 '''
 
 
@@ -152,6 +156,14 @@ def _bound_quality_report(evidence):
                     'dataset': str(source), 'inspection_stage': report.get('inspection_stage')}
 
 
+class ImageCommitConflict(ValueError):
+    failure_class = 'duplicate'
+
+    def __init__(self, conflicts):
+        self.conflicts = conflicts
+        super().__init__('跨样本截图重复，拒绝并发提交：' + canonical(conflicts))
+
+
 class RuntimeStore:
     def __init__(self, registry, scope_id):
         self.registry = Path(registry).resolve()
@@ -192,6 +204,20 @@ class RuntimeStore:
         campaign = self._scope(con)['campaign_id']
         con.execute('INSERT INTO m4_events(scope_id,campaign_id,event_type,task_key,attempt_id,at,payload_json) VALUES(?,?,?,?,?,?,?)',
                     (self.scope_id, campaign, event, task_key, attempt_id, now, canonical(payload or {})))
+
+    def _customer_history_proof(self, plan=None):
+        """Read/hash original customer evidence before taking the writer lock."""
+        if plan is None:
+            con = self._connect(readonly=True)
+            try:
+                row = con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=?', (self.scope_id,)).fetchone()
+                if row is None:
+                    return {}
+                plan = json.loads(row[0])
+            finally:
+                con.close()
+        from .admission_cohort import validate_customer_history
+        return validate_customer_history(plan)
 
     def initialize(self, policy=None, *, now=None):
         policy = validate_policy(policy or {})
@@ -251,11 +277,15 @@ class RuntimeStore:
     def enqueue_plan(self, plan, publication, *, now=None):
         current = timestamp(now)
         verify_publication(plan, publication, now=current)
+        history_proof = self._customer_history_proof(plan)
+        current = timestamp(now)
         plan_sha = publication['plan_sha256']
         with self._transaction() as con:
             policy = self._policy(con)
             if self._scope(con)['state'] == 'closed_replanned':
                 raise ValueError('scope已永久closed_replanned；新任务版本必须使用新scope')
+            from .admission_cohort import guard_enqueue
+            guard_enqueue(con, self.registry, self.scope_id, plan, publication, policy['campaign_id'], history_proof=history_proof)
             existing = con.execute('SELECT * FROM m4_plans WHERE scope_id=? AND plan_sha256=?', (self.scope_id, plan_sha)).fetchone()
             if existing:
                 if json.loads(existing['publication_json']) != publication:
@@ -302,6 +332,7 @@ class RuntimeStore:
     def claim_next(self, worker_id, *, request_id, plan_sha256=None, batch_id=None, now=None, _fault=None):
         if not all(isinstance(v, str) and v.strip() for v in (worker_id, request_id)):
             raise ValueError('worker_id和幂等request_id必须非空')
+        history_proof = self._customer_history_proof()
         current = timestamp(now)
         with self._transaction() as con:
             policy = self._policy(con)
@@ -312,6 +343,8 @@ class RuntimeStore:
                 return self._view(self._attempt(con, old['attempt_id']))
             if self._scope(con)['state'] != 'active':
                 return None
+            from .admission_cohort import guard_scope
+            guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
             campaign = policy['campaign_id']
             live = list(con.execute("SELECT a.*,t.domain_key FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.status IN ('reserved','running') AND a.lease_expires_at>?", (current,)))
             if sum(r['campaign_id'] == campaign for r in live) >= policy['max_workers'] or any(r['worker_id'] == worker_id for r in live):
@@ -367,9 +400,12 @@ class RuntimeStore:
         return row
 
     def start_attempt(self, attempt_id, worker_id, lease_token, *, now=None):
+        history_proof = self._customer_history_proof()
         current = timestamp(now)
         with self._transaction() as con:
             row = self._owned(con, attempt_id, worker_id, lease_token, current)
+            from .admission_cohort import guard_scope
+            guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
             if row['capability_expires_at'] <= current:
                 raise ValueError('能力已过期，不能开始真实执行')
             if row['started_at'] is None:
@@ -386,6 +422,8 @@ class RuntimeStore:
         current = timestamp(now)
         with self._transaction() as con:
             self._owned(con, attempt_id, worker_id, lease_token, current)
+            from .admission_cohort import guard_scope
+            guard_scope(con, self.registry, self.scope_id)
             expires = current + self._policy(con)['lease_seconds']
             con.execute('UPDATE m4_attempts SET lease_expires_at=? WHERE attempt_id=?', (expires, attempt_id))
             self._event(con, 'lease_extended', current, {'lease_expires_at': expires}, attempt_id=attempt_id)
@@ -405,7 +443,7 @@ class RuntimeStore:
         next_at = current + policy['task_interval_seconds']
         con.execute('INSERT INTO m4_domains VALUES(?,?) ON CONFLICT(domain_key) DO UPDATE SET next_start_at=MAX(next_start_at,excluded.next_start_at)', (row['domain_key'], next_at))
 
-    def finish_attempt(self, attempt_id, worker_id, lease_token, outcome, *, failure_class=None, root_cause=None, evidence=None, now=None):
+    def finish_attempt(self, attempt_id, worker_id, lease_token, outcome, *, failure_class=None, root_cause=None, evidence=None, exact_images=None, now=None):
         if outcome not in ('collected_pending_review', 'rejected'):
             raise ValueError('生产只能保存待审或拒绝，不授予QC/客户PASS')
         evidence = evidence or []
@@ -415,6 +453,7 @@ class RuntimeStore:
             raise ValueError('失败必须有分类与实际根因')
         if outcome == 'collected_pending_review' and (failure_class or root_cause or not evidence):
             raise ValueError('保存成功需要证据且不能带失败原因')
+        history_proof = self._customer_history_proof() if outcome == 'collected_pending_review' else None
         current = timestamp(now)
         with self._transaction() as con:
             row = self._owned(con, attempt_id, worker_id, lease_token, current, terminal_ok=True)
@@ -424,6 +463,27 @@ class RuntimeStore:
                 return self._view(row)
             if row['started_at'] is None:
                 raise ValueError('未开始的预留不能记为真实执行结果')
+            if outcome == 'collected_pending_review':
+                from .admission_cohort import guard_scope
+                guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
+            if exact_images is not None:
+                if outcome != 'collected_pending_review':
+                    raise ValueError('精确图片声明只允许与成功保存同事务提交')
+                checked = self._checked_images(exact_images, row['sample_id'])
+                conflicts = []
+                for path, digest in checked.items():
+                    for other in con.execute('SELECT path,sample_id FROM m4_exact_images WHERE digest=? AND sample_id<>?',
+                                             (digest, row['sample_id'])):
+                        conflicts.append({'sha256': digest, 'current_image': path,
+                                          'other_image': other['path'], 'other_sample_id': other['sample_id']})
+                if conflicts:
+                    raise ImageCommitConflict(conflicts)
+                for path, digest in checked.items():
+                    previous = con.execute('SELECT digest,sample_id FROM m4_exact_images WHERE path=?', (path,)).fetchone()
+                    if previous and tuple(previous) != (digest, row['sample_id']):
+                        raise ValueError('精确图片声明的原路径发生变化：' + path)
+                    con.execute('INSERT OR IGNORE INTO m4_exact_images VALUES(?,?,?,?,?)',
+                                (path, digest, row['sample_id'], attempt_id, current))
             policy = self._policy(con)
             con.execute('UPDATE m4_attempts SET status=?,finished_at=?,failure_class=?,root_cause=?,evidence_json=? WHERE attempt_id=?',
                         (outcome, current, failure_class, root_cause, canonical(evidence), attempt_id))
@@ -457,6 +517,68 @@ class RuntimeStore:
                 self._event(con, 'lease_recovered', current, {'reason': reason, 'status': status, **transition}, row['task_key'], attempt_id)
                 recovered.append(self._view(saved))
         return recovered
+
+    @staticmethod
+    def _checked_images(images, sample_id=None):
+        import hashlib
+        if not isinstance(images, dict) or not images:
+            raise ValueError('精确图片声明必须为非空路径/SHA映射')
+        checked = {}
+        for name, digest in images.items():
+            path = Path(name)
+            resolved = path.resolve()
+            if (not path.is_absolute() or resolved.suffix != '.png' or resolved.parent.name != 'images'
+                    or (sample_id is not None and path.parent.parent.name != sample_id)
+                    or (sample_id is not None and resolved.parent.parent.name != sample_id)
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or hashlib.sha256(resolved.read_bytes()).hexdigest() != digest):
+                raise ValueError('精确图片声明与原文件不一致：' + str(name))
+            checked[str(resolved)] = digest
+        return checked
+
+    def register_exact_baseline(self, images, *, now=None):
+        """Register observed legacy/committed images; never register in-flight captures.
+
+        Existing paths are immutable. Capture claims are inserted only by
+        finish_attempt in the same transaction that commits its success.
+        """
+        if not images:
+            return
+        current = timestamp(now)
+        with self._transaction() as con:
+            checked = self._checked_images(images)
+            for path, digest in checked.items():
+                sid = Path(path).parent.parent.name
+                attempt = con.execute('SELECT attempt_id,status FROM m4_attempts WHERE sample_id=?', (sid,)).fetchone()
+                if attempt and attempt['status'] != 'collected_pending_review':
+                    continue
+                previous = con.execute('SELECT digest,sample_id FROM m4_exact_images WHERE path=?', (path,)).fetchone()
+                if previous and tuple(previous) != (digest, sid):
+                    raise ValueError('已登记精确图片发生变化：' + path)
+                con.execute('INSERT OR IGNORE INTO m4_exact_images VALUES(?,?,?,?,?)',
+                            (path, digest, sid, attempt['attempt_id'] if attempt else None, current))
+
+    def exact_image_claims(self):
+        con = self._connect(readonly=True)
+        try:
+            return [dict(row) for row in con.execute('SELECT * FROM m4_exact_images ORDER BY path')]
+        finally:
+            con.close()
+
+    def attempt_image_states(self):
+        con = self._connect(readonly=True)
+        try:
+            return {row['sample_id']: row['status'] for row in con.execute('SELECT sample_id,status FROM m4_attempts')}
+        finally:
+            con.close()
+
+    @contextmanager
+    def exact_image_snapshot(self):
+        """Fence only snapshot/commit boundaries, never browser execution."""
+        with self._transaction() as con:
+            states = {row['sample_id']: row['status'] for row in con.execute('SELECT sample_id,status FROM m4_attempts')}
+            claims = [dict(row) for row in con.execute('SELECT * FROM m4_exact_images ORDER BY path')]
+            yield states, claims
 
     def set_scope_paused(self, paused, reason, *, now=None):
         if type(paused) is not bool or not isinstance(reason, str) or not reason.strip():
@@ -520,11 +642,19 @@ class RuntimeStore:
                 return {'already_closed': True, 'path': str(receipt_path), 'sha256': binding['sha256'], 'closure': receipt}
             if events or receipt_path.exists() or list(receipt_path.parent.glob('.closure-*.prepared.json')):
                 raise ValueError('存在未匹配已提交关闭事件的closure收据；可能发生提交中断，保留现场核账')
-            if scope['state'] != 'paused':
+            # A completed rejected-only batch has no remaining runner work to
+            # pause. Its original final snapshot stays immutable; permit direct
+            # closure only after the full terminal population checks below.
+            terminal_failed_scope = scope['state'] == 'active'
+            if scope['state'] not in ('paused', 'active'):
                 raise ValueError('仅允许关闭已暂停且无在途的失败scope')
             rows = list(con.execute('SELECT * FROM m4_tasks WHERE scope_id=? ORDER BY created_at,task_id,task_version', (self.scope_id,)))
             tasks = [self._view(row) for row in rows]
             attempts = [self._view(self._attempt(con, row[0])) for row in con.execute('SELECT attempt_id FROM m4_attempts WHERE scope_id=? ORDER BY created_at,rowid', (self.scope_id,))]
+            if terminal_failed_scope and (not tasks or not attempts
+                    or any(row['status'] != 'needs_replan' for row in tasks)
+                    or {row['task_key'] for row in tasks} != {row['task_key'] for row in attempts}):
+                raise ValueError('仅允许关闭已暂停scope或全部已实际拒收的终结scope')
             if any(row['status'] in ACTIVE for row in attempts) or any(row['status'] in ACTIVE for row in tasks):
                 raise ValueError('scope存在reserved/running在途attempt，禁止关闭')
             if any(row['started_at'] is None or row['status'] != 'rejected' or row['finished_at'] is None for row in attempts):
@@ -547,7 +677,8 @@ class RuntimeStore:
                 raise ValueError('原计划与数据库任务不构成同一完整全集')
             if manifest.get('runtime_scope_id') != self.scope_id or manifest.get('registry_path') != str(self.registry) or manifest.get('samples') or manifest.get('active_task') or manifest.get('reserved_attempts'):
                 raise ValueError('原manifest含成功/在途/预留或输出绑定不匹配')
-            if manifest.get('collection_status') != 'paused_pending_resume':
+            expected_status = 'finished_pending_review' if terminal_failed_scope else 'paused_pending_resume'
+            if manifest.get('collection_status') != expected_status:
                 raise ValueError('原manifest不是已暂停待恢复状态')
             manifest_attempts = manifest.get('attempts', [])
             by_id = {row.get('attempt_id'): row for row in manifest_attempts}

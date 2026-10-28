@@ -41,7 +41,11 @@ def producer_implementation():
     root = Path(webcollect.__file__).parent
     return {name: file_sha(root / name) for name in (
         'collect.py', 'task_generation.py', 'task_contract.py', 'runtime.py',
-        'storage.py', 'narrative_revisions.py', 'client_package.py')}
+        'storage.py', 'narrative_revisions.py', 'client_package.py',
+        'browser.py', 'snapshot.js', 'history_business.py', 'task_replanning.py',
+        'bmi_strategy.py', 'date_strategy.py', 'ascii_art_strategy.py',
+        'loan_strategy.py', 'html_table_strategy.py', 'qr_strategy.py', 'qr_pixel.py',
+        'placeholder_strategy.py', 'placeholder_pixel.py')}
 
 
 def policy_load(value=None):

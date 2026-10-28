@@ -23,8 +23,21 @@ from webcollect.planning import object_sha256, validate_capability
 from webcollect.runtime import domain_key
 from webcollect.bmi_strategy import BMI_INVENTORY_JS, ADAPTER_ID as BMI_ADAPTER_ID, matches_uri as bmi_matches_uri
 from webcollect.date_strategy import DATE_INVENTORY_JS, ADAPTER_ID as DATE_ADAPTER_ID, matches_uri as date_matches_uri
+from webcollect.ascii_art_strategy import ASCII_ART_INVENTORY_JS, ADAPTER_ID as ASCII_ART_ADAPTER_ID, matches_uri as ascii_art_matches_uri
+from webcollect.loan_strategy import LOAN_INVENTORY_JS, ADAPTER_ID as LOAN_ADAPTER_ID, matches_uri as loan_matches_uri
+from webcollect.html_table_strategy import (HTML_TABLE_INVENTORY_JS, ADAPTER_ID as HTML_TABLE_ADAPTER_ID,
+    matches_uri as html_table_matches_uri, validate_observation as validate_html_table_observation)
+from webcollect.qr_strategy import (QR_INVENTORY_JS, ADAPTER_ID as QR_ADAPTER_ID,
+    matches_uri as qr_matches_uri, validate_observation as validate_qr_observation)
+from webcollect.placeholder_strategy import (PLACEHOLDER_INVENTORY_JS, ADAPTER_ID as PLACEHOLDER_ADAPTER_ID,
+    matches_uri as placeholder_matches_uri)
 
-VERSION = 'site-supply-6-observed-date-widget'
+from webcollect.hmac_strategy import (HMAC_INVENTORY_JS, ADAPTER_ID as HMAC_ADAPTER_ID,
+    matches_uri as hmac_matches_uri, validate_observation as validate_hmac_observation)
+from webcollect.pbkdf2_strategy import (PBKDF2_INVENTORY_JS, ADAPTER_ID as PBKDF2_ADAPTER_ID,
+    matches_uri as pbkdf2_matches_uri, validate_observation as validate_pbkdf2_observation)
+
+VERSION = 'site-supply-14-native-and-explicit-form-containers'
 
 
 def normalize_uri(value):
@@ -235,26 +248,117 @@ def discover(ledger, sources_path, output):
 INVENTORY_JS = r'''() => {
  const bmi=(''' + BMI_INVENTORY_JS + r''')();
  const date=(''' + DATE_INVENTORY_JS + r''')();
+ const art=(''' + ASCII_ART_INVENTORY_JS + r''')();
+ const loan=(''' + LOAN_INVENTORY_JS + r''')();
+ const table=(''' + HTML_TABLE_INVENTORY_JS + r''')();
+ const qr=(''' + QR_INVENTORY_JS + r''')();
+ const placeholder=(''' + PLACEHOLDER_INVENTORY_JS + r''')();
+ const hmac=(''' + HMAC_INVENTORY_JS + r''')();
+ const pbkdf2=(''' + PBKDF2_INVENTORY_JS + r''')();
  const clean=s=>(s||'').replace(/\s+/g,' ').trim();
- const selector=e=>e.id?'#'+CSS.escape(e.id):e.tagName.toLowerCase()+
-   (e.name?'[name="'+CSS.escape(e.name)+'"]':':nth-of-type('+([...e.parentNode.children].filter(x=>x.tagName===e.tagName).indexOf(e)+1)+')');
- return {title:document.title,widgets:[...bmi.widgets,...date.widgets],widget_rejections:[...bmi.widget_rejections,...date.widget_rejections],
-   result_targets:[...document.querySelectorAll('output,[role="status"],[aria-live],#result')]
-   .filter(e=>e.checkVisibility()).map(e=>({selector:selector(e),text:clean(e.innerText)})).concat(bmi.result_targets,date.result_targets),
-   forms:[...document.forms].map(f=>({
-   label:clean(f.getAttribute('aria-label')||f.querySelector('legend,h1,h2,h3')?.innerText||document.title),
-   fields:[...f.elements].filter(e=>['INPUT','TEXTAREA','SELECT','BUTTON'].includes(e.tagName)).map(e=>({
-     selector:selector(e),tag:e.tagName.toLowerCase(),type:e.type||'',name:e.name||'',
-     label:clean(e.labels?.[0]?.innerText||e.innerText||e.placeholder||''),
-     visible:!!e.checkVisibility()&&e.getBoundingClientRect().bottom>0&&e.getBoundingClientRect().top<innerHeight,
-     min:e.min||'',max:e.max||'',value:e.value||'',options:e.options?[...e.options].map(o=>({label:o.text,value:o.value})):[]}))})),
- links:[...document.querySelectorAll('a[href]')].filter(e=>e.checkVisibility()).map(e=>({label:clean(e.innerText),uri:e.href})).filter(e=>e.label).slice(0,50)};
+ const unique=(value,node)=>{try{const nodes=document.querySelectorAll(value);return nodes.length===1&&nodes[0]===node;}catch{return false;}};
+ const selector=e=>{
+   if(e.id){const value='#'+CSS.escape(e.id);if(unique(value,e))return value;}
+   if(e.name){const value=e.tagName.toLowerCase()+'[name="'+CSS.escape(e.name)+'"]';if(unique(value,e))return value;}
+   const parts=[];
+   for(let node=e;node&&node.nodeType===1;node=node.parentElement){
+     if(node!==e&&node.id){const id='#'+CSS.escape(node.id);if(unique(id,node)){parts.unshift(id);break;}}
+     const siblings=node.parentElement?[...node.parentElement.children].filter(other=>other.tagName===node.tagName):[node];
+     parts.unshift(node.tagName.toLowerCase()+(siblings.length>1?':nth-of-type('+(siblings.indexOf(node)+1)+')':''));
+   }
+   const value=parts.join(' > ');return unique(value,e)?value:null;
+ };
+ const visible=e=>{
+   if(!e||e.ownerDocument!==document||!e.isConnected||e.matches('input[type="hidden"]'))return false;
+   if(!e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
+   let rect=e.getBoundingClientRect();
+   if(rect.width<=0||rect.height<=0)return false;
+   let left=Math.max(0,rect.left),right=Math.min(innerWidth,rect.right),top=Math.max(0,rect.top),bottom=Math.min(innerHeight,rect.bottom);
+   for(let node=e;node;node=node.parentElement){
+     const style=getComputedStyle(node);
+     if(style.display==='none'||style.visibility!=='visible'||Number(style.opacity)===0||node.hidden)return false;
+     if(node!==e&&/(hidden|clip|scroll|auto)/.test(style.overflowX+' '+style.overflowY)){
+       const box=node.getBoundingClientRect();
+       if(/hidden|clip|scroll|auto/.test(style.overflowX)){left=Math.max(left,box.left);right=Math.min(right,box.right);}
+       if(/hidden|clip|scroll|auto/.test(style.overflowY)){top=Math.max(top,box.top);bottom=Math.min(bottom,box.bottom);}
+     }
+   }
+   return right>left&&bottom>top;
+ };
+ const renderedText=e=>{
+   if(!visible(e))return '';
+   const style=getComputedStyle(e),transparent=value=>/rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(value||'');
+   if(parseFloat(style.fontSize)===0||transparent(style.color)||transparent(style.webkitTextFillColor))return '';
+   // textContent would incorrectly recover text from display:none descendants.
+   return typeof e.innerText==='string'?clean(e.innerText):'';
+ };
+ const label=e=>{
+   const explicit=[...(e.labels||[])].map(renderedText).filter(Boolean);
+   if(explicit.length===1)return explicit[0];
+   if(explicit.length>1)return '';
+   const ids=(e.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean);
+   if(ids.length){const nodes=ids.map(id=>document.getElementById(id));
+     if(ids.every((id,index)=>unique('#'+CSS.escape(id),nodes[index]))&&nodes.every(visible))return clean(nodes.map(renderedText).join(' '));}
+   // Framework label association is structural, never an arbitrary nearby word.
+   const group=e.closest('.layui-form-item,.el-form-item,.ant-form-item,.ivu-form-item');
+   if(group){
+     const names=[...group.querySelectorAll('label.layui-form-label,label.el-form-item__label,label.ant-form-item-label,label.ivu-form-item-label,.ant-form-item-label > label')]
+       .filter(node=>node.closest('.layui-form-item,.el-form-item,.ant-form-item,.ivu-form-item')===group&&visible(node));
+     const controls=[...group.querySelectorAll('input:not([type="hidden"]),textarea,select')].filter(visible);
+     if(names.length===1&&controls.length===1&&controls[0]===e&&(!names[0].hasAttribute('for')||names[0].control===e))return renderedText(names[0]);
+   }
+   if(e.matches('button,[role="button"]'))return renderedText(e);
+   if(e.matches('input[type="button"],input[type="submit"],input[type="reset"]'))return clean(e.value);
+   // A filled input's placeholder is not visible. aria-label alone is likewise
+   // not evidence of a readable label in the original viewport.
+   if(e.matches('input,textarea')&&!e.value)return clean(e.placeholder);
+   return '';
+ };
+ const formQuery='form,[role="form"],.layui-form,.el-form,.ant-form,.ivu-form';
+ const containers=[...document.querySelectorAll(formQuery)].filter(visible);
+ const forms=containers.map(f=>{
+   const native=f.tagName==='FORM';
+   const nodes=native?[...f.elements]:[...f.querySelectorAll('input,textarea,select,button')];
+   const fields=nodes.filter(e=>e.ownerDocument===document&&['INPUT','TEXTAREA','SELECT','BUTTON'].includes(e.tagName)
+     &&(native?e.form===f&&(e.closest(formQuery)===f||!f.contains(e)):e.closest(formQuery)===f)).map(e=>({
+       selector:selector(e),tag:e.tagName.toLowerCase(),type:e.type||'',name:e.name||'',label:label(e),
+       visible:visible(e),enabled:!e.disabled&&e.getAttribute('aria-disabled')!=='true',
+       editable:!e.disabled&&!e.readOnly&&e.getAttribute('aria-disabled')!=='true'&&e.getAttribute('aria-readonly')!=='true',read_only:!!e.readOnly||e.getAttribute('aria-readonly')==='true',
+       min:e.min||'',max:e.max||'',value:e.value||'',
+       options:e.options?[...e.options].map(o=>({label:o.text,value:o.value})):[]})).filter(field=>field.selector);
+   return {label:clean(f.getAttribute('aria-label')||renderedText(f.querySelector('legend,h1,h2,h3'))||document.title),fields};
+ }).filter(form=>form.fields.length);
+ const resultNodes=new Set(document.querySelectorAll('output,[role="status"],[role="log"],[aria-live]:not([aria-live="off"]),#result'));
+ // Real labelled output controls are observable targets even when a library
+ // builds them from a div instead of a native HTML form. The label itself is
+ // retained; no virtual result DOM or cross-frame target is manufactured.
+ for(const node of document.querySelectorAll('input,textarea,[role="region"][aria-labelledby]')){
+   const name=label(node);
+   if(name&&((node.matches('input,textarea')&&(node.readOnly||node.getAttribute('aria-readonly')==='true'))
+      ||/^(?:输出(?:结果|内容|文本|数据)?|(?:计算|转换|处理|生成|运行|编码|解码)?结果)\s*[:：]?$/.test(name)))resultNodes.add(node);
+ }
+ const resultTargets=[...resultNodes].filter(visible).map(e=>({selector:selector(e),
+   text:clean(e.matches('input,textarea')?e.value:e.innerText),label:label(e)})).filter(row=>row.selector);
+ const allResults=[...new Map([...resultTargets,...bmi.result_targets,...date.result_targets,...art.result_targets,
+   ...loan.result_targets,...table.result_targets,...qr.result_targets,...placeholder.result_targets,
+   ...hmac.result_targets,...pbkdf2.result_targets].map(row=>[row.selector,row])).values()];
+ return {title:document.title,widgets:[...bmi.widgets,...date.widgets,...art.widgets,...loan.widgets,...table.widgets,...qr.widgets,...placeholder.widgets,...hmac.widgets,...pbkdf2.widgets],widget_rejections:[...bmi.widget_rejections,...date.widget_rejections,...art.widget_rejections,...loan.widget_rejections,...table.widget_rejections,...qr.widget_rejections,...placeholder.widget_rejections,...hmac.widget_rejections,...pbkdf2.widget_rejections],
+   result_targets:allResults,
+   forms,
+ links:[...document.querySelectorAll('a[href]')].filter(visible).map(e=>({label:clean(e.innerText),uri:e.href})).filter(e=>e.label).slice(0,50)};
 }'''
 
 SCREEN_SCHEMA = {'type': 'object', 'properties': {
     'status': {'type':'string','enum': ['ready', 'rejected', 'review_required']}, 'reason': {'type': 'string'},
     'page_observations': {'type': 'array', 'items': {'type': 'string'}}},
     'required': ['status', 'reason', 'page_observations'], 'additionalProperties': False}
+
+
+def inventory_language_ratio(inventory):
+    """Required view preparation cannot erase a failing original viewport."""
+    current = chinese_ratio(inventory['visible_text'])
+    initial = chinese_ratio(inventory.get('initial_visible_text', inventory['visible_text']))
+    return min(current, initial)
 
 
 def inventory_support(uri, inventories):
@@ -265,27 +369,64 @@ def inventory_support(uri, inventories):
     This is mechanical inventory support; it never changes screening status.
     """
     forms, fields, widget_fields, controls = [], [], [], []
+    table_workflow = False
+    qr_workflow = False
+    hmac_workflow = False
+    pbkdf2_workflow = False
     for inventory in inventories:
         if normalize_uri(inventory['page_uri']) != uri:
             raise ValueError('Observed inventory is outside the exact candidate page scope')
         widgets = inventory.get('widgets', [])
         for widget in widgets:
-            matcher = {BMI_ADAPTER_ID: bmi_matches_uri, DATE_ADAPTER_ID: date_matches_uri}.get(widget.get('adapter_id'))
+            matcher = {BMI_ADAPTER_ID: bmi_matches_uri, DATE_ADAPTER_ID: date_matches_uri,
+                       ASCII_ART_ADAPTER_ID: ascii_art_matches_uri,
+                       LOAN_ADAPTER_ID: loan_matches_uri,
+                       HTML_TABLE_ADAPTER_ID: html_table_matches_uri,
+                       QR_ADAPTER_ID: qr_matches_uri,
+                       PLACEHOLDER_ADAPTER_ID: placeholder_matches_uri,
+                       HMAC_ADAPTER_ID: hmac_matches_uri,
+                       PBKDF2_ADAPTER_ID: pbkdf2_matches_uri}.get(widget.get('adapter_id'))
             if (matcher is None or
                     not matcher(uri) or not matcher(widget.get('page_uri', '')) or
                     normalize_uri(widget['page_uri']) != uri):
                 raise ValueError('Typed widget is unregistered or outside its observed page scope')
+            if widget.get('adapter_id') == HTML_TABLE_ADAPTER_ID:
+                validate_html_table_observation({'site_uri': uri}, inventory, widget)
+                # Only this registered exact-URI transition has independently
+                # exercised grid -> editable cells. Never invent initial fields.
+                table_workflow = True
+                forms.append(widget)
+            if widget.get('adapter_id') == QR_ADAPTER_ID:
+                validate_qr_observation({'site_uri': uri}, inventory, widget)
+                # The real initial tab is text; the exact registered WiFi-tab
+                # transition exposes the two controls. Initial hidden fields
+                # remain honestly marked hidden in the inventory.
+                qr_workflow = True
+                forms.append(widget)
+            if widget.get('adapter_id') == HMAC_ADAPTER_ID:
+                validate_hmac_observation({'site_uri': uri}, inventory, widget)
+                # The masked key is an observed editable input, but its hidden
+                # value is never promoted to visible completion evidence.
+                hmac_workflow = True
+                forms.append(widget)
+            if widget.get('adapter_id') == PBKDF2_ADAPTER_ID:
+                validate_pbkdf2_observation({'site_uri': uri}, inventory, widget)
+                pbkdf2_workflow = True
+                forms.append(widget)
             widget_fields.extend(field for field in widget['fields']
                                  if field['visible'] and field.get('enabled') is True)
         controls.extend(e for e in inventory['elements'] if e.get('clickable') or e.get('inputable'))
         for form in inventory['forms'] + widgets:
-            visible = [field for field in form['fields'] if field['visible']]
+            visible = [field for field in form['fields'] if field['visible']
+                       and field.get('enabled', True) and field.get('label')]
             fields.extend(visible)
-            if (sum(field['tag'] in ('input', 'textarea') and field['type'] in
+            if (sum(field['tag'] in ('input', 'textarea') and field.get('editable', True) and field['type'] in
                     ('text', 'number', 'textarea', 'search', 'email', 'url', 'tel') for field in visible) >= 2
                     and any(field['type'] in ('submit', 'button') for field in visible)):
                 forms.append(form)
     actions = {'scroll'}
+    if table_workflow or qr_workflow or hmac_workflow or pbkdf2_workflow:
+        actions.update(('click', 'type'))
     if controls or any(field['type'] in ('submit', 'button') for field in widget_fields):
         actions.add('click')
     if (any(element.get('inputable') for element in controls) or
@@ -376,6 +517,22 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                                     response_status = response.status if response else None;landed_uri=page.url
                                     verify_public_url(page.url)
                                     if not response or response_status>=400: raise ValueError('Page inaccessible: HTTP '+str(response_status))
+                                initial_visible_text = None
+                                if ascii_art_matches_uri(page.url):
+                                    # This observed widget's submit and line-width
+                                    # controls are below the initial viewport.
+                                    # Record the real necessary view change; the
+                                    # generated trajectory must repeat it itself.
+                                    prefix=directory/('view-preparation-'+str(index)+'-'+str(attempt))
+                                    prefix.with_suffix('.png').write_bytes(await bounded(ledger,page.screenshot()))
+                                    before=await bounded(ledger,observe(page))
+                                    initial_visible_text = before['visible_text']
+                                    await bounded(ledger,page.mouse.wheel(0,80))
+                                    await bounded(ledger,page.wait_for_timeout(150))
+                                    after=await bounded(ledger,observe(page))
+                                    save_json(prefix.with_suffix('.json'),{'purpose':'Expose observed ASCII-art input and submit controls',
+                                        'action_type':'scroll','arguments':{'direction':'down'},'distance':80,
+                                        'before':before,'after':after,'production_action':False})
                                 task={'task_id':jid+'-'+str(index),'site_uri':uri,'initial_url':target,
                                       'instruction':'只读站点能力探测','content_preparation':False,'operations':[{'action_type':'wait'}]}
                                 result = await bounded(ledger,inspect_page(page,task,evidence_dir,samples=2,interval_ms=100,
@@ -384,6 +541,8 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                                 inventory={'page_uri':normalize_uri(landed_uri) if landed_uri else target,
                                     'requested_uri':target,'landed_uri':landed_uri,'visible_text':state['visible_text'],
                                     'elements':state['elements'],**await bounded(ledger,page.evaluate(INVENTORY_JS))}
+                                if initial_visible_text is not None:
+                                    inventory['initial_visible_text'] = initial_visible_text
                                 inventory_file=evidence_dir/'inventory.json';save_json(inventory_file,inventory)
                                 metrics['rendered_inventory_saved']=True
                                 save_json(cache_file,{'result_path':str(evidence_dir/'result.json'),'inventory_path':str(inventory_file),
@@ -404,7 +563,8 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                         inventory_support(uri, [inventory])
                         pages.append({'uri':target,'landed_uri':landed_uri,'response_status':response_status,
                             'accessible':response_status is not None and response_status<400,'rendered':True,
-                            'chinese_ratio':chinese_ratio(inventory['visible_text']),'routing':result['summary']['routing'],'error':result['error']})
+                            'chinese_ratio':inventory_language_ratio(inventory),
+                            'routing':result['summary']['routing'],'error':result['error']})
                         images += [evidence_dir/f['path'] for f in result['frames']];capabilities.append(inventory)
                     evidence=[{'path':str(path),'sha256':file_sha(path)} for path in sorted(directory.rglob('*')) if path.is_file()]
                     controls, forms, actions = inventory_support(uri, capabilities)

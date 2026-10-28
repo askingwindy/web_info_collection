@@ -16,4 +16,4 @@ ai = ["webcollect>=0.2.0"]
 include = ["quality_inspector*"]
 
 [tool.setuptools.package-data]
-quality_inspector = ["review.html", "delivery.json", "contract-authority.json", "authority/*.md"]
+quality_inspector = ["review.html", "delivery.json", "contract-authority.json", "authority/*.md", "vision_ocr.swift"]

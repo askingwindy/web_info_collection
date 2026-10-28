@@ -63,6 +63,9 @@ def _scoped_page_uris(record):
     if 'capability_scope' not in record:
         return None
     scope = record['capability_scope']
+    if isinstance(scope, dict) and scope.get('kind') == 'observed-workflow-pages':
+        from .observed_workflow import validate_scope
+        return validate_scope(record)
     if (not isinstance(scope, dict) or set(scope) != {'kind', 'page_uris', 'sitewide'}
             or scope.get('kind') != 'exact-candidate-page' or scope.get('sitewide') is not False
             or scope.get('page_uris') != [record['site_uri']]):
@@ -195,6 +198,14 @@ def validate_capability(record, *, now=None, require_ready=True):
     if not set(record['supported_actions']) <= CONTROL | NONCONTROL | {'hotkey'}:
         raise ValueError('能力记录包含动作空间以外的动作')
     _scoped_page_uris(record)
+    if 'site_qualification' in record:
+        from site_planner.qualification import validate_qualification
+        qualification = validate_qualification(record)
+        if record['status'] != qualification['status']:
+            raise ValueError('站点状态与绑定的资格判断不一致')
+    if 'observed_workflow_parent' in record:
+        from .observed_workflow import validate_derived_capability
+        validate_derived_capability(record, now=current if require_ready else None)
     if require_ready and (record['status'] != 'ready' or expires <= current):
         raise ValueError('站点能力尚待审核、被拒绝或已过期')
     verify_evidence(record.get('evidence'))

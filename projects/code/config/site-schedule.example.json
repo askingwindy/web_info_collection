@@ -1,0 +1,30 @@
+{
+  "schema_version": "webcollect-site-schedule-1",
+  "registry": "/path/to/existing-active-production-ledger.sqlite3",
+  "max_parallel_sites": 2,
+  "max_schedule_seconds": 3600,
+  "sites": [
+    {
+      "site_key": "site-a",
+      "batches": [
+        {
+          "plan": "/path/to/site-a/scheduled-plan.json",
+          "publication": "/path/to/site-a/publication.json",
+          "policy": "/path/to/shared-policy-max-workers-2.json",
+          "output": "/path/to/captures/site-a"
+        }
+      ]
+    },
+    {
+      "site_key": "site-b",
+      "batches": [
+        {
+          "plan": "/path/to/site-b/scheduled-plan.json",
+          "publication": "/path/to/site-b/publication.json",
+          "policy": "/path/to/shared-policy-max-workers-2.json",
+          "output": "/path/to/captures/site-b"
+        }
+      ]
+    }
+  ]
+}
