@@ -1,5 +1,9 @@
 # WebCollect 采集核心
 
+当前执行范围为2026-10-28的 `current-chain-r01` 全新链路。统一入口为[真实试点执行说明](../prd/真实试点执行说明-20261028.md)，变更、进展与清理结果见[工程状态与清理记录](../prd/工程状态与清理记录-20261028.md)，实时事实以[本轮进度账](../../verify_results/pilot1000-20261028-r01/progress.json)及其原始账本为准。审核、去重、验收和产量仅使用绑定本轮manifest及专库的结果；旧运行、资格PASS和工程测试均不计本轮合格量。网站按整体应用管理，每个实际任务页面最多一条、5–10个必要操作，整站累计三次真实失败即停止。
+
+Git仅提交有效源码、纯测试及当前工程/需求说明。样本、原图、过程报告、原始模型请求、账本、凭据和ZIP留在本地；历史原件及失败/费用证据保留，清理记录不改变其结论。下文旧批次实测和命令属于对应范围的兼容说明，执行本轮时以当前入口为准。
+
 按计划执行真实网页操作，保存原始截图、同步界面树、动作记录与断言。先按客户样例导出实际交付文件，再由独立质检器读取该输出；采集成功、格式通过、人工审核、本地试点和客户验收分别记录。
 
 ## 正式交付流程
@@ -227,7 +231,7 @@ projects/code/.venv/bin/python -m webcollect archive-client \
 
 ## 源码与数据边界
 
-Git保留核心源码、JS/Schema资源、通用脚本、运行依赖配置和需求规范。测试、批次计划、联调样本、过程报告、`results/`及`verify_results/`留在本地，不纳入Git。客户提供的原始样例属于需求附件，是独立质检基准的必要输入。
+Git保留核心源码、JS/Schema资源、通用脚本、运行依赖配置、纯测试及当前工程/需求规范。批次计划、联调样本、过程报告、原始模型请求、账本、凭据、ZIP、`results/`及`verify_results/`留在本地，不纳入Git。客户提供的原始样例属于需求附件，是独立质检基准的必要输入。
 
 正式样本、共享注册表和失败证据应独立备份，不能用源码仓库代替数据存储。程序不会因为采集或导出成功就自动设置正式交付通过。
 
@@ -235,13 +239,13 @@ Git保留核心源码、JS/Schema资源、通用脚本、运行依赖配置和�
 
 新增独立命令 `python -m webcollect.batch` 和 `python -m webcollect.task_generation`（仓库运行设置 `PYTHONPATH=projects/code`）。前者管理冻结的运行配置、job/租约、请求前费用预留、限额及用量；后者从站点库存生成表单任务规格，编译为现有M4计划，并调用原预检/发布、collect_m4、facts及客户导出。安装后入口为 `webcollect-batch`、`webcollect-tasks`。
 
-真实 `generate` 现要求同时提供 `--history-registry` 和 `--history-set`；后者为冻结的 `qc-cumulative-set-1` 客户包集合，必须包含本仓库 `results/delivery/LATEST.md` 指向的正式包并保持全部文件SHA。原标注中已知同业务会拒绝，未识别的同源历史比较保持待定；`execute` 在预检/采集前重新检查客户包与实时M4历史。该复查尚非跨进程原子语义锁。旧仅查询M4任务库的计划不能直接执行，实际命令及220条历史拦截证据见 `verify_results/three-program-acceleration-20261026/history-r01/commands.json` 与 `result-summary.json`。
+真实 `generate` 要求同时提供 `--history-registry` 和 `--history-set`。本轮前者必须是已绑定的专用生产账本，后者使用 `verify_results/pilot1000-20261028-r01/current-chain-r01/manifest.json`（`webcollect-current-chain-manifest-1`）；初始对照为空，随后仅累计本链结果，不读取旧正式包。历史兼容入口仍接受冻结的 `qc-cumulative-set-1` 客户包集合，并要求覆盖 `results/delivery/LATEST.md` 指向的正式包及全部文件SHA；这项旧集合要求不用于本轮。原标注中已知同业务会拒绝，未识别的同源比较保持待定；`execute` 在预检/采集前重核所绑定集合及实时M4记录，该复查尚非跨进程原子语义锁。旧仅查询M4任务库的计划不能直接执行；旧220条历史拦截证据保留在 `verify_results/three-program-acceleration-20261026/history-r01/commands.json` 与 `result-summary.json`，不作为本轮审核输入。
 
 作业账本独立于生产编号账本；不能创建空生产账本或新campaign绕过已有待审/attempt上限。`config/batch-no-model.json` 是 `mode=real, model=null` 的显式无模型配置，不需要API、费率、币种或模型金额预算；保留发现/页面/时间/并发/域间隔/租约及有界job尝试，原采集attempt和待审库存仍由原runtime控制。模型对象存在时维持严格预算和费率验证，`model:null` 无法预留或发送模型请求。合成配置仅供开发。
 
 `generate` 默认 `--generator deterministic`，现支持购物合计、行程速度、矩形面积三种明确业务策略；未知表单保留拒绝，不臆造结果。结构签名忽略参数，同origin同策略跨路径/换控件也不能多产一条；无效范围、无变化输入和结果歧义在编号前拒绝。`review_required` 能力只产待复核提案，发布/执行门禁保留。数值断言不等于视觉、单位和业务终态已通过独立审核。显式 `--generator model` 保留旧模型路径，启用时才依赖模型配置。
 
-当前命令、验证与边界见[S0运行记录](../prd/三程序S0运行记录-20261026.md)及[执行入口](../prd/三程序计划执行入口.md)。定向复验：`projects/code/.venv/bin/python projects/code/scripts/verify_s0.py --output <新目录>`；可用 `--components runtime tasks qc compat` 选择受影响范围，`--browser` 另启本地受控Chrome。统一无浏览器路径与各受控浏览器用例已分别实跑，组合 `--browser` 命令尚未单独运行。旧[E0–E3记录](../prd/三程序E0-E3运行记录-20261026.md)继续保留。测试/报告按既有规则留在本地。
+旧S0命令、验证与边界见[S0运行记录](../prd/三程序S0运行记录-20261026.md)及[执行入口](../prd/三程序计划执行入口.md)。定向复验：`projects/code/.venv/bin/python projects/code/scripts/verify_s0.py --output <新目录>`；可用 `--components runtime tasks qc compat` 选择受影响范围，`--browser` 另启本地受控Chrome。统一无浏览器路径与各受控浏览器用例已分别实跑，组合 `--browser` 命令尚未单独运行。旧[E0–E3记录](../prd/三程序E0-E3运行记录-20261026.md)继续保留。纯测试可纳入Git，实跑报告留在本地。
 
 ## DeepSeek / GLM 辅助判断接口（2026-10-27）
 

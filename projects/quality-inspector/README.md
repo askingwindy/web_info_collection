@@ -1,5 +1,9 @@
 # WebCollect 独立质检器
 
+当前执行范围为2026-10-28的 `current-chain-r01` 全新链路。统一入口为[真实试点执行说明](../prd/真实试点执行说明-20261028.md)，变更、进展与清理结果见[工程状态与清理记录](../prd/工程状态与清理记录-20261028.md)，实时事实以[本轮进度账](../../verify_results/pilot1000-20261028-r01/progress.json)及其原始账本为准。审核、去重、验收和产量仅使用绑定本轮manifest及专库的结果；旧运行、资格PASS和工程测试均不计本轮合格量。网站按整体应用管理，每个实际任务页面最多一条、5–10个必要操作，整站累计三次真实失败即停止。
+
+Git仅提交有效源码、纯测试及当前工程/需求说明。样本、原图、过程报告、原始模型请求、账本、凭据和ZIP留在本地；历史原件及失败/费用证据保留，清理记录不改变其结论。下文旧批次实测和命令属于对应范围的兼容说明，执行本轮时以当前入口为准。
+
 2026-10-28认证恢复：新增独立`python -m quality_inspector.document_auth_recovery`，只为已持久记录的资料HTTP401/provider1000提供一次明确有界的恢复增量，不改原请求、UNKNOWN费用、原预算和冻结源码。`prepare`需要绑定原资料receipt/原request ID的单次授权JSON及独立同模型/同一请求预算配置；只生成control receipt，不生成可直接派发的资料receipt。`run`还必须接收`--auth-proof`：`webcollect-model-authentication-evidence-1`的`ledger`、`config:{path,sha256}`、`request_id`，程序从原SQLite重核同服务、同模型的一次真实成功认证诊断及其原响应/usage，不能用手写PASS或凭据重发声明替代。凭据是否改变不作推定，仍401时不能重发完整资料。
 
 该入口的`prepare --original-receipt ... --authorization ... --config ... --ledger ... --initialize-ledger --output ...`、`run --receipt ... --auth-proof ... --output ...`、`status --receipt ... --output ...`和`finalize --receipt ... --status ... --output ... [--archive ...]`复用原资料run/status/finalizer。相同失败request只有一个恢复scope；复制原receipt、换输出/ledger/授权文本不能增加请求。prepare中断可在原scope完成；已激活但尚未派发时可追加新的成功诊断证据，保留旧证据，仍只允许一次资料请求。请求已持久成功而job写入中断时，过期租约后的`run/status`可严格重验原响应/usage/资料引用并恢复结果，不发新请求、不重置尝试数；活租约不抢占。新输出的`recovery-accounting.json`分别列原pipeline、原401资料请求、恢复请求及认证诊断账本，UNKNOWN预留始终保留，实际扣费仍为UNKNOWN。资料人工始终0，原样本人审和正式分布门禁继续核验；底层原件改变会阻止后续状态/封包。
@@ -174,7 +178,7 @@ C12另依据附件A的`step_result`实际观察要求，拦截已确认的待审
 
 `layout.py`统一发现客户平铺目录和历史多批目录；`external_evidence.py`处理包外捕获证据绑定。字段、去重、作用域和审核台均使用实际客户文件路径。
 
-历史`package`兼容入口保留内部候选组包；常规客户导出使用采集工程`python -m webcollect package`。组包不执行网站采集，也不宣告验收通过。数据、测试和详细验证过程不纳入源码Git历史。
+历史`package`兼容入口保留内部候选组包；常规客户导出使用采集工程`python -m webcollect package`。组包不执行网站采集，也不宣告验收通过。纯测试可纳入源码Git；样本、原始模型请求、账本、ZIP及详细验证过程留在本地。
 
 
 ## M4 累计集合与审核版本边界（0.5.0）

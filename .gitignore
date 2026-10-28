@@ -20,10 +20,8 @@
 *.sqlite3
 *.sqlite3-*
 
-# Keep local tests, run plans, reports and collected data out of source history.
+# Keep run plans, reports and collected data out of source history; pure tests are tracked.
 /m1-sample/
-/projects/code/tests/
-/projects/quality-inspector/tests/
 /projects/code/plans/
 /projects/sample/
 /projects/prd/*
@@ -31,3 +29,16 @@
 !/projects/prd/M1-规则说明.md
 !/projects/prd/M1-检查清单.md
 !/projects/prd/M2-人工核验SOP.md
+
+# Current engineering entrypoints and status are source-controlled.
+!/projects/prd/三程序计划执行入口.md
+!/projects/prd/真实试点执行说明-20261028.md
+!/projects/prd/项目记忆-真实试点-20261028.md
+!/projects/prd/工程状态与清理记录-20261028.md
+
+# Customer sample payloads stay local; keep only their explanatory document.
+/request/web操作采集需求/samples/*
+!/request/web操作采集需求/samples/样例说明.md
+
+# Local regression projections from real captures are evidence, not pure fixtures.
+/projects/code/tests/fixtures/
