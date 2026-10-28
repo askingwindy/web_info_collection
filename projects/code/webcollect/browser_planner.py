@@ -229,10 +229,17 @@ def validate_observation_intent(intent):
     validate_identity(intent)
 
 
-async def observe_task(ledger, intent_path, capability_path, output, *, max_actions=None):
+async def observe_task(ledger, intent_path, capability_path, output, *, max_actions=None, site_failure_guard=None):
     intent, capability = load_json(intent_path), load_json(capability_path)
     validate_observation_intent(intent)
     pilot = intent.get('pilot_identity') is not None
+    from .site_failure_stop import SiteFailureStore, SiteStopped, execution_id, model_usage_refs
+    binding = site_failure_guard or intent.get('site_failure_guard')
+    if pilot and binding is None:
+        raise ValueError('Pilot observation requires the persistent whole-site failure guard')
+    stop_store = SiteFailureStore(binding) if binding is not None else None
+    if stop_store:
+        stop_store.guard(intent)  # Before gateway, browser, output or job creation.
     if max_actions is None:
         max_actions = 10 if pilot else 12
     if ledger.config['mode'] != 'real':
@@ -260,6 +267,7 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
     transitions, history, fingerprints = [], [], []
     try:
         async with async_playwright() as p:
+            if stop_store: stop_store.guard(intent)
             browser = await p.chromium.launch(channel='chrome', headless=True)
             context = await browser.new_context(viewport={'width': 1280, 'height': 720}, device_scale_factor=1,
                                                 locale='zh-CN', timezone_id='Asia/Shanghai')
@@ -269,6 +277,7 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                 if 'natural_settle_ms' in intent:
                     await page.wait_for_timeout(intent['natural_settle_ms'])
                 for number in range(max_actions + 1):
+                    if stop_store: stop_store.guard(intent)
                     ledger.heartbeat(job)
                     if source_identity() != ledger.get(jid)['payload']['source_identity']:
                         raise ValueError('Observation implementation changed')
@@ -355,6 +364,15 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
         save_json(output / 'failure.json', {'error_type': type(error).__name__, 'reason': str(error),
                                          'completed_observation_actions': len(transitions), 'transitions': transitions,
                                          'formal_samples': 0, 'QC_approval': False})
+        visits = [row for row in ledger.visits() if row['job_id'] == jid]
+        if stop_store and visits and not isinstance(error, SiteStopped):
+            usage = model_usage_refs(ledger, jid)
+            unknown = (any(row['state'] in ('reserved', 'unknown') for row in usage)
+                       or any(row['state'] in ('reserved_for_dispatch', 'unknown') for row in visits))
+            stop_store.record(intent, execution_id('observation', ledger.path, jid), stage='observation',
+                state='unknown' if unknown else 'failed', reason=type(error).__name__ + ': ' + str(error),
+                real_execution=True, evidence=[{'path': str(output / 'failure.json'),
+                    'sha256': file_sha(output / 'failure.json')}], usage_refs=usage)
         ledger.finish(job, 'review_required', error=type(error).__name__)
         raise
 
@@ -364,9 +382,11 @@ def main(argv=None):
     for key in ('config', 'ledger', 'intent', 'capability', 'output'):
         parser.add_argument('--' + key, type=Path, required=True)
     parser.add_argument('--max-actions', type=int, default=None)
+    parser.add_argument('--site-failure-guard', type=Path, help='Frozen whole-site stop-ledger binding JSON')
     args = parser.parse_args(argv)
     result = asyncio.run(observe_task(BatchLedger(args.ledger, load_json(args.config)), args.intent,
-                                     args.capability, args.output, max_actions=args.max_actions))
+                                     args.capability, args.output, max_actions=args.max_actions,
+                                     site_failure_guard=load_json(args.site_failure_guard) if args.site_failure_guard else None))
     print(json.dumps(result, ensure_ascii=False))
 
 

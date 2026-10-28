@@ -43,7 +43,7 @@ def generation_source_identity():
         'snapshot.js', 'browser.py', 'ascii_art_strategy.py', 'loan_strategy.py',
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
-        'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'production_identity.py')
+        'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'production_identity.py', 'current_chain.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -349,6 +349,10 @@ def read_history(registry, *, include_scopes=False):
     path = Path(registry).resolve()
     if not path.is_file():
         raise ValueError('Historical registry missing; never create an empty production replacement')
+    from .current_chain import is_current_registry, scope_for_registry, registry_snapshot
+    if is_current_registry(path):
+        rows = registry_snapshot(scope_for_registry(path), path)['rows']
+        return [(row['scope_id'], row['task']) for row in rows] if include_scopes else [row['task'] for row in rows]
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as con:
         exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_tasks'").fetchone()
         if not exists:
@@ -427,6 +431,9 @@ def read_customer_history(manifest_path):
     manifest_path = Path(manifest_path).resolve()
     manifest_sha = file_sha(manifest_path)
     manifest = load_json(manifest_path)
+    from .current_chain import MANIFEST_SCHEMA, read_chain_history
+    if manifest.get('schema_version') == MANIFEST_SCHEMA:
+        return read_chain_history(manifest_path)
     if (manifest.get('schema_version') != 'qc-cumulative-set-1'
             or not isinstance(manifest.get('packages'), list) or not manifest['packages']):
         raise ValueError('Real generation needs a nonempty frozen qc-cumulative-set-1 history')
@@ -485,6 +492,12 @@ def read_customer_history(manifest_path):
 
 def bind_formal_history(scope):
     """Require this repository's explicit current formal delivery, not an arbitrary set."""
+    from .current_chain import SCOPE_SCHEMA, read_chain_history
+    if scope.get('schema_version') == SCOPE_SCHEMA:
+        actual = read_chain_history(scope['manifest']['path'])[1]
+        if actual != scope:
+            raise ValueError('Current-chain result population changed')
+        return actual
     latest = FORMAL_LATEST_PATH.resolve()
     before = file_sha(latest)
     targets = set()
@@ -510,6 +523,11 @@ def check_live_m4_history(plan, registry, output):
     from .collect_runtime import runtime_scope
     registry, capture = Path(registry).resolve(), Path(output).resolve() / 'capture'
     own_scope = runtime_scope(capture)
+    from .current_chain import SCOPE_SCHEMA, assert_registry_scope, registry_snapshot
+    history_scope = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope')
+    if isinstance(history_scope, dict) and history_scope.get('schema_version') == SCOPE_SCHEMA:
+        assert_registry_scope(history_scope, registry)
+        registry_snapshot(history_scope, registry)
     own_tasks = set()
     from .task_replanning import validated_replans
     repairs, _ = validated_replans(registry, plan.get('generation', {}).get('replan_closures'))
@@ -893,8 +911,11 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     if plan['generation'].get('source_identity') != generation_source_identity():
         raise ValueError('Generation/history implementation changed or was not bound; regenerate before dispatch')
     history_scope = plan.get('generation', {}).get('history_scope')
-    if not isinstance(history_scope, dict) or history_scope.get('schema_version') != 'webcollect-task-history-scope-1':
+    from .current_chain import SCOPE_SCHEMA, assert_registry_scope
+    if not isinstance(history_scope, dict) or history_scope.get('schema_version') not in ('webcollect-task-history-scope-1', SCOPE_SCHEMA):
         raise ValueError('Real execution requires explicit frozen customer history coverage; regenerate legacy M4-only plans')
+    if history_scope['schema_version'] == SCOPE_SCHEMA:
+        assert_registry_scope(history_scope, registry)
     history_manifest = history_scope.get('manifest', {})
     if file_sha(history_manifest['path']) != history_manifest.get('sha256'):
         raise ValueError('Historical set changed since task generation')

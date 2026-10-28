@@ -69,8 +69,15 @@ def _contexts(plan):
 
 def _file_stamps(scope):
     """Metadata fence around a full content read, without hashing under writer lock."""
-    paths = {Path(scope['manifest']['path']), Path(scope['formal_anchor']['path'])}
-    for package in scope['packages']:
+    current = scope.get('schema_version') == 'webcollect-current-chain-1'
+    if current:
+        from .current_chain import assert_registry_scope, assert_current_result_path
+        assert_registry_scope(scope, scope['registry'])
+        paths = {Path(scope['manifest']['path']), *[assert_current_result_path(scope, ref['path'])
+                                                  for ref in scope['current_results_refs']]}
+    else:
+        paths = {Path(scope['manifest']['path']), Path(scope['formal_anchor']['path'])}
+    for package in ([] if current else scope['packages']):
         root = Path(package['path'])
         _require(root.is_dir() and not root.is_symlink(), 'original customer package missing or unsafe')
         paths.add(root)
@@ -97,8 +104,13 @@ def validate_customer_history(plan):
         if identity in proofs:
             continue
         before = _file_stamps(expected['history_scope'])
-        history, scope = read_customer_history(_read(expected['history_scope']['manifest']))
-        scope = bind_formal_history(scope)
+        if expected['history_scope'].get('schema_version') == 'webcollect-current-chain-1':
+            from .current_chain import read_chain_history, assert_registry_scope
+            assert_registry_scope(expected['history_scope'], expected['registry_snapshot']['registry'])
+            history, scope = read_chain_history(_read(expected['history_scope']['manifest']))
+        else:
+            history, scope = read_customer_history(_read(expected['history_scope']['manifest']))
+            scope = bind_formal_history(scope)
         customers = sorted([{'id': 'customer:' + row['sample_id'], 'record': row} for row in history], key=lambda row: row['id'])
         _require(scope == expected['history_scope'] and object_sha256(history) == expected['customer_history_sha256']
                  and customers == [row for row in expected['comparisons'] if row['id'].startswith('customer:')],
@@ -113,7 +125,14 @@ def _check_customer_references(expected, history_proof=None):
     from .task_admission import _read
     scope = expected['history_scope']
     _read(scope['manifest'])
-    _read({key: scope['formal_anchor'][key] for key in ('path', 'sha256')})
+    if scope.get('schema_version') == 'webcollect-current-chain-1':
+        from .current_chain import assert_registry_scope, assert_current_result_path
+        assert_registry_scope(scope, expected['registry_snapshot']['registry'])
+        for ref in scope['current_results_refs']:
+            assert_current_result_path(scope, ref['path'])
+            _read(ref)
+    else:
+        _read({key: scope['formal_anchor'][key] for key in ('path', 'sha256')})
     if history_proof is not None:
         identity = object_sha256(expected)
         proof = history_proof.get(identity, {})

@@ -71,7 +71,7 @@ def source_identity():
     root = Path(__file__).parent
     return {name: file_sha(root / name) for name in
             ('observed_workflow.py', 'browser.py', 'snapshot.js', 'task_contract.py',
-             'task_admission.py', 'task_generation.py', 'planning.py', 'production_identity.py')}
+             'task_admission.py', 'task_generation.py', 'planning.py', 'production_identity.py', 'current_chain.py')}
 
 
 def _review_checks(task):
@@ -458,8 +458,13 @@ def prepare_admission(capability, trace_ref, history_context, output, *, mode, p
     task = compile_task(capability, trace_ref)
     trace, _, _, _, frames = _trace(trace_ref)
     _require(mode in SCHEMAS and mode == trace['mode'] and _text(producer_context_id), 'packet mode/producer identity required')
-    _require(history_context.get('registry_snapshot') and history_context.get('history_scope', {}).get('formal_anchor')
-             and isinstance(history_context.get('comparisons'), list), 'whole frozen original customer/registry history required')
+    from .task_admission import validate_history_context
+    validate_history_context(history_context)
+    from .current_chain import SCOPE_SCHEMA, assert_current_evidence
+    if history_context['history_scope'].get('schema_version') == SCOPE_SCHEMA:
+        assert_current_evidence(history_context['history_scope'], trace_ref)
+        assert_current_evidence(history_context['history_scope'], capability.get('evidence', []))
+    _require(isinstance(history_context.get('comparisons'), list), 'explicit comparison population required')
     packet = {'schema_version': SCHEMAS[mode][0], 'version': VERSION, 'mode': mode,
               'created_at': timestamp(now), 'producer_context_id': producer_context_id,
               'capability': deepcopy(capability), 'trace': deepcopy(trace_ref), 'task': task,

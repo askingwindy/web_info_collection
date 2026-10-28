@@ -80,11 +80,14 @@ CREATE INDEX IF NOT EXISTS m4_exact_digest ON m4_exact_images(digest);
 
 
 def validate_policy(value):
-    if not isinstance(value, dict) or set(value) - (set(DEFAULT_POLICY) | {'pilot_identity_required'}):
+    if not isinstance(value, dict) or set(value) - (set(DEFAULT_POLICY) | {'pilot_identity_required', 'site_failure_guard'}):
         raise ValueError('运行预算包含未知字段')
     policy = {**deepcopy(DEFAULT_POLICY), **deepcopy(value)}
     if 'pilot_identity_required' in value and value['pilot_identity_required'] is not True:
         raise ValueError('pilot_identity_required只能显式开启，不能关闭已冻结试点门禁')
+    if 'site_failure_guard' in value:
+        from .site_failure_stop import validate_binding
+        policy['site_failure_guard'] = validate_binding(value['site_failure_guard'])
     if not isinstance(policy['campaign_id'], str) or not policy['campaign_id'].strip():
         raise ValueError('campaign_id必须非空')
     for key in ('max_workers', 'max_domain_workers', 'attempt_cap', 'pending_review_cap', 'lease_seconds', 'target_total'):
@@ -221,6 +224,24 @@ class RuntimeStore:
         from .admission_cohort import validate_customer_history
         return validate_customer_history(plan)
 
+    def _sync_site_failures(self):
+        # Reconcile committed new failures before taking the production writer
+        # lock. A crash after finish cannot hide a failure on the next dispatch.
+        con = self._connect(readonly=True)
+        try:
+            policy = self._policy(con)
+        finally:
+            con.close()
+        if policy.get('site_failure_guard'):
+            from .site_failure_stop import SiteFailureStore
+            SiteFailureStore(policy['site_failure_guard']).sync_formal(self.registry, policy['campaign_id'])
+
+    @staticmethod
+    def _guard_site(policy, task):
+        if policy.get('site_failure_guard'):
+            from .site_failure_stop import SiteFailureStore
+            SiteFailureStore(policy['site_failure_guard']).guard(task)
+
     def initialize(self, policy=None, *, now=None):
         policy = validate_policy(policy or {})
         current = timestamp(now)
@@ -252,6 +273,8 @@ class RuntimeStore:
             new = validate_policy({**old, **updates})
             if old.get('pilot_identity_required') and not new.get('pilot_identity_required'):
                 raise ValueError('不能关闭已开启的试点身份门禁')
+            if old.get('site_failure_guard') and new.get('site_failure_guard') != old['site_failure_guard']:
+                raise ValueError('不能更换或清空整站失败账以重置累计停止状态')
             if new['campaign_id'] != old['campaign_id'] or new['baseline_category_counts'] != old['baseline_category_counts']:
                 raise ValueError('已有campaign或基线分母不能通过预算更新替换')
             if old.get('resource_root') is not None and new['resource_root'] != old['resource_root']:
@@ -340,6 +363,7 @@ class RuntimeStore:
     def claim_next(self, worker_id, *, request_id, plan_sha256=None, batch_id=None, now=None, _fault=None):
         if not all(isinstance(v, str) and v.strip() for v in (worker_id, request_id)):
             raise ValueError('worker_id和幂等request_id必须非空')
+        self._sync_site_failures()
         history_proof = self._customer_history_proof()
         current = timestamp(now)
         with self._transaction() as con:
@@ -349,6 +373,7 @@ class RuntimeStore:
                 if old['worker_id'] != worker_id or (plan_sha256 is not None and old['plan_sha256'] != plan_sha256):
                     raise ValueError('幂等request_id已用于不同worker或计划')
                 previous = self._attempt(con, old['attempt_id'])
+                self._guard_site(policy, json.loads(previous['task_json']))
                 from .production_identity import guard as page_guard
                 page_guard(con, previous['task_key'], json.loads(previous['task_json']),
                            required=policy.get('pilot_identity_required', False))
@@ -382,6 +407,11 @@ class RuntimeStore:
                 if domain and domain[0] > current:
                     continue
                 task = json.loads(row['task_json'])
+                from .site_failure_stop import SiteStopped
+                try:
+                    self._guard_site(policy, task)
+                except SiteStopped:
+                    continue  # Other whole applications remain dispatchable.
                 from .production_identity import allocation_uri, guard as page_guard
                 page_guard(con, row['task_key'], task, required=policy.get('pilot_identity_required', False))
                 day = datetime.fromtimestamp(current, ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
@@ -414,10 +444,12 @@ class RuntimeStore:
         return row
 
     def start_attempt(self, attempt_id, worker_id, lease_token, *, now=None):
+        self._sync_site_failures()
         history_proof = self._customer_history_proof()
         current = timestamp(now)
         with self._transaction() as con:
             row = self._owned(con, attempt_id, worker_id, lease_token, current)
+            self._guard_site(self._policy(con), json.loads(row['task_json']))
             from .production_identity import guard as page_guard
             page_guard(con, row['task_key'], json.loads(row['task_json']),
                        required=self._policy(con).get('pilot_identity_required', False))

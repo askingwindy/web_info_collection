@@ -72,6 +72,10 @@ def registry_snapshot(registry, *, exclude_scope=None, own_tasks=()):
 
 
 def context(history_scope, customer_history, registry, *, exclude_scope=None, own_tasks=()):
+    from .current_chain import SCOPE_SCHEMA, history_context
+    if isinstance(history_scope, dict) and history_scope.get('schema_version') == SCOPE_SCHEMA:
+        return history_context(history_scope, customer_history, registry,
+                               exclude_scope=exclude_scope, own_tasks=own_tasks)
     _require(isinstance(history_scope, dict) and history_scope.get('schema_version') == 'webcollect-task-history-scope-1', 'frozen customer history scope required')
     _require(isinstance(history_scope.get('formal_anchor'), dict), 'formal LATEST history binding required')
     manifest = history_scope.get('manifest', {})
@@ -162,7 +166,11 @@ def prepare_packet(capability, spec, task, history_context, frames, output, *, m
     _require(mode in SCHEMAS and _text(producer_context_id), 'explicit execution mode and producer context required')
     validate_capability(capability, now=current, require_ready=True)
     _require(capability.get('mode') == mode, 'capability/mode mismatch')
-    _require(history_context.get('registry_snapshot') and history_context.get('history_scope', {}).get('formal_anchor'), 'complete frozen history context required')
+    validate_history_context(history_context)
+    from .current_chain import SCOPE_SCHEMA, assert_current_evidence
+    if history_context['history_scope'].get('schema_version') == SCOPE_SCHEMA:
+        assert_current_evidence(history_context['history_scope'], frames)
+        assert_current_evidence(history_context['history_scope'], capability.get('evidence', []))
     roles = _native_roles(capability, spec, task)
     _require(isinstance(frames, list) and frames, 'actual original observation frames required')
     for frame in frames:
@@ -186,6 +194,15 @@ def prepare_packet(capability, spec, task, history_context, frames, output, *, m
     save_json(output / 'review-template.json', template)
     return {'packet': reference(packet_path), 'review_template': str(output / 'review-template.json'),
             'status': 'REVIEW_REQUIRED', 'sample_ids_allocated': 0, 'QC_approval': False}
+
+
+def validate_history_context(value):
+    from .current_chain import SCOPE_SCHEMA, validate_history_context as validate_current
+    if value.get('history_scope', {}).get('schema_version') == SCOPE_SCHEMA:
+        return validate_current(value)
+    _require(value.get('registry_snapshot') and value.get('history_scope', {}).get('formal_anchor'),
+             'complete frozen history context required')
+    return True
 
 
 def _registered_ids():
@@ -339,7 +356,8 @@ def verify_collection_entry(plan, registry, capture_output):
     _require(Path(capture_output).name == 'capture' and capture.name == 'capture',
              'admitted direct output must be the generation wrapper output/capture; use generation execute')
     scope = generation.get('history_scope')
-    _require(isinstance(scope, dict) and scope.get('schema_version') == 'webcollect-task-history-scope-1',
+    from .current_chain import SCOPE_SCHEMA
+    _require(isinstance(scope, dict) and scope.get('schema_version') in ('webcollect-task-history-scope-1', SCOPE_SCHEMA),
              'direct admission collection requires frozen original history')
     manifest = _read(scope.get('manifest'))
     history, current_scope = read_customer_history(manifest)
