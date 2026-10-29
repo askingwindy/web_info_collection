@@ -31,12 +31,13 @@ ASSESS_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'page_kind': {'enum': ['TARGET_APPLICATION', 'DIRECTORY_OR_INTRODUCTION', 'DOWNLOAD_OR_ARTICLE', 'UNKNOWN']}}}
 
 
-def model_decision(ledger, gateway, purpose, payload, schema, *, images=()):
+def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), output_limit=None):
     jid = ledger.enqueue(purpose, {'input': payload, 'schema': schema,
-                                  'image_refs': [reference(p) for p in images]})
+                                  'image_refs': [reference(p) for p in images], **({'output_limit':output_limit} if output_limit else {})})
     # Never reclaim a failed/UNKNOWN model job, even when a lease expires.
     old = ledger.get(jid)
     if old['state'] == 'done':
+        with ledger.transaction() as con:ledger.event(con,'model_cache_hit',{'kind':purpose,'job_id':jid})
         return old['result']
     if old['state'] != 'queued' or old['attempts']:
         raise OutcomeUnknown('Original model job unresolved; no automatic replacement: ' + jid)
@@ -45,7 +46,7 @@ def model_decision(ledger, gateway, purpose, payload, schema, *, images=()):
         raise OutcomeUnknown('Original model job unresolved: ' + jid)
     try:
         result = gateway.call(job, purpose, json.dumps(payload, ensure_ascii=False), schema,
-                              images=images, attempts=1)
+                              images=images, attempts=1, **({'output_limit':output_limit} if output_limit else {}))
         ledger.finish(job, result=result)
         return result
     except BaseException as error:
@@ -219,7 +220,7 @@ async def assess_hit(pool, ledger, gateway, browser, run_id, hit, parent, key, o
         hit = {**hit, 'uri': follow}
 
 
-async def discover_ai(config, *, pool_path, ledger_path, output, categories, target=10,
+async def _discover_legacy(config, *, pool_path, ledger_path, output, categories, target=10,
                       per_category=2, max_rounds=3, max_searches=20, search_engine='search_std', unresolved_selection_decision=None):
     if (not categories or len(categories) != len(set(categories)) or any(c not in CANONICAL_CATEGORIES for c in categories)
             or any(type(n) is not int or n < 1 for n in (target, per_category, max_rounds, max_searches))
@@ -358,3 +359,16 @@ async def discover_ai(config, *, pool_path, ledger_path, output, categories, tar
     else:
         save_json(output / 'report.json', report)
     return report
+
+
+async def discover_ai(config, **kwargs):
+    # Never rewrite an existing frozen run or re-query its completed three sites.
+    root=Path(kwargs['output']).resolve()
+    if kwargs.get('interaction_policy') is None and not ((root/'run-frozen.json').exists() and load_json(root/'run-frozen.json').get('version')=='glm-discovery-interaction-3'):
+        kwargs.pop('interaction_policy',None)
+        return await _discover_legacy(config,**kwargs)
+    if (root/'run-frozen.json').exists() and load_json(root/'run-frozen.json').get('version')!='glm-discovery-interaction-3':
+        if kwargs.get('interaction_policy') is not None:raise ValueError('Original interaction frozen; no policy replacement')
+        return await _discover_legacy(config,**kwargs)
+    from .discovery_batch import discover
+    return await discover(config,**kwargs)

@@ -27,7 +27,7 @@ from importlib.resources import files
 SCHEMA['properties']['tasks']['items']['properties']['task_type']=json.loads(files('webcollect').joinpath('schemas/annotation.schema.json').read_text())['properties']['task_type']
 
 
-def prompt_for(capability):
+def legacy_prompt_for(capability):
     anchors=[page.get('page_anchor') for page in capability['capabilities']]
     if not all(anchors):raise ValueError('Workflow planning requires original page anchors')
     verify_evidence([ref for anchor in anchors for ref in anchor.values()])
@@ -46,14 +46,18 @@ def prompt_for(capability):
         'capability':capability,'anchors':anchors}
 
 
+# The old envelope above remains importable for validating archived proposals.
+from .semantic_workflow import prompt_for, SCHEMA as SEMANTIC_SCHEMA, VERSION as SEMANTIC_VERSION
+
+
 def propose(gateway, job, capability, *, synthetic_response=None):
     prompt=prompt_for(capability)
-    refs=[ref for anchor in prompt['anchors'] for ref in anchor.values()]
-    verify_evidence(refs)
+    anchors=[p['page_anchor'] for p in capability['capabilities']]
     from .telemetry import phase
     with phase(gateway.ledger.path.parent/'planning-phases.jsonl','workflow_planning',scope={'job_id':job['id']}):
-        response=gateway.call(job,VERSION,json.dumps(prompt,ensure_ascii=False),SCHEMA,
-            images=[anchor['image']['path'] for anchor in prompt['anchors']],synthetic_response=synthetic_response,attempts=1)
+        response=gateway.call(job,SEMANTIC_VERSION,json.dumps(prompt,ensure_ascii=False),SEMANTIC_SCHEMA,
+            images=[anchor['image']['path'] for anchor in anchors],synthetic_response=synthetic_response,attempts=1,
+            output_limit=min(8192,gateway.ledger.config['model']['max_completion_tokens']))
     for spec in response['tasks']:
-        if spec.get('anchors')!=prompt['anchors']:raise ValueError('Model changed original page evidence bindings')
+        if 'anchors' in spec and spec['anchors']!=anchors:raise ValueError('Model changed original page evidence bindings')
     return response

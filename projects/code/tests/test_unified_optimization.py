@@ -103,10 +103,10 @@ class PlanningContracts(unittest.TestCase):
             path=Path(temp)/'fixture';path.write_text('local')
             refs={}
             for key in ('image','state','capture'):
-                item=Path(temp)/key;item.write_text('{"capture_controls":[{"element_id":"one","selector":"#one"}]}' if key=='state' else key)
+                item=Path(temp)/key;item.write_text(__import__('json').dumps({'capture_controls':[{'element_id':'one','selector':'#one'}], 'elements':[{'element_id':'one','text':'输入','visible':True}], 'url':'https://example.org/','visible_text':'中文输入'}) if key=='state' else key)
                 refs[key]={'path':str(item),'sha256':file_sha(item)}
-            cap={'capabilities':[{'page_anchor':refs}]}
-            gateway=MagicMock();gateway.ledger.path=Path(temp)/'ledger.db';gateway.call.return_value={'tasks':[]}
+            cap={'capabilities':[{'page_anchor':refs}], 'task_families':['form-workflow']}
+            gateway=MagicMock();gateway.ledger.path=Path(temp)/'ledger.db';gateway.ledger.config={'model':{'max_completion_tokens':10000}};gateway.call.return_value={'tasks':[]}
             self.assertEqual(propose(gateway,{'id':'controlled'},cap),{'tasks':[]})
             self.assertEqual(gateway.call.call_args.kwargs['images'],[refs['image']['path']])
             gateway.call.return_value={'tasks':[{'anchors':[]}]}

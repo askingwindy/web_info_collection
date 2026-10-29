@@ -463,7 +463,7 @@ def inventory_support(uri, inventories):
     return controls, forms, sorted(actions)
 
 
-def probe_gateway(ledger,candidates,output,fixture_pages=None):
+def probe_gateway(ledger,candidates,output,fixture_pages=None,structured_review=False):
     """Preflight only an uncached model branch; no browser/provider dispatch."""
     if ledger.config.get('model') is None:return None
     cached=True
@@ -471,6 +471,7 @@ def probe_gateway(ledger,candidates,output,fixture_pages=None):
         uri=normalize_uri(candidate['site_uri'])
         payload={'candidate':candidate,'version':VERSION,'output':str(Path(output).resolve()),
             'mode':ledger.config['mode'],'fixture_sha256':object_sha256(fixture_pages.get(uri)) if fixture_pages else None}
+        if structured_review:payload['source_review_protocol']='site-source-review-2'
         try:job=ledger.get(object_sha256({'kind':'site-probe','payload':payload}))
         except ValueError:cached=False;break
         if job['state']!='done':cached=False;break
@@ -482,7 +483,7 @@ def probe_gateway(ledger,candidates,output,fixture_pages=None):
     return ModelGateway(ledger)
 
 
-async def probe(ledger, candidates_path, output, *, fixture_pages=None):
+async def probe(ledger, candidates_path, output, *, fixture_pages=None, structured_review=False):
     from playwright.async_api import async_playwright
     from webcollect.preflight import inspect_page
     from webcollect.browser import observe, capture
@@ -493,7 +494,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
         raise ValueError('Synthetic probe requires the dedicated controlled integration fixture runner')
     output = Path(output).resolve(); output.mkdir(parents=True, exist_ok=True)
     records, stopped = [], None
-    gateway = probe_gateway(ledger,candidates,output,fixture_pages)
+    gateway = probe_gateway(ledger,candidates,output,fixture_pages,structured_review)
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel='chrome', headless=True)
         context = await browser.new_context(viewport={'width':1280,'height':720},device_scale_factor=1,locale='zh-CN')
@@ -502,7 +503,8 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                 uri = normalize_uri(candidate['site_uri'])
                 jid = ledger.enqueue('site-probe', {'candidate': candidate, 'version': VERSION,
                     'output': str(output), 'mode': ledger.config['mode'],
-                    'fixture_sha256': object_sha256(fixture_pages.get(uri)) if fixture_pages else None})
+                    'fixture_sha256': object_sha256(fixture_pages.get(uri)) if fixture_pages else None,
+                    **({'source_review_protocol':'site-source-review-2'} if structured_review else {})})
                 old = ledger.get(jid)
                 if old['state']=='done':
                     record = old['result']; validate_capability(record, require_ready=False)
@@ -607,6 +609,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                             except BaseException as caught:
                                 error=caught
                                 metrics['responsibility']=getattr(caught,'responsibility','site' if response_status is not None and response_status>=400 else 'unknown')
+                                if not getattr(caught,'responsibility',None):caught.responsibility=metrics['responsibility']
                                 evidence_dir.mkdir(parents=True,exist_ok=True)
                                 save_json(evidence_dir/'visit-failure.json',{'target_uri':target,'visit_id':visit['id'] if visit else None,
                                     'capture_failure':getattr(caught,'capture',None),'response_status':response_status,'landed_uri':landed_uri,'error_type':type(caught).__name__,'error_message':str(caught)})
@@ -636,8 +639,12 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                             'page_observations':[],'review_source':'not_reviewed','automatic_status':'MECHANICAL_PREFLIGHT_ONLY'}
                     else:
                         if gateway is None:gateway=ModelGateway(ledger)
-                        decision=gateway.call(job,'site-screen-v2',json.dumps({'instruction':'Inspect every representative page image. Chinese visible text >=70%, Chinese navigation/controls, no mandatory login or blocking overlay. Dynamic/advertising uncertainties route to review_required. Supply one observation per page_id, including every evidence image_id for that page; multiple images are evidence of one page; readiness is provisional capability, not trajectory QC.','pages':pages},ensure_ascii=False),SCREEN_SCHEMA,images=images,synthetic_response=response)
-                        validate_screen_coverage(pages,decision)
+                        if structured_review:
+                            from .source_review import review
+                            decision=review(gateway,job,pages,capabilities,images)
+                        else:
+                            decision=gateway.call(job,'site-screen-v2',json.dumps({'instruction':'Inspect every representative page image. Chinese visible text >=70%, Chinese navigation/controls, no mandatory login or blocking overlay. Dynamic/advertising uncertainties route to review_required. Supply one observation per page_id, including every evidence image_id for that page; multiple images are evidence of one page; readiness is provisional capability, not trajectory QC.','pages':pages},ensure_ascii=False),SCREEN_SCHEMA,images=images,synthetic_response=response)
+                            validate_screen_coverage(pages,decision)
                     if any(r['routing']=='REVIEW_REQUIRED' for r in pages) and decision['status']=='ready':
                         decision={**decision,'status':'review_required','reason':'Preflight requires unresolved risk adjudication'}
                     record={'schema_version':'webcollect-site-capability-1','capability_id':'site-'+object_sha256(uri)[:20],

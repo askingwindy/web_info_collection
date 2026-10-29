@@ -123,6 +123,9 @@ def qualification_status(decision, ratios, *, preflight_blocked=False):
 
 def validate_qualification(record):
     q = record['site_qualification']
+    if q.get('schema_version')=='site-source-review-2':
+        from .source_review import validate
+        return validate(record)
     category_policy, schema = _category_contract(q)
     if q.get('schema_version') != VERSION or q.get('mode') != record.get('mode'):
         raise ValueError('Site qualification schema/mode differs')
@@ -204,6 +207,10 @@ def qualify_catalog(ledger, catalog_path, output, *, access=None):
         if record.get('status') == 'rejected' or not record.get('capabilities'):
             records.append(deepcopy(record)); continue
         validate_capability(record, require_ready=False)
+        if record.get('screening',{}).get('unified_review'):
+            from .source_review import qualify
+            updated=qualify(record,ledger,output,access);validate_qualification(updated)
+            records.append(updated);continue
         evidence = record['evidence']
         images = [Path(row['path']) for row in evidence if Path(row['path']).suffix.lower() == '.png']
         if not images:

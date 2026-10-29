@@ -176,7 +176,8 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
         self.assertIn('visible_text',rejected['mismatch_fields'])
         self.assertEqual(base64.b64decode(rejected['original_png_base64']),result['png'])
         recomputed=browser.stability_pair(rejected['snapshot_before'],rejected['snapshot_live'],
-            base64.b64decode(rejected['original_png_base64']),base64.b64decode(rejected['comparison_png_base64']))
+            base64.b64decode(rejected['original_png_base64']),base64.b64decode(rejected['comparison_png_base64']),
+            allow_border=rejected['allow_border'])
         self.assertEqual(recomputed,rejected['stability']);self.assertFalse(recomputed['accepted'])
 
     def validate_actual_file_consumers(self,result):

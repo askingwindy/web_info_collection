@@ -914,7 +914,9 @@
        !['presentation','none'].includes(image.getAttribute('role'))||s.pointerEvents!=='none'||
        image.hasAttribute('title')||image.hasAttribute('aria-label')||image.hasAttribute('aria-labelledby'))reasons.push('not_explicitly_decorative');
     if(!image.complete||image.naturalWidth<=0||image.naturalHeight<=0)reasons.push('image_not_loaded');
-    if(unknownBorderPaint||!b.every(Number.isInteger)||r.left<0||r.top<0||r.right>width||r.bottom>height||
+    // Image exclusions have their own overlap/unbounded-paint proof below.
+    // The border-only proof is deliberately independent and computed later.
+    if(!b.every(Number.isInteger)||r.left<0||r.top<0||r.right>width||r.bottom>height||
        r.left<clip.left||r.top<clip.top||r.right>clip.right||r.bottom>clip.bottom)reasons.push('clipped_or_fractional_geometry');
     for(let p=image;p;p=p.parentElement) {
       const a=getComputedStyle(p),scale=axisScale(p);
@@ -1006,7 +1008,8 @@
       const siblings=n.parentElement?[...n.parentElement.children].filter(s=>s.localName===n.localName):[n];
       parts.unshift(n.localName+':nth-of-type('+(siblings.indexOf(n)+1)+')');n=n.parentElement;
     }
-    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0};
+    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
+      options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:clean(o.label),disabled:o.disabled})):[]};
   });
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,

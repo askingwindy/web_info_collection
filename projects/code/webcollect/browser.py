@@ -354,7 +354,7 @@ async def viewport_png(page):
         return base64.b64decode(result['data'],validate=True),{'method':'chrome_rendered_viewport','font_wait_error':str(error),'device_metrics_reasserted':metrics,'font_rendering_policy':'actual browser fallback; no page content or resource modification'}
 
 
-async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None):
+async def _capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None):
     """Capture full evidence; only proved unrelated decorative IMG pixels may vary.
 
     retries remains the total number of attempts, including when explicitly
@@ -434,6 +434,34 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
     raise error
 
 
+class SnapshotFault(ValueError):
+    responsibility = 'collector'
+
+
+async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None):
+    try:
+        return await _capture(page, selector, index, retries, assertions, protected_selectors)
+    except Exception as error:
+        # Preserve the exact comparison on EvidenceStale. A script exception may
+        # precede any tree; retain the available PNG without claiming synchrony.
+        if getattr(error, 'capture', None) is not None:
+            raise
+        diagnostic = {'schema_version': 'webcollect-capture-exception-1',
+                      'accepted_as_formal_frame': False, 'action_executed': False,
+                      'error_type': type(error).__name__, 'error_message': str(error)}
+        try:
+            png, method = await asyncio.wait_for(viewport_png(page), timeout=25)
+            diagnostic.update(diagnostic_png_base64=base64.b64encode(png).decode('ascii'), screenshot=method)
+        except Exception as secondary:
+            diagnostic['diagnostic_error_type'] = type(secondary).__name__
+        # Only a known observer program error is a proven collector fault.
+        if 'ReferenceError:' in str(error) or 'SyntaxError:' in str(error):
+            fault = SnapshotFault(str(error)); fault.capture = diagnostic
+            raise fault from error
+        error.capture = diagnostic
+        raise
+
+
 async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None):
     """Reject any changed captured state before dispatch, including non-control actions."""
     options={'assertions':assertions,**({'protected_selectors':protected_selectors} if protected_selectors else {})}
@@ -452,6 +480,7 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
             # the rejected comparison, without replacing the original step PNG.
             error.capture={'schema_version':'webcollect-execution-state-rejection-1',
                 'snapshot_before':state,'snapshot_live':live,'snapshot_final':final,
+                'allow_border':captured.get('border_enabled',False),
                 'original_png_base64':base64.b64encode(captured['png']).decode('ascii'),
                 'comparison_png_base64':base64.b64encode(png).decode('ascii'),
                 'comparison_screenshot':method,'stability':proof,'final_stability':final_proof,

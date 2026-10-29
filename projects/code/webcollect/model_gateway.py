@@ -67,8 +67,12 @@ class ModelGateway:
         self._credential = (credential(self.config['model']) if self.config['mode'] == 'real' else None)
 
     def call(self, job, purpose, text, schema, *, images=(), synthetic_response=None,
-             attempts=2):
+             attempts=2, output_limit=None):
         model = self.config['model']
+        if output_limit is not None:
+            if type(output_limit) is not int or not 1<=output_limit<=model['max_completion_tokens']:
+                raise ValueError('Stage output limit may only tighten the original reservation')
+            purpose += ':output-'+str(output_limit)
         compatible_provider = model['provider'] in ('deepseek', 'glm', 'ark')
         if len(images) > model['max_images']:
             raise ValueError('Image limit exceeded; segment with overlapping adjacent frames')
@@ -117,6 +121,8 @@ class ModelGateway:
                     self.ledger.heartbeat(job)
                     time.sleep(min(limit.seconds,1))
             if request['state'] == 'succeeded':
+                with self.ledger.transaction() as con:
+                    self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':request['id']})
                 return json.loads(request['response'])['result']
             if request['state'] != 'new':
                 continue  # Previously charged invalid response is retained, never resent under the same identity.
@@ -137,7 +143,7 @@ class ModelGateway:
                         # Ark's total-output limit includes reasoning. max_tokens
                         # only bounds the final answer for its GLM model.
                         limit = 'max_completion_tokens' if model['provider'] == 'ark' else 'max_tokens'
-                        payload[limit] = model['max_completion_tokens']
+                        payload[limit] = output_limit or model['max_completion_tokens']
                         if 'reasoning_effort' in model:
                             payload['reasoning_effort'] = model['reasoning_effort']
                         if model['provider'] in ('glm', 'ark'):
@@ -152,7 +158,7 @@ class ModelGateway:
                     else:
                         payload.update(response_format={'type': 'json_schema', 'json_schema': {
                             'name': 'webcollect_result', 'strict': True, 'schema': schema}},
-                            max_completion_tokens=model['max_completion_tokens'], store=False)
+                            max_completion_tokens=output_limit or model['max_completion_tokens'], store=False)
                     req = urllib.request.Request(model['endpoint'], json.dumps(payload).encode(), headers={
                         'Authorization': 'Bearer ' + self._credential,
                         'Content-Type': 'application/json', 'X-Client-Request-Id': rid})

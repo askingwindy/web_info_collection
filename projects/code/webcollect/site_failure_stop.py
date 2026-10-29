@@ -154,7 +154,10 @@ class SiteFailureStore:
             con.execute('BEGIN IMMEDIATE')
             for identity in decision['execution_ids']:
                 original=con.execute('SELECT * FROM site_executions WHERE execution_id=? AND application_key=?',(identity,key)).fetchone()
-                if not original or original[3]!='failed':raise ValueError('Only actual original failures can be reassessed')
+                if not original:raise ValueError('Original execution required')
+                if original[3]=='unknown':
+                    self._verify_closed_visit(original, decision.get('visit_proofs',{}).get(identity))
+                elif original[3]!='failed':raise ValueError('Original failure or proved closed visit required')
                 rows=con.execute('SELECT receipt FROM site_reassessments WHERE execution_id=?',(identity,)).fetchall()
                 values=[json.loads(row[0]) for row in rows]
                 if not values or len({v['responsibility'] for v in values})!=1 or values[0]['responsibility'] not in ('model','configuration','interface','collector'):
@@ -168,6 +171,34 @@ class SiteFailureStore:
             con.execute('INSERT OR IGNORE INTO site_reassessment_decisions VALUES(?,?,?)',(object_sha256(value),key,canonical(value)))
             con.commit()
         return self.status(application)
+
+    @staticmethod
+    def _verify_closed_visit(original, proof):
+        """Only resolve attribution of a known failed, zero-model visit.
+
+        A model UNKNOWN, interrupted/reserved visit or a transport error can
+        never be released through this route.
+        """
+        from .batch_core import BatchLedger
+        from .planning import verify_evidence
+        if not isinstance(proof,dict):raise ValueError('Closed visit proof required')
+        verify_evidence([proof['diagnostic']])
+        diagnostic=load_json(proof['diagnostic']['path'])
+        ledger=Path(proof['ledger']).resolve()
+        with closing(sqlite3.connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
+            con.row_factory=sqlite3.Row
+            row=con.execute('SELECT * FROM top_level_visits WHERE id=?',(proof['visit_id'],)).fetchone()
+            if not row:raise ValueError('Original visit missing')
+            row=dict(row);row['metrics']=json.loads(row['metrics'] or '{}')
+            requests=con.execute('SELECT COUNT(*) FROM model_requests WHERE job_id=?',(row['job_id'],)).fetchone()[0]
+        usage=json.loads(original[6])
+        if (row['state']!='failed' or row['finished_at'] is None or requests or
+            not isinstance(row['response_status'],int) or not 200<=row['response_status']<400 or
+            diagnostic.get('visit_id')!=row['id'] or diagnostic.get('error_message')!=row['error_message'] or
+            not any(token in row['error_message'] for token in ('ReferenceError:', 'SyntaxError:')) or
+            not any(ref.get('visit_id')==row['id'] and ref.get('ledger')==str(ledger) for ref in usage) or
+            proof.get('visit_sha256')!=object_sha256(row)):
+            raise ValueError('Only evidenced observer fault in finished zero-model visit may resolve attribution')
 
     @staticmethod
     def _success_schema(con):
@@ -371,8 +402,10 @@ class SiteFailureStore:
         reviewed={}
         for row in reassessments:
             verify_evidence(row['evidence'])
-            if row['original']['state']=='failed':reviewed.setdefault(row['original']['fact_id'],set()).add(row['responsibility'])
-        adjusted=failed-sum(len(opinions)==1 and next(iter(opinions)) in ('model','configuration','interface','collector') for opinions in reviewed.values())
+            reviewed.setdefault(row['original']['fact_id'],set()).add(row['responsibility'])
+        failed_ids={r['original']['fact_id'] for r in reassessments if r['original']['state']=='failed'}
+        unknown_ids={r['original']['fact_id'] for r in reassessments if r['original']['state']=='unknown'}
+        adjusted=failed-sum(identity in failed_ids and len(opinions)==1 and next(iter(opinions)) in ('model','configuration','interface','collector') for identity,opinions in reviewed.items())
         applied=set()
         with self.connect() as con:
             if con.execute("SELECT 1 FROM sqlite_master WHERE name='site_reassessment_decisions'").fetchone():
@@ -380,18 +413,24 @@ class SiteFailureStore:
                     decision=json.loads(raw);verify_evidence([decision['authorization']])
                     for receipt in decision['reviews']:
                         if receipt not in reassessments:raise ValueError('Applied failure reassessment changed')
+                    authorization=load_json(decision['authorization']['path'])
+                    for identity in decision['execution_ids']:
+                        if identity in unknown_ids:
+                            original=con.execute('SELECT * FROM site_executions WHERE execution_id=?',(identity,)).fetchone()
+                            self._verify_closed_visit(original,authorization.get('visit_proofs',{}).get(identity))
                     applied.update(identity for identity in decision['execution_ids'] if len(reviewed.get(identity,set()))==1)
-        effective=failed-len(applied)
+        effective=failed-len(applied & failed_ids)
+        effective_unknown=unknown-len(applied & unknown_ids)
         unavailable=effective>=LIMIT and not verified
-        state='unknown_hold' if unknown else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
+        state='unknown_hold' if effective_unknown else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
         return {'application_key': key, 'failure_count': failed,'historical_stopped':failed>=LIMIT,
                 'effective_site_failure_count':effective,'explicitly_reassessed_executions':sorted(applied),'reassessment_count':len(reassessments),
                 'reassessed_site_failure_count':max(0,adjusted),'reassessment_changes_dispatch':bool(applied), 'unknown_execution_count': unknown,
-                'failure_limit': LIMIT, 'qualified_success_count': verified,
+                'effective_unknown_execution_count':effective_unknown, 'failure_limit': LIMIT, 'qualified_success_count': verified,
                 'source_reported_success_count': successes - verified, 'used': bool(failed or unknown or successes),
                 'unavailable_before_first_valid': unavailable, 'state': state,
                 'round_id': self.binding['campaign_id'], 'automatic_round_reentry': False,
-                'stopped': effective >= LIMIT, 'dispatch_blocked': effective >= LIMIT or bool(unknown)}
+                'stopped': effective >= LIMIT, 'dispatch_blocked': effective >= LIMIT or bool(effective_unknown)}
 
     def guard(self, application):
         state = self.status(application)

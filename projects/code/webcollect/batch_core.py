@@ -652,6 +652,7 @@ class BatchLedger:
                 'model_request_states':dict(Counter(r['state'] for r in requests)),
                 'retry_requests':sum(r['attempt']>0 for r in requests),
                 'stages':dict(stages),
+                'stage_report':__import__('webcollect.stage_metering',fromlist=['report']).report(self),
                 'usage_coverage': covered/len(requests) if requests else None,
                 'known_model_cost_micros': known, 'uncertain_reserved_cost_micros': reserved,
                 'model_cost_micros': known if covered == len(requests) else 'UNKNOWN',

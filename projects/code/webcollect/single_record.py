@@ -77,7 +77,7 @@ async def source(pool_path, uri, config_path, ledger_path, output, *, chain):
         save_json(output/'hold.json',result)
         return result
     path = output / 'candidates.json'; candidate(pool_path, uri, path)
-    observed = await probe(ledger, path, output / 'probe')
+    observed = await probe(ledger, path, output / 'probe', structured_review=True)
     if len(observed['records']) != 1 or observed['records'][0].get('schema_version') != 'webcollect-site-capability-1':
         return {'status': 'SOURCE_FAILED', 'probe': observed, 'sample_ids_allocated': 0}
     if observed['records'][0]['status'] == 'rejected':

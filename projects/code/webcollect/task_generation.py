@@ -44,7 +44,7 @@ def generation_source_identity():
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py',
-        'workflow_planning.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
+        'workflow_planning.py','semantic_workflow.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -888,7 +888,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             if max_tasks is not None and len(tasks) >= max_tasks:
                 break
             try:
-                if 'anchors' in spec:
+                if 'anchors' in spec or spec.get('schema_version') == 'webcollect-semantic-workflow-2':
                     from .workflow_proposal import compile_workflow
                     task = compile_workflow(record, spec, VERSION)
                 else:
@@ -923,11 +923,13 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 structures.setdefault(signature, []).append(task)
                 if semantic:semantics.add(proposal_signature(task))
                 tasks.append(task)
+                with ledger.transaction() as con:ledger.event(con,'phase_output',{'kind':'task-generation','job_id':jid,'identity':object_sha256(spec),'status':'valid','task_id':task['task_id']})
                 if history_decision:
                     quality_reviews.append({'task_id': task['task_id'], 'task_version': task['task_version'],
                                             'task_sha256': object_sha256(task), **history_decision})
             except (ValueError,KeyError) as error:
                 rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error)})
+                with ledger.transaction() as con:ledger.event(con,'phase_output',{'kind':'task-generation','job_id':jid,'identity':object_sha256(spec),'status':'rejected','reason':str(error)})
     tasks.sort(key=lambda task: (len([op for op in task['operations'] if op['action_type'] not in ('wait','complete')])>8,len(task['operations'])))
     template=generator in ('deterministic','reviewed') or ledger.config['mode']=='synthetic'
     planning_stage=({'mode':'template','template_version':STRATEGY_VERSION,

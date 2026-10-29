@@ -11,6 +11,9 @@ SCHEMA = 'webcollect-workflow-proposals-1'
 
 
 def compile_workflow(capability, spec, version):
+    from .semantic_workflow import VERSION as SEMANTIC_VERSION, compile_semantic
+    if spec.get('schema_version') == SEMANTIC_VERSION:
+        return compile_semantic(capability, spec, version)
     from .task_admission import _frame
     from .task_contract import validate_m4_task, CONTROL_ACTIONS
     from .collect import validate_plan

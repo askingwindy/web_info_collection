@@ -26,6 +26,7 @@ def main(argv=None):
     p.add_argument('--per-category', type=int, default=2)
     p.add_argument('--max-rounds', type=int, default=3)
     p.add_argument('--max-searches', type=int, default=20)
+    p.add_argument('--interaction-policy', type=Path, help='Versioned batch policy; old frozen runs cannot change protocol')
     p.add_argument('--search-engine', choices=['search_std', 'search_pro'], default='search_std')
     for command in ('discover', 'probe'):
         p = sub.add_parser(command)
@@ -51,7 +52,7 @@ def main(argv=None):
             result = asyncio.run(discover_ai(load_json(args.config), pool_path=args.pool,
                 ledger_path=args.ledger, output=args.output, categories=args.categories,
                 target=args.target, per_category=args.per_category,
-                max_rounds=args.max_rounds, max_searches=args.max_searches, search_engine=args.search_engine))
+                max_rounds=args.max_rounds, max_searches=args.max_searches, search_engine=args.search_engine, interaction_policy=load_json(args.interaction_policy) if args.interaction_policy else None))
         elif args.command == 'prepare-review':
             result = prepare_review(args.catalog, args.output, capability_ids=args.capability_ids)
         elif args.command == 'import-review':
