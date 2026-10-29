@@ -764,7 +764,7 @@ def compile_form(capability, spec, *, _observer_sha256=None):
     return task
 
 
-def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None):
+def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None):
     if max_tasks is not None and (type(max_tasks) is not int or max_tasks < 1):
         raise ValueError('max_tasks must be an explicit positive integer')
     from .task_contract import validate_m4_plan
@@ -841,9 +841,15 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             rejected.append({'site_uri':record.get('site_uri'),'reason':str(error)}); continue
         prompt = {'instruction':'Generate distinct natural tasks using the observed form inventory. Supply at least two different necessary text/number fields, the actual visible submit label, meaningful input values and a verifiable final visible result. Do not invent controls. Do not vary only parameters to create multiple tasks on one form. Unsupported forms yield no tasks. Use Chinese prose and 「」 for titles. Task execution rechecks all observations.',
                   'capability':{'site_uri':record['site_uri'],'pages':record['capabilities']}}
+        feedback=None
+        if workflow_feedback:
+            if generator!='workflow-model':raise ValueError('Compiler feedback only applies to workflow-model')
+            from .workflow_planning import validate_feedback
+            feedback=validate_feedback(ledger,record,workflow_feedback)
         if generator=='workflow-model':
             from .workflow_planning import prompt_for
             prompt=prompt_for(record)
+            if feedback:prompt['compiler_feedback']=feedback
         if generator in ('model','workflow-model'):actual_prompts.append(prompt)
         jid = ledger.enqueue('task-generation', {'capability_sha256':object_sha256(record),'version':VERSION,
             'source_identity':sources,
@@ -851,7 +857,8 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             'workflow_proposals_sha256': object_sha256(proposed),
             'page_identities_sha256': object_sha256(identities),
             'admission_inputs_sha256':object_sha256(admission_refs) if admission_refs else None,
-            'history_sha256':history_hash,'mode':ledger.config['mode']})
+            'history_sha256':history_hash,'mode':ledger.config['mode'],
+            **({'workflow_feedback_sha256':object_sha256(workflow_feedback)} if workflow_feedback else {})})
         try:
             job = ledger.claim('task-generation',job_id=jid)
         except BudgetStop as error:
@@ -866,7 +873,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             try:
                 if generator=='workflow-model':
                     from .workflow_planning import propose
-                    specs=propose(gateway,job,record,synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])})
+                    specs=propose(gateway,job,record,synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])},compiler_feedback=feedback)
                 elif proposed and 'form-workflow' not in record['task_families']:
                     specs = {'tasks': []}
                 elif generator == 'reviewed':

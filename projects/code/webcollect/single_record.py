@@ -199,7 +199,7 @@ def numeric_workflow(catalog_path, output, *, inputs, submit_label, assertions, 
     result={'schema_version':SCHEMA,'tasks':[spec]};save_json(output,result);return result
 
 
-def plan(config_path, ledger_path, catalog_path, chain, output, *, generator='deterministic', workflow_specs=None):
+def plan(config_path, ledger_path, catalog_path, chain, output, *, generator='deterministic', workflow_specs=None, workflow_feedback=None):
     from .current_chain import read_chain_history
     from .task_generation import generate
     scope = read_chain_history(Path(chain).resolve())[1]
@@ -209,7 +209,7 @@ def plan(config_path, ledger_path, catalog_path, chain, output, *, generator='de
     assert_current_evidence(scope, identity_value)
     ledger = BatchLedger(ledger_path, load_json(config_path), initialize=not Path(ledger_path).exists())
     result = generate(ledger, catalog_path, output / 'generation', history_set=Path(chain).resolve(),
-        history_registry=scope['registry'], generator=generator, workflow_specs=workflow_specs,
+        history_registry=scope['registry'], generator=generator, workflow_specs=workflow_specs, workflow_feedback=workflow_feedback,
         page_identities=identities, max_tasks=1)
     if result.get('plan_file'):
         from .current_chain import assert_current_evidence

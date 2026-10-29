@@ -50,8 +50,9 @@ def legacy_prompt_for(capability):
 from .semantic_workflow import prompt_for, SCHEMA as SEMANTIC_SCHEMA, VERSION as SEMANTIC_VERSION
 
 
-def propose(gateway, job, capability, *, synthetic_response=None):
+def propose(gateway, job, capability, *, synthetic_response=None, compiler_feedback=None):
     prompt=prompt_for(capability)
+    if compiler_feedback:prompt['compiler_feedback']=compiler_feedback
     anchors=[p['page_anchor'] for p in capability['capabilities']]
     from .telemetry import phase
     with phase(gateway.ledger.path.parent/'planning-phases.jsonl','workflow_planning',scope={'job_id':job['id']}):
@@ -61,3 +62,28 @@ def propose(gateway, job, capability, *, synthetic_response=None):
     for spec in response['tasks']:
         if 'anchors' in spec and spec['anchors']!=anchors:raise ValueError('Model changed original page evidence bindings')
     return response
+
+
+def validate_feedback(ledger,capability,feedback):
+    from .planning import object_sha256,verify_evidence
+    if set(feedback)!={'schema_version','prior_job_id','generation_result'} or feedback['schema_version']!='webcollect-workflow-compiler-feedback-1':
+        raise ValueError('Versioned bounded compiler feedback required')
+    verify_evidence([feedback['generation_result']]);report=load_json(feedback['generation_result']['path'])
+    job=ledger.get(feedback['prior_job_id'])
+    with ledger.connect() as con:
+        states=[r[0] for r in con.execute('SELECT state FROM model_requests WHERE job_id=?',(job['id'],))]
+    if (job['kind']!='task-generation' or job['state']!='done' or job['payload'].get('workflow_feedback_sha256') or
+        job['payload'].get('capability_sha256')!=object_sha256(capability) or not states or any(s!='succeeded' for s in states) or
+        report.get('generated_tasks')!=0 or report.get('pending') or not report.get('rejected')):
+        raise ValueError('Only one revision of a successful but compiler-rejected proposal; UNKNOWN cannot be revised')
+    specs=job['result']['specs']['tasks']
+    if not specs or {object_sha256(s) for s in specs}!={r.get('spec_sha256') for r in report['rejected']}:
+        raise ValueError('Compiler feedback must cover the original rejected specifications')
+    from .workflow_proposal import compile_workflow
+    for spec in specs:
+        try:compile_workflow(capability,spec,'compiler-feedback-check')
+        except ValueError as error:
+            if not any(r['spec_sha256']==object_sha256(spec) and r['reason']==str(error) for r in report['rejected']):raise ValueError('Compiler feedback reason changed')
+        else:raise ValueError('Cannot revise a valid plan through rejection feedback')
+    return {'instruction':'仅修正以下明确编译错误。不要保留与初值相同的选择，不要凑步；无法自然达到5步返回空tasks。本协议最多修订一次，仍需完整重新编译与冻结。',
+            'prior_specs':specs,'rejections':report['rejected'],'binding':feedback}

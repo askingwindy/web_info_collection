@@ -242,3 +242,24 @@ class DiscoveryIntegration(unittest.TestCase):
                     self.assertEqual(asyncio.run(batch.discover(cfg,**args)),result)
                     self.assertEqual(len(calls),count)
                     self.assertEqual(calls.count('ai-batch-assessment'),(4+size-1)//size)
+
+class CompilerFeedback(SemanticFixture,unittest.TestCase):
+    def test_one_bound_revision_then_freeze_and_never_revise_unknown(self):
+        from webcollect.task_generation import generate
+        from webcollect.workflow_planning import validate_feedback
+        from test_s0_task_generation import catalog
+        record,spec=self.semantic();bad=deepcopy(spec);bad['steps'][0]['value']='10'
+        cfg=load_json(Path(__file__).parents[1]/'config/batch-synthetic.json')
+        ledger=BatchLedger(self.root/'feedback-ledger',cfg,initialize=True);source=catalog(self.root/'source-catalog',[record])
+        first=generate(ledger,source,self.root/'bad',generator='workflow-model',synthetic_specs={record['site_uri']:[bad]})
+        self.assertEqual(first['generated_tasks'],0)
+        with ledger.connect() as con:job=con.execute("select id from jobs where kind='task-generation'").fetchone()[0]
+        report=next((self.root/'bad').glob('generation-*.json'))
+        feedback={'schema_version':'webcollect-workflow-compiler-feedback-1','prior_job_id':job,'generation_result':{'path':str(report),'sha256':file_sha(report)}}
+        validate_feedback(ledger,record,feedback)
+        fixed=generate(ledger,source,self.root/'fixed',generator='workflow-model',synthetic_specs={record['site_uri']:[spec]},workflow_feedback=feedback)
+        self.assertEqual(fixed['generated_tasks'],1,fixed)
+        again=generate(ledger,source,self.root/'fixed',generator='workflow-model',synthetic_specs={record['site_uri']:[spec]},workflow_feedback=feedback)
+        self.assertEqual(fixed,again);self.assertEqual(ledger.summary()['model_requests'],2)
+        with ledger.transaction() as con:con.execute("update model_requests set state='unknown' where job_id=?",(job,))
+        with self.assertRaises(ValueError):validate_feedback(ledger,record,feedback)
