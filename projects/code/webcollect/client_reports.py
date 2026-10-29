@@ -276,6 +276,8 @@ def finalize_client_package(repo, source, qc_report, output, *, effective_set=No
     from quality_inspector.delivery_scope import verify_delivery_scope
     scope = verify_delivery_scope(effective_set, cross_package_report, dataset=source,
         expected_contract=report.get('requirements_baseline', {}).get('sha256'))
+    from quality_inspector.profiles import verify_member_release
+    verify_member_release(report, scope)
     _protect_scope_output(output, scope)
     report_sha256 = sha(report_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -326,6 +328,8 @@ def archive_client_package(source, qc_report, output, *, effective_set=None, cro
     from quality_inspector.delivery_scope import verify_delivery_scope
     scope = verify_delivery_scope(effective_set, cross_package_report, dataset=source, phase='final',
         expected_contract=report.get('requirements_baseline', {}).get('sha256'))
+    from quality_inspector.profiles import verify_member_release
+    verify_member_release(report, scope)
     _protect_scope_output(output, scope)
     _protect_scope_output(checksum_path, scope)
     report_hash = sha(qc_report)

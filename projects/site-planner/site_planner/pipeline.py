@@ -344,7 +344,13 @@ INVENTORY_JS = r'''() => {
  const allResults=[...new Map([...resultTargets,...bmi.result_targets,...date.result_targets,...art.result_targets,
    ...loan.result_targets,...table.result_targets,...qr.result_targets,...placeholder.result_targets,
    ...hmac.result_targets,...pbkdf2.result_targets].map(row=>[row.selector,row])).values()];
+ const controls=[...document.querySelectorAll('input:not([type="hidden"]),textarea,select,button')]
+  .filter(visible).map(e=>({selector:selector(e),tag:e.localName,type:e.type||'',label:label(e),
+   value:e.value||'',visible:true,enabled:!e.disabled&&e.getAttribute('aria-disabled')!=='true',
+   editable:!e.disabled&&!e.readOnly&&e.getAttribute('aria-readonly')!=='true',
+   min:e.min||'',max:e.max||''})).filter(e=>e.selector);
  return {title:document.title,widgets:[...bmi.widgets,...date.widgets,...art.widgets,...loan.widgets,...table.widgets,...qr.widgets,...placeholder.widgets,...hmac.widgets,...pbkdf2.widgets],widget_rejections:[...bmi.widget_rejections,...date.widget_rejections,...art.widget_rejections,...loan.widget_rejections,...table.widget_rejections,...qr.widget_rejections,...placeholder.widget_rejections,...hmac.widget_rejections,...pbkdf2.widget_rejections],
+   controls,
    result_targets:allResults,
    forms,
  links:[...document.querySelectorAll('a[href]')].filter(visible).map(e=>({label:clean(e.innerText),uri:e.href})).filter(e=>e.label).slice(0,50)};
@@ -443,7 +449,7 @@ def inventory_support(uri, inventories):
 async def probe(ledger, candidates_path, output, *, fixture_pages=None):
     from playwright.async_api import async_playwright
     from webcollect.preflight import inspect_page
-    from webcollect.browser import observe
+    from webcollect.browser import observe, capture
     candidates = load_json(candidates_path)
     if candidates.get('schema_version') != 'webcollect-site-candidates-1' or candidates.get('mode') != ledger.config['mode']:
         raise ValueError('Candidates/mode mismatch')
@@ -537,12 +543,23 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                                         'before':before,'after':after,'production_action':False})
                                 task={'task_id':jid+'-'+str(index),'site_uri':uri,'initial_url':target,
                                       'instruction':'只读站点能力探测','content_preparation':False,'operations':[{'action_type':'wait'}]}
+                                # Start diagnostic probes from an actually ready
+                                # frame. A premature loading observation must not
+                                # become a permanent route after readiness earns
+                                # a synchronized proof later in the same visit.
+                                anchor = await bounded(ledger, capture(page))
                                 result = await bounded(ledger,inspect_page(page,task,evidence_dir,samples=2,interval_ms=100,
                                     url_check=verify_public_url if fixture_pages is None else None))
-                                state = await bounded(ledger,observe(page))
+                                state = anchor['state']
+                                anchor_image = evidence_dir/'page-anchor.png'; anchor_image.write_bytes(anchor['png'])
+                                anchor_state = evidence_dir/'page-anchor.state.json'; save_json(anchor_state, state)
+                                anchor_capture = evidence_dir/'page-anchor.capture.json'; save_json(anchor_capture, anchor['capture'])
+                                page_anchor = {key: {'path': str(path), 'sha256': file_sha(path)} for key, path in (
+                                    ('image', anchor_image), ('state', anchor_state), ('capture', anchor_capture))}
                                 inventory={'page_uri':normalize_uri(landed_uri) if landed_uri else target,
                                     'requested_uri':target,'landed_uri':landed_uri,'visible_text':state['visible_text'],
-                                    'elements':state['elements'],**await bounded(ledger,page.evaluate(INVENTORY_JS))}
+                                    'elements':state['elements'], 'page_anchor': page_anchor,
+                                    **await bounded(ledger,page.evaluate(INVENTORY_JS))}
                                 if initial_visible_text is not None:
                                     inventory['initial_visible_text'] = initial_visible_text
                                 inventory_file=evidence_dir/'inventory.json';save_json(inventory_file,inventory)
@@ -596,6 +613,8 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                         'rendered':bool(pages),'unique_task_capacity_estimate':len(forms),'capacity_basis':'distinct observed forms or typed business widgets; not measured accepted trajectories',
                         'screening':decision,'mode':ledger.config['mode'],'QC_approval':False}
                     validate_capability(record,require_ready=False);save_json(directory/'capability.json',record)
+                    ledger.record_probe_outcome(job, uri, record,
+                        {'path': str(directory / 'capability.json'), 'sha256': file_sha(directory / 'capability.json')})
                     ledger.finish(job,result=record);records.append(record)
                 except BudgetStop as error:
                     partial={'site_uri':uri,'site_category':candidate['site_category'],'status':'queued','reason':str(error),
@@ -606,13 +625,17 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                     save_json(directory/('partial-attempt-'+str(ledger.get(jid)['attempts'])+'.json'),partial)
                     ledger.finish(job,'queued',result=partial,error=str(error));records.append(partial);stopped=str(error);break
                 except Exception as error:
-                    failure={'site_uri':uri,'site_category':candidate['site_category'],'status':'review_required',
+                    failure={'schema_version':'webcollect-site-probe-failure-1',
+                        'site_uri':uri,'site_category':candidate['site_category'],'status':'review_required',
                         'reason':type(error).__name__,'error_message':str(error),'representative_pages':pages,
                         'capabilities':capabilities,'visit_ids':visit_ids,
                         'accessible':any(v['response_status'] is not None and v['response_status']<400 for v in ledger.visits() if v['id'] in visit_ids),
                         'rendered':bool(list(directory.rglob('*.png'))),
                         'evidence':[{'path':str(path),'sha256':file_sha(path)} for path in sorted(directory.rglob('*')) if path.is_file()]}
-                    save_json(directory/('failure-attempt-'+str(ledger.get(jid)['attempts'])+'.json'),failure)
+                    failure_path = directory/('failure-attempt-'+str(ledger.get(jid)['attempts'])+'.json')
+                    save_json(failure_path,failure)
+                    ledger.record_probe_outcome(job, uri, failure,
+                        {'path': str(failure_path), 'sha256': file_sha(failure_path)})
                     ledger.finish(job,'review_required',result=failure,error=type(error).__name__);records.append(failure)
                 finally:await page.close()
         finally:

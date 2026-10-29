@@ -435,6 +435,19 @@ def _flow_record(spec, mode):
 
 def completion_scroll(capability, spec, operations, assertions, *, _observer_sha256=None):
     """Compile one observed necessary view action, never an arbitrary step pad."""
+    if spec.get('completion_view', {}).get('schema_version') == 'webcollect-live-completion-view-1':
+        view = spec['completion_view']
+        _require(set(view) == {'schema_version', 'distance'} and type(view['distance']) is int
+                 and 1 <= view['distance'] <= 480, 'live result view needs one bounded scroll distance')
+        _require(assertions and all(condition.get('selector') == spec['completion']['selector']
+                 and set(condition) <= {'selector', 'contains', 'numbers'} for condition in assertions),
+                 'live view supports one literal/numeric terminal container')
+        return {'operation_id': 'reveal-complete-result', 'subgoal_id': 'result', 'action_type': 'scroll',
+                'selector': spec['completion']['selector'], 'arguments': {'direction': 'down'},
+                'execution': {'distance': view['distance'], 'settle_ms': 500},
+                'goal': '向下滚动，完整查看结果', 'rationale': '仅在本次实际结果超出视口时查看完整结果',
+                'expected': '完整显示任务结果', 'postconditions': deepcopy(assertions),
+                'completion_view': deepcopy(view)}
     _require(not spec.get('widget_adapter') and not spec.get('deterministic_strategy'), 'completion-view proof is for reviewed ordinary groups only')
     mode = capability.get('mode'); _require(mode in SCHEMAS, 'completion-view execution mode required')
     record = _flow_record(spec, mode)
@@ -508,6 +521,31 @@ def completion_scroll(capability, spec, operations, assertions, *, _observer_sha
 
 def validate_live_completion_scroll(task, operation, state):
     """The collector calls this on the synchronized pre-action original frame."""
+    if (not task.get('task_admission') and operation.get('completion_view', {}).get('schema_version')
+            == 'webcollect-live-completion-view-1'):
+        view = operation['completion_view']; distance = view.get('distance')
+        _require(set(view) == {'schema_version', 'distance'} and type(distance) is int and 1 <= distance <= 480,
+                 'live view distance is invalid')
+        _require(operation is task['operations'][-1] and operation.get('action_type') == 'scroll'
+                 and operation.get('arguments') == {'direction': 'down'}
+                 and operation.get('execution', {}).get('distance') == distance
+                 and operation.get('postconditions') == task['final_assertions'], 'live view must be the bound last action')
+        conditions = task['final_assertions']; selector = operation.get('selector')
+        _require(conditions and all(condition.get('selector') == selector
+                 and set(condition) <= {'selector', 'contains', 'numbers'} for condition in conditions),
+                 'live view needs the frozen literal/numeric terminal')
+        actual = _terminal_target(state, selector)
+        box = actual.get('bbox', []); width, height = state.get('screen_resolution', [0, 0])
+        _require(actual.get('visible') is False and _text(actual.get('text')) and len(box) == 4
+                 and 0 <= box[0] < box[2] <= width and distance <= box[1] < height < box[3] <= height + distance,
+                 'PADDING_SCROLL: only an existing clipped result within one scroll may be revealed')
+        from .collect import check_numbers
+        for condition in conditions:
+            _require(('contains' in condition and condition['contains'] in actual['text'])
+                     or ('numbers' in condition and check_numbers(actual['text'], condition['numbers'])),
+                     'live clipped content does not satisfy the actual frozen result')
+        return {'machine_status': 'PASS', 'scope': 'same-execution clipped terminal only; no semantic/QC approval',
+                'observed_before_result_bbox': box, 'completion_view': view}
     _require(operation.get('completion_view') and task.get('task_admission'), 'view scroll needs current reviewed admission')
     packet = load_json(_read(task['task_admission']['packet']))
     record = _flow_record(packet['spec'], packet['mode'])

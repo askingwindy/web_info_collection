@@ -1,4 +1,4 @@
-"""Bound delivery-QC runner: sampled GLM jobs, human escalation and final QC.
+"""Bound delivery-QC runner: sampled model jobs, human escalation and final QC.
 
 This runner never collects trajectories, authors human decisions, or bypasses
 distribution checks. Every operation uses the immutable outer receipt. Unlike
@@ -54,9 +54,12 @@ def _implementation():
 def _mode(ledger,mode):
     model=ledger.config.get('model') or {}
     if mode=='real':
-        if (ledger.config.get('mode')!='real' or model.get('provider')!='glm'
-                or model.get('model')!='glm-5.3-flash' or model.get('supports_vision') is not True):
-            raise ValueError('Real delivery pipeline requires explicitly configured glm-5.3-flash vision')
+        supported = ((model.get('provider') == 'glm' and model.get('model') == 'glm-5.3-flash')
+                     or (model.get('provider') == 'ark' and model.get('model') in
+                         ('glm-5-3-flash-260828', 'deepseek-v4-1-flash-261017',
+                          'deepseek-v4-1-flash-economy-261017')))
+        if ledger.config.get('mode')!='real' or not supported or model.get('supports_vision') is not True:
+            raise ValueError('Real delivery pipeline requires explicitly configured glm-5.3-flash or Ark vision model')
     elif mode=='controlled':
         if ledger.config.get('mode')!='synthetic' or model.get('provider')!='synthetic':
             raise ValueError('Controlled mode requires a synthetic ledger and cannot claim real review')
@@ -145,9 +148,14 @@ class _BoundLedger:
 
 
 def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELIVERY_PROFILE,
-            mode='real',supporting_files=(),cross_package_report=None,collection_checks=None,document_review_mode='ai'):
+            mode='real',supporting_files=(),cross_package_report=None,collection_checks=None,document_review_mode='ai',
+            sample_reviews=None,production_handoff=None):
     from .delivery_scope import verify_delivery_scope
     _mode(ledger,mode)
+    if production_handoff is not None:
+        if mode != 'real':raise ValueError('Controlled QC cannot update production/shared pool')
+        from webcollect.site_pool_sync import validate_handoff
+        validate_handoff(production_handoff,dataset)
     if document_review_mode not in ('ai','human'):raise ValueError('Explicit ai or human documentary review mode required')
     dataset=Path(dataset).resolve();plan_path=Path(plan_path).resolve()
     plan=delivery_sampling.verify(plan_path,dataset)
@@ -161,6 +169,8 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
         roots.append(root)
     if dataset not in roots:raise ValueError('Cumulative set must include the actual candidate package')
     if ledger.path.is_relative_to(dataset):raise ValueError('Model ledger must be outside candidate samples')
+    supporting_files=list(dict.fromkeys([*map(lambda p:str(Path(p).resolve()),supporting_files),
+                                         *([str(Path(sample_reviews).resolve())] if sample_reviews else [])]))
     output=_external(output,roots,[plan_path,effective_set,profile,ledger.path,*supporting_files])
     output.mkdir(parents=True,exist_ok=False)
     implementation=_implementation();candidate=package_files(dataset)
@@ -173,7 +183,8 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
                                 collection_checks=collection_checks)
         from .profiles import delivery_document_review_template
         document_template=delivery_document_review_template(inspect(None,dataset,profile=profile,inspection_stage='payload'))
-        document_job=(ai_worker.documents_job(proxy,dataset,profile,output/'document-preparation',supporting_files=supporting_files)
+        document_job=(ai_worker.documents_job(proxy,dataset,profile,output/'document-preparation',supporting_files=supporting_files,
+                      sample_reviews=sample_reviews,delivery_sampling_plan=plan_path if sample_reviews else None)
                       if document_review_mode=='ai' else None)
         queue=_read(queued['queue_file'])
         job_ids={job for row in queue['jobs'] for job in (row['visual_job'],row['difference_job'])}
@@ -189,6 +200,7 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
                'effective_set':_ref(effective_set),'profile':_ref(profile),
                'cross_package_report':_ref(cross_package_report),'delivery_scope':scope,
                'collection_checks':queue.get('collection_checks'),
+               **({'production_handoff':production_handoff} if production_handoff is not None else {}),
                'supporting_files':[_ref(path) for path in supporting_files],
                'implementation_sha256':implementation,'queue':_ref(queued['queue_file']),
                'pipeline_rules_version':PIPELINE_RULES_VERSION,
@@ -261,6 +273,9 @@ def verify(receipt_path,ledger=None):
         _check_ref(receipt['collection_checks'])
         ai_worker.collection_context(receipt['collection_checks'],{
             slot['current']['sample_id'] for slot in delivery_sampling.verify(receipt['plan']['path'])['slots']})
+    if receipt.get('production_handoff'):
+        from webcollect.site_pool_sync import validate_handoff
+        validate_handoff(receipt['production_handoff'],receipt['dataset'])
     plan=delivery_sampling.verify(receipt['plan']['path'],receipt['dataset'])
     if plan['plan_sha256']!=receipt['plan_sha256']:raise ValueError('Bound delivery sampling plan identity changed')
     if package_files(receipt['dataset'])!=receipt['candidate_files_sha256']:raise ValueError('Pipeline candidate package changed')
@@ -510,6 +525,9 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
         if not request_id:raise ValueError('Progress import needs an explicit idempotent request ID')
         imported=progress.import_qc(report_dir/'report.json',request_id=request_id)
     verify(receipt_path,ledger)
+    if receipt.get('production_handoff'):
+        from webcollect.site_pool_sync import apply_qc
+        apply_qc(report_dir/'report.json',receipt['production_handoff'])
     for reference in human_inputs:_check_ref(reference)
     summary={'schema_version':VERSION+'-status','receipt':_ref(receipt_path),'mode':receipt['mode'],
              'dataset':receipt['dataset'],'original_denominator':receipt['original_denominator'],
@@ -623,6 +641,7 @@ def main(argv=None):
     p.add_argument('--plan',type=Path,required=True);p.add_argument('--effective-set',type=Path,required=True)
     p.add_argument('--cross-package-report',type=Path,required=True)
     p.add_argument('--collection-checks',type=Path)
+    p.add_argument('--production-handoff',type=Path,help='Original current-chain capture handoff for automatic shared pool QC writeback')
     p.add_argument('--document-review-mode',choices=('ai','human'),required=True)
     p.add_argument('--profile',type=Path,default=DEFAULT_DELIVERY_PROFILE);p.add_argument('--output',type=Path,required=True)
     p.add_argument('--mode',choices=('real','controlled'),required=True);p.add_argument('--supporting-file',type=Path,action='append',default=[])
@@ -648,7 +667,8 @@ def main(argv=None):
             result=prepare(ledger,args.input,args.plan,args.effective_set,args.output,profile=args.profile,
                            mode=args.mode,supporting_files=args.supporting_file,
                            cross_package_report=args.cross_package_report,collection_checks=args.collection_checks,
-                           document_review_mode=args.document_review_mode)
+                           document_review_mode=args.document_review_mode,
+                           production_handoff=_ref(args.production_handoff) if args.production_handoff else None)
         elif args.command=='finalize':
             progress=None
             if args.progress_state or args.production_registry:

@@ -60,6 +60,22 @@ class PilotIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'whole public host'):
             validate_identity(self.task)
 
+    def test_multihost_task_page_requires_frozen_application_alias_evidence(self):
+        from webcollect.batch_core import save_json
+        task = deepcopy(self.task)
+        task['pilot_identity']['application']['canonical_uri'] = 'https://canonical.example/'
+        with self.assertRaisesRegex(ValueError, 'ownership'):
+            validate_identity(task)
+        source = self.root / 'same-application.json'
+        save_json(source, {'schema_version': 'webcollect-application-aliases-1', 'applications': [{
+            'canonical_uri': 'https://canonical.example/',
+            'aliases': ['https://canonical.example/', 'https://example.org/'],
+            'evidence': [self.anchor['state']]}]})
+        task['pilot_identity']['application']['application_registry'] = reference(source)
+        self.assertEqual(validate_identity(task)['application_key'], '//canonical.example/')
+        source.write_text(source.read_text() + '\n')
+        with self.assertRaises(ValueError): validate_identity(task)
+
     def test_shared_entry_is_allowed_and_does_not_claim_the_task_page(self):
         self.task['initial_url'] = 'https://example.org/'
         self.task['pilot_identity']['shared_pages'] = [{'uri': self.task['initial_url'], 'role': 'entry',

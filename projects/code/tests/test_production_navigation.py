@@ -40,6 +40,11 @@ class ProductionNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         config = load_json(Path(__file__).resolve().parents[1] / 'config/batch-no-model.json')
+        from webcollect.site_failure_stop import SiteFailureStore
+        import time
+        config['site_failure_guard'] = SiteFailureStore.initialize({
+            'ledger': str(self.root/'stop.sqlite3'), 'campaign_id': 'CONTROLLED-navigation',
+            'formal_since': time.time()-1}).binding
         config['budget'].update(max_top_level_visits=2, min_domain_interval_seconds=1)
         self.ledger = BatchLedger(self.root / 'ledger.sqlite3', config, initialize=True)
         self.job = self.ledger.claim('test', job_id=self.ledger.enqueue('test', {'case': self._testMethodName}))

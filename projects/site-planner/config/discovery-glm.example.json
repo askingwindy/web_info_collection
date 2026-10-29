@@ -1,0 +1,44 @@
+{
+  "budget": {
+    "cost_control": "observe_only",
+    "currency": "CNY",
+    "lease_seconds": 240,
+    "max_concurrent_jobs": 1,
+    "max_discovery_candidates": 100,
+    "max_job_attempts": 1,
+    "max_model_cost_micros": null,
+    "max_model_requests": 100,
+    "max_probe_pages": 80,
+    "max_reserved_tokens": 100000000,
+    "max_run_seconds": 5400,
+    "max_top_level_visits": 80,
+    "min_domain_interval_seconds": 3,
+    "min_model_interval_seconds": 1
+  },
+  "mode": "real",
+  "model": {
+    "api_key_env": "GLM_API_KEY",
+    "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    "image_encoding": "data_url",
+    "image_tokens_per_image": 8192,
+    "max_completion_tokens": 8192,
+    "max_images": 1,
+    "model": "glm-5.3-flash",
+    "provider": "glm",
+    "rates": {
+      "cached_input": 230000,
+      "input": 800000,
+      "output": 2800000,
+      "source": "https://docs.bigmodel.cn/cn/guide/start/pricing ; checked 2026-10-29; CNY per million input 0.8 cached 0.23 output 2.8; account debit UNKNOWN",
+      "version": "glm-5.3-flash-official-20261029-r01"
+    },
+    "reasoning_effort": "low",
+    "request_overhead_tokens": 2048,
+    "reserve_cost_micros": 1000000,
+    "reserve_input_tokens": 950000,
+    "supports_vision": true,
+    "timeout_seconds": 180
+  },
+  "run_id": "shared-pool-glm-discovery-CHANGE-ME",
+  "schema_version": "webcollect-batch-config-1"
+}

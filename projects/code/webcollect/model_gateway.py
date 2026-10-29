@@ -1,11 +1,11 @@
 """Bounded Chat Completions JSON/image adapter, with no SDK automatic retries.
 
 Protocol reference: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+Ark reference: https://docs.volcengine.com/docs/ark/chat-api?lang=zh
 Prices/model names are explicit configuration, never inferred from chat access.
 """
 import base64
 import json
-import os
 from pathlib import Path
 import re
 import time
@@ -48,9 +48,9 @@ def response_usage(raw, provider):
 
 
 def parse_content(content, provider):
-    """Accept only a complete single JSON fence for GLM; never repair JSON."""
+    """Accept only a complete single JSON fence for GLM/Ark; never repair JSON."""
     normalized = False
-    if provider == 'glm' and isinstance(content, str):
+    if provider in ('glm', 'ark') and isinstance(content, str):
         envelope = re.fullmatch(r'\s*```json[ \t]*\r?\n(.*?)\r?\n```\s*', content, re.DOTALL)
         if envelope and '```' not in envelope.group(1):
             content = envelope.group(1)
@@ -62,11 +62,13 @@ class ModelGateway:
     def __init__(self, ledger):
         self.ledger = ledger
         self.config = validate_config(ledger.config, credentials=True, require_model=True)
+        from .model_credentials import credential
+        self._credential = (credential(self.config['model']) if self.config['mode'] == 'real' else None)
 
     def call(self, job, purpose, text, schema, *, images=(), synthetic_response=None,
              attempts=2):
         model = self.config['model']
-        compatible_provider = model['provider'] in ('deepseek', 'glm')
+        compatible_provider = model['provider'] in ('deepseek', 'glm', 'ark')
         if len(images) > model['max_images']:
             raise ValueError('Image limit exceeded; segment with overlapping adjacent frames')
         if images and not model.get('supports_vision', True):
@@ -131,21 +133,27 @@ class ModelGateway:
                     payload = {'model': model['model'], 'messages': [
                         {'role': 'system', 'content': system}, {'role': 'user', 'content': parts}]}
                     if compatible_provider:
-                        payload['max_tokens'] = model['max_completion_tokens']
+                        # Ark's total-output limit includes reasoning. max_tokens
+                        # only bounds the final answer for its GLM model.
+                        limit = 'max_completion_tokens' if model['provider'] == 'ark' else 'max_tokens'
+                        payload[limit] = model['max_completion_tokens']
                         if 'reasoning_effort' in model:
                             payload['reasoning_effort'] = model['reasoning_effort']
-                        if model['provider'] == 'glm':
+                        if model['provider'] in ('glm', 'ark'):
                             payload['thinking'] = {'type': 'enabled'}
-                        # GLM's JSON response mode is documented for text models.
-                        # Vision capability is explicit, never inferred from names.
-                        if model['provider'] != 'glm' or not model['supports_vision']:
+                        # Ark GLM has no declared structured-output capability.
+                        # Original GLM's JSON mode is documented for text models.
+                        if (model['provider'] == 'deepseek'
+                                or (model['provider'] == 'ark' and model['model'] in
+                                    ('deepseek-v4-1-flash-261017', 'deepseek-v4-1-flash-economy-261017'))
+                                or (model['provider'] == 'glm' and not model['supports_vision'])):
                             payload['response_format'] = {'type': 'json_object'}
                     else:
                         payload.update(response_format={'type': 'json_schema', 'json_schema': {
                             'name': 'webcollect_result', 'strict': True, 'schema': schema}},
                             max_completion_tokens=model['max_completion_tokens'], store=False)
                     req = urllib.request.Request(model['endpoint'], json.dumps(payload).encode(), headers={
-                        'Authorization': 'Bearer ' + os.environ[model['api_key_env']],
+                        'Authorization': 'Bearer ' + self._credential,
                         'Content-Type': 'application/json', 'X-Client-Request-Id': rid})
                     # Do not follow redirects carrying credentials to a different endpoint.
                     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -154,6 +162,8 @@ class ModelGateway:
                     with urllib.request.build_opener(NoRedirect).open(req, timeout=model['timeout_seconds']) as response:
                         raw = json.loads(response.read(16_000_001))
                 usage = response_usage(raw, model['provider'])
+                if model['provider'] == 'ark' and raw.get('model') != model['model']:
+                    raise ValueError('Returned Ark model differs from configured version')
                 choice = raw['choices'][0]
                 if choice.get('finish_reason') != 'stop' or choice['message'].get('refusal'):
                     raise ValueError('Incomplete/refused response')

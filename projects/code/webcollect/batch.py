@@ -25,10 +25,13 @@ def main(argv=None):
     try:
         config = validate_config(load_json(args.config))
         if args.command == 'validate-config':
-            import os
             missing = []
-            if config['model'] is not None and config['mode'] == 'real' and not os.environ.get(config['model']['api_key_env']):
-                missing.append('model credential environment: ' + config['model']['api_key_env'])
+            if config['model'] is not None and config['mode'] == 'real':
+                from .model_credentials import credential
+                try:
+                    credential(config['model'])
+                except ValueError as error:
+                    missing.append(str(error))  # Resolver errors always suppress credential content.
             result = {'configuration': 'VALID', 'mode': config['mode'], 'missing': missing,
                       'model_enabled': config['model'] is not None,
                       'real_model_verified': False, 'fee_currency': config['budget'].get('currency')}

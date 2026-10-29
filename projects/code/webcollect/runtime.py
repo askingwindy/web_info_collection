@@ -4,7 +4,7 @@ Scopes bind an output batch. Campaigns share budgets and quota reservations, so
 changing a directory cannot reset a production budget. This module never opens a
 browser, modifies evidence, or declares a customer/QC acceptance decision.
 """
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import ipaddress
@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS m4_exact_images (
  path TEXT PRIMARY KEY, digest TEXT NOT NULL, sample_id TEXT NOT NULL,
  attempt_id TEXT, created_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS m4_exact_digest ON m4_exact_images(digest);
+CREATE TABLE IF NOT EXISTS m4_site_pool (
+ scope_id TEXT PRIMARY KEY, pool_path TEXT NOT NULL, pending INTEGER NOT NULL,
+ synced_revision INTEGER NOT NULL DEFAULT 0, last_error TEXT);
 '''
 
 
@@ -188,12 +191,70 @@ class RuntimeStore:
         try:
             con.execute('BEGIN IMMEDIATE')
             yield con
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_site_pool'").fetchone():
+                con.execute('UPDATE m4_site_pool SET pending=1 WHERE scope_id=?', (self.scope_id,))
             con.commit()
         except BaseException:
             con.rollback()
             raise
         finally:
             con.close()
+        self.sync_site_pool(strict=False)
+
+    def site_pool_binding(self):
+        with closing(self._connect(readonly=True)) as con:
+            if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_site_pool'").fetchone():
+                return None
+            row = con.execute('SELECT * FROM m4_site_pool WHERE scope_id=?', (self.scope_id,)).fetchone()
+            return dict(row) if row else None
+
+    def bind_site_pool(self, pool_path):
+        from site_planner.site_pool import SitePool
+        from .site_pool_sync import guard_plan
+        path = str(SitePool(pool_path, readonly=True).path)
+        with closing(self._connect()) as con:
+            con.execute('CREATE TABLE IF NOT EXISTS m4_site_pool (scope_id TEXT PRIMARY KEY, pool_path TEXT NOT NULL, '
+                        'pending INTEGER NOT NULL, synced_revision INTEGER NOT NULL DEFAULT 0, last_error TEXT)')
+            con.commit()
+        old = self.site_pool_binding()
+        if old:
+            if old['pool_path'] != path:
+                raise ValueError('Cannot replace an existing shared pool binding')
+            self.sync_site_pool()
+            return
+        binding = self.plan_binding()
+        if binding.get('plan'):
+            guard_plan(path, self.registry, self.scope_id, binding['plan'])
+        with self._transaction() as con:
+            old = con.execute('SELECT pool_path FROM m4_site_pool WHERE scope_id=?', (self.scope_id,)).fetchone()
+            if old and old[0] != path:
+                raise ValueError('Cannot replace an existing shared pool binding')
+            con.execute('INSERT OR IGNORE INTO m4_site_pool(scope_id,pool_path,pending) VALUES(?,?,1)',
+                        (self.scope_id, path))
+            self._event(con, 'site_pool_bound', timestamp(None), {'pool': path}) if not old else None
+        self.sync_site_pool()
+
+    def sync_site_pool(self, *, strict=True):
+        binding = self.site_pool_binding()
+        if binding is None:
+            return None
+        try:
+            from .site_pool_sync import sync
+            revision = sync(binding['pool_path'], self.registry, self.scope_id)
+            with closing(self._connect()) as con:
+                con.execute('UPDATE m4_site_pool SET pending=0,synced_revision=?,last_error=NULL '
+                            'WHERE scope_id=? AND ?=(SELECT COALESCE(MAX(event_id),0) FROM m4_events WHERE scope_id=?)',
+                            (revision, self.scope_id, revision, self.scope_id))
+                con.commit()
+            return revision
+        except Exception as error:
+            with closing(self._connect()) as con:
+                con.execute('UPDATE m4_site_pool SET pending=1,last_error=? WHERE scope_id=?',
+                            (type(error).__name__, self.scope_id))
+                con.commit()
+            if strict:
+                raise
+            return None
 
     def _scope(self, con):
         row = con.execute('SELECT * FROM m4_scopes WHERE scope_id=?', (self.scope_id,)).fetchone()
@@ -305,6 +366,12 @@ class RuntimeStore:
 
     def enqueue_plan(self, plan, publication, *, now=None):
         current = timestamp(now)
+        from .current_chain import require_plan
+        connection = self._connect(readonly=True)
+        try:
+            require_plan(plan, self.registry, self._policy(connection))
+        finally:
+            connection.close()
         verify_publication(plan, publication, now=current)
         history_proof = self._customer_history_proof(plan)
         current = timestamp(now)
@@ -365,6 +432,7 @@ class RuntimeStore:
     def claim_next(self, worker_id, *, request_id, plan_sha256=None, batch_id=None, now=None, _fault=None):
         if not all(isinstance(v, str) and v.strip() for v in (worker_id, request_id)):
             raise ValueError('worker_id和幂等request_id必须非空')
+        self.sync_site_pool()
         self._sync_site_failures()
         history_proof = self._customer_history_proof()
         current = timestamp(now)
@@ -446,6 +514,7 @@ class RuntimeStore:
         return row
 
     def start_attempt(self, attempt_id, worker_id, lease_token, *, now=None):
+        self.sync_site_pool()
         self._sync_site_failures()
         history_proof = self._customer_history_proof()
         current = timestamp(now)
@@ -992,6 +1061,41 @@ class RuntimeStore:
             SiteFailureStore(site_guard).sync_successes(self.registry, self.snapshot()['scope']['campaign_id'])
         return result
 
+    def record_qc_report(self, reference):
+        """Register actual QC, retaining unresolved checks and immutable capture outcomes."""
+        report, _ = _bound_quality_report([reference])
+        with closing(self._connect(readonly=True)) as con:
+            samples = {r['sample_id']: dict(r) for r in con.execute(
+                'SELECT sample_id,task_key,evidence_json FROM m4_attempts WHERE scope_id=? '
+                "AND status='collected_pending_review'", (self.scope_id,))}
+        for row in report['samples']:
+            sid = row['sample_id']
+            if sid not in samples:
+                continue
+            status = row['status']
+            if status not in ('PASS', 'FAIL', 'REVIEW_REQUIRED'):
+                raise ValueError('Unsupported actual QC status')
+            # Package/document checks must pass too before accepting a task.
+            if status == 'PASS' and report.get('status') != 'PASS':
+                status = 'REVIEW_REQUIRED'
+            payload = {'sample_id': sid, 'status': status, 'report': reference}
+            with closing(self._connect(readonly=True)) as con:
+                prior = con.execute("SELECT 1 FROM m4_events WHERE scope_id=? AND task_key=? "
+                    "AND event_type='pool_qc_result' AND payload_json=?",
+                    (self.scope_id, samples[sid]['task_key'], canonical(payload))).fetchone()
+                review = con.execute('SELECT decision FROM m4_reviews WHERE sample_id=?', (sid,)).fetchone()
+            if prior:
+                continue
+            if status in ('PASS', 'FAIL'):
+                decision = 'pass' if status == 'PASS' else 'reject'
+                if review and review[0] != decision:
+                    raise ValueError('Existing review cannot be overwritten; use an explicit replacement')
+                if not review:
+                    self.record_review(sid, decision, [reference], 'Automatic evidence-bound independent QC registration')
+            with self._transaction() as con:
+                self._event(con, 'pool_qc_result', timestamp(None), payload, samples[sid]['task_key'])
+        self.sync_site_pool()
+
     def record_publication(self, release_id, sample_ids, evidence, *, now=None):
         if not isinstance(release_id, str) or not release_id.strip() or not isinstance(sample_ids, list) or not sample_ids or len(set(sample_ids)) != len(sample_ids):
             raise ValueError('发布需要稳定release_id与不重复sample_ids')
@@ -1042,6 +1146,7 @@ class RuntimeStore:
             return {'schema_version': 'webcollect-runtime-snapshot-1', 'scope': scope, 'policy': policy,
                     'tasks': tasks, 'attempts': attempts, 'events': events,
                     'campaign_actual_attempt_count': campaign_attempts,
+                    'site_pool': self.site_pool_binding(),
                     'QC_approval': False, 'customer_acceptance': 'UNKNOWN'}
         finally:
             con.close()

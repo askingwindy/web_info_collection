@@ -41,6 +41,19 @@ def load(path):
         raise ValueError('Unsupported local acceptance profile schema')
     if data.get('scope') not in ('pilot', 'delivery') or not isinstance(data.get('profile_id'), str) or not data['profile_id'].strip():
         raise ValueError('Profile must identify its pilot or delivery scope')
+    if 'release' in data:
+        release = data['release']
+        if (not isinstance(release, dict) or set(release) != {'kind', 'version'}
+                or release['kind'] not in ('experiment', 'formal', 'formal-package')
+                or not isinstance(release['version'], str) or not release['version'].strip()):
+            raise ValueError('Release must declare experiment/formal and an explicit version')
+        if release['kind'] == 'formal' and (data['scope'] != 'delivery'
+                or data.get('targets', {}).get('expected_samples') != 200000
+                or data.get('targets', {}).get('category_share') != 'enforced'):
+            raise ValueError('Formal release requires 200000 samples and enforced corpus distributions')
+        if release['kind'] == 'formal-package' and (data['scope'] != 'delivery'
+                or data.get('targets', {}).get('expected_samples') != 10000):
+            raise ValueError('Formal member package requires exactly 10000 samples')
     duplicate = data.get('duplicates', {})
     if duplicate != {'exact_images': 'zero-cross-sample-reuse',
                      'sequence': 'exact-action_type+target_text+page_name-list',
@@ -73,6 +86,39 @@ def load(path):
             raise ValueError('Delivery profile must pin its attachment authority hashes')
     return {'path': str(path), 'sha256': sha(path), 'configuration': data,
             'customer_algorithm_equivalence': 'UNKNOWN', 'customer_actual_acceptance': 'UNKNOWN'}
+
+
+def release_errors(configuration, packages, versions, sample_count):
+    """Formal packaging totals are independent of local sample quality."""
+    if configuration.get('release', {}).get('kind') != 'formal':
+        return []
+    errors = []
+    if sample_count != 200000 or len(packages) != 20 or any(row['sample_count'] != 10000 for row in packages):
+        errors.append({'reason': 'Formal release requires exactly 20 packages of 10000 unique effective samples each'})
+    if versions.get('identical_copies') or versions.get('superseded'):
+        errors.append({'reason': 'Formal package population contains duplicate or superseded sample copies'})
+    return errors
+
+
+def verify_member_release(report, delivery_scope):
+    """Do not apply a 200000 corpus target to each 10000 member payload.
+
+    A formal member is sealable only inside the already verified twenty-package
+    corpus of the same explicit version. Experiments cannot claim that scope.
+    """
+    declared = report.get('local_profile', {}).get('configuration', {}).get('release')
+    corpus = delivery_scope.get('release')
+    if declared and declared['kind'] == 'formal':
+        raise ValueError('Formal corpus profile is for check-set; seal a formal-package member instead')
+    if declared and declared['kind'] == 'formal-package':
+        if (not corpus or corpus.get('kind') != 'formal' or corpus.get('version') != declared['version']
+                or delivery_scope.get('effective_sample_count') != 200000
+                or len(delivery_scope.get('package_roots', [])) != 20
+                or report.get('sample_count') != 10000):
+            raise ValueError('Formal member requires the exact verified 20x10000 corpus and version')
+    elif corpus and corpus.get('kind') == 'formal':
+        raise ValueError('An experimental/undeclared payload cannot be sealed as a formal member')
+    return declared
 
 
 def package_files(dataset):

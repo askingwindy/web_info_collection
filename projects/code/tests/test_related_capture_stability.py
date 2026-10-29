@@ -71,7 +71,7 @@ class RelatedProofTests(unittest.TestCase):
 
     def test_loading_target_label_value_hit_and_geometry_changes_are_rejected(self):
         variants=[]
-        for field,value in (('document_ready','interactive'),('fonts_ready',False),('images_ready',False)):
+        for field,value in (('document_ready','loading'),('fonts_ready',False),('images_ready',False)):
             last=state();last['capture_readiness'][field]=value;variants.append(last)
         for field,value in (('text','其他标签'),('hit_valid',False),('bbox',[1,15,10,25])):
             last=state();last['target'][field]=value;variants.append(last)
@@ -80,6 +80,16 @@ class RelatedProofTests(unittest.TestCase):
         last=state();last['capture_images'][0]['bbox']=[11,0,31,10];variants.append(last)
         for last in variants:
             with self.subTest(last=last):self.assertFalse(browser.stability_pair(state(),last,png(),png())['accepted'])
+
+    def test_dom_ready_with_loaded_viewport_does_not_wait_for_background_document_load(self):
+        original=state();original['capture_readiness']['document_ready']='interactive'
+        proof=browser.stability_pair(original,deepcopy(original),png(),png())
+        self.assertTrue(proof['accepted']);self.assertTrue(proof['loading_complete'])
+        for field in ('fonts_ready','images_ready'):
+            incomplete=deepcopy(original);incomplete['capture_readiness'][field]=False
+            self.assertFalse(browser.stability_pair(incomplete,incomplete,png(),png())['accepted'])
+        changed=deepcopy(original);changed['values'][0]['value']='8'
+        self.assertFalse(browser.stability_pair(original,changed,png(),png())['accepted'])
 
     def test_frozen_v1_remains_strict_and_v2_cannot_be_downgraded(self):
         old={'screen_resolution':[40,30],'visible_text':'旧证据'}
@@ -158,7 +168,16 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
         broken=deepcopy(receipt);broken['attempts'][-1]['comparison_png_base64']=base64.b64encode(result['png']).decode()
         with self.assertRaises(ValueError):browser.validate_capture_receipt(result['state'],broken,result['png'])
         await self.page.locator('#result').evaluate('(node)=>node.textContent="结果43"')
-        with self.assertRaises(ValueError):await browser.verify_execution_state(self.page,result['state'],'#go',assertions=[{'selector':'#result','contains':'42'}])
+        with self.assertRaises(ValueError) as caught:
+            await browser.verify_execution_state(self.page,result['state'],'#go',assertions=[{'selector':'#result','contains':'42'}])
+        rejected=caught.exception.capture
+        self.assertEqual(rejected['schema_version'],'webcollect-execution-state-rejection-1')
+        self.assertFalse(rejected['action_executed']);self.assertFalse(rejected['accepted_as_formal_frame'])
+        self.assertIn('visible_text',rejected['mismatch_fields'])
+        self.assertEqual(base64.b64decode(rejected['original_png_base64']),result['png'])
+        recomputed=browser.stability_pair(rejected['snapshot_before'],rejected['snapshot_live'],
+            base64.b64decode(rejected['original_png_base64']),base64.b64decode(rejected['comparison_png_base64']))
+        self.assertEqual(recomputed,rejected['stability']);self.assertFalse(recomputed['accepted'])
 
     def validate_actual_file_consumers(self,result):
         # Exercise the real validation branches with local bytes only. This is

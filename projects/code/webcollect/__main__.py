@@ -12,8 +12,13 @@ from .validate import read_json, validate_sample
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'site-pool':
+        from .site_pool_reader import main as pool_main
+        return pool_main(argv[1:])
     parser=argparse.ArgumentParser(description='WebCollect：真实轨迹采集、合同校验与客户交付封包')
     sub=parser.add_subparsers(dest='command',required=True)
+    sub.add_parser('site-pool',help='只读共享站点池候选或严格验证既有能力；不派发采集')
     generate=sub.add_parser('scaffold',help='生成合成联调样本，不得交付')
     day=datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
     generate.add_argument('--output',type=Path,default=Path(f'projects/sample/integration/B{day}_001'))

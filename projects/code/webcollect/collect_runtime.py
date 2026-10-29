@@ -54,7 +54,8 @@ def source_identity():
              'content_preparation.py', 'content_preparation.js', 'production_facts.py',
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
-             'admission_cohort.py', 'production_identity.py', 'batch_protocol.py']
+             'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
+             'workflow_proposal.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}
@@ -257,7 +258,7 @@ def close_scope_for_replan(output, registry, reason, evidence, *, now=None):
 
 
 async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
-                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None):
+                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None):
     from playwright.async_api import async_playwright
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
@@ -324,6 +325,11 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         verify_shard_policy(registry, snapshot['policy'])
         if policy_path and validate_policy(read_json(policy_path)) != snapshot['policy']:
             raise ValueError('续跑不能静默替换预算，请显式记录预算调整原因')
+        original_pool = bootstrap.get('site_pool')
+        if site_pool is not None and str(Path(site_pool).resolve()) != original_pool:
+            raise ValueError('Resume cannot replace the frozen shared pool')
+        if original_pool:
+            store.bind_site_pool(original_pool)
         store.enqueue_plan(plan, publication)
         binding = store.plan_binding()
         if binding['plan'] != plan or binding['publication'] != publication:
@@ -386,12 +392,15 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
             output.mkdir(parents=True)
         checkpoint_json(bootstrap_path, {'schema_version': 'webcollect-bootstrap-m4-1',
             'plan': plan, 'publication': publication, 'policy': policy, 'manifest': manifest,
-            'source_files_sha256': sources, 'registry_path': str(registry), 'output_path': str(output)})
+            'source_files_sha256': sources, 'registry_path': str(registry), 'output_path': str(output),
+            **({'site_pool': str(Path(site_pool).resolve())} if site_pool is not None else {})})
         # Save a recoverable initialization record before touching persistent queue state.
         write_json(output / 'plan.json', plan)
         write_json(output / 'publication.json', publication)
         checkpoint_manifest(output, manifest)
         store.initialize(policy)
+        if site_pool is not None:
+            store.bind_site_pool(site_pool)
         store.enqueue_plan(plan, publication)
     store.recover_expired()
     attempts = store.attempt_ledger()['attempts']

@@ -76,7 +76,8 @@ def validate_identity(task, *, observed_states=None):
     _require(isinstance(value, dict) and set(value) == {'version', 'application', 'task_page', 'shared_pages'}
              and value['version'] == VERSION, 'unsupported pilot identity binding')
     app, page, shared = value['application'], value['task_page'], value['shared_pages']
-    _require(isinstance(app, dict) and set(app) == {'canonical_uri', 'name', 'evidence'}
+    _require(isinstance(app, dict) and {'canonical_uri', 'name', 'evidence'} <= set(app)
+             and not set(app) - {'canonical_uri', 'name', 'evidence', 'application_registry'}
              and _text(app['name']) and app['name'] == task.get('app_name'), 'whole application name/URI/evidence required')
     app_uri = urlsplit(app['canonical_uri'])
     page_url(app['canonical_uri'])
@@ -89,9 +90,12 @@ def validate_identity(task, *, observed_states=None):
     _require(isinstance(page['aliases'], list) and page['aliases'] and len(set(page['aliases'])) == len(page['aliases'])
              and page['canonical_uri'] in page['aliases'], 'declare canonical task page among exact observed aliases')
     aliases = {page_url(uri) for uri in page['aliases']}
-    host = app_uri.hostname.lower().rstrip('.')
-    _require(all(urlsplit(uri).hostname.lower().rstrip('.') == host for uri in page['aliases']),
-             'first pilot requires one host; multi-host app aliases need a later explicit adapter')
+    from .application_identity import canonical_key, host_key
+    registry = app.get('application_registry')
+    whole = canonical_key(app['canonical_uri'], registry)
+    _require(whole == host_key(app['canonical_uri']), 'application URI must be the evidence-backed canonical host')
+    _require(all(canonical_key(uri, registry) == whole for uri in page['aliases']),
+             'task page host needs evidence-backed whole application ownership')
     from .task_admission import _frame
     state, _ = _frame(page['anchor'], task.get('mode', task.get('observed_workflow', {}).get('mode', 'real')))
     _require(page_url(state.get('url')) in aliases, 'task page anchor does not show a declared page')
@@ -103,7 +107,7 @@ def validate_identity(task, *, observed_states=None):
                  'shared page exclusion needs role, reason and original evidence')
         verify_evidence(row['evidence'])
         uri = page_url(row['uri'])
-        _require(urlsplit(row['uri']).hostname.lower().rstrip('.') == host and uri not in aliases
+        _require(canonical_key(row['uri'], registry) == whole and uri not in aliases
                  and uri not in shared_urls, 'shared page cannot hide a task page or repeat a role')
         shared_urls.add(uri)
     if task.get('initial_url'):

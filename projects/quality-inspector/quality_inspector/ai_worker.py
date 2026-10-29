@@ -27,7 +27,7 @@ from . import semantic_runtime
 
 PROMPT_VERSION = 'independent-all-frame-review-2-explicit-frame-ids'
 POLICY_VERSION = 'batch-review-worker-2'
-DOCUMENT_PROMPT_VERSION = 'independent-documentary-full-payload-2'
+DOCUMENT_PROMPT_VERSION = 'independent-documentary-full-payload-3-verified-coverage'
 MAX_DOCUMENT_INPUT_BYTES = 4 * 1024 * 1024
 
 
@@ -553,7 +553,15 @@ def _document_request(value):
         'not claim final approval. Keep the five original documentary criteria and delivery distribution '
         'thresholds unchanged. Preserve FAIL for contradictions and REVIEW_REQUIRED for missing evidence. '
         'Do not infer human review, customer acceptance, privacy truth or full-frame visual approval from '
-        'prose, the file inventory or a synthetic response. Documentary evidence does not replace visual QC.',
+        'prose, the file inventory or a synthetic response. Documentary evidence does not replace visual QC. '
+        'For review_coverage_and_claims, compare documentary claims with verified_sample_review_state when '
+        'supplied: it is computed by the independent inspector from original sample bytes, actual review '
+        'records and the frozen sampling policy. A truthful export-stage NOT_RUN/pending stub predates that '
+        'external review and is not a claim of final approval. A human_percent=0 policy does not require '
+        'inventing a human PASS. Customer acceptance and a final release seal may remain UNKNOWN at this '
+        'payload stage. Missing required selected/escalated reviews remain pending in the independent '
+        'sample gates. Judge the completeness and truthfulness of coverage declarations here; never '
+        'substitute a documentary PASS for those sample gates.',
         'required_checks':DELIVERY_DOCUMENT_CHECKS,'documents':value['documents'],
         'document_files_sha256':{rel:actual[rel] for rel in value['documents']},
         'supplementary_evidence':value['supplementary_evidence'],
@@ -586,14 +594,24 @@ def _supporting_document(path,dataset):
             'content':load_text(path)}
 
 
-def documents_job(ledger,dataset,profile,output,*,supporting_files=()):
+def documents_job(ledger,dataset,profile,output,*,supporting_files=(),sample_reviews=None,delivery_sampling_plan=None):
     """One actual-payload document job, independent from sample wording changes."""
     from .engine import inspect
     from .profiles import DELIVERY_DOCUMENT_CHECKS, delivery_document_review_template
     dataset=Path(dataset).resolve()
     if Path(output).resolve().is_relative_to(dataset) or ledger.path.is_relative_to(dataset):
         raise ValueError('Document job outputs and ledger must be outside candidates')
-    report=inspect(None,dataset,profile=profile,inspection_stage='payload')
+    if (sample_reviews is None)!=(delivery_sampling_plan is None):
+        raise ValueError('Actual sample reviews and frozen sampling plan must be supplied together')
+    review_inputs=([sample_reviews,delivery_sampling_plan] if sample_reviews is not None else [])
+    supporting=[_supporting_document(path,dataset) for path in supporting_files]
+    if len({item['path'] for item in supporting})!=len(supporting):
+        raise ValueError('Duplicate supporting evidence file')
+    # Check original paths before deduplication, including symlink rejection.
+    extra=[_supporting_document(path,dataset) for path in review_inputs]
+    supporting=list({item['path']:item for item in [*supporting,*extra]}.values())
+    report=inspect(None,dataset,profile=profile,inspection_stage='payload',
+                   reviews=sample_reviews,delivery_sampling_plan=delivery_sampling_plan)
     template=delivery_document_review_template(report)
     payload=template['payload_files_sha256']
     docs={rel:load_text(dataset/rel) for rel in payload
@@ -603,9 +621,18 @@ def documents_job(ledger,dataset,profile,output,*,supporting_files=()):
               ('DELIVERY_DOCUMENT_CONTENT','DELIVERY_ATTACHMENT')]
     if failures:raise ValueError('Mechanical document failures block model expenditure: '+', '.join(c['rule_id'] for c in failures))
     actual=package_files(dataset)
-    supporting=[_supporting_document(path,dataset) for path in supporting_files]
-    if len({item['path'] for item in supporting})!=len(supporting):
-        raise ValueError('Duplicate supporting evidence file')
+    verified_review={'status':'NOT_SUPPLIED','human_identity_authentication':'UNKNOWN'}
+    if sample_reviews is not None:
+        refs={item['path']:{k:item[k] for k in ('path','sha256')} for item in supporting}
+        verified_review={'status':'INDEPENDENT_INSPECTOR_EVALUATED',
+            'sample_reviews':refs[str(Path(sample_reviews).resolve())],
+            'sampling_plan':refs[str(Path(delivery_sampling_plan).resolve())],
+            'semantic_sampling':report['semantic_sampling'],
+            'samples':[{'sample_id':row['sample_id'],'status':row['status'],
+                'semantic_checks':[c for c in row['checks'] if c['rule_id'].startswith('REVIEW_')]}
+                for row in report['samples']],
+            'human_identity_authentication':'UNKNOWN',
+            'scope':'Actual review evidence and policy validation; no final release or customer acceptance inferred'}
     censuses=[]
     for item in supporting:
         if Path(item['path']).suffix.lower()!='.json':continue
@@ -636,6 +663,7 @@ def documents_job(ledger,dataset,profile,output,*,supporting_files=()):
         'supporting_evidence_status':'SUPPLIED' if supporting else 'NOT_SUPPLIED',
         'source_attempt_censuses':censuses,
         'source_attempt_census_status':'SUPPLIED_MANIFEST_ENTRIES' if censuses else 'UNKNOWN',
+        'verified_sample_review_state':verified_review,
         'review_boundaries':{'human_review_status':'UNKNOWN','customer_acceptance':'UNKNOWN',
             'formal_release_status':'UNKNOWN','visual_review_status':'NOT_INFERRED_BY_DOCUMENT_WORKER'},
         'scope_notes':[

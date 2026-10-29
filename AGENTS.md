@@ -31,6 +31,7 @@
 - 修改前运行 `git status --short`，保留已有用户改动。文档任务只修改文档。
 - 首选 `rg` 定位函数与对应 `test_*.py`。三个包共同使用 `projects/code/.venv/bin/python`；未安装包时设置 `PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector`。
 - 使用 [README 的选定离线验证命令](README.md#离线验证)，按改动更换 `--module`。验证目录必须是新目录。测试日志、源码摘要与失败保留，不把夹具 PASS 写成真实生产 PASS。
+- 默认只跑修改模块及直接受影响调用链的用例，不做全量回归；公共契约变更、失败或未解决问题需要扩大时，先说明具体原因。仅提交已验证代码时不重复跑未受影响测试。
 - 不默认运行历史全量测试、浏览器集成脚本、`model-smoke`、worker `run`、scheduler 或生产 CLI。先确认任务范围和 I/O；`--help` 可用于核对命令。
 - 文档、路径或封包改变不应自动重做 AI 审核；使用现有证据/规则绑定判断失效范围。语义检查意义改变时更新 `semantic.py` 对应规则版本，并测试局部失效。
 - 同时维护相关 README、工程说明和设计说明，避免复制易过期的运行统计。

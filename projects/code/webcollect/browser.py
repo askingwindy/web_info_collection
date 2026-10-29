@@ -167,7 +167,11 @@ def fingerprint(state):
 
 def _loaded(state):
     ready=state.get('capture_readiness',{})
-    return (ready.get('schema_version')=='webcollect-capture-readiness-1' and ready.get('document_ready')=='complete'
+    # DOMContentLoaded establishes the document tree. Pending offscreen/background
+    # requests do not prove that visible task content is unloaded. Fonts, viewport
+    # images, synchronized state/pixels and the pre-action recheck remain required.
+    return (ready.get('schema_version')=='webcollect-capture-readiness-1'
+            and ready.get('document_ready') in ('interactive', 'complete')
             and ready.get('fonts_ready') is True and ready.get('images_ready') is True)
 
 
@@ -404,7 +408,19 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
         proof=stability_pair(state,live,captured['png'],png)
         final_proof=stability_pair(state,final,captured['png'],png)
         if not proof['accepted'] or not final_proof['accepted']:
-            raise ValueError('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
+            error=ValueError('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
+            # The later failure screenshot cannot explain this exact rejection.
+            # Reuse the collector's existing capture_failure companion to retain
+            # the rejected comparison, without replacing the original step PNG.
+            error.capture={'schema_version':'webcollect-execution-state-rejection-1',
+                'snapshot_before':state,'snapshot_live':live,'snapshot_final':final,
+                'original_png_base64':base64.b64encode(captured['png']).decode('ascii'),
+                'comparison_png_base64':base64.b64encode(png).decode('ascii'),
+                'comparison_screenshot':method,'stability':proof,'final_stability':final_proof,
+                'accepted_as_formal_frame':False,'action_executed':False,
+                'mismatch_fields':[key for key in sorted(state.keys()|live.keys()|final.keys())
+                                   if state.get(key)!=live.get(key) or state.get(key)!=final.get(key)]}
+            raise error
         return {'matched':True,'full_state_matched':proof['full_dom_stable'] and final_proof['full_dom_stable'],
                 'state_fingerprint':fingerprint(state),'live_state_fingerprint':fingerprint(live),
                 'final_state_fingerprint':fingerprint(final),'target':live.get('target'),'stability':proof,'final_stability':final_proof,

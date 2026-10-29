@@ -1,5 +1,15 @@
 # WebCollect 采集核心
 
+共享池闭环：execute自动消费资格目录的 `site-pool-binding.json`，或显式 `--site-pool`；原生产scope绑定后自动同步采集/失败/QC状态，派发前阻断重复页面和逻辑任务，同站其他功能继续可用。`webcollect site-pool --include-unavailable` 查看全部状态；`python -m webcollect.site_pool_sync --registry ... --scope ...` 只修复原绑定的状态同步。详见[状态回写与防重](../../docs/共享站点池与自主发现.md#状态回写与防重)。
+
+`python -m webcollect.single_record --help` 提供单条来源、规划、采集和独立QC阶段；复用既有当前链，不分配额外总体目标，生成阶段 `--max-tasks 1` 先限制再登记。见[今日单条真实闭环计划](../../docs/今日单条真实闭环计划-20261029.md)。
+
+程序2共享池只读入口为 `python -m webcollect site-pool --pool /absolute/pool.sqlite3 --purpose candidates`，`--purpose capabilities` 会严格重验既有能力证据和有效期。两者不生成任务或派发采集。见[共享站点池与自主发现](../../docs/共享站点池与自主发现.md)。
+
+2026-10-29一致性修复新增 `generate --workflow-specs`，以原始PNG/树绑定显式DOM工作流提案，共用单次采集入口；`--page-identities`在生成前冻结当前链页面/整体应用身份。无策略/提案的能力仍显式不支持。新终态滚动直接核验本次实际截断结果，旧准入收据仍按原绑定检查。范围和验证见[有限修复计划](../../docs/需求一致性修复计划-20261028.md)。
+
+派发前稳态复核失败的当次原图/比较图、树和拒绝证明保存于 `capture_failure.json`；较晚故障截图仍单独保存。记录不会将被拒帧或未执行动作记为成功。
+
 当前源码导航：[工程说明](../../docs/工程说明.md)、[设计说明](../../docs/设计说明.md)、[agent 接手说明](../../AGENTS.md)。`34afaaa` 已将普通新任务改为单次执行后保存待审证据，由独立 QC 后置审核；仍保留只读预检及旧准入兼容。下文含早期批次流程，最新交接与发布参数以新说明及 CLI `--help` 为准。
 
 当前执行范围为2026-10-28的 `current-chain-r01` 全新链路。统一入口为[真实试点执行说明](../prd/真实试点执行说明-20261028.md)，变更、进展与清理结果见[工程状态与清理记录](../prd/工程状态与清理记录-20261028.md)，实时事实以[本轮进度账](../../verify_results/pilot1000-20261028-r01/progress.json)及其原始账本为准。审核、去重、验收和产量仅使用绑定本轮manifest及专库的结果；旧运行、资格PASS和工程测试均不计本轮合格量。网站按整体应用管理，每个实际任务页面最多一条、5–10个必要操作，整站累计三次真实失败即停止。
@@ -253,6 +263,8 @@ Git保留核心源码、JS/Schema资源、通用脚本、运行依赖配置、�
 
 模型配置支持显式 `provider=deepseek` 或 `provider=glm`，分别使用厂商 Chat Completions 协议。[DeepSeek配置示例](config/batch-deepseek.example.json)和[GLM配置示例](config/batch-glm.example.json)保留未填写的型号、费率和预算，不能直接发送请求。启用前一次性补齐：确切模型版本与端点、凭据环境变量、币种及有来源和版本的输入/缓存/输出费率、请求/Token/时长上限和金额控制方式，以及视觉能力和每张图片的保守Token预留。金额控制默认要求硬上限；显式只统计模式见下文。原 `model:null`、`synthetic`、`chat-completions` 配置继续沿用原表示，既有账本不能通过更改配置扩容。
 
+本项目GLM凭据已由用户指定为忽略的 `request/token`，由程序在运行时读取，不再逐次询问。顺序为配置的环境变量、显式绝对路径 `model.api_key_file`、GLM项目默认文件；缺失或有歧义时在模型请求预留前停止。token只进入内存和Authorization头，不进入配置、账本或审核材料；文件可为单独token，或带中文说明的唯一GLM `id.secret`。同文件的 Ark 凭据只由下节 `ark1` 选择器读取。此授权不改变任务、模型预算或派发范围。
+
 新厂商配置必须显式填写 `supports_vision`、`image_tokens_per_image`、`request_overhead_tokens`。纯文本模型在图片请求预留和派发前即被拒绝；视觉模型的文本、完整Schema、系统消息、消息开销和逐张图片预留合计超限也在请求前拒绝。视觉审核仍传原PNG，不以树文字、OCR文本或拼图替代全帧证据。是否具备视觉能力应按所选版本核验，不能仅从厂商名称推断。
 
 DeepSeek 和 GLM 文本模型使用 `max_tokens` 与 `json_object`，完整Schema写入系统指令，返回结果仍经本地JSON Schema验证。GLM视觉模型按官方限制不发送 `response_format`，同样必须返回满足本地Schema的JSON；不会在一次失败后自动换协议或换模型重发。缓存用量接受 `prompt_tokens_details.cached_tokens`，DeepSeek同时支持其 `prompt_cache_hit_tokens`；缺失、冲突或非法用量继续记为 `UNKNOWN` 并保留预留，不把未知计为0。
@@ -264,6 +276,38 @@ DeepSeek 和 GLM 文本模型使用 `max_tokens` 与 `json_object`，完整Schem
 2026-10-27已按用户指定的[GLM-5.3-Flash文档](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)实跑首站首条。该型号使用显式`image_encoding=data_url`；旧GLM不填时保留raw base64表示。可选`reasoning_effort=low/high/max`仅供GLM/DeepSeek，GLM显式启用thinking；本轮使用high。GLM完整单一JSON代码围栏可规范化解析，前后解释、多块、非法JSON或Schema错误仍拒绝，原始响应不改写，完整系统指令继续绑定缓存身份。
 
 本轮GLM完成站点图像筛选、11原帧五语义审核、3个近邻完整轨迹比较和资料审核。9次真实请求折算费用0.200977元；单条PASS、资料分布项FAIL，整包及GLM内部批次FAIL，未正式放行。资料通用worker原先只传Markdown/CSV，本次运行脚本另提供真实站点/标注JSON、文件库存、采集普查及修订sidecar，并对最终引用施加路径/SHA成对Schema约束；这些补证均有新请求身份和原失败记录，尚未将该补证流程泛化为通用无人值守能力。实际证据在`verify_results/production-day-20261027/glm-first-run-r01/`。
+
+## 火山方舟 Ark 双链路（2026-10-29）
+
+原智谱 `provider=glm` 保留；火山方舟是独立 `provider=ark`，两种备选模型都使用 Ark 的数据面接口和 Bearer API Key。首选 [GLM 配置](config/batch-ark-glm.example.json) `glm-5-3-flash-260828`；备选 [DeepSeek 配置](config/batch-ark-deepseek.example.json) 按用户指令改为 `deepseek-v4-1-flash-economy-261017`。标准版继续兼容旧冻结账本。端点固定为 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`，不使用 Coding Plan 或厂商官方端点。依据：[地址与鉴权](https://docs.volcengine.com/docs/ark/base-url-and-authentication?lang=zh)、[Chat API](https://docs.volcengine.com/docs/ark/chat-api?lang=zh)、[模型列表](https://docs.volcengine.com/docs/ark/model-list?lang=zh)、[模型价格](https://docs.volcengine.com/docs/ark/model-pricing?lang=zh)。
+
+运行时优先使用 `ARK_API_KEY`，其次为显式绝对路径 `model.api_key_file`，最后读取项目 `request/token` 的唯一 `ark1: <token>` 标签（支持中文冒号或等号；值可在下一行）。若 `request/token` 是目录，则读取 `request/token/ark1` 中的单独 token。不会把同文件 GLM token 当作 Ark key，也不会把 key 写入配置、用量导出或请求记录。不要用 `cat`、终端参数或 shell export 回显密钥。
+
+两份示例可直接通过配置校验，均限制为1次请求、0.10元金额预留、16384输入和4096总输出Token、1张图、零候选和页面访问。GLM费率按2026-10-29官方CNY/百万Token输入0.80、缓存0.23、输出2.80；DeepSeek经济版示例采用高峰费率输入1.60、缓存0.032、输出6.40作为保守上限。空闲折扣、缓存存储和实际账户扣费不由Token估算证明。复制时设置新的联通 run_id；已有任务需先检查原请求，不借新账绕过 UNKNOWN。
+
+以下从仓库根目录执行，`model-smoke` 是真实有费请求，图片应为本次明确选择的原 PNG。仅在需要新联通验证时运行一次；已有联通账直接查 `status`。正式发现、任务生成和QC依各自授权配置预算，这些示例不授予生产恢复。
+
+```sh
+PYTHONPATH=projects/code projects/code/.venv/bin/python -m webcollect.batch validate-config \
+  --config projects/code/config/batch-ark-glm.example.json
+PYTHONPATH=projects/code projects/code/.venv/bin/python -m webcollect.batch init \
+  --config /absolute/path/to/authorized-ark-config.json \
+  --ledger /absolute/path/to/new-ark-protocol.sqlite3
+PYTHONPATH=projects/code projects/code/.venv/bin/python -m webcollect.batch model-smoke \
+  --config /absolute/path/to/authorized-ark-config.json \
+  --ledger /absolute/path/to/new-ark-protocol.sqlite3 \
+  --image /absolute/path/to/original.png
+```
+
+Ark 使用 `max_completion_tokens`，计入思考和回答；显式开启thinking，并转发 `reasoning_effort=low/high/max`。GLM通过系统Schema约束输出，不发送 `response_format`；DeepSeek使用 `json_object`。完整单一JSON围栏可解包，但原回复保留；多块、解释文字、Schema不匹配和模型版本不一致仍失败。图像传原PNG data URL，缓存用量缺失保持UNKNOWN。站点资格收据、任务生成和QC共享网关，QC real模式也接受这两个确切的Ark视觉模型。
+
+“双链路”通过冻结配置显式选择，默认采用Ark GLM示例；没有异常后自动换通道、换模型或换账重发。旧请求、费用、失败和审核均留在原账；新模型审核不继承旧模型的PASS。离线回归模块为 `test_ark_provider`、`test_model_credentials`、`test_model_provider_protocols`、`test_site_qualification_provenance`、`test_delivery_pipeline`。
+
+自主发现中的搜索仍为独立智谱 `web_search` 服务。使用Ark模型时，搜索单独读取 `GLM_API_KEY` 或项目GLM凭据，绝不把Ark key发往智谱；Ark联通不会修复该搜索服务的401，搜索用量/费用也不并入模型Token估算。
+
+首次联通结果与原账见[接入报告](../../verify_results/ark-integration-20261029-live-r01/接入报告.md)，当时两个版本均返回 `HTTP 404 / ModelNotOpen`。开通后Ark GLM已通过合成原图输入、严格JSON、版本和usage验证；标准版DeepSeek当时仍为 `ModelNotOpen`，见[开通后复验](../../verify_results/ark-integration-20261029-live-r03/复验报告.md)。备选改为经济版且适配当前凭据格式后，经济版也通过同类真实验证；见[经济版与凭据格式复验](../../verify_results/ark-integration-20261029-live-r06-economy-format/复验报告.md)。旧UNKNOWN原账未改写或重发。
+
+本机凭据现位于忽略的 `request/token.yaml`，所以后续Ark本机配置需显式填写 `model.api_key_file` 为该文件的绝对路径，或提供 `ARK_API_KEY`；Ark默认 `request/token` 路径不会自动猜测文件改名。YAML通过安全解析选择唯一账户：Ark使用 `ark1`，智谱使用 `glm1`，兼容字符串或 `api_key` 子字段，禁止跨厂商混用。如果该文件因保留旧标签而不能按严格YAML解析，Ark仅接受显式顶层、唯一、完整的 `ark1: token` 条目；重复、缺失、嵌套歧义或无效内容仍停止，不修改凭据文件。已验证配置位于 `verify_results/ark-integration-20261029-live-r03/glm/config.json` 和 `verify_results/ark-integration-20261029-live-r06-economy-format/deepseek/config.json`（相对仓库根），各自1次诊断额度已使用，不能当作生产配置或扩容原账。
 
 ## 按数据审计 AI 请求、Token 与费用（2026-10-27）
 

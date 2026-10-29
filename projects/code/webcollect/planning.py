@@ -217,6 +217,11 @@ def validate_capability(record, *, now=None, require_ready=True):
     return deepcopy(record)
 
 
+def is_probe_failure(record):
+    return (record.get('schema_version') == 'webcollect-site-probe-failure-1'
+            or not record.get('schema_version') and bool(record.get('error_message')))
+
+
 def _records(capabilities):
     if isinstance(capabilities, dict):
         if capabilities.get('schema_version') != 'webcollect-capability-catalog-1':
@@ -228,6 +233,10 @@ def _records(capabilities):
     for record in capabilities:
         if not isinstance(record, dict):
             raise ValueError('能力目录项必须为对象')
+        if is_probe_failure(record):
+            if not record.get('reason') or not record.get('site_uri'):
+                raise ValueError('失败能力记录必须保留原原因和页面')
+            continue
         key = (record.get('capability_id'), record.get('version'))
         if not all(isinstance(v, str) and v for v in key) or key in result:
             raise ValueError('能力版本缺失或重复')
@@ -268,6 +277,8 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
         if not all(isinstance(value, str) and value for value in key) or key not in catalog:
             raise ValueError('任务缺少精确版本的站点能力记录')
         capability = validate_capability(catalog[key], now=current)
+        from .workflow_proposal import verify_task
+        verify_task(task, capability)
         if (capability['site_uri'], capability['site_category']) != (task['site_uri'], task['site_category']):
             raise ValueError('任务URI/类目与能力记录不一致')
         page_uris = _scoped_page_uris(capability)
@@ -288,7 +299,9 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
                'capabilities': list(used.values()), 'preflight_report_sha256': plan['media_preflight']['report_sha256'],
                'capability_catalog': catalog_records,
                'capability_catalog_sha256': object_sha256(catalog_records),
-               'capability_candidate_count': len(catalog_records),
+               'capability_candidate_count': len(capabilities.get('records', [])) if isinstance(capabilities, dict) else len(capabilities),
+               'probe_failures': [record for record in (capabilities.get('records', []) if isinstance(capabilities, dict) else capabilities)
+                                  if is_probe_failure(record)],
                'sample_ids_allocated': 0, 'QC_approval': False}
     receipt['publication_sha256'] = object_sha256(receipt)
     return receipt
@@ -301,7 +314,8 @@ def verify_publication(plan, publication, *, now=None):
     if publication.get('publication_sha256') != object_sha256(body):
         raise ValueError('计划发布收据SHA不一致')
     # Recheck actual evidence and current expiry; publishing is not a permanent permit.
-    expected = publish_plan(plan, publication.get('capability_catalog'), now=now)
+    catalog = list(publication.get('capability_catalog') or []) + list(publication.get('probe_failures', []))
+    expected = publish_plan(plan, catalog, now=now)
     for key in ('plan_sha256', 'task_count', 'tasks', 'capabilities', 'preflight_report_sha256',
                 'capability_catalog', 'capability_catalog_sha256', 'capability_candidate_count',
                 'sample_ids_allocated', 'QC_approval'):

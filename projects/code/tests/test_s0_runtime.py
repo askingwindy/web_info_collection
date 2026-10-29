@@ -165,6 +165,36 @@ class NoModelRuntimeTests(unittest.TestCase):
 
 
 class NoModelProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_diagnostic_probes_start_after_delayed_viewport_image_is_ready(self):
+        from webcollect.browser import observe
+        from webcollect.preflight import inspect_page
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = load_json(REPO/'projects/code/config/batch-no-model.json')
+            ledger = BatchLedger(root/'operations.sqlite3', config, initialize=True)
+            uri = 'https://example.org/delayed-image-fixture'
+            html = '''<!doctype html><meta charset="utf-8"><title>延迟图像工程夹具</title>
+            <h1>受控合成计算页面</h1><p>图片稍后自然加载完成，探测必须等待原始图片就绪再核对，不修改页面资源或掩盖变化。</p>
+            <img id="icon" alt="受控测试图标" width="20" height="20">
+            <form><label>数量<input type="number"></label><label>单价<input type="number"></label><button>计算</button></form>
+            <script>setTimeout(()=>document.querySelector('#icon').src='data:image/svg+xml,'+
+            encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="green"/></svg>'),500)</script>'''
+            save_json(root/'candidates.json', {'schema_version':'webcollect-site-candidates-1','mode':'real','records':[
+                {'site_uri':uri,'site_category':'工具','source':[{'kind':'controlled-fixture-not-real-supply'}]}]})
+            calls=[]
+            async def ready_probe(page,*args,**kwargs):
+                state=await observe(page)
+                self.assertTrue(state['capture_readiness']['images_ready'])
+                calls.append(True)
+                return await inspect_page(page,*args,**kwargs)
+            with patch('webcollect.preflight.inspect_page',side_effect=ready_probe):
+                result=await probe(ledger,root/'candidates.json',root/'probe',fixture_pages={uri:html})
+            self.assertEqual(calls,[True])
+            record=result['records'][0]
+            self.assertEqual(record['representative_pages'][0]['routing'],'NORMAL_M1')
+            self.assertIn('page_anchor',record['capabilities'][0])
+            self.assertEqual(ledger.summary()['model_requests'],0)
+
     async def test_rendered_fixture_probes_without_credentials_and_stays_pending(self):
         retained = os.environ.get('WEBCOLLECT_S0_RUNTIME_EVIDENCE')
         if retained:

@@ -31,6 +31,10 @@ class VisitAccountingTests(unittest.IsolatedAsyncioTestCase):
         else:
             tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup);self.root=Path(tmp.name)
         self.cfg=load_json(REPO/'projects/code/config/batch-no-model.json')
+        from webcollect.site_failure_stop import SiteFailureStore
+        self.cfg['site_failure_guard'] = SiteFailureStore.initialize({
+            'ledger': str(self.root/'site-stop.sqlite3'), 'campaign_id': 'CONTROLLED-visits',
+            'formal_since': time.time()-1}).binding
         self.cfg['budget'].update(max_top_level_visits=8,min_domain_interval_seconds=1)
         self.ledger=BatchLedger(self.root/'ops.sqlite3',self.cfg,initialize=True)
         self.requests=[]

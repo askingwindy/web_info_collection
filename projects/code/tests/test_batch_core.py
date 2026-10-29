@@ -78,6 +78,23 @@ class BatchCoreTests(unittest.TestCase):
             ledger.consume('probe_pages', 'two')
         self.assertEqual(ledger.summary()['resources'][0]['used'], 1)
 
+    def test_provider_auth_unknown_blocks_new_jobs_but_preserves_completed_cache(self):
+        ledger=self.ledger();job=self.job(ledger);gateway=ModelGateway(ledger)
+        result=gateway.call(job,'completed','cached JSON',SCHEMA,synthetic_response={'answer':7})
+        rid=ledger.reserve_request(job,'CONTROLLED unauthorized response',0)['id']
+        ledger.settle_request(rid,state='unknown',error='HTTPError:401',
+                              response={'provider_error':{'http_status':401,'provider_code':'1000'}})
+        restarted=BatchLedger(ledger.path,self.config)
+        self.assertEqual(ModelGateway(restarted).call(job,'completed','cached JSON',SCHEMA),result)
+        ledger.finish(job,'review_required')
+        other=self.job(restarted,'another-task')
+        with self.assertRaisesRegex(OutcomeUnknown,'authorization failure'):
+            restarted.reserve_request(other,'new task must not dispatch',0)
+        self.assertEqual(restarted.summary()['model_requests'],2)
+        with restarted.connect() as con:
+            self.assertEqual(con.execute('SELECT state,error FROM model_requests WHERE id=?',(rid,)).fetchone()[:],
+                             ('unknown','HTTPError:401'))
+
     def test_changed_prompt_has_new_request_and_all_images_checked(self):
         ledger = self.ledger(); job = self.job(ledger); gateway = ModelGateway(ledger)
         for text in ('JSON v1', 'JSON v2'):

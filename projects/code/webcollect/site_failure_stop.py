@@ -23,12 +23,12 @@ class SiteStopped(ValueError):
     pass
 
 
-def application_key(value):
+def application_key(value, registry=None):
     """Use the pilot identity's whole-host normalization, never a page key."""
     uri = value['pilot_identity']['application']['canonical_uri'] if isinstance(value, dict) and value.get('pilot_identity') else (
         value.get('site_uri', value.get('initial_url')) if isinstance(value, dict) else value)
-    parsed = urlsplit(uri)
-    return page_url(urlunsplit((parsed.scheme, parsed.netloc, '/', '', '')))
+    from .application_identity import canonical_key
+    return canonical_key(uri, registry)
 
 
 def execution_id(stage, source, identity):
@@ -36,11 +36,15 @@ def execution_id(stage, source, identity):
 
 
 def validate_binding(value):
-    if (not isinstance(value, dict) or set(value) != {'ledger', 'campaign_id', 'formal_since'}
+    if (not isinstance(value, dict) or not {'ledger', 'campaign_id', 'formal_since'} <= set(value)
+            or set(value) - {'ledger', 'campaign_id', 'formal_since', 'application_registry'}
             or not isinstance(value['ledger'], str) or not Path(value['ledger']).is_absolute()
             or not isinstance(value['campaign_id'], str) or not value['campaign_id'].strip()
             or type(value['formal_since']) not in (int, float) or not 0 < value['formal_since'] < float('inf')):
         raise ValueError('Whole-site failure guard requires a fixed absolute ledger, campaign and formal_since')
+    if value.get('application_registry') is not None:
+        from .application_identity import aliases
+        aliases(value['application_registry'])
     return {**value, 'ledger': str(Path(value['ledger']).resolve())}
 
 
@@ -103,7 +107,7 @@ class SiteFailureStore:
                 or not isinstance(reason, str) or not reason.strip() or not identity or not evidence
                 or not isinstance(usage_refs, list)):
             raise ValueError('Only evidenced real execution failures/unknown outcomes may enter the site ledger')
-        body = (identity, application_key(application), stage, state, reason, canonical(evidence), canonical(usage_refs))
+        body = (identity, application_key(application, self.binding.get('application_registry')), stage, state, reason, canonical(evidence), canonical(usage_refs))
         with self.connect(True) as con:
             con.execute('BEGIN IMMEDIATE')
             old = con.execute('SELECT execution_id,application_key,stage,state,reason,evidence_json,usage_refs_json '
@@ -281,7 +285,7 @@ class SiteFailureStore:
                 'status': outcome, 'evidence': refs}])
             if sample_hashes(Path(report['dataset']) / 'samples' / sid) != receipt['sample_files_sha256']:
                 raise ValueError('QC success files differ from the original committed capture')
-            fact = {'fact_id': identity, 'application_key': application_key(json.loads(task)),
+            fact = {'fact_id': identity, 'application_key': application_key(json.loads(task), self.binding.get('application_registry')),
                     'sample_id': sid, 'attempt_id': attempt_id, 'report_sha256': reference['sha256'],
                     'sample_files_sha256': receipt['sample_files_sha256'],
                     'verification': 'source-bound-independent-qc-pass', 'recorded_at': at}
@@ -298,7 +302,7 @@ class SiteFailureStore:
         return {'source_reviews_consulted': len(rows), 'local_QC_approval_granted': False}
 
     def status(self, application):
-        key = application_key(application)
+        key = application_key(application, self.binding.get('application_registry'))
         with self.connect() as con:
             counts = dict(con.execute('SELECT state,COUNT(*) FROM site_executions WHERE application_key=? GROUP BY state', (key,)))
             successes = verified = 0

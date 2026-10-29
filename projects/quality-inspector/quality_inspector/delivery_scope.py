@@ -85,5 +85,6 @@ def verify_delivery_scope(effective_set_path, cross_package_report_path, *, data
             'contract_sha256': current['contract_sha256'], 'source_member': member,
             'package_roots': sorted(current['input_files_sha256']),
             'payload_files_sha256': actual_payload, 'payload_sha256': digest(actual_payload),
-            'effective_sample_count': current['sample_count'], 'cross_package_status': 'PASS',
+            'effective_sample_count': current['sample_count'],
+            'release': current['local_profile']['configuration'].get('release'), 'cross_package_status': 'PASS',
             'semantic_review_repeated': False, 'QC_approval': False}

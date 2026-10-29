@@ -21,11 +21,18 @@ VERSION = 'webcollect-machine-batch-1'
 MARKER = 'batch_shard_meta'
 
 
-def site_key(uri):
+def site_key(uri, registry=None, *, strict=False):
     if uri.startswith('//'):
         uri = 'https:' + uri
-    key = application_key(uri)
-    return '//' + key[2:].removeprefix('www.')
+    key = application_key(uri, registry)
+    # Frozen v1 manifests retain their conventional-www identity. Newly planned
+    # manifests use explicit ownership evidence, including for www aliases.
+    return key if strict or registry is not None else '//' + key[2:].removeprefix('www.')
+
+
+def manifest_site_key(manifest, uri):
+    return site_key(uri, manifest.get('application_registry'),
+                    strict=manifest.get('site_identity_policy') == 'evidence-aliases-1')
 
 
 def _seal(value, field):
@@ -52,7 +59,7 @@ def _read_ref(ref, base=None):
     return value, path
 
 
-def _capacity(record, base):
+def _capacity(record, base, registry=None, *, strict=False):
     count = record.get('capacity'); ref = record.get('capacity_ref')
     if count is None or ref is None:
         return None, None
@@ -60,7 +67,8 @@ def _capacity(record, base):
         raise ValueError('Capacity must be an explicit positive integer or unknown')
     proof, path = _read_ref(ref, base)
     if (proof.get('schema_version') != 'webcollect-site-capacity-1' or proof.get('status') != 'verified'
-            or proof.get('capacity') != count or site_key(proof.get('site_uri', '')) != site_key(record['site_uri'])
+            or proof.get('capacity') != count
+            or site_key(proof.get('site_uri', ''), registry, strict=strict) != site_key(record['site_uri'], registry, strict=strict)
             or not isinstance(proof.get('evidence'), list) or not proof['evidence']):
         raise ValueError('Capacity requires a matching verified, evidenced site-capacity receipt')
     for item in proof['evidence']:
@@ -68,7 +76,7 @@ def _capacity(record, base):
     return count, {'receipt_sha256': ref['sha256'], 'evidence_sha256': sorted(item['sha256'] for item in proof['evidence'])}
 
 
-def facts_state(refs, run_id):
+def facts_state(refs, run_id, registry=None, *, strict=False):
     """Recompute exclusions from immutable facts, ignoring claimed summaries."""
     executions = {}; execution_keys = {}; successes = {}; sources = []; formal_since = None
     for ref in refs:
@@ -101,9 +109,9 @@ def facts_state(refs, run_id):
             successes[identity] = fact
     counts = defaultdict(lambda: {'failed': 0, 'unknown': 0})
     for fact in executions.values():
-        counts[site_key(fact['application_key'])][fact['state']] += 1
+        counts[site_key(fact['application_key'], registry, strict=strict)][fact['state']] += 1
     excluded = sorted(key for key, states in counts.items() if states['failed'] >= 3 or states['unknown'])
-    used = sorted(set(counts) | {site_key(row['application_key']) for row in successes.values()})
+    used = sorted(set(counts) | {site_key(row['application_key'], registry, strict=strict) for row in successes.values()})
     return {'sources': sources, 'excluded_sites': excluded, 'used_sites': used,
             'formal_since': formal_since, 'execution_counts': dict(counts),
             'execution_facts': [executions[key] for key in sorted(executions)],
@@ -142,9 +150,13 @@ def plan_shards(catalog, *, run_id, target, shard_ids=None, worker_count=None, f
     records = catalog.get('records') if isinstance(catalog, dict) else None
     if not isinstance(records, list) or not records:
         raise ValueError('A nonempty explicit candidate catalog is required')
-    state = facts_state(facts, run_id); groups = defaultdict(list)
+    registry = catalog.get('application_registry')
+    if registry is not None:
+        from .application_identity import aliases
+        aliases(registry)
+    state = facts_state(facts, run_id, registry, strict=True); groups = defaultdict(list)
     for record in records:
-        groups[site_key(record['site_uri'])].append(record)
+        groups[site_key(record['site_uri'], registry, strict=True)].append(record)
     sites = []
     for number, (key, members) in enumerate(sorted(groups.items()), 1):
         if number > 999999:
@@ -153,7 +165,13 @@ def plan_shards(catalog, *, run_id, target, shard_ids=None, worker_count=None, f
         if len(categories) != 1 or not next(iter(categories)).strip():
             raise ValueError('Whole-site aliases cannot change category')
         origins = sorted({urlunsplit((urlsplit(row['site_uri']).scheme, urlsplit(row['site_uri']).netloc.lower(), '/', '', '')) for row in members})
-        capacities = [_capacity(row, base) for row in members]
+        if registry is not None:
+            from .batch_core import load_json
+            declared = [row['canonical_uri'] for row in load_json(registry['path'])['applications']
+                        if site_key(row['canonical_uri'], registry, strict=True) == key]
+            if declared:
+                origins = declared
+        capacities = [_capacity(row, base, registry, strict=True) for row in members]
         known = [(count, proof) for count, proof in capacities if count is not None]
         capacity, proof = max(known, key=lambda item: item[0]) if known else (None, None)
         sites.append({'site_id': f'S{number:06}', 'application_key': key, 'site_uri': origins[0],
@@ -169,12 +187,15 @@ def plan_shards(catalog, *, run_id, target, shard_ids=None, worker_count=None, f
     return _seal({'schema_version': VERSION, 'run_id': run_id, 'round_index': 0, 'target': target,
                   'catalog_sha256': object_sha256(catalog), 'raw_candidate_count': len(records),
                   'sites': sites, 'shards': shards, 'facts': state, 'ancestor_sha256': [],
+                  'site_identity_policy': 'evidence-aliases-1', 'application_registry': registry,
                   'production_started': False}, 'manifest_sha256')
 
 
 def verify_manifest(manifest):
     if manifest.get('schema_version') != VERSION or _seal(manifest, 'manifest_sha256') != manifest:
         raise ValueError('Changed or unsupported static batch manifest')
+    if manifest.get('site_identity_policy') not in (None, 'evidence-aliases-1'):
+        raise ValueError('Unsupported static application ownership policy')
     ids = [row['site_id'] for row in manifest['sites']]; keys = [row['application_key'] for row in manifest['sites']]
     if len(ids) != len(set(ids)) or len(keys) != len(set(keys)):
         raise ValueError('Global site identities must be unique')
@@ -184,7 +205,7 @@ def verify_manifest(manifest):
     for row in manifest['sites']:
         parsed = urlsplit(row['site_uri'])
         if (not re.fullmatch(r'S[0-9]{6}', row['site_id']) or row['shard_id'] not in owners
-                or row['application_key'] != site_key(row['site_uri']) or parsed.path != '/'
+                or row['application_key'] != manifest_site_key(manifest, row['site_uri']) or parsed.path != '/'
                 or parsed.query or parsed.fragment or row['state'] not in ('assigned', 'reserve', 'used', 'unavailable')
                 or (row['state'] == 'assigned' and (type(row['capacity']) is not int or row['capacity'] < 1))):
             raise ValueError('Invalid canonical site, capacity, state or owner')
@@ -204,7 +225,7 @@ def global_task_id(run_id, site_id, local_task_id):
 
 def guard_shard_task(manifest, shard_id, task):
     verify_manifest(manifest)
-    matches = [row for row in manifest['sites'] if row['application_key'] == site_key(task['site_uri'])]
+    matches = [row for row in manifest['sites'] if row['application_key'] == manifest_site_key(manifest, task['site_uri'])]
     if len(matches) != 1:
         raise ValueError('Task site is outside the frozen catalog')
     site = matches[0]; binding = task.get('batch_identity')
@@ -212,7 +233,7 @@ def guard_shard_task(manifest, shard_id, task):
     if (site['state'] != 'assigned' or site['shard_id'] != shard_id or binding != expected
             or not task['task_id'].startswith(site['site_id'] + '-T-')
             or task['site_uri'] != site['site_uri'] or task['site_category'] != site['site_category']
-            or site_key(task.get('initial_url', task['site_uri'])) != site['application_key']):
+            or manifest_site_key(manifest, task.get('initial_url', task['site_uri'])) != site['application_key']):
         raise ValueError('Task must belong to this shard and use its exact canonical site URI and identity')
     return site
 
@@ -307,6 +328,8 @@ def verify_shard_policy(registry, policy):
     manifest = verify_manifest(marker['manifest']); binding = policy.get('site_failure_guard')
     if not isinstance(binding, dict) or binding.get('campaign_id') != manifest['run_id']:
         raise ValueError('A sharded worker requires the same run site_failure_guard')
+    if binding.get('application_registry') != manifest.get('application_registry'):
+        raise ValueError('Shard and original site guard must use the same frozen application aliases')
     store = SiteFailureStore(binding)
     if manifest['facts']['formal_since'] is not None and binding['formal_since'] != manifest['facts']['formal_since']:
         raise ValueError('Shard failure cutoff differs from its frozen portable facts')
@@ -316,7 +339,7 @@ def verify_shard_policy(registry, policy):
         raise ValueError('Worker must import exact immutable original failure/unknown facts before dispatch')
     counts = defaultdict(lambda: {'failed': 0, 'unknown': 0})
     for fact in imported['executions']:
-        counts[site_key(fact['application_key'])][fact['state']] += 1
+        counts[manifest_site_key(manifest, fact['application_key'])][fact['state']] += 1
     for key, states in manifest['facts']['execution_counts'].items():
         if any(counts[key][state] < count for state, count in states.items()):
             raise ValueError('Worker must import the frozen original failure/unknown facts before dispatch')
@@ -387,7 +410,9 @@ def merge_qualified(manifest, inputs, *, facts=(), global_reviews=(), global_sam
     from quality_inspector.profiles import package_files
     from .client_reports import validate_report_semantic_rules
     global_reviews = list(global_reviews)
-    verify_manifest(manifest); state = facts_state(facts, manifest['run_id'])
+    verify_manifest(manifest)
+    state = facts_state(facts, manifest['run_id'], manifest.get('application_registry'),
+                        strict=manifest.get('site_identity_policy') == 'evidence-aliases-1')
     sites = {row['site_id']: row for row in manifest['sites']}; versions = {}; sources = []; copies = []; shard_results = {}
     for item in inputs:
         result, _ = _read_ref(item['result_ref']); report, _ = _read_ref(item['report_ref'])
@@ -518,6 +543,8 @@ def next_round(manifest, merged, *, new_catalog=None, base=None):
             row['state'] = 'used'
     owners = [row['shard_id'] for row in manifest['shards']]
     if new_catalog is not None:
+        if new_catalog.get('application_registry') != manifest.get('application_registry'):
+            raise ValueError('A replenishment round cannot change frozen application ownership')
         addition = plan_shards(new_catalog, run_id=manifest['run_id'], target=max(1, merged['deficit']),
                                shard_ids=owners, facts=merged['facts']['sources'], base=base)
         old_keys = {row['application_key'] for row in result['sites']}

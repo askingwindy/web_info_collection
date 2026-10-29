@@ -202,6 +202,31 @@ def same_chain(left, right):
             and all(left.get(key) == right.get(key) for key in keys))
 
 
+def require_plan(plan, registry, policy):
+    """Marked current registries cannot opt out of page ownership or site stop.
+
+    Legacy unmarked registries retain their original contract. Validate before
+    preflight/dispatch, without creating or resetting any ledger.
+    """
+    if not is_current_registry(registry):
+        return False
+    scope = scope_for_registry(registry)
+    supplied = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope')
+    _require(isinstance(supplied, dict) and same_chain(scope, supplied), 'new task must bind the exact current chain')
+    _require(policy.get('pilot_identity_required') is True and bool(policy.get('site_failure_guard')),
+             'current chain requires page identity and original whole-site failure guard')
+    from .production_identity import validate_plan
+    validate_plan(plan, required=True)
+    assert_current_evidence(scope, plan)
+    from .site_failure_stop import SiteFailureStore
+    guard = SiteFailureStore(policy['site_failure_guard'])
+    for task in plan['tasks']:
+        application = task['pilot_identity']['application']
+        _require(application.get('application_registry') == guard.binding.get('application_registry'),
+                 'page identity and dispatch guard must use the same frozen application aliases')
+    return True
+
+
 def validate_history_context(value):
     scope = value.get('history_scope', {})
     records, actual = read_chain_history(scope.get('manifest', {}).get('path', ''))

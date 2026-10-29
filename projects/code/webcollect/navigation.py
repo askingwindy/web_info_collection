@@ -22,6 +22,28 @@ class BatchNavigation:
     def __init__(self, ledger, job):
         self.ledger, self.job = ledger, job
 
+    def record_preflight_outcome(self, task, record, reference):
+        """Settle the actual read-only probe before another task is dispatched."""
+        binding = self.ledger.config.get('site_failure_guard')
+        if (not binding or self.ledger.config['mode'] != 'real'
+                or not (record.get('error') or record.get('summary', {}).get('routing') == 'REVIEW_REQUIRED')):
+            return
+        from .site_failure_stop import SiteFailureStore, execution_id
+        from .planning import verify_evidence
+        from .batch_core import load_json
+        verify_evidence([reference])
+        if load_json(reference['path']) != record:
+            raise ValueError('Preflight outcome differs from its original evidence')
+        visits = [row for row in self.ledger.visits() if row['job_id'] == self.job['id']
+                  and row['purpose'] == 'preflight:' + task['task_id']]
+        if not visits or visits[-1]['state'] != 'succeeded':
+            return  # Navigation failure/UNKNOWN already has its own original fact.
+        visit = visits[-1]
+        SiteFailureStore(binding).record(task, execution_id('preflight', self.ledger.path, visit['id']),
+            stage='probe', state='failed', real_execution=True,
+            reason=str(record.get('error') or record['summary']), evidence=[reference],
+            usage_refs=[{'ledger': str(self.ledger.path), 'visit_id': visit['id']}])
+
     async def goto(self, page, uri, *, purpose, timeout_ms=30000):
         from .collect import verify_public_url
         verify_public_url(uri)

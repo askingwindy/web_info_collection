@@ -1,0 +1,40 @@
+{
+  "schema_version": "webcollect-batch-config-1",
+  "run_id": "ark-deepseek-protocol-CHANGE-ME",
+  "mode": "real",
+  "budget": {
+    "max_model_requests": 1,
+    "max_reserved_tokens": 20480,
+    "max_model_cost_micros": 100000,
+    "currency": "CNY",
+    "max_discovery_candidates": 0,
+    "max_probe_pages": 0,
+    "max_run_seconds": 300,
+    "max_concurrent_jobs": 1,
+    "min_domain_interval_seconds": 2,
+    "min_model_interval_seconds": 1,
+    "lease_seconds": 180
+  },
+  "model": {
+    "provider": "ark",
+    "model": "deepseek-v4-1-flash-economy-261017",
+    "endpoint": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    "api_key_env": "ARK_API_KEY",
+    "timeout_seconds": 90,
+    "reserve_input_tokens": 16384,
+    "max_completion_tokens": 4096,
+    "max_images": 1,
+    "reserve_cost_micros": 100000,
+    "supports_vision": true,
+    "image_tokens_per_image": 8192,
+    "request_overhead_tokens": 2048,
+    "reasoning_effort": "low",
+    "rates": {
+      "version": "ark-deepseek-economy-official-20261029-r01-peak-upper-bound",
+      "source": "https://docs.volcengine.com/docs/ark/model-pricing?lang=zh ; checked 2026-10-29; CNY per million tokens; peak rates used as conservative ceiling; off-peak estimate may be lower; account debit and cache storage charges UNKNOWN",
+      "input": 1600000,
+      "cached_input": 32000,
+      "output": 6400000
+    }
+  }
+}

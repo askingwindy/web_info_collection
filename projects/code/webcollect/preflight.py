@@ -83,6 +83,27 @@ def _limits(samples, interval_ms):
         raise ValueError('预检 interval-ms 必须为100至2000整数')
 
 
+async def _wait_visible_readiness(page, timeout=8):
+    """Bounded read-only resource wait; expiry still allows diagnostic probes."""
+    from .browser import observe as read_state, _loaded
+    started=time.monotonic();observations=[]
+    while True:
+        try:
+            state=await read_state(page,timeout=max(.01,timeout-(time.monotonic()-started)))
+        except Exception as error:
+            return {'status':'observer_unavailable','error_type':type(error).__name__,
+                    'elapsed_seconds':time.monotonic()-started,'observations':observations}
+        ready=state.get('capture_readiness')
+        observations.append(ready)
+        if ready is None or _loaded(state):
+            return {'status':'legacy_observer' if ready is None else 'ready',
+                    'elapsed_seconds':time.monotonic()-started,'observations':observations}
+        if time.monotonic()-started>=timeout:
+            return {'status':'wait_expired','elapsed_seconds':time.monotonic()-started,
+                    'observations':observations,'diagnostic_probes_still_required':True}
+        await asyncio.sleep(min(.1,max(0,timeout-(time.monotonic()-started))))
+
+
 async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_check=None):
     """Inspect an already loaded page, without clicking, scrolling or playback changes.
 
@@ -114,6 +135,10 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
             'screenshot_sha256': sha256(png).hexdigest(),
             'diagnostic_only': True, 'formal_synchronized_capture': False,
             'actions_executed': [], 'page_content_modified_by_preflight': False})
+        # Keep the first original viewport, then give visible fonts/images a
+        # bounded chance to finish. Expiry never grants readiness or skips the
+        # existing loading/pixel checks; dynamic-page diagnosis remains usable.
+        write_json(directory/'readiness_wait.json',await _wait_visible_readiness(page))
         for index in range(samples):
             if index:
                 await asyncio.sleep(interval_ms / 1000)
@@ -335,6 +360,11 @@ async def preflight_plan(plan_path, output, samples=3, interval_ms=400,
                         write_json(folder / 'context_cleanup_failure.json', {'error': str(cleanup)})
                         record['cleanup_error'] = str(cleanup)
                 records.append({**record, 'evidence_directory': folder.name})
+                if navigation is not None and hasattr(navigation, 'record_preflight_outcome'):
+                    outcome_path = folder / 'preflight_outcome.json'
+                    write_json(outcome_path, record)
+                    navigation.record_preflight_outcome(task, record,
+                        {'path': str(outcome_path.resolve()), 'sha256': digest(outcome_path)})
                 checkpoint_json(output / 'progress.json', progress)
                 from .batch_core import BudgetStop
                 if isinstance(navigation_failure, BudgetStop):

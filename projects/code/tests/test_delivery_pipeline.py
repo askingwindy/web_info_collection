@@ -97,6 +97,40 @@ class DeliveryPipelineTests(unittest.TestCase):
             self.assertEqual(job['payload']['delivery_pipeline_binding'],receipt['binding'])
         self.assertFalse(receipt['release_ready'])
 
+    def test_document_coverage_revalidates_real_review_protocol_and_reuses_original_sample_jobs(self):
+        ledger,prepared,state=self.run_mock_real()
+        original=pipeline.verify(prepared['receipt'],ledger)
+        exported=pipeline.ai_worker.report(ledger,original['queue']['path'],self.root/'sample-only')
+        reviews=exported['review_file']
+        second=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'verified-doc-prepared',
+            profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real',sample_reviews=reviews)
+        revised=pipeline.verify(second['receipt'],ledger)
+        context=ledger.get(revised['document_job'])['payload']['supplementary_evidence']['verified_sample_review_state']
+        self.assertEqual(context['semantic_sampling']['actual_ai_reviewed'],1)
+        self.assertEqual(context['semantic_sampling']['actual_human_reviewed'],0)
+        self.assertEqual(context['semantic_sampling']['human_pending_count'],0)
+        self.assertEqual(context['samples'][0]['status'],'PASS')
+        self.assertEqual({jid for jid in original['jobs'] if original['jobs'][jid]['kind']!='ai-documents'},
+                         {jid for jid in revised['jobs'] if revised['jobs'][jid]['kind']!='ai-documents'})
+        before=ledger.summary()['model_requests']
+        with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
+            resolved=pipeline.run(second['receipt'],self.root/'verified-doc-run',max_jobs=10)
+        self.assertEqual(ledger.summary()['model_requests'],before+1)
+        self.assertEqual(resolved['payload_status'],'PASS')
+        self.assertEqual(resolved['actual_human_reviewed'],0)
+
+    def test_document_coverage_preserves_pending_selected_sample_review(self):
+        reviews=self.fixture.reviewed();value=json.loads(reviews.read_text())
+        value.pop('delivery_document_review',None)
+        value['records'][0]['checks']['privacy']['status']='REVIEW_REQUIRED'
+        reviews.write_text(json.dumps(value))
+        prepared=self.prepare(sample_reviews=reviews)
+        receipt=pipeline.verify(prepared['receipt'],self.ledger)
+        context=self.ledger.get(receipt['document_job'])['payload']['supplementary_evidence']['verified_sample_review_state']
+        self.assertNotEqual(context['samples'][0]['status'],'PASS')
+        self.assertGreater(context['semantic_sampling']['human_pending_count'],0)
+        self.assertEqual(self.ledger.summary()['model_requests'],0)
+
     def test_run_uses_only_bound_jobs_and_controlled_reviews_never_claim_real_ai_pass(self):
         result=self.prepare()
         unrelated=self.ledger.enqueue('ai-visual',{'CONTROLLED-unbound':'must not execute'})

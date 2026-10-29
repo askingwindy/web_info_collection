@@ -8,6 +8,7 @@
 !.env.example
 /request/token
 /request/token/
+/request/token.yaml
 /results/
 /verify_results/
 *.zip

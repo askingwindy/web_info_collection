@@ -45,13 +45,45 @@ class DocumentMaterialsTests(unittest.TestCase):
                                         if k not in ('qc_report.md','SHA256SUMS')},
                 'dataset_checks':[{'rule_id':'DELIVERY_CATEGORY_SHARE','status':'FAIL','actual':1.0}]}
 
-    def prepare(self,*,supporting=(),report=None):
+    def prepare(self,*,supporting=(),report=None,**kwargs):
         formats={'package_errors':[],'samples':[{'sample_id':'A','confirmed_format_pass':True,
                   'errors':[],'total_steps':6,'effective_steps':5}]}
         with patch('quality_inspector.engine.inspect',return_value=report or self.report()),\
                 patch('quality_inspector.ai_worker.format_run',return_value=formats):
             return documents_job(self.ledger,self.dataset,REPO/'projects/quality-inspector/quality_inspector/delivery.json',
-                                 self.root/'preparation',supporting_files=supporting)
+                                 self.root/'preparation',supporting_files=supporting,**kwargs)
+
+    def test_verified_review_coverage_requires_paired_original_inputs_and_binds_hashes(self):
+        reviews=self.root/'actual-reviews.json';reviews.write_text('{"fixture":"review"}')
+        plan=self.root/'sampling.json';plan.write_text('{"fixture":"policy"}')
+        with self.assertRaisesRegex(ValueError,'supplied together'):
+            self.prepare(sample_reviews=reviews)
+        evaluated=self.report()
+        evaluated.update(semantic_sampling={'actual_ai_reviewed':1,'actual_human_reviewed':0,
+            'ai_pending_count':0,'human_pending_count':0,'policy':{'ai_percent':100,'human_percent':0}},
+            samples=[{'sample_id':'A','status':'PASS','checks':[{'rule_id':'REVIEW_PRIVACY','status':'PASS'}]}])
+        jid=self.prepare(report=evaluated,sample_reviews=reviews,delivery_sampling_plan=plan)
+        job=self.ledger.claim('ai-documents',job_id=jid)
+        context=job['payload']['supplementary_evidence']['verified_sample_review_state']
+        self.assertEqual(context['semantic_sampling'],evaluated['semantic_sampling'])
+        self.assertEqual(context['sample_reviews']['sha256'],file_sha(reviews))
+        self.assertEqual(context['sampling_plan']['sha256'],file_sha(plan))
+        gateway=self.Gateway(self.decision())
+        plan.write_text('{"fixture":"tampered policy"}')
+        with self.assertRaisesRegex(ValueError,'Supporting documentary evidence changed'):
+            do_documents(self.ledger,gateway,job)
+        self.assertFalse(gateway.calls)
+
+    def test_inspector_rejects_unbound_review_before_document_job_or_expenditure(self):
+        reviews=self.root/'bad-reviews.json';reviews.write_text('{}')
+        plan=self.root/'bad-plan.json';plan.write_text('{}')
+        with patch('quality_inspector.engine.inspect',side_effect=ValueError('Invalid frozen sampling plan')) as inspector:
+            with self.assertRaisesRegex(ValueError,'Invalid frozen'):
+                documents_job(self.ledger,self.dataset,'unused',self.root/'out',
+                              sample_reviews=reviews,delivery_sampling_plan=plan)
+        self.assertEqual(inspector.call_args.kwargs['reviews'],reviews)
+        self.assertEqual(inspector.call_args.kwargs['delivery_sampling_plan'],plan)
+        self.assertFalse(self.ledger.summary()['jobs'])
 
     def job(self,**kwargs):
         return self.ledger.claim('ai-documents',job_id=self.prepare(**kwargs))

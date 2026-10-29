@@ -130,6 +130,8 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append({'sample': str(path), 'reason': str(error)})
     count = len(samples); share = max(categories.values(), default=0) / count if count else 0
+    from .profiles import release_errors
+    errors.extend(release_errors(selected['configuration'], packages, versions, count))
     if len(rows) != count: errors.append({'reason': 'cumulative metadata count differs from sample population'})
     if targets['expected_samples'] is not None and count != targets['expected_samples']:
         errors.append({'reason': f'Expected {targets["expected_samples"]} samples; inspected {count}'})

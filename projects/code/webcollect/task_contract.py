@@ -105,7 +105,15 @@ def validate_m4_task(task):
     by_id = dict(zip(ids, operations))
     for op in operations:
         if op.get('completion_view') and not task.get('task_admission'):
-            raise ValueError('Completion-view scroll requires current independently reviewed task admission')
+            view = op['completion_view']
+            if (not isinstance(view, dict) or set(view) != {'schema_version', 'distance'}
+                    or view.get('schema_version') != 'webcollect-live-completion-view-1'
+                    or type(view.get('distance')) is not int or not 1 <= view['distance'] <= 480
+                    or op is not operations[-1] or op.get('action_type') != 'scroll'
+                    or op.get('arguments') != {'direction': 'down'}
+                    or op.get('execution', {}).get('distance') != view['distance']
+                    or op.get('postconditions') != task['final_assertions']):
+                raise ValueError('Completion-view needs a bounded live terminal scroll or its original admission')
         if op.get('subgoal_id') not in goals:
             raise ValueError('M4 operation must reference an existing subgoal')
         if op.get('observation'):

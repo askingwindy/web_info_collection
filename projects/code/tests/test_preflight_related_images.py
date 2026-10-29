@@ -239,6 +239,22 @@ class RelatedImageBrowserTests(unittest.IsolatedAsyncioTestCase):
         output=BytesIO();Image.new('RGB',(25,25),color).save(output,format='PNG')
         return 'data:image/png;base64,'+base64.b64encode(output.getvalue()).decode()
 
+    async def test_delayed_image_is_waited_for_without_editing_page_or_approving_unloaded_pixels(self):
+        await self.page.set_content('''<!doctype html><meta charset="utf-8"><h1>工程测试页面</h1>
+          <button id="button">核对</button><img id="delayed" width="25" height="25" alt="测试图标">''')
+        await self.page.evaluate('(src)=>setTimeout(()=>document.querySelector("#delayed").src=src,500)',self.image_uri('green'))
+        task={'task_id':'OFFLINE-delay','site_uri':'https://offline.example.org/',
+              'initial_url':'https://offline.example.org/','content_preparation':False,
+              'operations':[{'action_type':'click','selector':'#button'}]}
+        result=await inspect_page(self.page,task,self.root/'delay',samples=2,interval_ms=100)
+        self.assertIsNone(result['error']);self.assertEqual(result['summary']['routing'],'NORMAL_M1')
+        wait=json.loads((self.root/'delay/readiness_wait.json').read_text())
+        self.assertEqual(wait['status'],'ready')
+        self.assertTrue(any(row['images_ready'] is False for row in wait['observations']))
+        self.assertTrue(wait['observations'][-1]['images_ready'])
+        self.assertEqual(await self.page.locator('#delayed').get_attribute('style'),None)
+        self.assertEqual(self.requests,[])
+
     async def test_default_preflight_uses_real_observer_and_preserves_bounded_image_change(self):
         first,last=self.image_uri('red'),self.image_uri('blue')
         await self.page.set_content('''<!doctype html><meta charset="utf-8"><style>

@@ -67,6 +67,11 @@ class StaticBatchTests(unittest.TestCase):
     def test_large_catalog_keeps_unknown_reserve_and_groups_entire_host(self):
         catalog = self.catalog(11001)
         catalog['records'].append(dict(catalog['records'][0], site_uri='http://WWW.site00000.example/page?q=9#fragment'))
+        evidence = put(self.root / 'www-ownership-evidence.json', {'CONTROLLED': 'observed canonical application ownership'})
+        catalog['application_registry'] = put(self.root / 'www-aliases.json', {
+            'schema_version': 'webcollect-application-aliases-1', 'applications': [{
+                'canonical_uri': 'https://site00000.example/',
+                'aliases': ['https://site00000.example/', 'http://www.site00000.example/'], 'evidence': [evidence]}]})
         manifest = batch.plan_shards(catalog, run_id=self.run, target=170, shard_ids=('A', 'B'))
         self.assertEqual(manifest['raw_candidate_count'], 11002)
         self.assertEqual(len(manifest['sites']), 11001)
@@ -76,6 +81,23 @@ class StaticBatchTests(unittest.TestCase):
         self.assertEqual(manifest['sites'][0]['capacity'], 120)  # alias capacity does not sum
         self.assertEqual(len([row for row in manifest['sites'] if row['capacity'] is None]), 10997)
         self.assertFalse(manifest['production_started'])
+
+    def test_unproven_hosts_stay_distinct_and_proven_crosshost_aliases_share_owner(self):
+        catalog = {'records': [{'site_uri': uri, 'site_category': '在线工具'} for uri in (
+            'https://example.org/a', 'https://www.example.org/b', 'https://m.example.org/c')]}
+        plain = batch.plan_shards(catalog, run_id=self.run, target=1, worker_count=3)
+        self.assertEqual(len(plain['sites']), 3)
+        proof = put(self.root / 'alias-proof.json', {'CONTROLLED': 'observed common application'})
+        catalog['application_registry'] = put(self.root / 'application-aliases.json', {
+            'schema_version': 'webcollect-application-aliases-1', 'applications': [{
+                'canonical_uri': 'https://example.org/',
+                'aliases': ['https://example.org/', 'https://www.example.org/', 'https://m.example.org/'],
+                'evidence': [proof]}]})
+        combined = batch.plan_shards(catalog, run_id=self.run, target=1, worker_count=3)
+        batch.verify_manifest(combined)
+        self.assertEqual(len(combined['sites']), 1)
+        self.assertEqual(combined['sites'][0]['application_key'], '//example.org/')
+        self.assertEqual(sum(len(row['owned_site_ids']) for row in combined['shards']), 1)
 
     def test_n_workers_cover_every_site_once_without_filling_empty_active_shards(self):
         catalog = self.catalog()

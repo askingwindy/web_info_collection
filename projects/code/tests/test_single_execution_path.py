@@ -45,11 +45,11 @@ class HistoryDeferralTests(unittest.TestCase):
         self.assertEqual(result['status'], 'REVIEW_REQUIRED')
         self.assertEqual(result['history_sample_ids'], ['CONTROLLED-current'])
 
-    def test_known_business_duplicate_still_rejects(self):
+    def test_same_strategy_alone_requires_actual_difference_review(self):
         task = {'site_uri': 'https://example.org/', 'deterministic_strategy': {'id': 'controlled'}}
         old = {'sample_id': 'CONTROLLED-current', 'origin': 'https://elsewhere.example',
                'strategy_id': 'controlled', 'semantic_signature': task_generation.semantic_signature(task)}
-        self.assertEqual(task_generation.customer_history_decision(task, [old])['status'], 'REJECTED')
+        self.assertEqual(task_generation.customer_history_decision(task, [old])['status'], 'REVIEW_REQUIRED')
 
     def test_generation_retains_uncertain_task_without_admission_or_rehearsal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -215,6 +215,9 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.policy = {'campaign_id': 'CONTROLLED-single', 'baseline_category_counts': {}}
         if identity:
             self.policy['pilot_identity_required'] = True
+            stop = SiteFailureStore.initialize({'ledger': str(self.root / 'current-stop.sqlite3'),
+                'campaign_id': self.policy['campaign_id'], 'formal_since': time.time() - 1})
+            self.policy['site_failure_guard'] = stop.binding
         self.policy_path = self.root / 'policy.json'; save_json(self.policy_path, self.policy)
         self.output = self.root / 'results' / 'run'
         return capability
@@ -250,7 +253,14 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_chain_history(self.chain_manifest)[0], [])
 
     async def test_delivery_collects_once_and_resume_reuses_complete_pending_evidence(self):
-        await self.assert_single_saved_run(False)
+        await self.assert_single_saved_run(True)
+
+    async def test_current_chain_cannot_omit_identity_or_original_guard_before_browser(self):
+        self.prepared(False)
+        with patch('playwright.async_api.async_playwright', side_effect=AssertionError('No browser before identity')):
+            with self.assertRaisesRegex(ValueError, 'requires page identity'):
+                await self.collect()
+        self.assertEqual(self.actions, [])
 
     async def test_identity_bound_plan_uses_same_collector_without_admission_or_rehearsal(self):
         await self.assert_single_saved_run(True)
@@ -301,7 +311,7 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actions, [])
 
     async def test_shard_policy_is_rechecked_before_resume_dispatch(self):
-        self.prepared(False)
+        self.prepared(True)
         await self.collect()
         with patch('webcollect.batch_protocol.verify_shard_policy', side_effect=ValueError('CONTROLLED changed shard policy')) as guard, \
              patch('playwright.async_api.async_playwright', side_effect=AssertionError('No resumed browser')) as browser:
@@ -344,14 +354,16 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
             stop.guard(self.plan['tasks'][0])
 
     async def execute_shared_entry(self, identity, *, configure_after=False, register_before_qc=False):
-        capability = self.prepared(identity)
+        capability = self.prepared(True)
         # The actual execute->collect_m4->collect_one path is used; only read-only
         # preflight IO and the separately owned candidate exporter are fixtures.
         RuntimeStore(self.registry, 'CONTROLLED-authorized').initialize(self.policy)
         catalog_path = self.root / 'catalog.json'
         save_json(catalog_path, {'schema_version': 'webcollect-capability-catalog-1',
                                 'mode': 'real', 'records': [capability]})
-        ledger = BatchLedger(self.root / 'operations.sqlite3', config('real'), initialize=True)
+        ledger_config = config('real')
+        ledger_config['site_failure_guard'] = self.policy['site_failure_guard']
+        ledger = BatchLedger(self.root / 'operations.sqlite3', ledger_config, initialize=True)
         original = {k: v for k, v in self.plan.items() if k != 'media_preflight'}
         self.plan_path.write_text(json.dumps(original, ensure_ascii=False))
         async def fixture_preflight(source, output, **kwargs):

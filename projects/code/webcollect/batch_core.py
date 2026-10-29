@@ -86,8 +86,12 @@ def validate_config(value, *, credentials=False, require_model=False):
     """
     import os
     from urllib.parse import urlsplit
-    if not isinstance(value, dict) or set(value) != {'schema_version', 'run_id', 'mode', 'budget', 'model'}:
+    if (not isinstance(value, dict) or not {'schema_version', 'run_id', 'mode', 'budget', 'model'} <= set(value)
+            or set(value) - {'schema_version', 'run_id', 'mode', 'budget', 'model', 'site_failure_guard'}):
         raise ValueError('Expected exact webcollect-batch-config-1 fields')
+    if 'site_failure_guard' in value:
+        from .site_failure_stop import validate_binding
+        validate_binding(value['site_failure_guard'])
     if value['schema_version'] != 'webcollect-batch-config-1' or value['mode'] not in ('real', 'synthetic'):
         raise ValueError('Invalid batch schema/mode')
     if not isinstance(value['run_id'], str) or not value['run_id'].strip():
@@ -131,14 +135,17 @@ def validate_config(value, *, credentials=False, require_model=False):
     fields = {'provider', 'model', 'endpoint', 'api_key_env', 'timeout_seconds', 'reserve_input_tokens',
               'max_completion_tokens', 'max_images', 'reserve_cost_micros', 'rates'}
     capability_fields = {'supports_vision', 'image_tokens_per_image', 'request_overhead_tokens'}
-    optional_fields = capability_fields | {'image_encoding', 'reasoning_effort'}
+    optional_fields = capability_fields | {'image_encoding', 'reasoning_effort', 'api_key_file'}
     if not isinstance(model, dict) or not fields <= set(model) or set(model) - fields - optional_fields:
         raise ValueError('Explicit model adapter fields required: ' + ', '.join(sorted(fields)))
-    if model['provider'] not in ('synthetic', 'chat-completions', 'deepseek', 'glm'):
+    if model['provider'] not in ('synthetic', 'chat-completions', 'deepseek', 'glm', 'ark'):
         raise ValueError('Unsupported model provider')
+    if 'api_key_file' in model and (value['mode'] != 'real'
+            or not isinstance(model['api_key_file'], str) or not Path(model['api_key_file']).is_absolute()):
+        raise ValueError('Model credential file must be an explicit absolute real-mode path')
     if set(model) & capability_fields and not capability_fields <= set(model):
         raise ValueError('Vision and request token allowance fields must be supplied together')
-    if model['provider'] in ('deepseek', 'glm') and not capability_fields <= set(model):
+    if model['provider'] in ('deepseek', 'glm', 'ark') and not capability_fields <= set(model):
         raise ValueError('Provider requires explicit vision and request token allowances')
     if 'supports_vision' in model and type(model['supports_vision']) is not bool:
         raise ValueError('supports_vision must be an explicit boolean')
@@ -152,8 +159,8 @@ def validate_config(value, *, credentials=False, require_model=False):
         if model['provider'] != 'glm' or model['image_encoding'] not in ('raw_base64', 'data_url'):
             raise ValueError('image_encoding must be raw_base64 or data_url for the GLM provider')
     if 'reasoning_effort' in model:
-        if model['provider'] not in ('glm', 'deepseek') or model['reasoning_effort'] not in ('low', 'high', 'max'):
-            raise ValueError('reasoning_effort must be low, high or max for GLM/DeepSeek')
+        if model['provider'] not in ('glm', 'deepseek', 'ark') or model['reasoning_effort'] not in ('low', 'high', 'max'):
+            raise ValueError('reasoning_effort must be low, high or max for GLM/DeepSeek/Ark')
     if (value['mode'] == 'synthetic') != (model['provider'] == 'synthetic'):
         raise ValueError('Synthetic and real modes cannot share model results')
     for key in ('timeout_seconds', 'reserve_input_tokens', 'max_completion_tokens', 'max_images'):
@@ -171,6 +178,15 @@ def validate_config(value, *, credentials=False, require_model=False):
             raise ValueError('Rate version and source required')
     if not isinstance(model['model'], str) or not model['model'].strip():
         raise ValueError('Explicit model/version required')
+    if model['provider'] == 'ark':
+        # These are Ark model IDs, never aliases for the original providers.
+        if model['model'] not in ('glm-5-3-flash-260828', 'deepseek-v4-1-flash-261017',
+                                  'deepseek-v4-1-flash-economy-261017'):
+            raise ValueError('Unsupported Ark model version')
+        if model['endpoint'] != 'https://ark.cn-beijing.volces.com/api/v3/chat/completions':
+            raise ValueError('Ark requires the Beijing data-plane Chat Completions endpoint')
+        if model['max_completion_tokens'] > 65536:
+            raise ValueError('Ark max_completion_tokens must be <=65536')
     if value['mode'] == 'real':
         endpoint = urlsplit(model['endpoint'])
         if (endpoint.scheme != 'https' or not endpoint.hostname or endpoint.username or endpoint.password
@@ -183,8 +199,9 @@ def validate_config(value, *, credentials=False, require_model=False):
             raise ValueError('Real calls need nonzero verified input/output rates')
         if budget['min_model_interval_seconds']<1:
             raise ValueError('Real model dispatch requires an explicit nonzero rate interval')
-        if credentials and not os.environ.get(model['api_key_env']):
-            raise ValueError('Missing model credential environment: ' + model['api_key_env'])
+        if credentials:
+            from .model_credentials import credential
+            credential(model)
     minimum = (model['reserve_input_tokens'] * max(rates['input'], rates['cached_input']) +
                model['max_completion_tokens'] * rates['output'] + 999999) // 1_000_000
     if model['reserve_cost_micros'] < minimum:
@@ -386,6 +403,12 @@ class BatchLedger:
         unknown attempt. Redirects/subresources are separately observed metrics.
         Unique page reservations remain in resources and are never rewritten.
         """
+        if self.config['mode'] == 'real' and not self.config.get('site_failure_guard'):
+            raise BudgetStop('Real website dispatch requires the original whole-site failure guard; no request sent')
+        self.sync_visit_failures()
+        if self.config.get('site_failure_guard'):
+            from .site_failure_stop import SiteFailureStore
+            SiteFailureStore(self.config['site_failure_guard']).guard(target_uri)
         with self.transaction() as con:
             self._owned(con, job); self._time_limit(con)
             self._ensure_visit_schema(con)
@@ -421,6 +444,57 @@ class BatchLedger:
                  canonical(metrics or {}),visit['id']))
             self.event(con,'top_level_visit_finished',{'id':visit['id'],'job_id':row['job_id'],'state':state,
                 'response_status':response_status,'landed_uri':landed_uri})
+        self.sync_visit_failures()
+
+    def sync_visit_failures(self):
+        """Reconcile immutable visit facts before every source/probe/goto dispatch.
+
+        Collection navigation belongs to the production attempt, whose full
+        failure is imported by RuntimeStore, so it must not count twice here.
+        A retained dispatch reservation is UNKNOWN and blocks reentry.
+        """
+        binding = self.config.get('site_failure_guard')
+        if binding is None or self.config['mode'] != 'real':
+            return
+        from .site_failure_stop import SiteFailureStore, execution_id
+        store = SiteFailureStore(binding)
+        with self.connect() as con:
+            jobs = {row['id']: dict(row) for row in con.execute('SELECT id,kind,state,lease FROM jobs')}
+        for row in self.visits():
+            job = jobs.get(row['job_id'], {})
+            if row['purpose'].startswith('collection:') or row['state'] == 'succeeded':
+                continue
+            if (row['state'] == 'reserved_for_dispatch' and job.get('state') == 'running'
+                    and (job.get('lease') or 0) > time.time()):
+                continue  # A live visit is not an interrupted UNKNOWN fact.
+            state = 'failed' if row['state'] == 'failed' else 'unknown'
+            # An event binding, not a hash of the changing SQLite file.
+            fact = {key: row[key] for key in ('id', 'job_id', 'target_uri', 'dispatched_at')}
+            store.record(row['target_uri'], execution_id('probe', self.path, row['id']),
+                stage='probe', state=state, reason=row['error_type'] or 'Unresolved visit dispatch',
+                real_execution=True, evidence=[{'visit_fact': fact}],
+                usage_refs=[{'ledger': str(self.path), 'visit_id': row['id']}])
+
+    def record_probe_outcome(self, job, application, record, reference):
+        """Retain a rendered probe failure even when navigation itself succeeded."""
+        binding = self.config.get('site_failure_guard')
+        if not binding or self.config['mode'] != 'real':
+            return
+        if not (record.get('status') == 'rejected' or record.get('error_message')):
+            return  # Pending semantic review is not an executed failure.
+        from .planning import verify_evidence
+        from .site_failure_stop import SiteFailureStore, execution_id
+        verify_evidence([reference])
+        if load_json(reference['path']) != record:
+            raise ValueError('Probe outcome differs from its original evidence')
+        visits = [row for row in self.visits() if row['job_id'] == job['id']]
+        if not visits or any(row['state'] != 'succeeded' for row in visits):
+            return  # Original failed/UNKNOWN dispatches were already reconciled.
+        visit = visits[-1]
+        SiteFailureStore(binding).record(application, execution_id('probe-outcome', self.path, visit['id']),
+            stage='probe', state='failed', real_execution=True,
+            reason=record.get('error_message') or record.get('reason') or 'Rendered source rejected', evidence=[reference],
+            usage_refs=[{'ledger': str(self.path), 'visit_id': visit['id'], 'job_id': job['id']}])
 
     def visits(self):
         with self.connect() as con:
@@ -459,6 +533,9 @@ class BatchLedger:
                 if old['state'] in ('reserved', 'unknown'):
                     raise OutcomeUnknown('Prior request may have been billed; no automatic resend')
                 return dict(old)
+            from .provider_recovery import holds, permits_probe
+            if holds(con) and not permits_probe(con,job['id'],request_json,attempt):
+                raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
             used = con.execute('''SELECT COUNT(*),COALESCE(SUM(COALESCE(cost,reserved_cost)),0),
                 COALESCE(SUM(CASE WHEN usage IS NULL THEN reserved_tokens ELSE
                 json_extract(usage,'$.input_tokens')+json_extract(usage,'$.output_tokens') END),0)
