@@ -127,3 +127,13 @@ class ExplicitReassessment(unittest.TestCase):
             self.assertTrue(s.status('https://example.org')['dispatch_blocked'])
             auth.write_text('{}')
             with self.assertRaises(ValueError):s.guard('https://example.org')
+
+class PlanningEnvelope(unittest.TestCase):
+    def test_schema_rejects_missing_selectors_empty_postconditions_and_extra_operation_fields(self):
+        from jsonschema import Draft202012Validator
+        from webcollect.workflow_planning import _OPERATION
+        validator=Draft202012Validator(_OPERATION)
+        op={'operation_id':'focus','subgoal_id':'input','action_type':'click','goal':'聚焦','rationale':'输入前聚焦','expected':'可以输入','selector':'#actual','evidence':{'anchor_index':0,'anchor_element_id':'e1','target_label':'金额'}}
+        self.assertFalse(list(validator.iter_errors(op)))
+        bad=deepcopy(op);bad.pop('selector');self.assertTrue(list(validator.iter_errors(bad)))
+        for update in [{'postconditions':[]},{'final_assertions':[]}]:self.assertTrue(list(validator.iter_errors({**op,**update})))
