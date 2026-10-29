@@ -1,0 +1,6 @@
+{
+  "version": "glm-discovery-interaction-3",
+  "selection_batch_size": 2,
+  "page_batch_size": 2,
+  "output_limits": {"plan": 2048, "selection": 4096, "assessment": 8192}
+}

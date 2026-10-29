@@ -21,7 +21,7 @@ def report(ledger):
     stages={name:{'requests':0,'succeeded':0,'invalid':0,'unknown':0,'cache_hits':0,
         'input_tokens_known':0,'output_tokens_known':0,'cached_input_tokens_known':0,
         'usage_unknown_requests':0,'elapsed_seconds_known':0,'elapsed_unknown_requests':0,
-        'known_cost_micros':0,'unknown_cost_requests':0,'effective_outputs':'UNKNOWN','status':'NOT_RUN'} for name in STAGES}
+        'known_cost_micros':0,'unknown_cost_requests':0,'effective_outputs':'UNKNOWN','total_stage_cost':'UNKNOWN','status':'NO_MODEL_REQUEST_RECORDED'} for name in STAGES}
     timeline=[]
     with ledger.connect() as con:
         rows=con.execute('SELECT r.*,j.kind FROM model_requests r JOIN jobs j ON r.job_id=j.id ORDER BY r.started,r.id').fetchall()

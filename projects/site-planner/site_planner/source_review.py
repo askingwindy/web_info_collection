@@ -37,7 +37,12 @@ def verify(record,ledger):
     from .pipeline import validate_screen_coverage
     from webcollect.model_gateway import parse_content
     from jsonschema import Draft202012Validator
-    receipt=record['screening']['unified_review'];body=payload(record['representative_pages'],record['capabilities'])
+    receipt=record['screening']['unified_review']
+    job=ledger.get(receipt['job_id'])
+    if (job['kind']!='site-probe' or job['state']!='done' or job['result']!=record or
+        ledger.config['mode']!=record['mode'] or record['mode']=='real' and ledger.config['model']['provider']=='synthetic'):
+        raise ValueError('Source review must match the completed original source job')
+    body=payload(record['representative_pages'],record['capabilities'])
     if (receipt['version']!=VERSION or receipt['rules_sha256']!=object_sha256({'payload':body,'schema':schema()}) or
         receipt['model_sha256']!=object_sha256(ledger.config['model']) or receipt['ledger']!=str(ledger.path)):
         raise ValueError('Source review rules/model/scope changed')

@@ -147,7 +147,7 @@ class SourceReuse(SemanticFixture,unittest.TestCase):
         a=qualify(record,ledger,self.root/'review',ACCESS);validate(a)
         b=qualify(record,ledger,self.root/'review',ACCESS)
         self.assertEqual(a,b);self.assertEqual(ledger.summary()['model_requests'],1)
-        for mutate in (lambda r:r['screening']['unified_review'].update(rules_sha256='0'*64),
+        for mutate in (lambda r:r.update(supported_actions=['back']),lambda r:r['screening']['unified_review'].update(rules_sha256='0'*64),
                        lambda r:r['representative_pages'].append(r['representative_pages'][0]),
                        lambda r:r['screening']['unified_review'].update(model_sha256='0'*64)):
             bad=deepcopy(record);mutate(bad)
