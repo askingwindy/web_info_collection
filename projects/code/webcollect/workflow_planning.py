@@ -3,7 +3,7 @@ import json
 from .planning import verify_evidence
 from .batch_core import load_json
 
-VERSION='source-workflow-planning-1'
+VERSION='source-workflow-planning-2-explicit-keyboard'
 # The existing compiler is authoritative for nested action/anchor contracts.
 FIELDS={'capability_id':'string','capability_version':'string','task_family':'string','initial_url':'string',
         'instruction':'string','task_type':'array','operations':'array','subgoals':'array',
@@ -29,7 +29,7 @@ def prompt_for(capability):
             'subgoal':{'id':'input','description':'填写必要输入','evidence':[{'operation_id':'input-value','postcondition_index':0}]},
             'result_subgoal':{'id':'result','description':'核对结果','evidence':[{'final_assertion_index':0}]},
             'final_assertions':[{'selector':'COPY_OBSERVED_RESULT_SELECTOR','contains':'expected visible result'}],
-            'notes':'required_actions列出必要operation_id字符串。task_family使用capability.task_families已有值。macOS聚焦后整体替换已有输入用hotkey keys=[meta,a]，空值不全选。不要添加complete操作，采集器自动生成终态。不要把示例占位符复制进任务。最多返回一个独立任务。'},
+            'notes':'type只执行keyboard.insert_text，绝不会自动聚焦、全选或清空。必须显式规划click聚焦；原值非空时再hotkey keys=[meta,a]全选，然后type替换。两个非空必要输入通常构成6个真实操作，这些不是凑步。每个operation.subgoal_id必须等于subgoals中的实际id，不得拼接不存在id。final_assertions必须包含任务要求的具体结果值或范围，不能仅contains=BMI等标题。required_actions列出必要operation_id字符串。task_family使用capability.task_families已有值。macOS聚焦后整体替换已有输入用hotkey keys=[meta,a]，空值不全选。不要添加complete操作，采集器自动生成终态。不要把示例占位符复制进任务。最多返回一个独立任务。'},
         'capability':capability,'anchors':anchors}
 
 
