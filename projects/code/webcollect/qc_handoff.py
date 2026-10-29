@@ -46,7 +46,7 @@ def _attempts(scope, dataset, sample_ids):
     return rows
 
 
-def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent, seed, collection_checks=None):
+def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent, seed, collection_checks=None, stratify='batch', risk_selected=None):
     """Create immutable sampling/effective-set inputs without granting QC approval.
 
     Ratios are explicit, independent parameters. No model/provider configuration,
@@ -88,6 +88,10 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
         if path.parent.parent.name != 'samples':
             raise ValueError('Current result must belong to a complete samples package')
         root = path.parent.parent.parent
+        if record['sample_id'] in sample_ids:
+            if file_sha(dataset/'samples'/record['sample_id']/'annotation.json')!=record['annotation_sha256']:
+                raise ValueError('Indexed current candidate annotation changed')
+            continue  # Same committed original, not another comparison sample.
         if root == dataset:
             continue
         prior_roots.setdefault(root, set()).add(record['sample_id'])
@@ -102,7 +106,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     request = {'dataset': str(dataset), 'history_scope': scope, 'attempts': attempts,
                'candidate_files_sha256': original, 'effective_set': manifest,
                'ai_percent': ai_percent, 'human_percent': human_percent, 'seed': seed,
-               'collection_checks': collection_checks}
+               'collection_checks': collection_checks, 'stratify':stratify,'risk_selected':risk_selected}
     def result():
         bound_checks = output / 'collection-checks.json'
         return {'sampling_plan': str(output / 'sampling-plan.json'),
@@ -130,7 +134,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     with tempfile.TemporaryDirectory(prefix='.qc-handoff-', dir=output.parent) as temporary:
         staged = Path(temporary)
         plan = freeze(dataset, staged / 'sampling-plan.json', ai_percent=ai_percent,
-                      human_percent=human_percent, seed=seed, stratify='batch')
+                      human_percent=human_percent, seed=seed, stratify=stratify,risk_selected=risk_selected)
         save_json(staged / 'effective-set.json', manifest)
         if collection_checks is not None:
             bindings = [{key: row[key] for key in ('sample_id', 'task_id', 'task_version', 'task_key')}

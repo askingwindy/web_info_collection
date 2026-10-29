@@ -219,6 +219,7 @@ class CollectionWritebackIntegration(unittest.IsolatedAsyncioTestCase):
         from quality_inspector.profiles import DEFAULT_DELIVERY_PROFILE, package_files
         from quality_inspector.reporting import review_template
         case = SingleCollectionTests('test_identity_bound_plan_uses_same_collector_without_admission_or_rehearsal')
+        case._asyncioRunner=self._asyncioRunner
         await case.asyncSetUp(); self.addCleanup(case.doCleanups)
         case.prepared(True)
         pool = SitePool(case.root / 'shared.sqlite3', initialize=True)

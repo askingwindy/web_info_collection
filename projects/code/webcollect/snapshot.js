@@ -914,7 +914,7 @@
        !['presentation','none'].includes(image.getAttribute('role'))||s.pointerEvents!=='none'||
        image.hasAttribute('title')||image.hasAttribute('aria-label')||image.hasAttribute('aria-labelledby'))reasons.push('not_explicitly_decorative');
     if(!image.complete||image.naturalWidth<=0||image.naturalHeight<=0)reasons.push('image_not_loaded');
-    if(!b.every(Number.isInteger)||r.left<0||r.top<0||r.right>width||r.bottom>height||
+    if(unknownBorderPaint||!b.every(Number.isInteger)||r.left<0||r.top<0||r.right>width||r.bottom>height||
        r.left<clip.left||r.top<clip.top||r.right>clip.right||r.bottom>clip.bottom)reasons.push('clipped_or_fractional_geometry');
     for(let p=image;p;p=p.parentElement) {
       const a=getComputedStyle(p),scale=axisScale(p);
@@ -969,10 +969,49 @@
         text_or_control_overlap:reasons.includes('overlaps_text_or_control')},
       eligible:reasons.length===0,exclusion_reasons:[...new Set(reasons)]});
   }
+  // Conservative paint evidence: plain integral non-task border boxes only.
+  // Text, task targets, focused/selected controls and unknown paint stay exact.
+  const paintBorders=[];
+  const unknownBorderPaint=[...document.querySelectorAll('*')].some(n=>{
+    if(!n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
+    const c=getComputedStyle(n);
+    return n instanceof SVGElement||!!n.shadowRoot||n.localName.includes('-')||
+      c.boxShadow!=='none'||c.filter!=='none'||c.textShadow!=='none'||
+      !['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(n,p).content));
+  });
+  for(const node of document.querySelectorAll('input,button,select,textarea')) {
+    const b=rawBox(node),c=getComputedStyle(node);
+    if(unknownBorderPaint||!b.every(Number.isInteger)||!node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||
+       node===document.activeElement||node.checked||node.disabled||
+       protectedNodes.some(n=>n===node||n.contains(node)||node.contains(n))||
+       c.transform!=='none'||c.filter!=='none'||c.boxShadow!=='none'||c.borderImageSource!=='none'||
+       c.borderRadius!=='0px'||c.outlineStyle!=='none'||c.backgroundImage!=='none'||
+       !['Top','Right','Bottom','Left'].every(side=>c['border'+side+'Style']==='solid'&&c['border'+side+'Width']==='1px')||
+       !['::before','::after'].every(pseudo=>['none','normal'].includes(getComputedStyle(node,pseudo).content)))continue;
+    const edges=[[b[0],b[1],b[2],b[1]+1],[b[0],b[3]-1,b[2],b[3]],
+                 [b[0],b[1],b[0]+1,b[3]],[b[2]-1,b[1],b[2],b[3]]];
+    if(edges.some(edge=>textRects.some(t=>intersects(edge,t))))continue;
+    if([...document.querySelectorAll('*')].some(n=>n!==node&&!n.contains(node)&&
+       n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&edges.some(edge=>intersects(edge,rawBox(n)))))continue;
+    const hits=edges.every(edge=>{
+      for(let x=edge[0];x<edge[2];x++)for(let y=edge[1];y<edge[3];y++)
+        if(document.elementFromPoint(x+.5,y+.5)!==node)return false;
+      return true;
+    });
+    if(hits)paintBorders.push({bbox:b,edges,tag:node.localName,colors:['Top','Right','Bottom','Left'].map(side=>c['border'+side+'Color'])});
+  }
+  const captureControls=nodes.map((node,i)=>{
+    const parts=[];let n=node;
+    while(n&&n.nodeType===1){
+      const siblings=n.parentElement?[...n.parentElement.children].filter(s=>s.localName===n.localName):[n];
+      parts.unshift(n.localName+':nth-of-type('+(siblings.indexOf(n)+1)+')');n=n.parentElement;
+    }
+    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0};
+  });
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
-    capture_images:captureImages,
+    capture_images:captureImages,paint_borders:paintBorders,capture_controls:captureControls,
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,
     embedded_frames:nodes.map((node,i)=>node.matches('iframe,frame')?{

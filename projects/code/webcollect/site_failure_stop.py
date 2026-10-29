@@ -119,6 +119,56 @@ class SiteFailureStore:
             con.commit()
         return self.status(application)
 
+    def append_reassessment(self, identity, *, responsibility, reason, evidence):
+        """Append evidence only. Original counts and stop/hold decisions remain binding."""
+        from .planning import verify_evidence
+        if responsibility not in ('site','model','configuration','interface','collector','unknown') or not reason.strip():
+            raise ValueError('Explicit responsibility and reason required')
+        if not evidence:raise ValueError('Reassessment evidence required')
+        verify_evidence(evidence)
+        with self.connect(True) as con:
+            con.execute('BEGIN IMMEDIATE')
+            row=con.execute('SELECT * FROM site_executions WHERE execution_id=?',(identity,)).fetchone()
+            if not row:raise ValueError('Original execution not found')
+            original=self._execution_fact(row)
+            value={'original':original,'responsibility':responsibility,'reason':reason,'evidence':evidence,
+                   'changes_stop_decision':False}
+            key=object_sha256(value)
+            con.execute('CREATE TABLE IF NOT EXISTS site_reassessments (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, receipt TEXT NOT NULL)')
+            con.execute('INSERT OR IGNORE INTO site_reassessments VALUES(?,?,?)',(key,identity,canonical(value)))
+            con.commit()
+        return value
+
+    def apply_reassessments(self, application, authorization):
+        """Apply an explicit operational decision after evidenced review; never auto-unstop."""
+        from .planning import verify_evidence
+        verify_evidence([authorization]);decision=load_json(authorization['path'])
+        key=application_key(application,self.binding.get('application_registry'))
+        if (decision.get('action')!='apply_evidenced_failure_reassessments' or decision.get('application_key')!=key
+                or decision.get('campaign_id')!=self.binding['campaign_id'] or not decision.get('user_instruction')
+                or not isinstance(decision.get('execution_ids'),list) or not decision['execution_ids']
+                or len(set(decision['execution_ids']))!=len(decision['execution_ids'])):
+            raise ValueError('Explicit original-campaign reassessment authorization required')
+        reviews=[]
+        with self.connect(True) as con:
+            con.execute('BEGIN IMMEDIATE')
+            for identity in decision['execution_ids']:
+                original=con.execute('SELECT * FROM site_executions WHERE execution_id=? AND application_key=?',(identity,key)).fetchone()
+                if not original or original[3]!='failed':raise ValueError('Only actual original failures can be reassessed')
+                rows=con.execute('SELECT receipt FROM site_reassessments WHERE execution_id=?',(identity,)).fetchall()
+                values=[json.loads(row[0]) for row in rows]
+                if not values or len({v['responsibility'] for v in values})!=1 or values[0]['responsibility'] not in ('model','configuration','interface','collector'):
+                    raise ValueError('Unambiguous evidenced engineering responsibility required')
+                for value in values:
+                    verify_evidence(value['evidence'])
+                    if value['original']!=self._execution_fact(original):raise ValueError('Original failure changed')
+                reviews.extend(values)
+            value={'application_key':key,'authorization':authorization,'reviews':reviews,'execution_ids':sorted(decision['execution_ids'])}
+            con.execute('CREATE TABLE IF NOT EXISTS site_reassessment_decisions(id TEXT PRIMARY KEY, application_key TEXT NOT NULL, receipt TEXT NOT NULL)')
+            con.execute('INSERT OR IGNORE INTO site_reassessment_decisions VALUES(?,?,?)',(object_sha256(value),key,canonical(value)))
+            con.commit()
+        return self.status(application)
+
     @staticmethod
     def _success_schema(con):
         con.execute('CREATE TABLE IF NOT EXISTS site_successes ('
@@ -312,12 +362,36 @@ class SiteFailureStore:
         failed, unknown = counts.get('failed', 0), counts.get('unknown', 0)
         unavailable = failed >= LIMIT and not verified
         state = 'unknown_hold' if unknown else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
-        return {'application_key': key, 'failure_count': failed, 'unknown_execution_count': unknown,
+        reassessments=[]
+        with self.connect() as con:
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name='site_reassessments'").fetchone():
+                reassessments=[json.loads(row[0]) for row in con.execute(
+                    'SELECT r.receipt FROM site_reassessments r JOIN site_executions e ON r.execution_id=e.execution_id WHERE e.application_key=? ORDER BY r.id',(key,))]
+        from .planning import verify_evidence
+        reviewed={}
+        for row in reassessments:
+            verify_evidence(row['evidence'])
+            if row['original']['state']=='failed':reviewed.setdefault(row['original']['fact_id'],set()).add(row['responsibility'])
+        adjusted=failed-sum(len(opinions)==1 and next(iter(opinions)) in ('model','configuration','interface','collector') for opinions in reviewed.values())
+        applied=set()
+        with self.connect() as con:
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name='site_reassessment_decisions'").fetchone():
+                for (raw,) in con.execute('SELECT receipt FROM site_reassessment_decisions WHERE application_key=?',(key,)):
+                    decision=json.loads(raw);verify_evidence([decision['authorization']])
+                    for receipt in decision['reviews']:
+                        if receipt not in reassessments:raise ValueError('Applied failure reassessment changed')
+                    applied.update(identity for identity in decision['execution_ids'] if len(reviewed.get(identity,set()))==1)
+        effective=failed-len(applied)
+        unavailable=effective>=LIMIT and not verified
+        state='unknown_hold' if unknown else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
+        return {'application_key': key, 'failure_count': failed,'historical_stopped':failed>=LIMIT,
+                'effective_site_failure_count':effective,'explicitly_reassessed_executions':sorted(applied),'reassessment_count':len(reassessments),
+                'reassessed_site_failure_count':max(0,adjusted),'reassessment_changes_dispatch':bool(applied), 'unknown_execution_count': unknown,
                 'failure_limit': LIMIT, 'qualified_success_count': verified,
                 'source_reported_success_count': successes - verified, 'used': bool(failed or unknown or successes),
                 'unavailable_before_first_valid': unavailable, 'state': state,
                 'round_id': self.binding['campaign_id'], 'automatic_round_reentry': False,
-                'stopped': failed >= LIMIT, 'dispatch_blocked': failed >= LIMIT or bool(unknown)}
+                'stopped': effective >= LIMIT, 'dispatch_blocked': effective >= LIMIT or bool(unknown)}
 
     def guard(self, application):
         state = self.status(application)
@@ -335,6 +409,10 @@ class SiteFailureStore:
                 "AND a.status IN ('rejected','interrupted')", (campaign_id, self.binding['formal_since'])).fetchall()
         existing = {fact['execution_key']: fact for fact in self.export_facts()['executions']}
         for identity, status, failure_class, reason, evidence, task in rows:
+            # Existing historical entries remain unchanged; new program faults
+            # remain in RuntimeStore without creating a site failure.
+            if failure_class in ('program','configuration','model','interface','collector'):
+                continue
             state = 'unknown' if status == 'interrupted' or failure_class == 'interrupted' else 'failed'
             app = application_key(json.loads(task)); key = 'formal:' + identity
             if key in existing:

@@ -37,7 +37,8 @@ def response_usage(raw, provider):
         raise ValueError('Conflicting cached token usage')
     usage = {'input_tokens': counts.get('prompt_tokens'),
              'output_tokens': counts.get('completion_tokens'), 'cached_input_tokens': cached[0],
-             'image_tokens': counts.get('image_tokens'), 'provider_request_id': raw.get('id'),
+             'image_tokens': counts.get('image_tokens'),
+             'reasoning_tokens':(counts.get('completion_tokens_details') or {}).get('reasoning_tokens'), 'provider_request_id': raw.get('id'),
              'returned_model': raw.get('model'),
              'source': 'synthetic' if provider == 'synthetic' else 'provider_response'}
     for name in ('input_tokens', 'output_tokens'):

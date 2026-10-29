@@ -29,12 +29,15 @@ def compile_workflow(capability, spec, version):
     states = [_frame(frame, capability['mode'])[0] for frame in spec['anchors']]
     if spec['initial_url'] not in pages or any(state['url'] not in pages for state in states):
         raise ValueError('Workflow anchors must belong to the observed capability pages')
-    refs = [ref for frame in spec['anchors'] for ref in frame.values()]
+    refs = [frame[key] for frame in spec['anchors'] for key in sorted(frame)]
     for ref in refs:
         verify_evidence([ref])
     operations = deepcopy(spec['operations'])
     if not isinstance(operations, list) or not 5 <= len(operations) <= 10:
         raise ValueError('Workflow needs 5-10 necessary proposed actions; no wait/complete padding')
+    for previous,following in zip(operations,operations[1:]):
+        if previous.get('action_type') in ('click','type','select','hotkey') and all(previous.get(key)==following.get(key) for key in ('action_type','selector','index','arguments')):
+            raise ValueError('Repeated unchanged adjacent action is padding')
     for operation in operations:
         action = operation.get('action_type')
         if action not in set(capability['supported_actions']) - {'wait', 'complete'}:
@@ -49,6 +52,13 @@ def compile_workflow(capability, spec, version):
                        and row.get('text') == evidence.get('target_label')]
             if len(matches) != 1 or not evidence.get('target_label'):
                 raise ValueError('Workflow target label is not present in the original visible tree')
+            bindings=states[index].get('capture_controls')
+            if bindings is not None and not any(row['element_id']==identity and row['selector']==operation.get('selector')
+                    and row.get('index',0)==operation.get('index',0) for row in bindings):
+                raise ValueError('Workflow selector is not bound to its observed control')
+            if action=='type' and bindings is not None:
+                initial=next((row.get('value') for row in states[index].get('values',[]) if row['element_id']==identity),None)
+                if initial==operation.get('arguments',{}).get('text'):raise ValueError('Unnecessary unchanged input')
     task = {key: deepcopy(value) for key, value in spec.items() if key != 'anchors'}
     task.update(task_id='workflow-' + object_sha256(spec)[:24], task_version=version,
                 site_uri=capability['site_uri'], site_category=capability['site_category'],

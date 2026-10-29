@@ -509,7 +509,7 @@ def validate_client_layout(root):
 
 def build_client_package(repo, source, output, *, reviews=None, approved_only=False,
                          evidence_output=None, review_output=None, facts=None, revisions=None,
-                         selection_report=None):
+                         selection_report=None, source_packages=None):
     repo = Path(repo).resolve(); source = Path(source).resolve(); output = Path(output).absolute()
     from .contract_documents import load_facts, render as render_documents
     from .narrative_revisions import load_plan, apply as revise_narratives
@@ -536,7 +536,12 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
             raise FileExistsError('Refuse to overwrite sidecar: ' + str(path))
         if path.resolve().is_relative_to(output) or path.resolve().is_relative_to(source):
             raise ValueError('Evidence/review output must be outside customer output and source')
-    records = _discover(source)
+    sources=[Path(item).resolve() for item in source_packages] if source_packages is not None else [source]
+    if not sources or len(set(sources))!=len(sources):raise ValueError('Explicit unique source packages required')
+    for root in sources:
+        if output.is_relative_to(root) or root.is_relative_to(output):raise ValueError('Batch output overlaps an original package')
+    records=[record for root in sources for record in _discover(root)]
+    if len({record['sample_id'] for record in records})!=len(records):raise ValueError('Duplicate original sample across batch sources')
     if not records:
         raise ValueError('No samples found')
     baseline = repo / 'projects/quality-inspector/config/customer-samples.json'

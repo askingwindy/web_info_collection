@@ -75,7 +75,7 @@ def _same_bytes(expected, root):
                ('sample_id', 'annotation_sha256', 'evidence_sha256', 'files_sha256'))
 
 
-def _selection(slots, policy, role):
+def _selection(slots, policy, role, *, random_only=False):
     groups = {}
     for slot in slots:
         key = slot['site_id'] if policy['stratify'] == 'site' else 'batch'
@@ -84,6 +84,12 @@ def _selection(slots, policy, role):
     for key, ids in sorted(groups.items()):
         ranked = sorted(ids, key=lambda sid: (digest([policy['seed'], role, key, sid]), sid))
         selected.update(ranked[:count(len(ids), policy[role + '_percent'])])
+    risk=policy.get('risk_selected',{})
+    known={slot['slot_id'] for slot in slots}
+    if (not isinstance(risk,dict) or set(risk)-known or any(not isinstance(reasons,list) or not reasons
+            or any(not isinstance(reason,str) or not reason.strip() for reason in reasons) for reasons in risk.values())):
+        raise ValueError('Risk selection must bind actual frozen slots and explicit reasons')
+    if role=='ai' and not random_only:selected.update(risk)
     return selected
 
 
@@ -93,7 +99,7 @@ def _seal(plan):
     return plan
 
 
-def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='batch'):
+def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='batch', risk_selected=None):
     """Freeze one candidate population; mechanical acceptance remains separate."""
     from .format_checks import run
     root = Path(dataset).resolve(); output = Path(output).resolve()
@@ -103,6 +109,8 @@ def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='
     policy = {'ai_percent': _percent(ai_percent), 'human_percent': _percent(human_percent),
               'seed': seed, 'stratify': stratify, 'rounding': 'ceil',
               'replacement_human_required': True}
+    if risk_selected is not None:
+        policy['risk_selected']=deepcopy(risk_selected)
     formats = run(None, root)
     if not formats['samples']:
         raise ValueError('Cannot freeze an empty candidate population')
@@ -478,7 +486,9 @@ def evaluate(plan_path, dataset, *, ai_reviews=(), human_reviews=(),ai_failures=
               'acceptance_basis': 'explicit-frozen-sampling-policy', 'plan': source,
               'plan_sha256': plan['plan_sha256'], 'contract_sha256': plan['contract_sha256'],
               'policy': plan['policy'], 'original_denominator': plan['original_denominator'],
-              'ai_random_selected': sum(row['ai_selected'] for row in rows),
+              'ai_random_selected': len(_selection(plan['slots'],plan['policy'],'ai',random_only=True)),
+              'ai_risk_selected':len(plan['policy'].get('risk_selected',{})),
+              'ai_actual_selected':sum(row['ai_selected'] for row in rows),
               'human_random_selected': sum(row['human_random_selected'] for row in rows),
               'actual_ai_reviewed': sum(row['sample_id'] in ai for row in rows),
               'actual_human_reviewed': sum(row['sample_id'] in human for row in rows),

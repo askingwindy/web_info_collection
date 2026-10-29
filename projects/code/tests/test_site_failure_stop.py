@@ -71,7 +71,7 @@ class SiteFailureStopTests(unittest.TestCase):
             self.assertIsNotNone(attempt)
             runtime.start_attempt(attempt['attempt_id'], 'worker', attempt['lease_token'], now=now)
             runtime.finish_attempt(attempt['attempt_id'], 'worker', attempt['lease_token'], 'rejected',
-                failure_class='program', root_cause='CONTROLLED-' + str(number), now=now + 1)
+                failure_class='semantic', root_cause='CONTROLLED-' + str(number), now=now + 1)
         self.assertIsNone(runtime.claim_next('worker', request_id='third-formal', now=fixtures.NOW + 9))
         self.assertEqual(self.store.status('https://example.org/')['failure_count'], 3)
         runtime._sync_site_failures()

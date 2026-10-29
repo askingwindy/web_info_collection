@@ -18,7 +18,13 @@ CONTROL={'click','double_click','right_click','drag','select','type'}
 _SCREENSHOT_SESSIONS=weakref.WeakKeyDictionary()
 _CAPTURE_FRAMES=weakref.WeakKeyDictionary()
 CAPTURE_VERSION='webcollect-capture-2'
-STABILITY_VERSION='webcollect-related-stability-1'
+STABILITY_VERSION='webcollect-related-stability-2'
+
+
+class EvidenceStale(ValueError):
+    responsibility = 'collector'
+    recoverable_before_dispatch = True
+
 _CAPTURE_RETRY_DELAYS=(0.1,0.25,0.5,1.0,1.5,2.0,2.5)
 _CAPTURE_WAIT_BUDGET=8.0
 _ANIMATION_OBSERVATION_JS=r'''() => {
@@ -225,11 +231,16 @@ def related_projection(state):
     return result
 
 
-def stability_pair(before,after,png_before,png_after):
+def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True):
     """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
     loaded=_loaded(before) and _loaded(after)
     full=fingerprint(before)==fingerprint(after)
-    related=loaded and related_projection(before)==related_projection(after)
+    rule_version=rule_version or STABILITY_VERSION
+    if rule_version not in ('webcollect-related-stability-1',STABILITY_VERSION):raise ValueError('Unknown stability rule')
+    left,right=related_projection(before),related_projection(after)
+    if rule_version==STABILITY_VERSION and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
+        left['capture_readiness']['document_ready']='complete'
+    related=loaded and left==right
     regions=_image_regions(before) if related else []
     with Image.open(BytesIO(png_before)) as first,Image.open(BytesIO(png_after)) as last:
         if first.format!='PNG' or last.format!='PNG' or list(first.size)!=before['screen_resolution'] or first.size!=last.size:
@@ -241,17 +252,44 @@ def stability_pair(before,after,png_before,png_after):
         mask=Image.new('L',first.size,0);draw=ImageDraw.Draw(mask)
         for region in regions:
             x1,y1,x2,y2=region['bbox'];draw.rectangle((x1,y1,x2-1,y2-1),fill=255)
+        # New receipts only. Never reinterpret v1 failures. A local edge proof
+        # and unchanged full semantic state are necessary; no whole-page score.
+        border_proof=[]
+        if rule_version==STABILITY_VERSION and related and allow_border:
+            rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
+            for region in before.get('paint_borders',[]):
+                box=region['bbox'];edges=region['edges']
+                if len(box)!=4 or len(edges)!=4:continue
+                points=set()
+                for x1,y1,x2,y2 in edges:
+                    for x in range(max(0,x1),min(first.width,x2)):
+                        for y in range(max(0,y1),min(first.height,y2)):
+                            if changed.getpixel((x,y)) and not mask.getpixel((x,y)):points.add((x,y))
+                # Bound changed area relative to the proved border perimeter,
+                # and amplitude to one sixteenth of the channel range.
+                perimeter=2*((box[2]-box[0])+(box[3]-box[1]))
+                if not points or len(points)>perimeter/64:continue
+                deltas=[]
+                for point in points:
+                    a,b=rgba_first.getpixel(point),rgba_last.getpixel(point)
+                    delta=[b[i]-a[i] for i in range(3)]
+                    if a[3]!=b[3] or max(map(abs,delta))>255/16 or max(delta)-min(delta)>1:break
+                    deltas.append(delta)
+                else:
+                    for point in points:mask.putpixel(point,255)
+                    border_proof.append({'bbox':box,'points':sorted(points),'rgb_deltas':deltas,
+                                         'rule':'plain-nontask-border-low-contrast-1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
                       'bbox':list(changed.getbbox()) if changed.getbbox() else None,
                       'outside_allowed_pixels':outside.histogram()[255],
                       'difference_mask_sha256':hashlib.sha256(changed.tobytes()).hexdigest()}
-    return {'schema_version':STABILITY_VERSION,'accepted':bool(related and not pixel_change['outside_allowed_pixels']),
+    return {'schema_version':rule_version,'accepted':bool(related and not pixel_change['outside_allowed_pixels']),
             'full_dom_stable':full,'related_dom_stable':bool(related),'loading_complete':bool(loaded),
             'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
             'related_fingerprint':fingerprint(related_projection(before)),
             'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
-            'allowed_image_regions':regions,'pixel_change':pixel_change}
+            'allowed_image_regions':regions,**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version==STABILITY_VERSION else {}),'pixel_change':pixel_change}
 
 
 def validate_capture_receipt(state,receipt,png):
@@ -270,8 +308,8 @@ def validate_capture_receipt(state,receipt,png):
     other=base64.b64decode(attempt['comparison_png_base64'],validate=True)
     if attempt.get('snapshot_before')!=state or base64.b64decode(attempt['original_png_base64'],validate=True)!=png:
         raise ValueError('完整原图/原状态与capture证明不同')
-    first_proof=stability_pair(state,middle,png,other)
-    last_proof=stability_pair(state,final,png,other)
+    first_proof=stability_pair(state,middle,png,other,rule_version=attempt['stability']['schema_version'],allow_border=attempt['stability'].get('border_enabled',False))
+    last_proof=stability_pair(state,final,png,other,rule_version=attempt['final_stability']['schema_version'],allow_border=attempt['final_stability'].get('border_enabled',False))
     if (not first_proof['accepted'] or not last_proof['accepted'] or attempt.get('stability')!=first_proof
             or attempt.get('final_stability')!=last_proof or attempt.get('before_fingerprint')!=fingerprint(state)
             or attempt.get('after_fingerprint')!=fingerprint(final)
@@ -349,8 +387,8 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
         if v2:
             comparison,comparison_method=await asyncio.wait_for(viewport_png(page),timeout=25)
             final=await observe(page,selector,index,**options)
-            stability=stability_pair(before,after,png,comparison)
-            final_stability=stability_pair(before,final,png,comparison)
+            stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0)
+            final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0)
             extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
                    'original_png_base64':base64.b64encode(png).decode('ascii'),
                    'comparison_png_base64':base64.b64encode(comparison).decode('ascii'),
@@ -379,7 +417,7 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
             with Image.open(BytesIO(png)) as im:
                 if list(im.size)!=before['screen_resolution']:
                     raise ValueError('截图像素分辨率与 DOM 坐标系不一致')
-            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png}
+            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png,'border_enabled':attempt_index>0}
             return {'state':before,'png':png,'capture':{**({'schema_version':CAPTURE_VERSION} if v2 else {}),
                     'attempts':attempts,'screenshot_sha256':hashlib.sha256(png).hexdigest(),
                     'natural_wait_requested_ms':round(requested_wait*1000),
@@ -388,7 +426,7 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
                     'screenshot':screenshot_evidence,
                     'observer_sha256':hashlib.sha256(SNAPSHOT_JS.encode()).hexdigest()}}
         delay_before=next_delay
-    error=ValueError('截图前后页面结构持续变化，拒绝保存不同步界面树')
+    error=EvidenceStale('截图前后页面结构持续变化，拒绝保存不同步界面树')
     # Rejected evidence remains rejected. Callers may preserve this diagnostic
     # alongside their failure checkpoint without treating any PNG as accepted.
     error.capture={'attempts':attempts,'natural_wait_requested_ms':round(requested_wait*1000),
@@ -405,10 +443,10 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
         if not captured or captured['state']!=state:raise ValueError('派发缺少本次原始capture像素绑定')
         png,method=await asyncio.wait_for(viewport_png(page),timeout=25)
         final=await observe(page,selector,index,**options)
-        proof=stability_pair(state,live,captured['png'],png)
-        final_proof=stability_pair(state,final,captured['png'],png)
+        proof=stability_pair(state,live,captured['png'],png,allow_border=captured.get('border_enabled',False))
+        final_proof=stability_pair(state,final,captured['png'],png,allow_border=captured.get('border_enabled',False))
         if not proof['accepted'] or not final_proof['accepted']:
-            error=ValueError('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
+            error=EvidenceStale('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
             # The later failure screenshot cannot explain this exact rejection.
             # Reuse the collector's existing capture_failure companion to retain
             # the rejected comparison, without replacing the original step PNG.
@@ -427,7 +465,7 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
                 'live_state':live,'final_state':final,'png_base64':base64.b64encode(png).decode('ascii'),'screenshot':method}
     if fingerprint(live)!=fingerprint(state):
         changed=[key for key in sorted(live.keys()|state.keys()) if live.get(key)!=state.get(key)]
-        raise ValueError('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'+','.join(changed))
+        raise EvidenceStale('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'+','.join(changed))
     return {'matched':True,'state_fingerprint':fingerprint(live),'target':live.get('target')}
 
 

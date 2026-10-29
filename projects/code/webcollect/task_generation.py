@@ -44,7 +44,7 @@ def generation_source_identity():
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py',
-        'production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
+        'workflow_planning.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -772,11 +772,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     # Explicit fixture responses preserve the old controlled/model test API.
     # Ordinary API and CLI calls default to the no-model strategy path.
     generator=generator or ('model' if synthetic_specs is not None else 'deterministic')
-    if generator not in ('deterministic','model','reviewed'):
+    if generator not in ('deterministic','model','reviewed','workflow-model'):
         raise ValueError('Unknown task generator')
-    if generator=='model' and ledger.config.get('model') is None:
+    if generator in ('model','workflow-model') and ledger.config.get('model') is None:
         raise ValueError('Model task generator requires an explicitly enabled model branch')
-    if synthetic_specs is not None and (generator!='model' or ledger.config['mode']!='synthetic'):
+    if synthetic_specs is not None and (generator not in ('model','workflow-model') or ledger.config['mode']!='synthetic'):
         raise ValueError('Synthetic responses are only allowed by the explicit synthetic model fixture')
     sources = generation_source_identity()
     catalog = load_json(catalog_path)
@@ -818,7 +818,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         raise ValueError('Reviewed proposal generator requires explicit frozen admission references')
     tasks, rejected, pending, actual_prompts, quality_reviews = [], [], [], [], []
     gateway=None
-    if generator=='model':
+    if generator in ('model','workflow-model'):
         from .model_gateway import ModelGateway
         gateway=ModelGateway(ledger)
     for record in catalog['records']:
@@ -831,17 +831,20 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                                  'error_message': record.get('error_message'), 'visit_ids': record.get('visit_ids', []),
                                  'kind': 'probe_failure', 'evidence': record.get('evidence', [])})
                 continue
-            validate_capability(record,require_ready=generator=='model')
+            validate_capability(record,require_ready=generator in ('model','workflow-model'))
             if record.get('status')=='rejected' or timestamp(record['expires_at'])<=time.time():
                 raise ValueError('Capability rejected or expired')
             proposed = [spec for spec in proposals['tasks'] if spec.get('capability_id') == record['capability_id']]
-            if record.get('mode')!=ledger.config['mode'] or ('form-workflow' not in record['task_families'] and not proposed):
+            if record.get('mode')!=ledger.config['mode'] or ('form-workflow' not in record['task_families'] and not proposed and generator!='workflow-model'):
                 raise ValueError('UNSUPPORTED_WORKFLOW: no registered strategy or explicit source-bound workflow proposal')
         except (ValueError,KeyError) as error:
             rejected.append({'site_uri':record.get('site_uri'),'reason':str(error)}); continue
         prompt = {'instruction':'Generate distinct natural tasks using the observed form inventory. Supply at least two different necessary text/number fields, the actual visible submit label, meaningful input values and a verifiable final visible result. Do not invent controls. Do not vary only parameters to create multiple tasks on one form. Unsupported forms yield no tasks. Use Chinese prose and 「」 for titles. Task execution rechecks all observations.',
                   'capability':{'site_uri':record['site_uri'],'pages':record['capabilities']}}
-        if generator=='model':actual_prompts.append(prompt)
+        if generator=='workflow-model':
+            from .workflow_planning import prompt_for
+            prompt=prompt_for(record)
+        if generator in ('model','workflow-model'):actual_prompts.append(prompt)
         jid = ledger.enqueue('task-generation', {'capability_sha256':object_sha256(record),'version':VERSION,
             'source_identity':sources,
             'generator':generator,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
@@ -861,7 +864,10 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 pending.append({'job_id':jid,'state':prior['state']}); continue
         else:
             try:
-                if proposed and 'form-workflow' not in record['task_families']:
+                if generator=='workflow-model':
+                    from .workflow_planning import propose
+                    specs=propose(gateway,job,record,synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])})
+                elif proposed and 'form-workflow' not in record['task_families']:
                     specs = {'tasks': []}
                 elif generator == 'reviewed':
                     specs = {'tasks': [load_json(ref['packet']['path'])['spec'] for ref in admission_refs.values()
@@ -922,6 +928,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                                             'task_sha256': object_sha256(task), **history_decision})
             except (ValueError,KeyError) as error:
                 rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error)})
+    tasks.sort(key=lambda task: (len([op for op in task['operations'] if op['action_type'] not in ('wait','complete')])>8,len(task['operations'])))
     template=generator in ('deterministic','reviewed') or ledger.config['mode']=='synthetic'
     planning_stage=({'mode':'template','template_version':STRATEGY_VERSION,
         'description':'固定业务策略匹配实际控件标签与字段范围，确定性计算完成数值，再由原表单编译器生成操作；未调用模型。'}
@@ -952,10 +959,14 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     if tasks:
         validate_m4_plan(plan); validate_plan(plan)
         save_json(output/'plan.json',plan)
+        # A frozen plan is a queue item, never a collected result. RuntimeStore
+        # retains dispatch/idempotency and original campaign gates at execution.
+        queue_id=ledger.enqueue('frozen-plan',{'plan':str(output/'plan.json'),
+            'plan_sha256':file_sha(output/'plan.json'),'history_sha256':history_hash,'mode':ledger.config['mode']})
     result={'schema_version':'webcollect-task-generation-summary-1','catalog_candidates':len(catalog['records']),
         'strategy_form_candidates':sum(len(page.get('forms',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
         'strategy_widget_candidates':sum(len(page.get('widgets',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
-        'generated_tasks':len(tasks),'rejected':rejected,'pending':pending,'sample_ids_allocated':0,
+        'generated_tasks':len(tasks),'queue_job_id':queue_id if tasks else None,'rejected':rejected,'pending':pending,'sample_ids_allocated':0,
         'plan_file':str(output/'plan.json') if tasks else None,'mode':ledger.config['mode'],'generator':generator,
         'capability_review_required':plan['generation']['capability_review_required'],
         'post_collection_quality_reviews':quality_reviews,
@@ -1253,7 +1264,7 @@ def main(argv=None):
             p.add_argument('--workflow-specs',type=Path,help='Explicit original-frame DOM workflow proposals; no rehearsal or admission required')
             p.add_argument('--page-identities',type=Path,help='Explicit whole application name, task/shared roles and original anchors, frozen before generation')
             p.add_argument('--max-tasks',type=int,help='Bound the generated plan before registration; does not grant production quota')
-            p.add_argument('--generator',choices=('deterministic','model','reviewed'),default='deterministic',
+            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model'),default='deterministic',
                            help='Registered no-model strategies by default; model is an explicit budgeted option')
         else:
             for name in ('plan','registry','policy'):p.add_argument('--'+name,type=Path,required=True)

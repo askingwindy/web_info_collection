@@ -9,7 +9,7 @@ import shutil
 import time
 from urllib.parse import urldefrag
 from zoneinfo import ZoneInfo
-from .browser import capture, execute, prepare_action, observe, verify_execution_state, CONTROL, POINTER, SNAPSHOT_JS
+from .browser import EvidenceStale, capture, execute, prepare_action, observe, verify_execution_state, CONTROL, POINTER, SNAPSHOT_JS
 from .scaffold import program_version
 from .storage import allocate, write_json, verify_existing_registry
 from .validate import validate_sample, read_json, SCHEMAS, StrictValidator
@@ -46,6 +46,7 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
         with record.open('x',encoding='utf-8') as stream:
             json.dump({'diagnostic_only':True,'accepted_as_formal_frame':False,
                 'state':observation['state'],'capture':observation['capture'],'attempt':attempt,
+                'rejection':attempt.get('rejection'),
                 'natural_wait_requested_ms':timing['natural_wait_requested_ms'],
                 'natural_wait_observed_ms':timing['natural_wait_observed_ms']},stream,ensure_ascii=False,indent=2)
             stream.write('\n')
@@ -55,7 +56,16 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
     async def refresh():
         for number in range(1,4):
             attempt={'attempt':number,'started_at':now()};timing['attempts'].append(attempt)
-            observation=await capture(page,selector,index,assertions=assertions,**protection)
+            try:
+                observation=await capture(page,selector,index,assertions=assertions,**protection)
+            except EvidenceStale as error:
+                from .batch_core import save_json
+                folder=Path(evidence)/'terminal_candidates';folder.mkdir(exist_ok=True)
+                save_json(folder/('capture-rejection-'+str(number)+'.json'),{'diagnostic_only':True,
+                    'action_executed':False,'capture':getattr(error,'capture',None)})
+                if number==3:raise
+                await natural_wait(250)
+                continue
             attempt['screenshot_sha256']=observation['capture']['screenshot_sha256']
             try:
                 attempt['assertions']=await assert_state(page,assertions or [],
@@ -67,10 +77,8 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
             await natural_wait(1000)
             try:
                 preflight=await verify_execution_state(page,observation['state'],selector,index,assertions=assertions,**protection)
-            except ValueError as error:
-                if not str(error).startswith('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'):
-                    raise
-                attempt.update(status='stale_rejected',reason=str(error),finished_at=now())
+            except EvidenceStale as error:
+                attempt.update(status='stale_rejected',reason=str(error),finished_at=now(),rejection=getattr(error,'capture',None))
                 attempt['diagnostic']=reject_candidate(number,observation,attempt)
                 if number==3:raise
                 await natural_wait(250)
@@ -87,6 +95,31 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
     timing.update(finished_at=now(),elapsed_seconds=time.monotonic()-started,accepted=True)
     observation['terminal_refresh']=timing
     return observation
+
+
+async def capture_before_action(page, evidence, selector=None, index=0, **options):
+    """Refresh complete candidates before publication or dispatch, never replay actions."""
+    async def bounded_refresh():
+        for number in range(1,4):
+            observation=None
+            try:
+                observation=await capture(page,selector,index,**options)
+                await verify_execution_state(page,observation['state'],selector,index,**options)
+                return observation
+            except EvidenceStale as error:
+                from .batch_core import save_json
+                folder=Path(evidence)/'action_candidates';folder.mkdir(exist_ok=True)
+                import uuid
+                name=str(uuid.uuid4())
+                save_json(folder/(name+'.json'),{'attempt':number,'diagnostic_only':True,
+                    'action_executed':False,'rejection':getattr(error,'capture',None),
+                    'capture':observation['capture'] if observation else None,
+                    'state':observation['state'] if observation else None})
+                if observation:
+                    with (folder/(name+'.png')).open('xb') as stream:stream.write(observation['png'])
+                if number==3:raise
+                await asyncio.sleep(.25)
+    return await asyncio.wait_for(bounded_refresh(),timeout=12)
 
 
 def chinese_ratio(text):
@@ -941,7 +974,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                 if is_final or op.get('completion_view') else [])
             observation=await (capture_complete(page,evidence,op.get('selector'),op.get('index',0),
                                                 assertions=capture_conditions or None,**protection) if is_final else
-                               capture(page,op.get('selector'),op.get('index',0),assertions=capture_conditions or None,**protection))
+                               capture_before_action(page,evidence,op.get('selector'),op.get('index',0),assertions=capture_conditions or None,**protection))
             state=observation['state']
             if previous_conditions:
                 previous_state={**state,'assertion_targets':state['assertion_targets'][:len(previous_conditions)]}

@@ -185,7 +185,7 @@ class QCHandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'immutable request'):
             self.prepare()
 
-    def test_prior_current_results_are_included_without_loading_legacy_sets(self):
+    def test_same_original_current_result_is_not_a_second_comparison_sample(self):
         from webcollect.current_chain import append_current_result
         append_current_result(self.history, self.candidate / 'samples' / self.sample_id / 'annotation.json',
             site_uri='https://example.org/', task_key='CONTROLLED-task')
@@ -194,7 +194,7 @@ class QCHandoffTests(unittest.TestCase):
         registry_sha = file_sha(self.registry)
         result = self.prepare(dataset=copy)
         effective = json.loads(Path(result['effective_set']).read_text())
-        self.assertEqual({row['path'] for row in effective['packages']}, {str(copy), str(self.candidate)})
+        self.assertEqual({row['path'] for row in effective['packages']}, {str(copy)})
         self.assertEqual(file_sha(self.registry), registry_sha)
 
     def test_changes_during_freeze_reject_before_publication(self):

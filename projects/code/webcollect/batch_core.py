@@ -23,7 +23,7 @@ class BudgetStop(ValueError):
 
 
 class OutcomeUnknown(ValueError):
-    pass
+    responsibility='model'
 
 
 class ModelRateWait(ValueError):
@@ -292,8 +292,8 @@ class BatchLedger:
                 if con.execute("SELECT 1 FROM sqlite_master WHERE name='top_level_visits'").fetchone():
                     con.execute("UPDATE top_level_visits SET state='unknown',error_type='LeaseExpired',error_message='Dispatch reservation survived worker interruption; counted conservatively' WHERE job_id=? AND state='reserved_for_dispatch'",(row['id'],))
                 con.execute('UPDATE jobs SET state=?,owner=NULL,lease=NULL,error=?,updated=? WHERE id=?',
-                            ('review_required' if unknown or row['kind'] == 'collection' else 'queued',
-                             'Expired lease; unknown charge/collection side effects require reconciliation' if unknown or row['kind']=='collection' else None,
+                            ('review_required' if unknown or row['kind'] in ('collection','frozen-plan') else 'queued',
+                             'Expired lease; unknown charge/collection side effects require reconciliation' if unknown or row['kind'] in ('collection','frozen-plan') else None,
                              time.time(), row['id']))
                 self.event(con, 'lease_expired', {'job_id': row['id'], 'unknown_requests': len(unknown)})
         return len(rows)
@@ -315,7 +315,7 @@ class BatchLedger:
                             ('max_job_attempts reached; original attempts retained', time.time(), row['id']))
                 self.event(con, 'job_attempt_limit', {'job_id': row['id'], 'attempts': row['attempts'], 'limit': attempt_cap})
                 return None
-            running = con.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0]
+            running = con.execute("SELECT COUNT(*) FROM jobs WHERE state='running' AND kind!='frozen-plan'").fetchone()[0]
             if running >= self.config['budget']['max_concurrent_jobs']:
                 raise BudgetStop('max_concurrent_jobs reached; queued work retained')
             if domain:
@@ -436,6 +436,8 @@ class BatchLedger:
 
     def settle_visit(self, visit, *, state, response_status=None, landed_uri=None, error=None, metrics=None):
         if state not in ('succeeded','failed','unknown'): raise ValueError('Invalid top-level visit state')
+        metrics=dict(metrics or {})
+        if getattr(error,'responsibility',None):metrics['responsibility']=error.responsibility
         with self.transaction() as con:
             row = con.execute('SELECT * FROM top_level_visits WHERE id=?',(visit['id'],)).fetchone()
             if not row or row['state'] != 'reserved_for_dispatch': raise ValueError('Visit missing or already settled')
@@ -467,7 +469,10 @@ class BatchLedger:
             if (row['state'] == 'reserved_for_dispatch' and job.get('state') == 'running'
                     and (job.get('lease') or 0) > time.time()):
                 continue  # A live visit is not an interrupted UNKNOWN fact.
-            state = 'failed' if row['state'] == 'failed' else 'unknown'
+            responsibility=row['metrics'].get('responsibility')
+            if row['state']=='failed' and responsibility in ('model','configuration','interface','collector'):
+                continue  # Retained visit failure, no conviction of this application.
+            state = 'failed' if row['state'] == 'failed' and responsibility!='unknown' else 'unknown'
             # An event binding, not a hash of the changing SQLite file.
             fact = {key: row[key] for key in ('id', 'job_id', 'target_uri', 'dispatched_at')}
             store.record(row['target_uri'], execution_id('probe', self.path, row['id']),
@@ -487,6 +492,9 @@ class BatchLedger:
         verify_evidence([reference])
         if load_json(reference['path']) != record:
             raise ValueError('Probe outcome differs from its original evidence')
+        # Unknown attribution is a retained engineering diagnostic, not a site conviction.
+        if record.get('responsibility') not in ('site',) and record.get('status')!='rejected':
+            return
         visits = [row for row in self.visits() if row['job_id'] == job['id']]
         if not visits or any(row['state'] != 'succeeded' for row in visits):
             return  # Original failed/UNKNOWN dispatches were already reconciled.
@@ -603,7 +611,7 @@ class BatchLedger:
         visit_history = self.visit_history()
         stages=defaultdict(lambda:{'model_requests':0,'known_model_cost_micros':0,'uncertain_reserved_cost_micros':0,
                                    'input_tokens':0,'output_tokens':0,'cached_input_tokens':0,
-                                   'worker_seconds':0.0,'queue_wait_seconds':0.0})
+                                   'worker_seconds':0.0,'queue_wait_seconds':0.0,'reasoning_tokens_known':0,'reasoning_usage_unknown_requests':0,'request_states':defaultdict(int)})
         active={};first_claim=set()
         for event in events:
             detail=json.loads(event['detail']);jid=detail['job_id'];kind=metadata[jid]['kind']
@@ -615,6 +623,10 @@ class BatchLedger:
                 stages[kind]['worker_seconds']+=event['at']-active.pop(jid)
         for row in requests:
             stage=stages[metadata[row['job_id']]['kind']];stage['model_requests']+=1
+            stage['request_states'][row['state']]+=1
+            reasoning=json.loads(row['usage']).get('reasoning_tokens') if row['usage'] else None
+            if type(reasoning)is int and reasoning>=0:stage['reasoning_tokens_known']+=reasoning
+            else:stage['reasoning_usage_unknown_requests']+=1
             stage['known_model_cost_micros']+=row['cost'] or 0
             stage['uncertain_reserved_cost_micros']+=row['reserved_cost'] if row['cost']is None else 0
             if row['usage']:

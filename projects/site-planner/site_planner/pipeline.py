@@ -356,10 +356,27 @@ INVENTORY_JS = r'''() => {
  links:[...document.querySelectorAll('a[href]')].filter(visible).map(e=>({label:clean(e.innerText),uri:e.href})).filter(e=>e.label).slice(0,50)};
 }'''
 
-SCREEN_SCHEMA = {'type': 'object', 'properties': {
-    'status': {'type':'string','enum': ['ready', 'rejected', 'review_required']}, 'reason': {'type': 'string'},
-    'page_observations': {'type': 'array', 'items': {'type': 'string'}}},
-    'required': ['status', 'reason', 'page_observations'], 'additionalProperties': False}
+SCREEN_SCHEMA = {'type':'object','properties':{
+    'status':{'type':'string','enum':['ready','rejected','review_required']},'reason':{'type':'string'},
+    'page_observations':{'type':'array','items':{'type':'object','properties':{
+        'page_id':{'type':'string'},'image_ids':{'type':'array','items':{'type':'string'}},
+        'observation':{'type':'string'}},'required':['page_id','image_ids','observation'],'additionalProperties':False}}},
+    'required':['status','reason','page_observations'],'additionalProperties':False}
+
+
+def validate_screen_coverage(pages, decision):
+    observations=decision['page_observations']
+    expected={page['page_id']:{image['image_id'] for image in page['evidence_images']} for page in pages}
+    if len(expected)!=len(pages) or len(observations)!=len(expected) or not decision['reason'].strip():
+        raise ValueError('Incomplete site screening evidence')
+    seen=set()
+    for row in observations:
+        pid=row['page_id']; ids=row['image_ids']
+        if (pid in seen or pid not in expected or len(ids)!=len(set(ids)) or set(ids)!=expected[pid]
+                or not row['observation'].strip()):
+            raise ValueError('Incorrect page/image screening binding')
+        seen.add(pid)
+    return True
 
 
 def inventory_language_ratio(inventory):
@@ -446,6 +463,25 @@ def inventory_support(uri, inventories):
     return controls, forms, sorted(actions)
 
 
+def probe_gateway(ledger,candidates,output,fixture_pages=None):
+    """Preflight only an uncached model branch; no browser/provider dispatch."""
+    if ledger.config.get('model') is None:return None
+    cached=True
+    for candidate in candidates['records']:
+        uri=normalize_uri(candidate['site_uri'])
+        payload={'candidate':candidate,'version':VERSION,'output':str(Path(output).resolve()),
+            'mode':ledger.config['mode'],'fixture_sha256':object_sha256(fixture_pages.get(uri)) if fixture_pages else None}
+        try:job=ledger.get(object_sha256({'kind':'site-probe','payload':payload}))
+        except ValueError:cached=False;break
+        if job['state']!='done':cached=False;break
+    if cached:return None
+    from webcollect.provider_recovery import holds
+    from webcollect.batch_core import OutcomeUnknown
+    with ledger.connect() as con:
+        if holds(con):raise OutcomeUnknown('Original provider authorization hold; no browser visit permitted')
+    return ModelGateway(ledger)
+
+
 async def probe(ledger, candidates_path, output, *, fixture_pages=None):
     from playwright.async_api import async_playwright
     from webcollect.preflight import inspect_page
@@ -457,7 +493,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
         raise ValueError('Synthetic probe requires the dedicated controlled integration fixture runner')
     output = Path(output).resolve(); output.mkdir(parents=True, exist_ok=True)
     records, stopped = [], None
-    gateway = None
+    gateway = probe_gateway(ledger,candidates,output,fixture_pages)
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel='chrome', headless=True)
         context = await browser.new_context(viewport={'width':1280,'height':720},device_scale_factor=1,locale='zh-CN')
@@ -570,9 +606,10 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                                     'files_sha256':{str(path):file_sha(path) for path in (evidence_dir/'result.json',inventory_file)}})
                             except BaseException as caught:
                                 error=caught
+                                metrics['responsibility']=getattr(caught,'responsibility','site' if response_status is not None and response_status>=400 else 'unknown')
                                 evidence_dir.mkdir(parents=True,exist_ok=True)
                                 save_json(evidence_dir/'visit-failure.json',{'target_uri':target,'visit_id':visit['id'] if visit else None,
-                                    'response_status':response_status,'landed_uri':landed_uri,'error_type':type(caught).__name__,'error_message':str(caught)})
+                                    'capture_failure':getattr(caught,'capture',None),'response_status':response_status,'landed_uri':landed_uri,'error_type':type(caught).__name__,'error_message':str(caught)})
                                 raise
                             finally:
                                 if visit:
@@ -580,7 +617,9 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                                     ledger.settle_visit(visit,state='failed' if error else 'succeeded',response_status=response_status,
                                         landed_uri=landed_uri,error=error,metrics=metrics)
                         inventory_support(uri, [inventory])
-                        pages.append({'uri':target,'landed_uri':landed_uri,'response_status':response_status,
+                        page_images=[evidence_dir/f['path'] for f in result['frames']]
+                        page_id='page-'+str(index)
+                        pages.append({'page_id':page_id,'evidence_images':[{'image_id':page_id+'-image-'+str(n),'path':str(path),'sha256':file_sha(path)} for n,path in enumerate(page_images)],'uri':target,'landed_uri':landed_uri,'response_status':response_status,
                             'accessible':response_status is not None and response_status<400,'rendered':True,
                             'chinese_ratio':inventory_language_ratio(inventory),
                             'routing':result['summary']['routing'],'error':result['error']})
@@ -590,15 +629,15 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                     chinese_controls=[e for e in controls if chinese_ratio(e.get('text',''))>=0.7]
                     cheap_reject=any(r['chinese_ratio']<0.7 or r['error'] for r in pages) or not chinese_controls
                     response={'status':'rejected' if cheap_reject else 'ready','reason':'Controlled synthetic screen, never real site approval',
-                        'page_observations':['Synthetic fixture original viewport captured' for _ in pages]}
+                        'page_observations':[{'page_id':p['page_id'],'image_ids':[i['image_id'] for i in p['evidence_images']],'observation':'Synthetic fixture original viewport captured'} for p in pages]}
                     if cheap_reject:decision={'status':'rejected','reason':'rendered language/control/evidence check failed','page_observations':[]}
                     elif ledger.config['model'] is None:
                         decision={'status':'review_required','reason':'Automatic rendered preflight complete; visible Chinese, overlays and task-page semantics require review evidence',
                             'page_observations':[],'review_source':'not_reviewed','automatic_status':'MECHANICAL_PREFLIGHT_ONLY'}
                     else:
                         if gateway is None:gateway=ModelGateway(ledger)
-                        decision=gateway.call(job,'site-screen-v1',json.dumps({'instruction':'Inspect every representative page image. Chinese visible text >=70%, Chinese navigation/controls, no mandatory login or blocking overlay. Dynamic/advertising uncertainties route to review_required. Supply one observation per page; readiness is provisional capability, not trajectory QC.','pages':pages},ensure_ascii=False),SCREEN_SCHEMA,images=images,synthetic_response=response)
-                        if len(decision['page_observations'])!=len(pages) or not decision['reason'].strip():raise ValueError('Incomplete site screening evidence')
+                        decision=gateway.call(job,'site-screen-v2',json.dumps({'instruction':'Inspect every representative page image. Chinese visible text >=70%, Chinese navigation/controls, no mandatory login or blocking overlay. Dynamic/advertising uncertainties route to review_required. Supply one observation per page_id, including every evidence image_id for that page; multiple images are evidence of one page; readiness is provisional capability, not trajectory QC.','pages':pages},ensure_ascii=False),SCREEN_SCHEMA,images=images,synthetic_response=response)
+                        validate_screen_coverage(pages,decision)
                     if any(r['routing']=='REVIEW_REQUIRED' for r in pages) and decision['status']=='ready':
                         decision={**decision,'status':'review_required','reason':'Preflight requires unresolved risk adjudication'}
                     record={'schema_version':'webcollect-site-capability-1','capability_id':'site-'+object_sha256(uri)[:20],
@@ -627,7 +666,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None):
                 except Exception as error:
                     failure={'schema_version':'webcollect-site-probe-failure-1',
                         'site_uri':uri,'site_category':candidate['site_category'],'status':'review_required',
-                        'reason':type(error).__name__,'error_message':str(error),'representative_pages':pages,
+                        'reason':type(error).__name__,'responsibility':getattr(error,'responsibility','interface' if pages else 'unknown'),'error_message':str(error),'representative_pages':pages,
                         'capabilities':capabilities,'visit_ids':visit_ids,
                         'accessible':any(v['response_status'] is not None and v['response_status']<400 for v in ledger.visits() if v['id'] in visit_ids),
                         'rendered':bool(list(directory.rglob('*.png'))),

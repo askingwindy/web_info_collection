@@ -31,6 +31,8 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
+    from .browser import EvidenceStale
+    if isinstance(error,EvidenceStale):return 'program'
     from .runtime import ImageCommitConflict
     if isinstance(error, ImageCommitConflict):
         return 'duplicate'
@@ -144,6 +146,16 @@ def sync_manifest(store, output, manifest):
                 record['error'] = read_json(failure).get('error') or record['error']
             record['failure_evidence'] = row.get('evidence', [])
         records.append(record)
+    # Reconcile saved results on every resume before another allocation. Index and
+    # shared-pool sync are idempotent projections of the original attempt ledger.
+    from .current_chain import scope_for_registry, append_current_result, is_current_registry
+    scope=scope_for_registry(store.registry) if is_current_registry(store.registry) else None
+    if scope:
+        for row in snapshot['attempts']:
+            if row['status'] in ('collected_pending_review','reviewed_pass','published'):
+                append_current_result(scope['manifest']['path'],
+                    Path(output)/'samples'/row['sample_id']/'annotation.json',
+                    site_uri=row['task']['site_uri'],task_key=row['task_key'])
     manifest['attempts'] = records
     manifest['reserved_attempts'] = [{key: row.get(key) for key in
         ('attempt_id', 'task_id', 'task_version', 'sample_id', 'site_id', 'batch_id',

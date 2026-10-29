@@ -250,7 +250,7 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed['actual_attempts'], 1)
         self.assertEqual(resumed['qualified_samples'], 0)
         self.assertEqual(before, {str(path): file_sha(path) for path in evidence.iterdir() if path.is_file()})
-        self.assertEqual(read_chain_history(self.chain_manifest)[0], [])
+        self.assertEqual(len(read_chain_history(self.chain_manifest)[0]), 1)
 
     async def test_delivery_collects_once_and_resume_reuses_complete_pending_evidence(self):
         await self.assert_single_saved_run(True)
@@ -456,7 +456,7 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mapping['source'], check_ref)
         self.assertEqual(len(mapping['sample_bindings']), 1)
         self.assertEqual(self.actions, ['scroll'] * 5)
-        self.assertEqual(read_chain_history(self.chain_manifest)[0], [])
+        self.assertEqual(len(read_chain_history(self.chain_manifest)[0]), 1)
 
     async def test_actual_structure_metadata_export_and_handoff_preserve_saved_bytes(self):
         from webcollect.validate import validate_sample
@@ -563,7 +563,7 @@ class SingleCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actions, ['scroll'] * 5)
         self.assertEqual(raw_before, package_files(capture))
         self.assertEqual(candidate_before, package_files(candidate))
-        self.assertEqual(read_chain_history(self.chain_manifest)[0], [])
+        self.assertEqual(len(read_chain_history(self.chain_manifest)[0]), 1)
         store = RuntimeStore(self.registry, runtime_scope(capture))
         self.assertEqual(store.snapshot()['tasks'][0]['status'], 'collected_pending_review')
         site_store.sync_successes(self.registry, self.policy['campaign_id'])
