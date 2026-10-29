@@ -3,6 +3,8 @@
 No live I/O or execution-time action insertion. Original frames remain complete.
 """
 from copy import deepcopy
+import json
+from importlib.resources import files
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
 
@@ -11,7 +13,7 @@ TEXT = {'type': 'string', 'minLength': 1}
 def obj(properties):
     return {'type':'object', 'properties':properties, 'required':list(properties), 'additionalProperties':False}
 TASK_SCHEMA = obj({'schema_version':{'const':VERSION}, 'task_family':TEXT, 'instruction':TEXT,
-    'task_type':__import__('json').loads(__import__('importlib.resources',fromlist=['files']).files('webcollect').joinpath('schemas/annotation.schema.json').read_text())['properties']['task_type'],
+    'task_type':json.loads(files('webcollect').joinpath('schemas/annotation.schema.json').read_text())['properties']['task_type'],
     'steps':{'type':'array','minItems':1,'maxItems':8,'items':obj({
         'control_id':TEXT,'action':{'enum':['set_value','select','click']},'value':{'type':'string'},
         'necessity':TEXT,'expected':TEXT})},
@@ -72,11 +74,13 @@ def compile_semantic(capability, spec, version):
         return c
     focus=next((cid for cid,c in controls.items() if c['value'].get('focused')),None)
     def emit(action,c,step,n,**extra):
+        label=c['element'].get('text') or ((c['value'].get('display_value') or c['value'].get('value')) if c['value'].get('value_visible') is True else '')
+        if action!='hotkey' and not label:raise ValueError('Control has no proved visible label or native value')
         operations.append({'operation_id':f'op-{len(operations)}','subgoal_id':f'goal-{n}',
             'action_type':action,'goal':step['necessity'],'rationale':step['necessity'],'expected':step['expected'],
             **({'selector':c['binding']['selector'],'index':c['binding'].get('index',0),
                 'evidence':{'anchor_index':c['anchor_index'],'anchor_element_id':c['element']['element_id'],
-                            'target_label':c['element']['text']}} if action!='hotkey' else {}), **extra})
+                            'target_label':label,**({'target_label_source':'visible_native_value'} if not c['element'].get('text') else {})}} if action!='hotkey' else {}), **extra})
     for n,step in enumerate(spec['steps']):
         cid=step['control_id'];c=resolve(cid);action=step['action'];value=step['value'];row=c['element'];initial=c['value']
         if cid in seen:raise ValueError('Repeated semantic control; no padding or parameter variants')

@@ -50,9 +50,15 @@ def compile_workflow(capability, spec, version):
             index = evidence.get('anchor_index'); identity = evidence.get('anchor_element_id')
             if type(index) is not int or not 0 <= index < len(states):
                 raise ValueError('Workflow target needs an original anchor index')
+            def label_matches(row):
+                if row.get('text')==evidence.get('target_label'):return True
+                if evidence.get('target_label_source')!='visible_native_value':return False
+                return any(v['element_id']==identity and v.get('value_visible') is True and
+                    (v.get('display_value') or v.get('value'))==evidence.get('target_label')
+                    for v in states[index].get('values',[]))
             matches = [row for row in states[index]['elements'] if row.get('element_id') == identity
                        and row.get('visible') is True and row.get('enabled') is True
-                       and row.get('text') == evidence.get('target_label')]
+                       and label_matches(row)]
             if len(matches) != 1 or not evidence.get('target_label'):
                 raise ValueError('Workflow target label is not present in the original visible tree')
             bindings=states[index].get('capture_controls')

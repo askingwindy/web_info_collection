@@ -51,6 +51,17 @@ class SemanticPlans(SemanticFixture,unittest.TestCase):
         other=deepcopy(spec);other['steps'][0]['value']='99'
         self.assertEqual(proposal_signature(compile_workflow(record,spec,'fixture')),proposal_signature(compile_workflow(record,other,'fixture')))
 
+    def test_unlabelled_input_uses_only_proved_native_visible_value(self):
+        from webcollect.workflow_proposal import compile_workflow,verify_task
+        record,spec=self.semantic();anchor=record['capabilities'][0]['page_anchor'];path=Path(anchor['state']['path'])
+        state=load_json(path)
+        state['elements'][0]['text']='';state['values'][0].update(value_visible=True,display_value='10')
+        path.write_text(json.dumps(state));anchor['state']['sha256']=file_sha(path)
+        task=compile_workflow(record,spec,'fixture');verify_task(task,record)
+        self.assertEqual(task['operations'][0]['evidence']['target_label'],'10')
+        state['values'][0]['value_visible']=False;path.write_text(json.dumps(state));anchor['state']['sha256']=file_sha(path)
+        with self.assertRaises(ValueError):compile_workflow(record,spec,'fixture')
+
 
 class ImagePages(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
