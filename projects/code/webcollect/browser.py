@@ -341,7 +341,10 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                     if any(gx1<=x<gx2 and gy1<=y<gy2 for gx1,gy1,gx2,gy2 in guard):ok=False;break
                     a,b=rgba_first.getpixel((x,y)),rgba_last.getpixel((x,y))
                     delta=[b[i]-a[i] for i in range(3)]
-                    if a[3]!=b[3] or max(map(abs,delta))>255/16 or max(delta)-min(delta)>1:ok=False;break
+                    # Amplitude bound only: antialiased colored edges shift channels
+                    # unevenly (e.g. blue borders); DOM identity plus the small
+                    # per-channel bound carries the safety here.
+                    if a[3]!=b[3] or max(map(abs,delta))>255/16:ok=False;break
                     deltas.append(delta)
                 if ok:compliant.append((component,box,deltas))
             if not remaining and len(compliant)==len(components):
