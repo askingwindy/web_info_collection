@@ -48,6 +48,37 @@ def validate_binding(value):
     return {**value, 'ledger': str(Path(value['ledger']).resolve())}
 
 
+def _verify_persisted_reassessment_evidence(refs):
+    """Revalidate persisted reassessment evidence without freezing source code.
+
+    Data evidence (failure receipts, capture outcomes, criteria documents) is
+    byte-verified forever. A reference into the collector's own source tree is
+    a provenance record of the reviewed code version: the file must still
+    exist, the receipt keeps the reviewed sha256, but the live tree may evolve
+    — otherwise any later code change would globally block dispatch through
+    export_facts/status. Byte equality for source files is still enforced at
+    append/apply time, when the review is actually decided.
+    """
+    from .planning import verify_evidence
+    source_root = Path(__file__).resolve().parent
+    data, code = [], []
+    for ref in refs:
+        if isinstance(ref, dict) and isinstance(ref.get('path'), str) and ref['path']:
+            try:
+                inside = Path(ref['path']).resolve().is_relative_to(source_root)
+            except OSError:
+                inside = False
+            (code if inside else data).append(ref)
+        else:
+            data.append(ref)
+    if data:
+        verify_evidence(data)
+    for ref in code:
+        path = Path(ref['path'])
+        if ref.get('sha256') and (not path.is_file() or path.is_symlink()):
+            raise ValueError('Reviewed source provenance file no longer exists: ' + ref['path'])
+
+
 class SiteFailureStore:
     def __init__(self, binding, *, _seeding=False):
         self.binding = validate_binding(binding)
@@ -401,7 +432,7 @@ class SiteFailureStore:
         from .planning import verify_evidence
         reviewed={}
         for row in reassessments:
-            verify_evidence(row['evidence'])
+            _verify_persisted_reassessment_evidence(row['evidence'])
             reviewed.setdefault(row['original']['fact_id'],set()).add(row['responsibility'])
         failed_ids={r['original']['fact_id'] for r in reassessments if r['original']['state']=='failed'}
         unknown_ids={r['original']['fact_id'] for r in reassessments if r['original']['state']=='unknown'}

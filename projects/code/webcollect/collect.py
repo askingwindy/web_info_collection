@@ -192,11 +192,12 @@ async def assert_state(page, conditions, captured_state=None, captured_png=None,
             if (target.get('value') is not None and not any(k in condition for k in ('checked','disabled'))
                     and target.get('value_visible') is False
                     and not ('value' in condition and target['value'] == condition['value']
-                             and target.get('display_source') == 'rendered-option-text'
-                             and isinstance(displayed, str) and displayed == condition['value'])):
-                # Only independently rendered option text can prove visible
-                # rendering; a DOM value echoed back as display_value cannot,
-                # and the flag alone stays inconclusive.
+                             and isinstance(displayed, str) and displayed == condition['value']
+                             and displayed != target['value'])):
+                # Only text rendered independently of the DOM value (a select's
+                # option label differing from its value) can prove visible
+                # rendering; an input/textarea display_value is the DOM value
+                # itself, so equality with the expected value proves nothing.
                 raise CollectionFailure('任务结果控件的完整值未在实际视口中可见，不能以后台值判定完成','collector')
             if 'qr_png_payload' in condition:
                 from .qr_strategy import URI,SSID,PASSWORD,wifi_payload
