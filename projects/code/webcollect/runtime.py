@@ -778,10 +778,15 @@ class RuntimeStore:
             rows = list(con.execute('SELECT * FROM m4_tasks WHERE scope_id=? ORDER BY created_at,task_id,task_version', (self.scope_id,)))
             tasks = [self._view(row) for row in rows]
             attempts = [self._view(self._attempt(con, row[0])) for row in con.execute('SELECT attempt_id FROM m4_attempts WHERE scope_id=? ORDER BY created_at,rowid', (self.scope_id,))]
-            if terminal_failed_scope and (not tasks or not attempts
+            # A prepared-but-never-dispatched scope (every task still queued,
+            # zero attempts) failed before any browser/model dispatch; nothing
+            # was started, so closure with immutable evidence hides nothing and
+            # releases the reserved-but-unstarted quota for replanning.
+            never_dispatched = bool(tasks) and not attempts and all(row['status'] == 'queued' for row in tasks)
+            if terminal_failed_scope and not never_dispatched and (not tasks or not attempts
                     or any(row['status'] != 'needs_replan' for row in tasks)
                     or {row['task_key'] for row in tasks} != {row['task_key'] for row in attempts}):
-                raise ValueError('仅允许关闭已暂停scope或全部已实际拒收的终结scope')
+                raise ValueError('仅允许关闭已暂停scope、全部已实际拒收的终结scope或零派发排队scope')
             if any(row['status'] in ACTIVE for row in attempts) or any(row['status'] in ACTIVE for row in tasks):
                 raise ValueError('scope存在reserved/running在途attempt，禁止关闭')
             if any(row['started_at'] is None or row['status'] != 'rejected' or row['finished_at'] is None for row in attempts):
@@ -804,7 +809,7 @@ class RuntimeStore:
                 raise ValueError('原计划与数据库任务不构成同一完整全集')
             if manifest.get('runtime_scope_id') != self.scope_id or manifest.get('registry_path') != str(self.registry) or manifest.get('samples') or manifest.get('active_task') or manifest.get('reserved_attempts'):
                 raise ValueError('原manifest含成功/在途/预留或输出绑定不匹配')
-            expected_status = 'finished_pending_review' if terminal_failed_scope else 'paused_pending_resume'
+            expected_status = 'finished_pending_review' if terminal_failed_scope and attempts else 'paused_pending_resume'
             if manifest.get('collection_status') != expected_status:
                 raise ValueError('原manifest不是已暂停待恢复状态')
             manifest_attempts = manifest.get('attempts', [])
