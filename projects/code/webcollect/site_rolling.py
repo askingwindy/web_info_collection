@@ -47,10 +47,15 @@ def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, hist
             receipt = load_json(output/'round-receipt.json')
             verify_evidence([receipt['generation_result']])
             return receipt
-        if any(r[2] != 'done' for r in rows):
+        # A pre-enqueue failure closed with a recorded reason made no request; it is
+        # neither history to consult nor an unresolved UNKNOWN blocking the site.
+        unresolved = [r for r in rows if r[2] not in ('done', 'failed')]
+        if unresolved:
             raise ValueError('A prior round is unresolved; no new round or UNKNOWN resend')
         history = []
         for row in rows[-10:]:
+            if row[2] == 'failed':
+                continue
             prior = load_json(Path(row[1])/'round-receipt.json')
             verify_evidence([prior['generation_result']])
             history.append({'round': row[0], 'result': load_json(prior['generation_result']['path'])})
@@ -64,7 +69,7 @@ def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, hist
             'catalog_sha256': file_sha(catalog), 'history': history,
             'quality_feedback': [{'reference': ref, 'report': load_json(ref['path'])} for ref in feedback],
             'max_routes': max_tasks}
-        if rows and history[-1]['result'].get('pending'):
+        if history and history[-1]['result'].get('pending'):
             raise ValueError('Previous model/generation work remains pending; reconcile original ledger')
         if len(history) >= 2 and all(h['result'].get('generated_tasks') == 0 for h in history[-2:]):
             raise ValueError('Two empty/rejected rounds: stop this site and retain reasons')
