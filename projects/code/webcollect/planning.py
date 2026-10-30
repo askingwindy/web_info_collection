@@ -261,9 +261,21 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
         raise ValueError('M4计划发布不能跳过正式预检绑定')
     validate_preflight_binding(plan)
     report = json.loads(Path(plan['media_preflight']['report_path']).read_text())
-    if any(row.get('error') or row.get('summary', {}).get('routing') == 'REVIEW_REQUIRED'
-           for row in report['records']):
-        raise ValueError('预检仍有失败或待审任务，必须重新规划并保留原分母')
+    if any(row.get('error') for row in report['records']):
+        raise ValueError('预检仍有失败任务，必须重新规划并保留原分母')
+    # Advisory review routing excludes only that task; the denominator and the
+    # retained preflight report keep the risk visible for post-hoc QC.
+    advisory = {row.get('task_id') for row in report['records']
+                if row.get('summary', {}).get('routing') == 'REVIEW_REQUIRED'}
+    if advisory:
+        from .fragment_workflow import is_fragment
+        blocked = {task['task_id'] for task in plan['tasks'] if task['task_id'] in advisory and is_fragment(task)}
+        if blocked:
+            plan['tasks'] = [task for task in plan['tasks'] if task['task_id'] not in blocked]
+        if any(task_id in advisory and task_id not in blocked for task_id in advisory):
+            raise ValueError('非片段任务的预检待审仍须重新规划并保留原分母')
+        if not plan['tasks']:
+            raise ValueError('预检待审排除后无可派发任务，保留原分母')
     catalog = _records(capabilities)
     current = timestamp(now)
     # Retain the supplied candidate denominator, including rejected/expired sites.

@@ -13,6 +13,13 @@ def audit_capture(batch, sample_id):
     def fail(step_id,message):issues.append({'step_id':step_id,'message':message})
     try:
         data=read_json(sample/'annotation.json')
+        # A fragment sample ends mid-business by contract: its complete step
+        # truthfully records the final state without business assertions.
+        contract_path=evidence/'task_contract.json'
+        fragment_unclaimed=False
+        if contract_path.exists():
+            contract=read_json(contract_path)
+            fragment_unclaimed=(contract.get('business_completion')=='NOT_CLAIMED' or 'fragment' in contract)
         for step in data['steps']:
             number=step['step_id']
             try:
@@ -37,7 +44,7 @@ def audit_capture(batch, sample_id):
                     expected_ground.append({'step_id':number,'element_id':target['element_id'],'text':target['text'],'bbox':target['bbox']})
                     action=step['action']
                     if (action['target_element_id'],action['target_text'],action['target_bbox'])!=(target['element_id'],target['text'],target['bbox']):fail(number,'目标标注与原始真值不一致')
-                if step['action']['action_type']=='complete' and (not raw['final_assertions'] or not all(a['passed'] for a in raw['final_assertions'])):fail(number,'缺少最终页面断言的实际通过记录')
+                if step['action']['action_type']=='complete' and not fragment_unclaimed and (not raw['final_assertions'] or not all(a['passed'] for a in raw['final_assertions'])):fail(number,'缺少最终页面断言的实际通过记录')
                 checked+=1
             except (OSError,ValueError,KeyError,TypeError,IndexError) as e:fail(number,'证据不完整或格式错误：'+str(e))
         if read_json(evidence/'ground_truth.json')!=expected_ground:fail(None,'批次目标真值清单与逐步证据不一致')

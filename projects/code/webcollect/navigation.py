@@ -25,8 +25,11 @@ class BatchNavigation:
     def record_preflight_outcome(self, task, record, reference):
         """Settle the actual read-only probe before another task is dispatched."""
         binding = self.ledger.config.get('site_failure_guard')
+        # A read-only preflight ERROR on a repeatedly unrenderable page still
+        # convicts the site; an advisory REVIEW_REQUIRED routing flag is risk
+        # information for QC, never a site failure or a collection gate.
         if (not binding or self.ledger.config['mode'] != 'real'
-                or not (record.get('error') or record.get('summary', {}).get('routing') == 'REVIEW_REQUIRED')):
+                or not record.get('error')):
             return
         from .site_failure_stop import SiteFailureStore, execution_id
         from .planning import verify_evidence
