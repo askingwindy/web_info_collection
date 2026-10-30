@@ -45,7 +45,9 @@ def prompt_for(capability, context=None):
     prompt.update(version=VERSION, instruction=
         '根据已观察页面规划最多5条操作片段。只需Web动作合法、5至8个实际操作、实际重复指标达标；'
         '不要求完整业务结束、form、数值结果或每条全新业务。允许同页多轮输入、清空、选择、点击和滚动浏览。'
-        '仅引用已观察control_id/page_id。set_value由程序编译为显式聚焦/必要全选/输入或清空；'
+        '仅引用已观察control_id/page_id。输入、替换或清空输入框一律用set_value并给value；'
+        'set_value由程序编译为显式聚焦/必要全选/输入或清空；'
+        '裸type仅表示已显式聚焦后的继续键入，规划不要直接使用type表达输入或清空；'
         '其余action对应实际动作。滚动给direction，输入/选择给value，hotkey给keys，open_url给已观察page_id。'
         '新页面/动态控件没有观察证据时先返回需要观察的原因，不编造selector。'
         '静态阅读、wait和complete不增加步数。end_description描述片段结束意图，不宣称未完成业务成功。'
