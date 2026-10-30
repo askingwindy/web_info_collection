@@ -98,6 +98,7 @@ def _snapshot(registry, scope):
             rows.append({'task_key': row['task_key'], 'task_id': row['task_id'],
                 'task_version': row['task_version'], 'uri': uri, 'status': status,
                 'production_status': row['status'], 'attempts': attempts, 'qc': qc,
+                'fragment': 'fragment' in task,
                 'blocking': row['status'] in BLOCKING})
     return {'registry': str(registry), 'scope_id': scope, 'revision': revision, 'tasks': rows}
 
@@ -120,7 +121,9 @@ def sync(pool_path, registry, scope):
                 raise ValueError('Production state changed without a bound runtime event')
             return value['revision']
         for row, page_id, page_key in mapped:
-            if row['blocking']:
+            # Same-page fragment windows may coexist with other occupied pages;
+            # the exact-duplicate task_id guard below still applies to them.
+            if row['blocking'] and not row.get('fragment'):
                 other = con.execute('SELECT registry,task_key FROM collection_tasks WHERE (page_key=? OR task_id=?) AND blocking=1 '
                                     'AND NOT(registry=? AND task_key=?)',
                                     (page_key, row['task_id'], value['registry'], row['task_key'])).fetchone()

@@ -542,6 +542,13 @@ def observed_frame_description(state, goal='', before=None):
                 break
     parts=(['当前可见「'+label+'」'] if label else [])+([content] if content else [])
     if parts:return '，'.join(parts)
+    # Browsing fragments legitimately scroll onto viewports holding only formulas,
+    # numbers or short labels; quoting those actually-rendered lines stays evidence-
+    # bound. Only a viewport with no visible text at all lacks a describable state.
+    short=[observed_excerpt(line.strip()) for line in state.get('visible_text','').splitlines()
+           if line.strip() and len(line.strip())<=40]
+    if short:
+        return '可见文字「'+short[0]+'」'+('，另见「'+short[1]+'」' if len(short)>1 else '')
     # Do not turn missing observations into an exportable generic success.
     raise ValueError('NARRATIVE_VISIBLE_EVIDENCE_MISSING: 当前视口没有可绑定的标题或正文，不能生成实际变化说明')
 
