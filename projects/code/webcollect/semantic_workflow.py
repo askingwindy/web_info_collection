@@ -24,7 +24,7 @@ TASK_SCHEMA = obj({'schema_version':{'const':VERSION}, 'task_family':TEXT, 'inst
 SCHEMA = obj({'tasks':{'type':'array','maxItems':1,'items':TASK_SCHEMA}})
 
 
-def observation(capability):
+def observation(capability, *, allow_empty=False):
     anchors=[p['page_anchor'] for p in capability['capabilities']]
     verify_evidence([ref for a in anchors for ref in a.values()])
     states=[load_json(a['state']['path']) for a in anchors]
@@ -38,7 +38,7 @@ def observation(capability):
             value=next((v for v in state.get('values',[]) if v['element_id']==row['element_id']),{})
             cid=f'p{i}/'+row['element_id']
             controls[cid]={'anchor_index':i,'element':row,'binding':binding,'value':value}
-    if not controls:raise ValueError('Source lacks observed control bindings')
+    if not controls and not allow_empty:raise ValueError('Source lacks observed control bindings')
     return anchors,states,controls
 
 

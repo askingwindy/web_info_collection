@@ -27,7 +27,7 @@ from .html_table_strategy import ADAPTER_ID as HTML_TABLE_ADAPTER_ID, html_table
 from .qr_strategy import ADAPTER_ID as QR_ADAPTER_ID, qr_spec, compile_qr
 from .placeholder_strategy import ADAPTER_ID as PLACEHOLDER_ADAPTER_ID, placeholder_spec, compile_placeholder
 
-VERSION = 'observed-task-compiler-19-workflow-single-execution'
+VERSION = 'observed-task-compiler-20-normalized-conditions'
 STRATEGY_VERSION = 'deterministic-business-widgets-9-business-identity'
 BUSINESS_IDENTITY_VERSION = 'webcollect-business-identity-1'
 FORM_EXECUTION_ID = 'observed-form-result-v1'
@@ -44,7 +44,7 @@ def generation_source_identity():
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py',
-        'workflow_planning.py','semantic_workflow.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
+        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -83,6 +83,9 @@ SPEC_SCHEMA = strict_object({'tasks':{'type':'array','items':strict_object({
 
 def task_signature(task):
     """Conservative: argument/keyword substitutions have the same identity."""
+    from .fragment_workflow import is_fragment, logical_key
+    if is_fragment(task):
+        return 'fragment:' + logical_key(task)
     controls = [(op.get('action_type'), op.get('selector'), op.get('index',0))
                 for op in task.get('operations',[]) if op.get('action_type') not in ('wait','complete','scroll','hotkey')]
     return object_sha256({'site':_page_identity(task['site_uri']),
@@ -228,6 +231,9 @@ def _different_verified_business(left, right):
 
 
 def semantic_signature(task):
+    from .fragment_workflow import is_fragment
+    if is_fragment(task):
+        return None
     if 'workflow_admission' in task:
         from .observed_workflow import static_identity
         return static_identity(task)
@@ -373,6 +379,9 @@ def register_task(ledger, task, job_id):
         for signature in keys:
             old=con.execute('SELECT job_id,task_json FROM generated_task_index WHERE signature=?',(signature,)).fetchone()
             if old and (old['job_id']!=job_id or json.loads(old['task_json'])!=task):
+                from .fragment_workflow import is_fragment
+                if is_fragment(task):
+                    raise ValueError('Exact observed fragment already generated; resume original task')
                 if signature == keys[0] and (_different_verified_business(task, json.loads(old['task_json']))
                         or _different_supported_path(task, json.loads(old['task_json']))):
                     continue
@@ -597,8 +606,9 @@ def check_live_m4_history(plan, registry, output):
                     continue
                 if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
                     continue
-                same_structure = (task_signature(old) == signature and not _different_verified_business(task, old)
-                                  and not _different_supported_path(task, old))
+                from .fragment_workflow import is_fragment
+                same_structure = (task_signature(old) == signature and (is_fragment(task) or
+                                  not _different_verified_business(task, old) and not _different_supported_path(task, old)))
                 if same_structure or (semantic and semantic_signature(old) == semantic
                                       and proposal_signature(old) == proposal_signature(task)):
                     raise ValueError('Current M4 history contains the same business/structure outside this exact bound resume; no dispatch')
@@ -614,6 +624,9 @@ def customer_history_decision(task, records):
     """
     if not records:
         return None
+    from .fragment_workflow import is_fragment
+    if is_fragment(task):
+        return None  # Actual global indexes/risk candidates replace business-novelty all-history questions.
     semantic = semantic_signature(task)
     matches = [r for r in records if semantic and r['semantic_signature'] == semantic]
     if matches:
@@ -764,7 +777,7 @@ def compile_form(capability, spec, *, _observer_sha256=None):
     return task
 
 
-def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None):
+def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None, fragment_context=None, site_filter=None):
     if max_tasks is not None and (type(max_tasks) is not int or max_tasks < 1):
         raise ValueError('max_tasks must be an explicit positive integer')
     from .task_contract import validate_m4_plan
@@ -772,11 +785,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     # Explicit fixture responses preserve the old controlled/model test API.
     # Ordinary API and CLI calls default to the no-model strategy path.
     generator=generator or ('model' if synthetic_specs is not None else 'deterministic')
-    if generator not in ('deterministic','model','reviewed','workflow-model'):
+    if generator not in ('deterministic','model','reviewed','workflow-model','fragment-model'):
         raise ValueError('Unknown task generator')
-    if generator in ('model','workflow-model') and ledger.config.get('model') is None:
+    if generator in ('model','workflow-model','fragment-model') and ledger.config.get('model') is None:
         raise ValueError('Model task generator requires an explicitly enabled model branch')
-    if synthetic_specs is not None and (generator not in ('model','workflow-model') or ledger.config['mode']!='synthetic'):
+    if synthetic_specs is not None and (generator not in ('model','workflow-model','fragment-model') or ledger.config['mode']!='synthetic'):
         raise ValueError('Synthetic responses are only allowed by the explicit synthetic model fixture')
     sources = generation_source_identity()
     catalog = load_json(catalog_path)
@@ -816,12 +829,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     admission_context = task_admission.context(history_scope, customer_history, history_registry) if admission_refs else None
     if generator == 'reviewed' and not admission_refs:
         raise ValueError('Reviewed proposal generator requires explicit frozen admission references')
-    tasks, rejected, pending, actual_prompts, quality_reviews = [], [], [], [], []
+    tasks, rejected, pending, actual_prompts, quality_reviews, empty_results = [], [], [], [], [], []
     gateway=None
-    if generator in ('model','workflow-model'):
-        from .model_gateway import ModelGateway
-        gateway=ModelGateway(ledger)
     for record in catalog['records']:
+        if site_filter is not None and record.get('site_uri') != site_filter:
+            continue
         if max_tasks is not None and len(tasks) >= max_tasks:
             break
         try:
@@ -831,11 +843,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                                  'error_message': record.get('error_message'), 'visit_ids': record.get('visit_ids', []),
                                  'kind': 'probe_failure', 'evidence': record.get('evidence', [])})
                 continue
-            validate_capability(record,require_ready=generator in ('model','workflow-model'))
+            validate_capability(record,require_ready=generator in ('model','workflow-model','fragment-model'))
             if record.get('status')=='rejected' or timestamp(record['expires_at'])<=time.time():
                 raise ValueError('Capability rejected or expired')
             proposed = [spec for spec in proposals['tasks'] if spec.get('capability_id') == record['capability_id']]
-            if record.get('mode')!=ledger.config['mode'] or ('form-workflow' not in record['task_families'] and not proposed and generator!='workflow-model'):
+            if record.get('mode')!=ledger.config['mode'] or ('form-workflow' not in record['task_families'] and not proposed and generator not in ('workflow-model','fragment-model')):
                 raise ValueError('UNSUPPORTED_WORKFLOW: no registered strategy or explicit source-bound workflow proposal')
         except (ValueError,KeyError) as error:
             rejected.append({'site_uri':record.get('site_uri'),'reason':str(error)}); continue
@@ -846,11 +858,20 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             if generator!='workflow-model':raise ValueError('Compiler feedback only applies to workflow-model')
             from .workflow_planning import validate_feedback
             feedback=validate_feedback(ledger,record,workflow_feedback)
-        if generator=='workflow-model':
+        if generator in ('workflow-model','fragment-model'):
             from .workflow_planning import prompt_for
-            prompt=prompt_for(record)
+            try:
+                if generator == 'fragment-model':
+                    from .fragment_workflow import prompt_for as fragment_prompt
+                    prompt = fragment_prompt(record, fragment_context)
+                else:
+                    prompt=prompt_for(record)
+            except (ValueError, KeyError) as error:
+                rejected.append({'site_uri':record['site_uri'],'reason':str(error),
+                    'diagnostics':getattr(error,'report',None),'responsibility':'collector'})
+                continue
             if feedback:prompt['compiler_feedback']=feedback
-        if generator in ('model','workflow-model'):actual_prompts.append(prompt)
+        if generator in ('model','workflow-model','fragment-model'):actual_prompts.append(prompt)
         jid = ledger.enqueue('task-generation', {'capability_sha256':object_sha256(record),'version':VERSION,
             'source_identity':sources,
             'generator':generator,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
@@ -858,6 +879,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             'page_identities_sha256': object_sha256(identities),
             'admission_inputs_sha256':object_sha256(admission_refs) if admission_refs else None,
             'history_sha256':history_hash,'mode':ledger.config['mode'],
+            **({'fragment_context':fragment_context} if generator=='fragment-model' else {}),
             **({'workflow_feedback_sha256':object_sha256(workflow_feedback)} if workflow_feedback else {})})
         try:
             job = ledger.claim('task-generation',job_id=jid)
@@ -871,15 +893,25 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 pending.append({'job_id':jid,'state':prior['state']}); continue
         else:
             try:
-                if generator=='workflow-model':
+                if generator in ('workflow-model','fragment-model'):
                     from .workflow_planning import propose
-                    specs=propose(gateway,job,record,synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])},compiler_feedback=feedback)
+                    if gateway is None:
+                        from .model_gateway import ModelGateway
+                        gateway=ModelGateway(ledger)
+                    fixture_tasks=(synthetic_specs or {}).get(record['site_uri'],[])
+                    specs=propose(gateway,job,record,synthetic_response={'tasks':fixture_tasks,
+                        'empty_reasons':[] if fixture_tasks else (['No controlled candidate'] if generator=='fragment-model' else
+                            [{'code':'UNKNOWN','reason':'Synthetic fixture supplied no candidate','control_ids':[],'step_indices':[]}])},
+                        compiler_feedback=feedback, fragment=generator=='fragment-model', context=fragment_context)
                 elif proposed and 'form-workflow' not in record['task_families']:
                     specs = {'tasks': []}
                 elif generator == 'reviewed':
                     specs = {'tasks': [load_json(ref['packet']['path'])['spec'] for ref in admission_refs.values()
                                        if load_json(ref['packet']['path'])['capability'] == record]}
                 else:
+                    if generator == 'model' and gateway is None:
+                        from .model_gateway import ModelGateway
+                        gateway=ModelGateway(ledger)
                     specs=deterministic_specs(record) if generator=='deterministic' else gateway.call(
                         job,'task-generation-'+VERSION,json.dumps(prompt,ensure_ascii=False),SPEC_SCHEMA,
                         synthetic_response={'tasks':(synthetic_specs or {}).get(record['site_uri'],[])})
@@ -891,11 +923,16 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 ledger.finish(job,'review_required',error=type(error).__name__)
                 pending.append({'job_id':jid,'state':'review_required'}); continue
         rejected.extend(specs.get('strategy_rejections',[]))
+        if not specs['tasks']:
+            from .workflow_normalization import empty_reason_report
+            empty_results.append({'site_uri':record['site_uri'],'job_id':jid,
+                'reasons':empty_reason_report(record,specs) if generator=='workflow-model' else
+                    [{'code':'UNKNOWN','reason':'Original response supplied no empty-task reason','control_ids':[],'step_indices':[]}]})
         for spec in specs['tasks']:
             if max_tasks is not None and len(tasks) >= max_tasks:
                 break
             try:
-                if 'anchors' in spec or spec.get('schema_version') == 'webcollect-semantic-workflow-2':
+                if 'anchors' in spec or spec.get('schema_version') in ('webcollect-semantic-workflow-2','webcollect-semantic-workflow-3','webcollect-fragment-workflow-1'):
                     from .workflow_proposal import compile_workflow
                     task = compile_workflow(record, spec, VERSION)
                 else:
@@ -920,9 +957,10 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                         continue
                 if _declares_business_identity(task) and not semantic:
                     raise ValueError('Unregistered or uncorroborated business identity; review required')
-                same_structure = signature in signatures and any(
+                from .fragment_workflow import is_fragment
+                same_structure = signature in signatures and (is_fragment(task) or any(
                     not _different_verified_business(task, old) and not _different_supported_path(task, old)
-                    for old in structures.get(signature, []))
+                    for old in structures.get(signature, [])))
                 if same_structure or semantic and proposal_signature(task) in semantics:
                     raise ValueError('Same business goal or form/action structure in history/current task set; parameter changes rejected')
                 register_task(ledger,task,jid)
@@ -935,7 +973,8 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                     quality_reviews.append({'task_id': task['task_id'], 'task_version': task['task_version'],
                                             'task_sha256': object_sha256(task), **history_decision})
             except (ValueError,KeyError) as error:
-                rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error)})
+                rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error),
+                    **({'diagnostics':error.report} if hasattr(error,'report') else {})})
                 with ledger.transaction() as con:ledger.event(con,'phase_output',{'kind':'task-generation','job_id':jid,'identity':object_sha256(spec),'status':'rejected','reason':str(error)})
     tasks.sort(key=lambda task: (len([op for op in task['operations'] if op['action_type'] not in ('wait','complete')])>8,len(task['operations'])))
     template=generator in ('deterministic','reviewed') or ledger.config['mode']=='synthetic'
@@ -975,7 +1014,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     result={'schema_version':'webcollect-task-generation-summary-1','catalog_candidates':len(catalog['records']),
         'strategy_form_candidates':sum(len(page.get('forms',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
         'strategy_widget_candidates':sum(len(page.get('widgets',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
-        'generated_tasks':len(tasks),'queue_job_id':queue_id if tasks else None,'rejected':rejected,'pending':pending,'sample_ids_allocated':0,
+        'generated_tasks':len(tasks),'queue_job_id':queue_id if tasks else None,'rejected':rejected,'pending':pending,'empty_results':empty_results,'sample_ids_allocated':0,
         'plan_file':str(output/'plan.json') if tasks else None,'mode':ledger.config['mode'],'generator':generator,
         'capability_review_required':plan['generation']['capability_review_required'],
         'post_collection_quality_reviews':quality_reviews,
@@ -1056,12 +1095,15 @@ def _qc_policy(value):
     if value is None:
         return None
     policy = load_json(value) if isinstance(value, (str, Path)) else value
-    if (not isinstance(policy, dict) or set(policy) != {'ai_percent', 'human_percent', 'seed'}
+    if (not isinstance(policy, dict) or not {'ai_percent', 'human_percent', 'seed'} <= set(policy)
+            or set(policy)-{'ai_percent','human_percent','seed','production_sampling'}
             or not isinstance(policy['seed'], str) or not policy['seed'].strip()):
         raise ValueError('QC policy requires explicit ai_percent, human_percent and seed')
     for key in ('ai_percent', 'human_percent'):
         if type(policy[key]) not in (int, float) or not 0 <= policy[key] <= 100:
             raise ValueError(key + ' must be a finite percentage from zero to 100')
+    if 'production_sampling' in policy and type(policy['production_sampling']) is not bool:
+        raise ValueError('production_sampling must be an explicit boolean')
     return dict(policy)
 
 
@@ -1273,7 +1315,7 @@ def main(argv=None):
             p.add_argument('--workflow-specs',type=Path,help='Explicit original-frame DOM workflow proposals; no rehearsal or admission required')
             p.add_argument('--page-identities',type=Path,help='Explicit whole application name, task/shared roles and original anchors, frozen before generation')
             p.add_argument('--max-tasks',type=int,help='Bound the generated plan before registration; does not grant production quota')
-            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model'),default='deterministic',
+            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model'),default='deterministic',
                            help='Registered no-model strategies by default; model is an explicit budgeted option')
         else:
             for name in ('plan','registry','policy'):p.add_argument('--'+name,type=Path,required=True)

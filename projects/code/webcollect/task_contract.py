@@ -64,6 +64,8 @@ def _assertions(conditions):
 
 
 def validate_m4_task(task):
+    from .fragment_workflow import is_fragment, POLICY
+    fragment = is_fragment(task)
     from .production_identity import validate_identity, require_actions
     validate_identity(task)
     if 'workflow_admission' in task:
@@ -78,9 +80,32 @@ def validate_m4_task(task):
                          if key not in ('_plan_schema_version', 'require_public_origin')})
     if not _text(task.get('task_version')):
         raise ValueError('M4 task_version is required')
-    if task.get('stop_when_final') is not True:
+    if task.get('workflow_proposal', {}).get('schema_version') == 'webcollect-semantic-workflow-3':
+        conditions = task.get('initial_preconditions')
+        if not isinstance(conditions, list) or not conditions or 'initial_focus' not in task:
+            raise ValueError('Normalized workflow requires frozen initial state assertions')
+        for condition in conditions:
+            if (set(condition) != {'control_id','selector','index','value','focused','readonly','tag'}
+                    or not _text(condition['selector']) or not isinstance(condition['value'], str)
+                    or type(condition['index']) is not int or condition['index'] < 0
+                    or type(condition['focused']) is not bool or type(condition['readonly']) is not bool
+                    or condition['tag'] not in ('input','textarea','select')):
+                raise ValueError('Invalid normalized initial state assertion')
+    if fragment:
+        if (task['fragment'].get('policy_version') != POLICY or task.get('stop_when_final') is not False
+                or task['fragment'].get('business_completion') != 'NOT_CLAIMED'
+                or task['workflow_proposal'].get('schema_version') not in
+                    ('webcollect-workflow-proposals-1', 'webcollect-fragment-workflow-1')):
+            raise ValueError('Invalid versioned operation fragment')
+        if (not isinstance(task.get('final_assertions'), list)
+                or not 5 <= len(task.get('operations', [])) <= 8
+                or task['fragment'].get('effective_steps') != len(task['operations'])
+                or task.get('required_actions') != [o['operation_id'] for o in task['operations']]):
+            raise ValueError('Fragment must bind 5-8 actual operations and their exact ending')
+    elif task.get('stop_when_final') is not True:
         raise ValueError('M4 stop_when_final must be true; do not disable natural completion to add steps')
-    _assertions(task.get('final_assertions'))
+    if not fragment or task.get('final_assertions'):
+        _assertions(task.get('final_assertions'))
     for condition in task['final_assertions']:
         if 'html_table_matrix' in condition:
             from .html_table_strategy import validate_table_assertion_scope
@@ -155,6 +180,9 @@ def validate_m4_task(task):
                 index = reference['final_assertion_index']
                 if type(index) is not int or not 0 <= index < len(task['final_assertions']):
                     raise ValueError('M4 final assertion evidence index is invalid')
+            elif fragment and set(reference) == {'operation_id'}:
+                if reference['operation_id'] not in by_id:
+                    raise ValueError('Fragment evidence must reference an actual operation')
             elif set(reference) == {'operation_id', 'postcondition_index'}:
                 operation = by_id.get(reference['operation_id'], {})
                 index = reference['postcondition_index']
@@ -198,6 +226,15 @@ def completion_decision(task, raw_records, next_operation):
 
 
 def terminal_evidence(task, raw_records, assertions, final_binding):
+    from .fragment_workflow import is_fragment
+    if is_fragment(task):
+        executed = executed_action_ids(raw_records)
+        if set(task['required_actions']) != executed or not final_binding.get('screenshot_sha256'):
+            raise ValueError('Fragment needs every actual operation and the saved synchronized ending frame')
+        return {'schema_version': 'webcollect-fragment-evidence-1', 'machine_status': 'PASS',
+            'executed_operation_ids': sorted(executed), 'effective_steps': len(executed),
+            'business_completion': 'NOT_CLAIMED', 'ending_frame': final_binding,
+            'semantic_status': 'REVIEW_REQUIRED'}
     def verify_pixel_binding(result,binding):
         if 'placeholder_png_text' in result.get('expected',{}):
             oracle=result.get('pixel_oracle',{})

@@ -37,7 +37,7 @@ from webcollect.hmac_strategy import (HMAC_INVENTORY_JS, ADAPTER_ID as HMAC_ADAP
 from webcollect.pbkdf2_strategy import (PBKDF2_INVENTORY_JS, ADAPTER_ID as PBKDF2_ADAPTER_ID,
     matches_uri as pbkdf2_matches_uri, validate_observation as validate_pbkdf2_observation)
 
-VERSION = 'site-supply-15-source-config-provenance'
+VERSION = 'site-supply-16-native-action-inventory'
 
 
 def normalize_uri(value):
@@ -394,6 +394,8 @@ def inventory_support(uri, inventories):
     This is mechanical inventory support; it never changes screening status.
     """
     forms, fields, widget_fields, controls = [], [], [], []
+    native_actions = set()
+    legacy_controls = []
     table_workflow = False
     qr_workflow = False
     hmac_workflow = False
@@ -401,6 +403,22 @@ def inventory_support(uri, inventories):
     for inventory in inventories:
         if normalize_uri(inventory['page_uri']) != uri:
             raise ValueError('Observed inventory is outside the exact candidate page scope')
+        from webcollect.observed_actions import control_actions
+        state = inventory
+        if 'capture_controls' not in state and inventory.get('page_anchor'):
+            from webcollect.planning import verify_evidence
+            ref = inventory['page_anchor']['state']
+            verify_evidence([ref])
+            state = load_json(ref['path'])
+        if 'capture_controls' not in state:
+            legacy_controls.extend(e for e in inventory['elements'] if e.get('visible') and e.get('enabled')
+                                   and (e.get('clickable') or e.get('inputable')))
+        for binding in state.get('capture_controls', []):
+            rows = [e for e in state['elements'] if e['element_id'] == binding['element_id']]
+            if len(rows) != 1:
+                raise ValueError('Ambiguous observed native control')
+            initial = next((v for v in state.get('values', []) if v['element_id'] == binding['element_id']), {})
+            native_actions.update(control_actions(rows[0], binding, initial))
         widgets = inventory.get('widgets', [])
         for widget in widgets:
             matcher = {BMI_ADAPTER_ID: bmi_matches_uri, DATE_ADAPTER_ID: date_matches_uri,
@@ -449,12 +467,12 @@ def inventory_support(uri, inventories):
                     ('text', 'number', 'textarea', 'search', 'email', 'url', 'tel') for field in visible) >= 2
                     and any(field['type'] in ('submit', 'button') for field in visible)):
                 forms.append(form)
-    actions = {'scroll'}
+    actions = {'scroll'} | native_actions
     if table_workflow or qr_workflow or hmac_workflow or pbkdf2_workflow:
         actions.update(('click', 'type'))
-    if controls or any(field['type'] in ('submit', 'button') for field in widget_fields):
+    if legacy_controls or any(field['type'] in ('submit', 'button') for field in widget_fields):
         actions.add('click')
-    if (any(element.get('inputable') for element in controls) or
+    if (any(element.get('inputable') for element in legacy_controls) or
             any(field['tag'] in ('input', 'textarea') and field['type'] in
                 ('text', 'number', 'textarea', 'search', 'email', 'url', 'tel') for field in widget_fields)):
         actions.update(('click', 'type', 'hotkey'))
@@ -597,6 +615,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                                 inventory={'page_uri':normalize_uri(landed_uri) if landed_uri else target,
                                     'requested_uri':target,'landed_uri':landed_uri,'visible_text':state['visible_text'],
                                     'elements':state['elements'], 'page_anchor': page_anchor,
+                                    'capture_controls':state['capture_controls'], 'values':state['values'],
                                     **await bounded(ledger,page.evaluate(INVENTORY_JS))}
                                 if initial_visible_text is not None:
                                     inventory['initial_visible_text'] = initial_visible_text

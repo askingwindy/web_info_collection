@@ -47,16 +47,21 @@ def legacy_prompt_for(capability):
 
 
 # The old envelope above remains importable for validating archived proposals.
-from .semantic_workflow import prompt_for, SCHEMA as SEMANTIC_SCHEMA, VERSION as SEMANTIC_VERSION
+from .workflow_normalization import prompt_for, SCHEMA as SEMANTIC_SCHEMA, VERSION as SEMANTIC_VERSION
 
 
-def propose(gateway, job, capability, *, synthetic_response=None, compiler_feedback=None):
-    prompt=prompt_for(capability)
+def propose(gateway, job, capability, *, synthetic_response=None, compiler_feedback=None, fragment=False, context=None):
+    schema, version = SEMANTIC_SCHEMA, SEMANTIC_VERSION
+    if fragment:
+        from .fragment_workflow import prompt_for as fragment_prompt, SCHEMA as schema, VERSION as version
+        prompt = fragment_prompt(capability, context)
+    else:
+        prompt=prompt_for(capability)
     if compiler_feedback:prompt['compiler_feedback']=compiler_feedback
     anchors=[p['page_anchor'] for p in capability['capabilities']]
     from .telemetry import phase
     with phase(gateway.ledger.path.parent/'planning-phases.jsonl','workflow_planning',scope={'job_id':job['id']}):
-        response=gateway.call(job,SEMANTIC_VERSION,json.dumps(prompt,ensure_ascii=False),SEMANTIC_SCHEMA,
+        response=gateway.call(job,version,json.dumps(prompt,ensure_ascii=False),schema,
             images=[anchor['image']['path'] for anchor in anchors],synthetic_response=synthetic_response,attempts=1,
             output_limit=min(8192,gateway.ledger.config['model']['max_completion_tokens']))
     for spec in response['tasks']:
@@ -85,5 +90,5 @@ def validate_feedback(ledger,capability,feedback):
         except ValueError as error:
             if not any(r['spec_sha256']==object_sha256(spec) and r['reason']==str(error) for r in report['rejected']):raise ValueError('Compiler feedback reason changed')
         else:raise ValueError('Cannot revise a valid plan through rejection feedback')
-    return {'instruction':'仅修正以下明确编译错误。不要保留与初值相同的选择，不要凑步；无法自然达到5步返回空tasks。本协议最多修订一次，仍需完整重新编译与冻结。',
+    return {'instruction':'仅修正以下明确编译错误。已满足的条件保留为前置断言、不计动作；不要凑步。无法自然达到5步返回空tasks及结构化原因。本协议最多修订一次，仍需完整重新编译与冻结。',
             'prior_specs':specs,'rejections':report['rejected'],'binding':feedback}

@@ -11,9 +11,19 @@ SCHEMA = 'webcollect-workflow-proposals-1'
 
 
 def compile_workflow(capability, spec, version):
+    from .fragment_workflow import VERSION as FRAGMENT_VERSION, compile_fragment
+    if spec.get('schema_version') == FRAGMENT_VERSION:
+        return compile_fragment(capability, spec, version)
+    from .workflow_normalization import VERSION as NORMALIZED_VERSION, compile_normalized
+    if spec.get('schema_version') == NORMALIZED_VERSION:
+        return compile_normalized(capability, spec, version)
     from .semantic_workflow import VERSION as SEMANTIC_VERSION, compile_semantic
     if spec.get('schema_version') == SEMANTIC_VERSION:
         return compile_semantic(capability, spec, version)
+    return _compile_explicit(capability, spec, version)
+
+
+def _compile_explicit(capability, spec, version, *, fragment=None):
     from .task_admission import _frame
     from .task_contract import validate_m4_task, CONTROL_ACTIONS
     from .collect import validate_plan
@@ -39,7 +49,7 @@ def compile_workflow(capability, spec, version):
     if not isinstance(operations, list) or not 5 <= len(operations) <= 10:
         raise ValueError('Workflow needs 5-10 necessary proposed actions; no wait/complete padding')
     for previous,following in zip(operations,operations[1:]):
-        if previous.get('action_type') in ('click','type','select','hotkey') and all(previous.get(key)==following.get(key) for key in ('action_type','selector','index','arguments')):
+        if not fragment and previous.get('action_type') in ('click','type','select','hotkey') and all(previous.get(key)==following.get(key) for key in ('action_type','selector','index','arguments')):
             raise ValueError('Repeated unchanged adjacent action is padding')
     for operation in operations:
         action = operation.get('action_type')
@@ -65,7 +75,7 @@ def compile_workflow(capability, spec, version):
             if bindings is not None and not any(row['element_id']==identity and row['selector']==operation.get('selector')
                     and row.get('index',0)==operation.get('index',0) for row in bindings):
                 raise ValueError('Workflow selector is not bound to its observed control')
-            if action=='type' and bindings is not None:
+            if action=='type' and bindings is not None and not fragment:
                 initial=next((row.get('value') for row in states[index].get('values',[]) if row['element_id']==identity),None)
                 if initial==operation.get('arguments',{}).get('text'):raise ValueError('Unnecessary unchanged input')
     task = {key: deepcopy(value) for key, value in spec.items() if key != 'anchors'}
@@ -73,9 +83,11 @@ def compile_workflow(capability, spec, version):
                 site_uri=capability['site_uri'], site_category=capability['site_category'],
                 app_name=next(page['title'] for page in capability['capabilities']
                               if page['page_uri'] == spec['initial_url']),
-                stop_when_final=True, content_preparation=False,
+                stop_when_final=not bool(fragment), content_preparation=False,
                 workflow_proposal={'schema_version': SCHEMA, 'spec': deepcopy(spec),
                                    'evidence': refs, 'semantic_status': 'REVIEW_REQUIRED'})
+    if fragment:
+        task['fragment'] = fragment
     validate_task_instruction(task['instruction'])
     validate_m4_task(task)
     validate_plan({'tasks': [task]})

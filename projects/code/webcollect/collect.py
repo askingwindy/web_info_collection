@@ -811,7 +811,8 @@ def validate_plan(plan):
     required=['task_id','site_uri','site_category','app_name','instruction','task_type','initial_url','operations','final_result','completion_judgement','final_assertions']
     task_type_schema=json.loads(SCHEMAS.joinpath('annotation.schema.json').read_text(encoding='utf-8'))['properties']['task_type']
     for task in plan['tasks']:
-        if not isinstance(task,dict) or any(not task.get(k) for k in required):raise ValueError('任务计划缺少必要字段')
+        from .fragment_workflow import is_fragment
+        if not isinstance(task,dict) or any(not task.get(k) for k in required if k!='final_assertions' or not is_fragment(task)):raise ValueError('任务计划缺少必要字段')
         type_errors=list(StrictValidator(task_type_schema).iter_errors(task['task_type']))
         if type_errors:
             raise ValueError('task_type 不符合合同枚举：'+str(task['task_id'])+'：'+type_errors[0].message)
@@ -842,6 +843,7 @@ def validate_plan(plan):
 def task_protected_selectors(task):
     """Protect future result surfaces without evaluating their assertions early."""
     conditions = list(task.get('final_assertions', []))
+    conditions += list(task.get('initial_preconditions', []))
     conditions += [condition for operation in task.get('operations', [])
                    for condition in operation.get('postconditions', [])]
     return sorted({condition['selector'] for condition in conditions
@@ -887,6 +889,10 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             await navigation.goto(page, task['initial_url'], purpose='collection:' + ids['sample_id'])
         await page.wait_for_timeout(task.get('initial_settle_ms',1000))
         write_json(evidence/'initial_navigation.json',{'url':page.url,'timestamp':now(),'task_initial_state':True})
+        from .workflow_normalization import assert_initial_state
+        initial_proof = await assert_initial_state(page, task)
+        if initial_proof is not None:
+            write_json(evidence/'initial_preconditions.json',initial_proof)
         while planned_index<len(operations):
             i=len(steps)+1
             op=operations[planned_index]
@@ -994,9 +1000,11 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                 final_assertion_state={**state,'assertion_targets':state['assertion_targets'][len(previous_conditions):]}
                 assertion=await assert_state(page,task['final_assertions'],captured_state=final_assertion_state,
                     **({'captured_png':observation['png']} if any('qr_png_payload' in c or 'placeholder_png_text' in c for c in task['final_assertions']) else {}))
-                final_description=completion_from_assertions(assertion)
+                from .fragment_workflow import is_fragment
+                final_description=(observed_frame_description(state, task['instruction'])
+                    if is_fragment(task) else completion_from_assertions(assertion))
                 heading=next((e['text'] for e in state['elements'] if e.get('native_role')=='h1' and e.get('text')), '')
-                final_goal='确认最终页面'+('「'+heading+'」' if heading else '')+'，'+final_description
+                final_goal=('确认本段结束页面' if is_fragment(task) else '确认最终页面')+('「'+heading+'」' if heading else '')+'，'+final_description
                 op={**op,'goal':final_goal,'rationale':final_description,'expected':final_description}
             if i==1:
                 (evidence/'initial_capture.png').write_bytes(observation['png'])

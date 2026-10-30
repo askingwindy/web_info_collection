@@ -248,7 +248,12 @@ class CompilerFeedback(SemanticFixture,unittest.TestCase):
         from webcollect.task_generation import generate
         from webcollect.workflow_planning import validate_feedback
         from test_s0_task_generation import catalog
-        record,spec=self.semantic();bad=deepcopy(spec);bad['steps'][0]['value']='10'
+        record,spec=self.semantic()
+        from webcollect.workflow_normalization import VERSION
+        spec['schema_version']=VERSION
+        spec['conditions']=[{k:v for k,v in s.items() if k!='action'} for s in spec['steps']]
+        spec['steps']=[]
+        bad=deepcopy(spec);bad['conditions'][0]['value']='10'
         cfg=load_json(Path(__file__).parents[1]/'config/batch-synthetic.json')
         ledger=BatchLedger(self.root/'feedback-ledger',cfg,initialize=True);source=catalog(self.root/'source-catalog',[record])
         first=generate(ledger,source,self.root/'bad',generator='workflow-model',synthetic_specs={record['site_uri']:[bad]})
