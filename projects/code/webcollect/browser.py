@@ -640,6 +640,8 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
 
 
 def prepare_action(state, operation):
+    from .agent_observation import require_action
+    require_action(state, operation)
     action=operation['action_type']
     target=state['target']
     parameters=dict(operation.get('arguments',{}))

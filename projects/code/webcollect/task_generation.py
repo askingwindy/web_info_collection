@@ -44,7 +44,7 @@ def generation_source_identity():
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py',
-        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
+        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -785,11 +785,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     # Explicit fixture responses preserve the old controlled/model test API.
     # Ordinary API and CLI calls default to the no-model strategy path.
     generator=generator or ('model' if synthetic_specs is not None else 'deterministic')
-    if generator not in ('deterministic','model','reviewed','workflow-model','fragment-model'):
+    if generator not in ('deterministic','model','reviewed','workflow-model','fragment-model','agent-model'):
         raise ValueError('Unknown task generator')
-    if generator in ('model','workflow-model','fragment-model') and ledger.config.get('model') is None:
+    if generator in ('model','workflow-model','fragment-model','agent-model') and ledger.config.get('model') is None:
         raise ValueError('Model task generator requires an explicitly enabled model branch')
-    if synthetic_specs is not None and (generator not in ('model','workflow-model','fragment-model') or ledger.config['mode']!='synthetic'):
+    if synthetic_specs is not None and (generator not in ('model','workflow-model','fragment-model','agent-model') or ledger.config['mode']!='synthetic'):
         raise ValueError('Synthetic responses are only allowed by the explicit synthetic model fixture')
     sources = generation_source_identity()
     catalog = load_json(catalog_path)
@@ -831,6 +831,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         raise ValueError('Reviewed proposal generator requires explicit frozen admission references')
     tasks, rejected, pending, actual_prompts, quality_reviews, empty_results = [], [], [], [], [], []
     gateway=None
+    model_responses = []
     for record in catalog['records']:
         if site_filter is not None and record.get('site_uri') != site_filter:
             continue
@@ -843,11 +844,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                                  'error_message': record.get('error_message'), 'visit_ids': record.get('visit_ids', []),
                                  'kind': 'probe_failure', 'evidence': record.get('evidence', [])})
                 continue
-            validate_capability(record,require_ready=generator in ('model','workflow-model','fragment-model'))
+            validate_capability(record,require_ready=generator in ('model','workflow-model','fragment-model','agent-model'))
             if record.get('status')=='rejected' or timestamp(record['expires_at'])<=time.time():
                 raise ValueError('Capability rejected or expired')
             proposed = [spec for spec in proposals['tasks'] if spec.get('capability_id') == record['capability_id']]
-            if record.get('mode')!=ledger.config['mode'] or ('form-workflow' not in record['task_families'] and not proposed and generator not in ('workflow-model','fragment-model')):
+            if record.get('mode')!=ledger.config['mode'] or ('form-workflow' not in record['task_families'] and not proposed and generator not in ('workflow-model','fragment-model','agent-model')):
                 raise ValueError('UNSUPPORTED_WORKFLOW: no registered strategy or explicit source-bound workflow proposal')
         except (ValueError,KeyError) as error:
             rejected.append({'site_uri':record.get('site_uri'),'reason':str(error)}); continue
@@ -855,15 +856,25 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                   'capability':{'site_uri':record['site_uri'],'pages':record['capabilities']}}
         feedback=None
         if workflow_feedback:
-            if generator not in ('workflow-model','fragment-model'):raise ValueError('Compiler feedback only applies to workflow-model or fragment-model')
+            if generator not in ('workflow-model','fragment-model','agent-model'):raise ValueError('Compiler feedback only applies to workflow-model or fragment-model')
             from .workflow_planning import validate_feedback
             feedback=validate_feedback(ledger,record,workflow_feedback)
-        if generator in ('workflow-model','fragment-model'):
+        if generator in ('workflow-model','fragment-model','agent-model'):
             from .workflow_planning import prompt_for
+            if generator in ('fragment-model','agent-model'):
+                from .agent_feedback import site_context
+                actual_context = site_context(history_registry, record['site_uri'], model_ledger=ledger,
+                    quality=[q['reference'] for q in (fragment_context or {}).get('quality_feedback',[])])
+                if actual_context['unresolved']:
+                    raise ValueError('Original unresolved execution/request blocks planning; reconcile original ledger')
+                fragment_context = {**(fragment_context or {}), 'actual_feedback':actual_context, 'images':actual_context['images']}
             try:
-                if generator == 'fragment-model':
+                if generator in ('fragment-model','agent-model'):
                     from .fragment_workflow import prompt_for as fragment_prompt
                     prompt = fragment_prompt(record, fragment_context)
+                    if generator == 'agent-model':
+                        from .workflow_planning import controlled_prompt
+                        prompt = controlled_prompt(record, fragment_context)
                 else:
                     prompt=prompt_for(record)
             except (ValueError, KeyError) as error:
@@ -871,15 +882,15 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                     'diagnostics':getattr(error,'report',None),'responsibility':'collector'})
                 continue
             if feedback:prompt['compiler_feedback']=feedback
-        if generator in ('model','workflow-model','fragment-model'):actual_prompts.append(prompt)
+        if generator in ('model','workflow-model','fragment-model','agent-model'):actual_prompts.append(prompt)
         jid = ledger.enqueue('task-generation', {'capability_sha256':object_sha256(record),'version':VERSION,
             'source_identity':sources,
-            'generator':generator,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
+            'generator':generator,'site_uri':record['site_uri'],'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
             'workflow_proposals_sha256': object_sha256(proposed),
             'page_identities_sha256': object_sha256(identities),
             'admission_inputs_sha256':object_sha256(admission_refs) if admission_refs else None,
             'history_sha256':history_hash,'mode':ledger.config['mode'],
-            **({'fragment_context':fragment_context} if generator=='fragment-model' else {}),
+            **({'fragment_context':fragment_context} if generator in ('fragment-model','agent-model') else {}),
             **({'workflow_feedback_sha256':object_sha256(workflow_feedback)} if workflow_feedback else {})})
         try:
             job = ledger.claim('task-generation',job_id=jid)
@@ -893,16 +904,17 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 pending.append({'job_id':jid,'state':prior['state']}); continue
         else:
             try:
-                if generator in ('workflow-model','fragment-model'):
+                if generator in ('workflow-model','fragment-model','agent-model'):
                     from .workflow_planning import propose
                     if gateway is None:
                         from .model_gateway import ModelGateway
                         gateway=ModelGateway(ledger)
                     fixture_tasks=(synthetic_specs or {}).get(record['site_uri'],[])
                     specs=propose(gateway,job,record,synthetic_response={'tasks':fixture_tasks,
-                        'empty_reasons':[] if fixture_tasks else (['No controlled candidate'] if generator=='fragment-model' else
+                        'empty_reasons':[] if fixture_tasks else ([{'category':'MISSING_OBSERVATION','reason':'No controlled candidate','control_ids':[]}] if generator=='agent-model' else
+                            ['No controlled candidate'] if generator=='fragment-model' else
                             [{'code':'UNKNOWN','reason':'Synthetic fixture supplied no candidate','control_ids':[],'step_indices':[]}])},
-                        compiler_feedback=feedback, fragment=generator=='fragment-model', context=fragment_context)
+                        compiler_feedback=feedback, fragment=generator in ('fragment-model','agent-model'), context=fragment_context, controlled=generator=='agent-model')
                 elif proposed and 'form-workflow' not in record['task_families']:
                     specs = {'tasks': []}
                 elif generator == 'reviewed':
@@ -922,21 +934,32 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             except Exception as error:
                 ledger.finish(job,'review_required',error=type(error).__name__)
                 pending.append({'job_id':jid,'state':'review_required'}); continue
+        model_responses.append({'site_uri':record['site_uri'],'job_id':jid,'response':specs})
         rejected.extend(specs.get('strategy_rejections',[]))
         if not specs['tasks']:
             from .workflow_normalization import empty_reason_report
             empty_results.append({'site_uri':record['site_uri'],'job_id':jid,
                 'reasons':empty_reason_report(record,specs) if generator=='workflow-model' else
+                    [{'code':reason.get('category','UNKNOWN') if isinstance(reason,dict) else 'UNKNOWN',
+                      'reason':reason.get('reason',reason) if isinstance(reason,dict) else reason,
+                      'evidence_status':'MODEL_REPORTED_UNVERIFIED', 'original_reason':reason}
+                     for reason in specs.get('empty_reasons', [])] or
                     [{'code':'UNKNOWN','reason':'Original response supplied no empty-task reason','control_ids':[],'step_indices':[]}]})
         for spec in specs['tasks']:
             if max_tasks is not None and len(tasks) >= max_tasks:
                 break
             try:
-                if 'anchors' in spec or spec.get('schema_version') in ('webcollect-semantic-workflow-2','webcollect-semantic-workflow-3','webcollect-fragment-workflow-1'):
+                if 'anchors' in spec or spec.get('schema_version') in ('webcollect-semantic-workflow-2','webcollect-semantic-workflow-3','webcollect-fragment-workflow-1','webcollect-fragment-workflow-2'):
                     from .workflow_proposal import compile_workflow
                     task = compile_workflow(record, spec, VERSION)
                 else:
                     task = compile_form(record,spec)
+                from .agent_controller import is_controlled
+                if is_controlled(task) and history_registry is not None:
+                    from .agent_feedback import known_start_conflicts
+                    conflicts = known_start_conflicts(history_registry, record, spec)
+                    if conflicts:
+                        raise ValueError('Known starting screenshot occupied: '+str(conflicts))
                 if task['initial_url'] in identities['pages']:
                     from copy import deepcopy
                     from .production_identity import validate_identity
@@ -973,7 +996,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                     quality_reviews.append({'task_id': task['task_id'], 'task_version': task['task_version'],
                                             'task_sha256': object_sha256(task), **history_decision})
             except (ValueError,KeyError) as error:
-                rejected.append({'site_uri':record['site_uri'],'spec_sha256':object_sha256(spec),'reason':str(error),
+                rejected.append({'site_uri':record['site_uri'],'job_id':jid,'spec':spec,'spec_sha256':object_sha256(spec),'reason':str(error),
                     **({'diagnostics':error.report} if hasattr(error,'report') else {})})
                 with ledger.transaction() as con:ledger.event(con,'phase_output',{'kind':'task-generation','job_id':jid,'identity':object_sha256(spec),'status':'rejected','reason':str(error)})
     tasks.sort(key=lambda task: (len([op for op in task['operations'] if op['action_type'] not in ('wait','complete')])>8,len(task['operations'])))
@@ -1000,6 +1023,9 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             'narrative_mode':'template' if template else 'mixed','prompt_stages':{
                 'planning':planning_stage,'narrative':{'mode':'template','template_version':'actual-state-describe_change',
                              'description':'沿用采集器实际可见状态及相邻截图对应的叙述生成。'}}}}
+    if generator == 'agent-model':
+        plan['generation']['site_planning_context'] = fragment_context
+        plan['generation']['controller_ledger'] = {'path':str(ledger.path), 'config_sha256':object_sha256(ledger.config)}
     if max_tasks is not None:
         plan['generation']['max_tasks'] = max_tasks
     if generation_source_identity() != sources:
@@ -1014,6 +1040,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     result={'schema_version':'webcollect-task-generation-summary-1','catalog_candidates':len(catalog['records']),
         'strategy_form_candidates':sum(len(page.get('forms',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
         'strategy_widget_candidates':sum(len(page.get('widgets',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
+        'model_responses':model_responses,'generated_task_details':tasks,
         'generated_tasks':len(tasks),'queue_job_id':queue_id if tasks else None,'rejected':rejected,'pending':pending,'empty_results':empty_results,'sample_ids_allocated':0,
         'plan_file':str(output/'plan.json') if tasks else None,'mode':ledger.config['mode'],'generator':generator,
         'capability_review_required':plan['generation']['capability_review_required'],
@@ -1264,7 +1291,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             verify_task_admissions(plan, catalog, registry, output)
         result=await collect_m4(pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
-            navigation=navigation, **({'site_pool': site_pool} if site_pool is not None else {}))
+            navigation=navigation, controller_ledger=ledger, **({'site_pool': site_pool} if site_pool is not None else {}))
         if result['collection_status']=='paused_pending_resume':
             return {'collection':result,'candidate':None,'stopped':'existing runtime paused; budget and queued work retained'}
         facts_path=output/'facts.json'; client=output/'candidate'
@@ -1315,7 +1342,7 @@ def main(argv=None):
             p.add_argument('--workflow-specs',type=Path,help='Explicit original-frame DOM workflow proposals; no rehearsal or admission required')
             p.add_argument('--page-identities',type=Path,help='Explicit whole application name, task/shared roles and original anchors, frozen before generation')
             p.add_argument('--max-tasks',type=int,help='Bound the generated plan before registration; does not grant production quota')
-            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model'),default='deterministic',
+            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model','agent-model'),default='deterministic',
                            help='Registered no-model strategies by default; model is an explicit budgeted option')
         else:
             for name in ('plan','registry','policy'):p.add_argument('--'+name,type=Path,required=True)

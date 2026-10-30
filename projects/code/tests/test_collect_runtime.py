@@ -305,6 +305,7 @@ class CollectorIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(1)
 
         config = load_json(Path(__file__).resolve().parents[1] / 'config/batch-no-model.json')
+        config['mode'] = 'synthetic'  # SlowPage is a simulation; no real dispatch permission.
         ledger = BatchLedger(self.root / 'navigation.sqlite3', config, initialize=True)
         job = ledger.claim('test', job_id=ledger.enqueue('test', {'case': self._testMethodName}))
         navigation = BatchNavigation(ledger, job)

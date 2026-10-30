@@ -1018,6 +1018,7 @@
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
     capture_images:captureImages,paint_borders:paintBorders,capture_controls:captureControls,
+    document_identity:{url_without_fragment:location.href.split('#')[0],performance_time_origin:performance.timeOrigin},
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,
     embedded_frames:nodes.map((node,i)=>node.matches('iframe,frame')?{

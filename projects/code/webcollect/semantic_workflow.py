@@ -129,3 +129,10 @@ def compile_semantic(capability, spec, version):
     task['workflow_proposal']={'schema_version':VERSION,'spec':deepcopy(spec),
         'evidence':[ref for anchor in anchors for ref in anchor.values()],'semantic_status':'REVIEW_REQUIRED'}
     return task
+
+
+def trusted_observation(capability):
+    """New agent projection retains UNKNOWN inventory; old protocol is unchanged."""
+    from .agent_observation import project
+    anchors, states, _ = observation(capability, allow_empty=True)
+    return [project(state, anchor) for state, anchor in zip(states, anchors)]

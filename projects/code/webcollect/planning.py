@@ -299,6 +299,11 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
         if task.get('task_family') not in capability['task_families']:
             raise ValueError('任务族未在实际能力记录中登记')
         actions = {op['action_type'] for op in task['operations']} - {'wait', 'complete'}
+        from .agent_controller import is_controlled
+        if is_controlled(task):
+            actions = set(task['fragment']['allowed_actions']) - {'set_value'}
+            if 'set_value' in task['fragment']['allowed_actions']:
+                actions |= {'click','hotkey','type'}
         if not actions <= set(capability['supported_actions']):
             raise ValueError('任务要求未验证的站点动作能力')
         used[key] = capability

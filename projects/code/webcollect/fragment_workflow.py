@@ -23,11 +23,14 @@ SCHEMA = obj({'tasks': {'type': 'array', 'maxItems': 5, 'items': TASK_SCHEMA},
 
 
 def is_fragment(task):
-    return task.get('fragment', {}).get('schema_version') == VERSION
+    return task.get('fragment', {}).get('schema_version') in (VERSION, 'webcollect-fragment-workflow-2')
 
 
 def logical_key(task):
     """Exact observed start + executable sequence, independent of prose/version."""
+    if task.get('fragment', {}).get('schema_version') == 'webcollect-fragment-workflow-2':
+        return object_sha256({'url':task['initial_url'], 'boundary':task['fragment'],
+                              'spec':task['workflow_proposal']['spec']})
     return object_sha256({'url': task['initial_url'],
         'start': task['fragment']['start_state_sha256'],
         'operations': [{k: op[k] for k in ('action_type', 'selector', 'index', 'arguments', 'execution') if k in op}

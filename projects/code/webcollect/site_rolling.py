@@ -9,7 +9,7 @@ VERSION = 'site-rolling-fragments-1'
 
 
 def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, history_set=None,
-               page_identities=None, feedback=(), synthetic_specs=None, max_tasks=5):
+               page_identities=None, feedback=(), synthetic_specs=None, max_tasks=5, controlled=False):
     from .task_generation import generate
     if type(max_tasks) is not int or not 1 <= max_tasks <= 5:
         raise ValueError('One rolling round refines at most five observed routes')
@@ -40,7 +40,7 @@ def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, hist
         if own:
             saved_context=json.loads(own[3])
             if (saved_context['catalog_sha256'] != file_sha(catalog) or saved_context['site_uri'] != site_uri
-                    or saved_context['max_routes'] != max_tasks):
+                    or saved_context['max_routes'] != max_tasks or saved_context.get('controlled',False) != controlled):
                 raise ValueError('Existing rolling round input changed; do not reuse a different scope')
             if own[2] != 'done':
                 raise ValueError('Original round is unresolved; reconcile its job, do not create another request')
@@ -65,17 +65,22 @@ def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, hist
         from .runtime import _bound_quality_report
         for ref in feedback:
             _bound_quality_report([ref])  # Planning prose cannot self-issue QC failures.
+        from .agent_feedback import site_context
+        actual_feedback = site_context(history_registry, site_uri, generation=history, quality=feedback, model_ledger=ledger)
+        if actual_feedback['unresolved']:
+            raise ValueError('Original execution/model request remains unresolved; reconcile before next round')
         context = {'version': VERSION, 'site_uri': site_uri, 'application_key': site_key, 'round': len(rows)+1,
             'catalog_sha256': file_sha(catalog), 'history': history,
             'quality_feedback': [{'reference': ref, 'report': load_json(ref['path'])} for ref in feedback],
-            'max_routes': max_tasks}
+            'max_routes': max_tasks, 'actual_feedback':actual_feedback, 'images':actual_feedback['images'],
+            'controlled':controlled}
         if history and history[-1]['result'].get('pending'):
             raise ValueError('Previous model/generation work remains pending; reconcile original ledger')
         if len(history) >= 2 and all(h['result'].get('generated_tasks') == 0 for h in history[-2:]):
             raise ValueError('Two empty/rejected rounds: stop this site and retain reasons')
         con.execute('INSERT INTO site_planning_rounds VALUES(?,?,?,?,?,NULL)',
                     (site_key, len(rows)+1, str(output), 'running', json.dumps(context, ensure_ascii=False)))
-    result = generate(ledger, catalog, output/'generation', generator='fragment-model',
+    result = generate(ledger, catalog, output/'generation', generator='agent-model' if controlled else 'fragment-model',
         history_registry=history_registry, history_set=history_set, page_identities=page_identities,
         synthetic_specs=synthetic_specs, max_tasks=max_tasks, site_filter=site_uri, fragment_context=context)
     path = output/'generation'/'generation-result.json'
@@ -96,10 +101,10 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('config', 'ledger', 'catalog', 'site-uri', 'output'):
         p.add_argument('--'+name, required=True)
-    p.add_argument('--history-registry'); p.add_argument('--history-set'); p.add_argument('--page-identities')
+    p.add_argument('--controlled', action='store_true'); p.add_argument('--history-registry'); p.add_argument('--history-set'); p.add_argument('--page-identities')
     a = p.parse_args(argv)
     print(json.dumps(plan_round(BatchLedger(a.ledger, load_json(a.config)), a.catalog, a.site_uri, a.output,
-        history_registry=a.history_registry, history_set=a.history_set, page_identities=a.page_identities), ensure_ascii=False))
+        history_registry=a.history_registry, history_set=a.history_set, page_identities=a.page_identities, controlled=a.controlled), ensure_ascii=False))
 
 
 if __name__ == '__main__':

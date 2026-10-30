@@ -11,6 +11,9 @@ SCHEMA = 'webcollect-workflow-proposals-1'
 
 
 def compile_workflow(capability, spec, version):
+    from .agent_controller import FRAGMENT_VERSION as CONTROLLED_VERSION, compile_goal
+    if spec.get('schema_version') == CONTROLLED_VERSION:
+        return compile_goal(capability, spec, version)
     from .fragment_workflow import VERSION as FRAGMENT_VERSION, compile_fragment
     if spec.get('schema_version') == FRAGMENT_VERSION:
         return compile_fragment(capability, spec, version)

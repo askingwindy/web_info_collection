@@ -31,6 +31,10 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
+    from .agent_controller import ControllerStop
+    if isinstance(error, ControllerStop):
+        return {'UNRESOLVED':'interrupted', 'DUPLICATE':'duplicate', 'EXECUTION_FAILED':'model',
+                'ENGINEERING_ERROR':'program'}.get(getattr(error,'category',''), 'collector')
     from .browser import EvidenceStale, PlanViewportInfeasible, PlanLabelUnreadable
     if isinstance(error,EvidenceStale):return 'program'
     if isinstance(error,PlanViewportInfeasible):return 'collector'
@@ -63,7 +67,7 @@ def source_identity():
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
              'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
-             'workflow_proposal.py', 'fragment_workflow.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py']
+             'workflow_proposal.py', 'fragment_workflow.py', 'agent_controller.py', 'agent_observation.py', 'agent_audit.py', 'agent_feedback.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}
@@ -276,7 +280,7 @@ def close_scope_for_replan(output, registry, reason, evidence, *, now=None):
 
 
 async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
-                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None):
+                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None):
     from playwright.async_api import async_playwright
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
@@ -288,6 +292,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
 
     plan = read_json(plan_path)
     validate_plan(plan)
+    from .agent_controller import verify_ledger_binding
+    verify_ledger_binding(plan, controller_ledger)
     from .batch_protocol import verify_plan_shard, verify_shard_policy
     verify_plan_shard(plan, registry)  # Read-only ownership check before any dispatch side effect.
     if publication_path is None:
@@ -472,9 +478,36 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         ids = {key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')}
                         task = {**attempt['task'], '_plan_schema_version': plan['schema_version'],
                                 'require_public_origin': True}
+                        from .agent_controller import is_controlled, FragmentController, model_chooser
+                        controller_options = {}
+                        if is_controlled(task):
+                            if controller_ledger is None:
+                                raise ValueError('Dynamic controller requires original BatchLedger')
+                            from .agent_feedback import site_context
+                            planning_context = plan.get('generation',{}).get('site_planning_context') or {}
+                            feedback_context = site_context(registry, task['site_uri'], model_ledger=controller_ledger,
+                                generation=planning_context.get('history',[]),
+                                quality=[q['reference'] for q in planning_context.get('quality_feedback',[])])
+                            if feedback_context['unresolved']:
+                                # Exclude only this already claimed attempt.
+                                if any(r.get('attempt_id') != attempt['attempt_id'] for r in feedback_context['unresolved']):
+                                    raise ValueError('Unresolved prior attempt blocks dynamic dispatch')
+                            def frame_guard(ref):
+                                from .planning import verify_evidence
+                                verify_evidence([ref])
+                                conflicts = [row for row in store.exact_image_claims()
+                                        if row['digest'] == ref['sha256'] and row['sample_id'] != attempt['sample_id']]
+                                for row in conflicts:
+                                    verify_evidence([{'path':row['path'],'sha256':row['digest']}])
+                                return conflicts
+                            def controller_factory(bound_task, directory):
+                                return FragmentController(bound_task, directory,
+                                    model_chooser(controller_ledger, bound_task, attempt['attempt_id']),
+                                    frame_guard=frame_guard, site_context=feedback_context)
+                            controller_options['controller_factory'] = controller_factory
                         with phase(phase_ledger, 'browser_collection', scope=meter_identity):
                             await collect_one(context, task, sample, evidence, ids,
-                                **({'navigation': navigation} if navigation is not None else {}))
+                                **({'navigation': navigation} if navigation is not None else {}), **controller_options)
                         with phase(phase_ledger, 'structural_check', scope=meter_identity):
                             report = await asyncio.to_thread(validate_sample, sample, 'delivery', {**manifest,
                                 'samples': manifest['samples'] + [attempt['sample_id']]})
@@ -493,13 +526,15 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         if conflicts:
                             raise CollectionFailure('跨样本截图重复，需重新规划：' + str(conflicts), 'duplicate')
                         meter.ensure_recorded()
+                        from .agent_feedback import save_attempt_feedback
+                        feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
                         saved = evidence / 'saved_sample.json'
                         write_json(saved, {'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id'],
                             'sample_files_sha256': await asyncio.to_thread(sample_hashes, sample),
                             'capture_files_sha256': await asyncio.to_thread(sample_hashes, evidence),
                             'semantic_review': 'REVIEW_REQUIRED'})
                         store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
-                                             'collected_pending_review', evidence=_evidence(saved),
+                                             'collected_pending_review', evidence=_evidence(saved) + [feedback_ref],
                                              exact_images=index.sample_images(sample))
                         index.add_sample(sample)
                     except asyncio.CancelledError:
@@ -539,10 +574,12 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             write_json(failure, {'error': str(error), 'timestamp': now(),
                                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
                                 'failure_class': classify_failure(error)})
+                        from .agent_feedback import save_attempt_feedback
+                        feedback_ref = save_attempt_feedback(evidence, attempt, 'rejected', str(error))
                         quarantine_interrupted(output, [{**attempt, 'status': 'rejected'}])
                         store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
                             'rejected', failure_class=classify_failure(error), root_cause=_root_cause(error),
-                            evidence=_evidence(failure))
+                            evidence=_evidence(failure) + [feedback_ref])
                         if classify_failure(error) == 'program':
                             store.set_scope_paused(True, 'Program validation failure; preserve rejected attempt and stop before another allocation')
                 try:

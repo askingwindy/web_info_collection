@@ -47,6 +47,12 @@ def audit_capture(batch, sample_id):
                 if step['action']['action_type']=='complete' and not fragment_unclaimed and (not raw['final_assertions'] or not all(a['passed'] for a in raw['final_assertions'])):fail(number,'缺少最终页面断言的实际通过记录')
                 checked+=1
             except (OSError,ValueError,KeyError,TypeError,IndexError) as e:fail(number,'证据不完整或格式错误：'+str(e))
+        if contract_path.exists() and contract.get('schema_version') == 'webcollect-controlled-fragment-evidence-1':
+            from .agent_audit import terminal_proof
+            records = [read_json(evidence/f"step_{s['step_id']:03}.json") for s in data['steps'][:-1]]
+            intent = read_json(Path(records[0]['controller_dispatch']['path']))
+            boundary = read_json(Path(intent['boundary']['path']))['task']
+            terminal_proof(boundary, records, contract['ending_frame'])
         if read_json(evidence/'ground_truth.json')!=expected_ground:fail(None,'批次目标真值清单与逐步证据不一致')
     except (OSError,ValueError,KeyError,TypeError) as e:fail(None,str(e))
     return {'sample_id':sample_id,'capture_evidence_pass':not issues,'steps_checked':checked,'issues':issues,

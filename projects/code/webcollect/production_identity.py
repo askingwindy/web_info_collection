@@ -174,7 +174,9 @@ def validate_plan(plan, *, required=False):
         urls, contents = set(), set()
         for task in pilot:
             binding = validate_identity(task)
-            require_actions(task, sum(op.get('action_type') not in ('wait', 'complete') for op in task['operations']), final=True)
+            from .agent_controller import is_controlled
+            if not is_controlled(task):
+                require_actions(task, sum(op.get('action_type') not in ('wait', 'complete') for op in task['operations']), final=True)
             from .fragment_workflow import is_fragment, logical_key
             if is_fragment(task):
                 key = ('fragment', logical_key(task))

@@ -829,6 +829,14 @@ def validate_plan(plan):
     required=['task_id','site_uri','site_category','app_name','instruction','task_type','initial_url','operations','final_result','completion_judgement','final_assertions']
     task_type_schema=json.loads(SCHEMAS.joinpath('annotation.schema.json').read_text(encoding='utf-8'))['properties']['task_type']
     for task in plan['tasks']:
+        from .agent_controller import is_controlled, validate_task as validate_controlled
+        if is_controlled(task):
+            validate_controlled(task)
+            validate_task_instruction(task['instruction'])
+            type_errors=list(StrictValidator(task_type_schema).iter_errors(task['task_type']))
+            if type_errors: raise ValueError('Invalid controlled task_type')
+            verify_public_url(task['initial_url'], {verify_public_url(task['site_uri']), *task.get('allowed_hosts', [])})
+            continue
         from .fragment_workflow import is_fragment
         if not isinstance(task,dict) or any(not task.get(k) for k in required if k!='final_assertions' or not is_fragment(task)):raise ValueError('任务计划缺少必要字段')
         type_errors=list(StrictValidator(task_type_schema).iter_errors(task['task_type']))
@@ -869,7 +877,7 @@ def task_protected_selectors(task):
                    and condition['selector'].strip()})
 
 
-async def collect_one(context, task, directory, evidence, ids, *, navigation=None):
+async def collect_one(context, task, directory, evidence, ids, *, navigation=None, controller_factory=None):
     from .task_contract import (is_m4_task, validate_m4_task, completion_decision,
                                 terminal_evidence, narrative_evidence, canonical_sha)
     m4=is_m4_task(task)
@@ -880,6 +888,13 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
     (directory/'images').mkdir(parents=True)
     (directory/'ui_tree').mkdir()
     evidence.mkdir(parents=True)
+    from .agent_controller import is_controlled
+    controlled = is_controlled(task)
+    controller = None
+    if controlled:
+        if controller_factory is None:
+            raise ValueError('Controlled fragment requires original ledger controller factory')
+        controller = controller_factory(task, evidence/'controller')
     page=await context.new_page()
     page.set_default_timeout(15000)
     dialogs=[]
@@ -911,9 +926,10 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
         initial_proof = await assert_initial_state(page, task)
         if initial_proof is not None:
             write_json(evidence/'initial_preconditions.json',initial_proof)
-        while planned_index<len(operations):
+        while controller is not None or planned_index<len(operations):
             i=len(steps)+1
-            op=operations[planned_index]
+            op=(await controller.next(page, assertions=raw_records[-1]['operation'].get('postconditions',[]) if raw_records else [])
+                if controller else operations[planned_index])
             operation_origin='planned'
             completion_trigger='planned_final'
             if op['action_type']!='complete' and task.get('stop_when_final',True):
@@ -999,6 +1015,9 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             observation=await (capture_complete(page,evidence,op.get('selector'),op.get('index',0),
                                                 assertions=capture_conditions or None,**protection) if is_final else
                                capture_before_action(page,evidence,op.get('selector'),op.get('index',0),assertions=capture_conditions or None,**protection))
+            if controller and not is_final:
+                op = controller.rebind(op, observation)
+                if op is None: continue
             state=observation['state']
             if previous_conditions:
                 previous_state={**state,'assertion_targets':state['assertion_targets'][:len(previous_conditions)]}
@@ -1095,6 +1114,9 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     previous['step_result']=observed_result
                 previous['tool_result']['return_value']['screen_changed']=raw_records[-1]['capture']['screenshot_sha256']!=observation['capture']['screenshot_sha256']
             arguments,element=prepare_action(state,op)
+            controller_dispatch = (controller.before_dispatch(op,state,
+                {'path':str((directory/image_path).resolve()),'sha256':observation['capture']['screenshot_sha256']})
+                if controller else None)
             from .production_identity import state_allowed
             state_allowed(task, state)
             action={'action_type':op['action_type'],'target_element_id':element['element_id'] if element else '',
@@ -1118,6 +1140,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                  'executed_action':{'tool_name':op['action_type'],'arguments':arguments},'completion_trigger':completion_trigger if is_final else None,
                  'operation_origin':operation_origin,'planned_operation_index':planned_index if operation_origin=='planned' else None,
                  'preparation_decision_id':decision_id}
+            if controller_dispatch is not None:
+                raw['controller_dispatch'] = controller_dispatch
             if planned_completion is not None:
                 raw['planned_completion']=planned_completion
                 raw['completion_description_source']='passed_final_assertions'
@@ -1191,12 +1215,22 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             except Exception as e:
                 raw['execution_error']=str(e)
                 write_json(evidence/f'step_{i:03}.json',raw)
+                if controller:
+                    try:
+                        controller.result({'path':str((evidence/f'step_{i:03}.json').resolve()),
+                            'sha256':hashlib.sha256((evidence/f'step_{i:03}.json').read_bytes()).hexdigest()}, error=str(e))
+                    except Exception as stopped:
+                        if getattr(e, 'capture', None): stopped.capture = e.capture
+                        raise stopped from e
                 raise
             if operation_origin=='preparation':
                 entry.update(action_step_id=i,action_executed=True)
                 checkpoint_json(evidence/'preparation_decisions.json',preparation)
             raw['ended_at']=now()
             write_json(evidence/f'step_{i:03}.json',raw)
+            if controller and not is_final:
+                controller.result({'path':str((evidence/f'step_{i:03}.json').resolve()),
+                    'sha256':hashlib.sha256((evidence/f'step_{i:03}.json').read_bytes()).hexdigest()})
             raw_records.append(raw);steps.append(step);previous=step
             if operation_origin=='preparation':
                 preparation_actions+=1
@@ -1232,6 +1266,10 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
               'preparation_scrolls':preparation_scrolls})
         return annotation
     except Exception as error:
+        if controller and controller.state == 'running':
+            controller.state = 'failed'
+            controller.event('terminal', category='EXECUTION_FAILED', reason=str(error),
+                evidence_preserved=True)
         if getattr(error,'terminal_refresh',None):
             write_json(evidence/'terminal_refresh_failure.json',{'diagnostic_only':True,
                 'accepted_as_formal_frame':False,'error':str(error),'terminal_refresh':error.terminal_refresh})

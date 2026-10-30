@@ -66,6 +66,11 @@ def _assertions(conditions):
 def validate_m4_task(task):
     from .fragment_workflow import is_fragment, POLICY
     fragment = is_fragment(task)
+    from .agent_controller import is_controlled, validate_task
+    if is_controlled(task):
+        from .production_identity import validate_identity
+        validate_identity(task)
+        return validate_task(task)
     from .production_identity import validate_identity, require_actions
     validate_identity(task)
     if 'workflow_admission' in task:
@@ -227,6 +232,10 @@ def completion_decision(task, raw_records, next_operation):
 
 def terminal_evidence(task, raw_records, assertions, final_binding):
     from .fragment_workflow import is_fragment
+    from .agent_controller import is_controlled
+    if is_controlled(task):
+        from .agent_audit import terminal_proof
+        return terminal_proof(task, raw_records, final_binding)
     if is_fragment(task):
         executed = executed_action_ids(raw_records)
         if set(task['required_actions']) != executed or not final_binding.get('screenshot_sha256'):

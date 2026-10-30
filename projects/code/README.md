@@ -1,5 +1,7 @@
 # WebCollect 采集核心
 
+2026-10-30 新增[规划采集 agent 闭环](../../docs/规划采集Agent闭环-20261030.md)：`agent-model` / `site_rolling --controlled` 使用可信三态观察、原执行/QC反馈及有预算的短计划控制循环；新片段协议直接采5–8实际有效动作，复用原账、采集和独立QC，成功仍仅待审。旧冻结协议与恢复门禁保留。本轮仅代码和离线验证，真实小批方案待范围明确后执行。
+
 共享池闭环：execute自动消费资格目录的 `site-pool-binding.json`，或显式 `--site-pool`；原生产scope绑定后自动同步采集/失败/QC状态，派发前阻断重复页面和逻辑任务，同站其他功能继续可用。`webcollect site-pool --include-unavailable` 查看全部状态；`python -m webcollect.site_pool_sync --registry ... --scope ...` 只修复原绑定的状态同步。详见[状态回写与防重](../../docs/共享站点池与自主发现.md#状态回写与防重)。
 
 `python -m webcollect.single_record --help` 提供单条来源、规划、采集和独立QC阶段；复用既有当前链，不分配额外总体目标，生成阶段 `--max-tasks 1` 先限制再登记。见[今日单条真实闭环计划](../../docs/今日单条真实闭环计划-20261029.md)。
