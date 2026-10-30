@@ -296,7 +296,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                     deltas.append(delta)
                 else:
                     for point in points:mask.putpixel(point,255)
-                    border_proof.append({'bbox':box,'points':sorted(points),'rgb_deltas':deltas,
+                    border_proof.append({'bbox':box,'points':[list(point) for point in sorted(points)],'rgb_deltas':deltas,
                                          'rule':'plain-nontask-border-low-contrast-1'})
         # v3 only, never a reinterpretation of recorded v1/v2 failures: a fully
         # identical DOM fingerprint (values, text, geometry, readiness) cannot
@@ -347,7 +347,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             if not remaining and len(compliant)==len(components):
                 for component,box,deltas in compliant:
                     for x,y in component:mask.putpixel((x,y),255)
-                    paint_noise_proof.append({'bbox':list(box),'points':sorted(component),'rgb_deltas':deltas,
+                    paint_noise_proof.append({'bbox':list(box),'points':[list(point) for point in sorted(component)],'rgb_deltas':deltas,
                                               'rule':'compact-repaint-noise-v1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
