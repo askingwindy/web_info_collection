@@ -278,7 +278,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
     rule_version=rule_version or STABILITY_VERSION
     if rule_version not in STABILITY_RULES:raise ValueError('Unknown stability rule')
     left,right=related_projection(before),related_projection(after)
-    if rule_version in (STABILITY_V2,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
+    if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
         left['capture_readiness']['document_ready']='complete'
     related=loaded and left==right
     regions=_image_regions(before) if related else []
@@ -295,7 +295,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # New receipts only. Never reinterpret v1 failures. A local edge proof
         # and unchanged full semantic state are necessary; no whole-page score.
         border_proof=[]
-        if rule_version in (STABILITY_V2,STABILITY_VERSION) and related and allow_border:
+        if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_VERSION) and related and allow_border:
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             for region in before.get('paint_borders',[]):
                 box=region['bbox'];edges=region['edges']
@@ -396,7 +396,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
             'related_fingerprint':fingerprint(related_projection(before)),
             'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
-            'allowed_image_regions':regions,**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_VERSION) else {}),
+            'allowed_image_regions':regions,**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_VERSION) else {}),
             **({'paint_noise_proof':paint_noise_proof} if paint_noise_proof else {}),'pixel_change':pixel_change}
 
 
