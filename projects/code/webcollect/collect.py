@@ -1004,7 +1004,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                      'source_raw_sha256':hashlib.sha256(previous_raw.read_bytes()).hexdigest(),
                      **raw_records[-1]['postconditions_saved_frame']})
             if is_final:
-                final_assertion_state={**state,'assertion_targets':state['assertion_targets'][len(previous_conditions):]}
+                final_assertion_state={**state,'assertion_targets':state.get('assertion_targets',[])[len(previous_conditions):]}
                 assertion=await assert_state(page,task['final_assertions'],captured_state=final_assertion_state,
                     **({'captured_png':observation['png']} if any('qr_png_payload' in c or 'placeholder_png_text' in c for c in task['final_assertions']) else {}))
                 from .fragment_workflow import is_fragment
@@ -1063,7 +1063,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             if op.get('completion_view'):
                 from .task_admission import validate_live_completion_scroll
                 completion_view_state={**state,
-                    'assertion_targets':state['assertion_targets'][len(previous_conditions):]}
+                    'assertion_targets':state.get('assertion_targets',[])[len(previous_conditions):]}
                 completion_view_proof=validate_live_completion_scroll(task,op,completion_view_state)
                 write_json(evidence/f'completion_view_{i:03}.json',{
                     **completion_view_proof,'screenshot_sha256':observation['capture']['screenshot_sha256'],
