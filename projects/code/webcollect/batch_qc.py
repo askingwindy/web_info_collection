@@ -6,12 +6,12 @@ changes production strategy, runs a worker or grants a review/release.
 import argparse
 import json
 from pathlib import Path
-from .batch_core import load_json, save_json
+from .batch_core import load_json, save_json, file_sha
 from .current_chain import read_chain_history
 
 
 def prepare(dataset, history_set, output, *, max_batch_size, ai_percent, human_percent, seed,
-            stratify='site', risk_selected=None, profile=None):
+            stratify='site', risk_selected=None, profile=None, production_sampling=False):
     from quality_inspector.cumulative import build_set_manifest, inspect_set
     from quality_inspector.delivery_sampling import verify
     from .qc_handoff import prepare_qc_inputs
@@ -38,7 +38,8 @@ def prepare(dataset, history_set, output, *, max_batch_size, ai_percent, human_p
     if report['mechanical_status']!='PASS':
         return {'status':'MECHANICALLY_BLOCKED','report':str(output/'mechanical-report.json'),'model_requests':0}
     handoff=prepare_qc_inputs(dataset,history_set,output/'handoff',ai_percent=ai_percent,
-        human_percent=human_percent,seed=seed,stratify=stratify,risk_selected=risk_selected)
+        human_percent=human_percent,seed=seed,stratify=stratify,risk_selected=risk_selected,
+        production_sampling=production_sampling)
     plan=verify(handoff['sampling_plan'],dataset)
     result={'status':'QC_NOT_RUN','handoff':handoff,'max_batch_size':max_batch_size,
         'denominator':len(plan['slots']),'ai_selected':sum(s['ai_selected'] for s in plan['slots']),
@@ -59,7 +60,7 @@ def main(argv=None):
 
 
 
-def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', supporting_files=()):
+def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', supporting_files=(), mode='real'):
     """Prepare existing sample and one batch documentary job; dispatch remains explicit."""
     from quality_inspector.delivery_pipeline import prepare as prepare_reviews
     receipt=load_json(batch_receipt)
@@ -68,7 +69,9 @@ def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', s
     kwargs={'profile':receipt['profile']} if receipt.get('profile') else {}
     return prepare_reviews(ledger,handoff['dataset'],receipt['handoff']['sampling_plan'],
         receipt['effective_set'],output,cross_package_report=receipt['cross_package_report'],
-        document_review_mode=document_review_mode,supporting_files=supporting_files,**kwargs)
+        document_review_mode=document_review_mode,supporting_files=supporting_files,mode=mode,
+        **({'production_handoff':{'path':receipt['handoff']['receipt'],'sha256':file_sha(receipt['handoff']['receipt'])}}
+            if mode=='real' else {}),**kwargs)
 
 
 def assemble(packages, history_set, output, *, max_batch_size, facts=None):

@@ -3,7 +3,7 @@ import argparse
 import json
 
 
-def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False):
+def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False, fragment_planning=False):
     from site_planner.site_pool import SitePool, page_uri
     from .planning import validate_capability, verify_evidence
     from .batch_core import load_json
@@ -12,7 +12,8 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
         raise ValueError('Select candidates or validated capabilities')
     rows = pool.rows()
     if not include_unavailable:
-        rows = [r for r in rows if r['collection']['dispatch_allowed']]
+        rows = [r for r in rows if r['collection']['dispatch_allowed'] or fragment_planning and
+                not r['collection'].get('sync_pending') and r['collection']['status'] not in ('quality_revoked','qc_failed')]
     if categories:
         from site_planner.site_pool import category
         for name in categories:
@@ -48,9 +49,10 @@ def main(argv=None):
     parser.add_argument('--purpose', choices=['candidates', 'capabilities'], default='candidates')
     parser.add_argument('--category', action='append', dest='categories')
     parser.add_argument('--include-unavailable', action='store_true', help='Include tracked/ineligible pages for read-only audit')
+    parser.add_argument('--fragment-planning', action='store_true', help='Read known synchronized pages for new source-bound fragment proposals; never dispatch')
     args = parser.parse_args(argv)
     print(json.dumps(read_site_pool(args.pool, purpose=args.purpose, categories=args.categories,
-                                   include_unavailable=args.include_unavailable), ensure_ascii=False, indent=2))
+                                   include_unavailable=args.include_unavailable,fragment_planning=args.fragment_planning), ensure_ascii=False, indent=2))
     return 0
 
 

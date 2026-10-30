@@ -46,7 +46,7 @@ def _attempts(scope, dataset, sample_ids):
     return rows
 
 
-def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent, seed, collection_checks=None, stratify='batch', risk_selected=None):
+def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent, seed, collection_checks=None, stratify='batch', risk_selected=None, production_sampling=False):
     """Create immutable sampling/effective-set inputs without granting QC approval.
 
     Ratios are explicit, independent parameters. No model/provider configuration,
@@ -79,6 +79,10 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     if len(sample_ids) != len(set(sample_ids)):
         raise ValueError('Candidate sample IDs must be unique')
     attempts = _attempts(scope, dataset, sample_ids)
+    production_context = None
+    if production_sampling:
+        from .sampling_context import production_context as capture_context
+        production_context = capture_context(scope, sample_ids)
     manifest = {'schema_version': 'qc-cumulative-set-1',
                 'scope': 'Explicit current-chain candidate and indexed current results; zero legacy history',
                 'packages': [{'path': str(dataset), 'package_files_sha256': original}]}
@@ -106,7 +110,8 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     request = {'dataset': str(dataset), 'history_scope': scope, 'attempts': attempts,
                'candidate_files_sha256': original, 'effective_set': manifest,
                'ai_percent': ai_percent, 'human_percent': human_percent, 'seed': seed,
-               'collection_checks': collection_checks, 'stratify':stratify,'risk_selected':risk_selected}
+               'collection_checks': collection_checks, 'stratify':stratify,'risk_selected':risk_selected,
+               **({'production_context':production_context} if production_sampling else {})}
     def result():
         bound_checks = output / 'collection-checks.json'
         return {'sampling_plan': str(output / 'sampling-plan.json'),
@@ -134,7 +139,8 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     with tempfile.TemporaryDirectory(prefix='.qc-handoff-', dir=output.parent) as temporary:
         staged = Path(temporary)
         plan = freeze(dataset, staged / 'sampling-plan.json', ai_percent=ai_percent,
-                      human_percent=human_percent, seed=seed, stratify=stratify,risk_selected=risk_selected)
+                      human_percent=human_percent, seed=seed, stratify=stratify,risk_selected=risk_selected,
+                      production_context=production_context)
         save_json(staged / 'effective-set.json', manifest)
         if collection_checks is not None:
             bindings = [{key: row[key] for key in ('sample_id', 'task_id', 'task_version', 'task_key')}
@@ -176,10 +182,12 @@ def main(argv=None):
     parser.add_argument('--human-percent', type=float, required=True)
     parser.add_argument('--seed', required=True)
     parser.add_argument('--collection-checks', type=Path)
+    parser.add_argument('--production-sampling', action='store_true', help='Explicit versioned fragment 10/30/100 policy; capture-bound ordinals required')
     args = parser.parse_args(argv)
     try:
         result = prepare_qc_inputs(args.dataset, args.history_set, args.output,
             ai_percent=args.ai_percent, human_percent=args.human_percent, seed=args.seed,
+            production_sampling=args.production_sampling,
             collection_checks=({'path': str(args.collection_checks.resolve()), 'sha256': file_sha(args.collection_checks)}
                                if args.collection_checks else None))
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:

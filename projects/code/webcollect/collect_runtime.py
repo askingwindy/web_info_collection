@@ -57,7 +57,7 @@ def source_identity():
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
              'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
-             'workflow_proposal.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py']
+             'workflow_proposal.py', 'fragment_workflow.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}

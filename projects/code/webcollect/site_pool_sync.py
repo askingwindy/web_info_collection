@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS collection_events (
  revision INTEGER NOT NULL, record TEXT NOT NULL);
 '''
 BLOCKING = {'queued', 'reserved', 'running', 'collected_pending_review',
-            'reviewed_pass', 'published', 'qc_failed'}
+            'reviewed_pass', 'batch_accepted', 'quality_revoked', 'published', 'qc_failed'}
 
 
 def _exists(con, table):
@@ -162,7 +162,7 @@ def page_state(pool, uri):
             except (OSError, sqlite3.Error):
                 pending = True
     states = {t['status'] for t in tasks}
-    status = next((s for s in ('published', 'reviewed_pass', 'qc_failed', 'collected_pending_review',
+    status = next((s for s in ('published', 'batch_accepted', 'reviewed_pass', 'quality_revoked', 'qc_failed', 'collected_pending_review',
                                'running', 'reserved', 'queued', 'failed') if s in states), 'not_started')
     return {'status': status, 'sync_pending': pending,
             'dispatch_allowed': not pending and not any(t['blocking'] for t in tasks),
@@ -184,7 +184,8 @@ def guard_plan(pool_path, registry, scope, plan):
     for task in plan['tasks']:
         uri = task.get('pilot_identity', {}).get('task_page', {}).get('canonical_uri', task['site_uri'])
         state = page_state(pool, uri)
-        foreign = [t for t in state['tasks'] if t['blocking'] and not (
+        from .fragment_workflow import is_fragment
+        foreign = [t for t in state['tasks'] if t['blocking'] and not is_fragment(task) and not (
             t['registry'] == str(Path(registry).resolve()) and t['scope_id'] == scope
             and t['task_id'] == task['task_id'] and t['task_version'] == task['task_version'])]
         if state.get('sync_pending') or foreign:
@@ -231,7 +232,7 @@ def apply_qc(report_path, handoff_reference):
         scopes = {r[0] for sid in ids for r in con.execute('SELECT scope_id FROM m4_attempts WHERE sample_id=?', (sid,))}
     for scope in scopes:
         store = RuntimeStore(registry, scope)
-        if store.site_pool_binding() is not None:
+        if report.get('production_quality') or store.site_pool_binding() is not None:
             store.record_qc_report(report_ref)
 
 

@@ -115,7 +115,8 @@ def validate_identity(task, *, observed_states=None):
     if observed_states is not None:
         _require(observed_states and all(page_url(row['url']) in aliases | shared_urls for row in observed_states),
                  'actual workflow includes an unbound page')
-        _require(page_url(observed_states[-1]['url']) in aliases, 'actual result page cannot be excluded as shared')
+        from .fragment_workflow import is_fragment
+        _require(page_url(observed_states[-1]['url']) in (aliases | shared_urls if is_fragment(task) else aliases), 'actual result page cannot be excluded as shared')
         _require(any(page_url(row['url']) in aliases and state_key(row, page['kind']) == state_key(state, page['kind'])
                      for row in observed_states), 'actual task page does not corroborate original content/function anchor')
     return {'binding_sha256': object_sha256(value), 'application_uri': app['canonical_uri'],
@@ -174,6 +175,12 @@ def validate_plan(plan, *, required=False):
         for task in pilot:
             binding = validate_identity(task)
             require_actions(task, sum(op.get('action_type') not in ('wait', 'complete') for op in task['operations']), final=True)
+            from .fragment_workflow import is_fragment, logical_key
+            if is_fragment(task):
+                key = ('fragment', logical_key(task))
+                _require(key not in contents, 'same exact fragment appears twice in plan')
+                contents.add(key)
+                continue
             _require(not urls.intersection(binding['task_page_urls']), 'same task page appears twice in pilot plan')
             content = (binding['application_key'], binding['content_key'])
             _require(content not in contents, 'same observed content/function appears twice in pilot plan')
@@ -191,6 +198,8 @@ def ensure_schema(con):
 
 
 def _keys(binding):
+    if binding.get('fragment_key'):
+        return ['fragment:' + binding['fragment_key']]
     return ['url:' + uri for uri in binding['task_page_urls']] + [
         'content:' + object_sha256([binding['application_key'], binding['content_key']])]
 
@@ -199,6 +208,9 @@ def reserve(con, task_key, task):
     binding = validate_identity(task)
     if binding is None:
         return
+    from .fragment_workflow import is_fragment, logical_key
+    if is_fragment(task):
+        binding['fragment_key'] = logical_key(task)
     ensure_schema(con)
     app = task['pilot_identity']['application']
     old_app = con.execute('SELECT canonical_uri,name FROM m4_pilot_applications WHERE application_key=?',
@@ -209,7 +221,7 @@ def reserve(con, task_key, task):
                 (binding['application_key'], binding['application_uri'], app['name']))
     for old in con.execute('SELECT task_key,task_json FROM m4_tasks WHERE task_key<>?', (task_key,)):
         prior = json.loads(old['task_json'])
-        if prior.get('pilot_identity') is None and page_url(prior['site_uri']) in binding['task_page_urls']:
+        if not is_fragment(task) and prior.get('pilot_identity') is None and page_url(prior['site_uri']) in binding['task_page_urls']:
             raise ValueError('PILOT_IDENTITY: task page already occurs in original legacy registry; explicit history disposition required')
     for key in _keys(binding):
         old = con.execute('SELECT task_key,identity_sha256 FROM m4_pilot_page_claims WHERE claim_key=?', (key,)).fetchone()
@@ -223,6 +235,9 @@ def guard(con, task_key, task, *, required=False):
     _require(binding is not None or not required, 'campaign pilot identity missing before dispatch')
     if binding is None:
         return
+    from .fragment_workflow import is_fragment, logical_key
+    if is_fragment(task):
+        binding['fragment_key'] = logical_key(task)
     app = con.execute('SELECT canonical_uri,name FROM m4_pilot_applications WHERE application_key=?',
                       (binding['application_key'],)).fetchone()
     _require(app and tuple(app) == (binding['application_uri'], task['pilot_identity']['application']['name']),
@@ -283,6 +298,9 @@ def accept(con, task_key, task, sample_id):
     if task.get('pilot_identity') is None:
         return
     binding = validate_identity(task)
+    from .fragment_workflow import is_fragment, logical_key
+    if is_fragment(task):
+        binding['fragment_key'] = logical_key(task)
     for key in _keys(binding):
         old = con.execute('SELECT accepted_sample_id FROM m4_pilot_page_claims WHERE claim_key=?', (key,)).fetchone()
         _require(old and old[0] in (None, sample_id), 'page already has another accepted effective sample version')

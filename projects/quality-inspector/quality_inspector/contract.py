@@ -37,7 +37,7 @@ def installed_contract():
                                   for name in ('contract.py', 'format_checks.py', 'engine.py',
                                                'reviews.py', 'profiles.py', 'duplicates.py',
                                                'cumulative.py', 'checksums.py', 'layout.py',
-                                               'delivery_sampling.py')},
+                                               'delivery_sampling.py','production_sampling.py')},
         'customer_actual_program_executed': False,
         'customer_actual_acceptance': 'UNKNOWN',
     }

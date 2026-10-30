@@ -617,6 +617,8 @@ class RuntimeStore:
                 transition = self._failure_transition(con, saved, current, policy)
             else:
                 con.execute('UPDATE m4_tasks SET status=? WHERE task_key=?', (outcome, row['task_key']))
+                from .sampling_context import register_capture
+                register_capture(con, row)
             self._domain_finished(con, row, current, policy)
             self._event(con, 'attempt_finished', current, {'outcome': outcome, 'failure_class': failure_class, 'root_cause': root_cause, 'evidence': evidence, **transition}, row['task_key'], attempt_id)
             return self._view(saved)
@@ -1064,6 +1066,8 @@ class RuntimeStore:
     def record_qc_report(self, reference):
         """Register actual QC, retaining unresolved checks and immutable capture outcomes."""
         report, _ = _bound_quality_report([reference])
+        if report.get('semantic_sampling', {}).get('production_policy'):
+            return self.record_batch_quality(reference)
         with closing(self._connect(readonly=True)) as con:
             samples = {r['sample_id']: dict(r) for r in con.execute(
                 'SELECT sample_id,task_key,evidence_json FROM m4_attempts WHERE scope_id=? '
@@ -1095,6 +1099,91 @@ class RuntimeStore:
             with self._transaction() as con:
                 self._event(con, 'pool_qc_result', timestamp(None), payload, samples[sid]['task_key'])
         self.sync_site_pool()
+
+    def record_batch_quality(self, reference):
+        """Record policy admission separately; never fabricate individual reviews."""
+        from quality_inspector.production_sampling import quality_report
+        from .sampling_context import ensure_schema, group_key
+        report, _ = _bound_quality_report([reference]); claimed = report.get('production_quality')
+        if not claimed:
+            raise ValueError('Actual program/quality-unit report required')
+        actual = quality_report(report, claimed['effective_set'], claimed['cross_package_report'], claimed.get('production_handoff'))
+        if actual != claimed:
+            raise ValueError('Production quality counts differ from independently recomputed checks')
+        revision = json.loads(Path(report['semantic_sampling']['plan']['path']).read_text())['revision']
+        with self._transaction() as con:
+            ensure_schema(con); policy = self._policy(con)
+            for row in actual['rows']:
+                captured = con.execute("SELECT a.*,t.task_json FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key "
+                    "WHERE a.sample_id=? AND a.scope_id=? AND a.status='collected_pending_review'", (row['sample_id'],self.scope_id)).fetchone()
+                if not captured:
+                    continue
+                task = json.loads(captured['task_json'])
+                if group_key(task) != row['group_id']:
+                    raise ValueError('QC quality group differs from the captured task')
+                old = con.execute('SELECT * FROM m4_quality_admissions WHERE sample_id=?', (row['sample_id'],)).fetchone()
+                if old and old['plan_revision'] > revision:
+                    raise ValueError('Cannot roll back a later QC expansion')
+                state = row['quality_admission']
+                retained = 'ACCEPTED_BY_BATCH_POLICY' if state == 'ACCEPTED_BY_BATCH_POLICY' else state
+                values = (row['sample_id'], policy['campaign_id'], row['group_id'], retained,
+                          row['ai_status'], int(row['force_full']), canonical(reference), revision)
+                if old and tuple(old) == values:
+                    continue
+                if state == 'ACCEPTED_BY_BATCH_POLICY':
+                    from .production_identity import verify_saved, accept
+                    verify_saved(task, row['sample_id'], json.loads(captured['evidence_json']))
+                    accept(con, captured['task_key'], task, row['sample_id'])
+                if old:
+                    con.execute('UPDATE m4_quality_admissions SET quality_status=?,ai_status=?,force_full=?,report_json=?,plan_revision=? WHERE sample_id=?',
+                                (retained,row['ai_status'],int(row['force_full']),canonical(reference),revision,row['sample_id']))
+                else:
+                    con.execute('INSERT INTO m4_quality_admissions VALUES(?,?,?,?,?,?,?,?)', values)
+                task_state = 'batch_accepted' if state == 'ACCEPTED_BY_BATCH_POLICY' else 'needs_replan' if state == 'REJECTED' else 'collected_pending_review'
+                con.execute('UPDATE m4_tasks SET status=?,quota_reserved=? WHERE task_key=?',
+                            (task_state,int(state!='REJECTED'),captured['task_key']))
+                payload = {'sample_id':row['sample_id'],'status':'PASS' if state=='ACCEPTED_BY_BATCH_POLICY' else 'FAIL' if state=='REJECTED' else 'REVIEW_REQUIRED',
+                    'quality_admission':state,'ai_status':row['ai_status'],'report':reference}
+                self._event(con,'pool_qc_result',timestamp(None),payload,captured['task_key'])
+                self._event(con,'batch_quality_recorded',timestamp(None),{**payload,'group_id':row['group_id'],'plan_revision':revision},captured['task_key'])
+            affected = {g for g,u in actual['quality_units'].items() if u['new_group_issue']}
+            current_ids = {r['sample_id'] for r in actual['rows']}
+            for group in affected:
+                trigger = {'group_id':group,'report':reference}
+                if con.execute("SELECT 1 FROM m4_events WHERE campaign_id=? AND event_type='batch_quality_group_hold' AND payload_json=?",
+                        (policy['campaign_id'],canonical(trigger))).fetchone():
+                    continue
+                self._event(con,'batch_quality_group_hold',timestamp(None),trigger)
+                for old in con.execute("SELECT * FROM m4_quality_admissions WHERE campaign_id=? AND group_id=? AND quality_status='ACCEPTED_BY_BATCH_POLICY'", (policy['campaign_id'],group)).fetchall():
+                    if old['sample_id'] in current_ids:
+                        continue
+                    con.execute("UPDATE m4_quality_admissions SET quality_status='REVOKED',force_full=1 WHERE sample_id=?",(old['sample_id'],))
+                    key=con.execute('SELECT task_key FROM m4_attempts WHERE sample_id=?',(old['sample_id'],)).fetchone()[0]
+                    con.execute("UPDATE m4_tasks SET status='quality_revoked',quota_reserved=0 WHERE task_key=?",(key,))
+                    self._event(con,'batch_quality_revoked',timestamp(None),{'sample_id':old['sample_id'],'trigger':reference,'group_id':group},key)
+            self._check_quota(con,policy)
+        return self.quality_progress()
+
+    def quality_progress(self, *, baseline_ids=(), target=1000):
+        from .planning import verify_evidence
+        if type(target) is not int or target < 1:
+            raise ValueError('Positive explicit target required')
+        with closing(self._connect(readonly=True)) as con:
+            campaign = self._policy(con)['campaign_id']
+            exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_quality_admissions'").fetchone()
+            rows = list(con.execute('SELECT * FROM m4_quality_admissions WHERE campaign_id=?',(campaign,))) if exists else []
+            attempts = con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=? AND started_at IS NOT NULL',(campaign,)).fetchone()[0]
+            saved = con.execute("SELECT COUNT(*) FROM m4_fragment_captures WHERE campaign_id=?",(campaign,)).fetchone()[0] if exists else 0
+        for row in rows:
+            verify_evidence([json.loads(row['report_json'])])
+        accepted = [r for r in rows if r['quality_status']=='ACCEPTED_BY_BATCH_POLICY' and r['sample_id'] not in set(baseline_ids)]
+        return {'policy_version':'qc-sampling-v1-20261030','actual_attempts':attempts,'saved_fragments':saved,
+            'accepted_ai_pass':sum(r['ai_status']=='PASS' for r in accepted),
+            'accepted_not_selected':sum(r['ai_status']=='NOT_SELECTED' for r in accepted),
+            'accepted_count':len(accepted),'pending_count':saved-sum(r['quality_status']!='PENDING' for r in rows),
+            'revoked_count':sum(r['quality_status']=='REVOKED' for r in rows),
+            'target':target,'deficit':max(0,target-len(accepted)),'target_met':len(accepted)>=target,
+            'effective_sample_ids':sorted(r['sample_id'] for r in accepted),'published':False,'customer_acceptance':'UNKNOWN'}
 
     def record_publication(self, release_id, sample_ids, evidence, *, now=None):
         if not isinstance(release_id, str) or not release_id.strip() or not isinstance(sample_ids, list) or not sample_ids or len(set(sample_ids)) != len(sample_ids):

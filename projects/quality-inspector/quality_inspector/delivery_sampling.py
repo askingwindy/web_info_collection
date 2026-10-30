@@ -76,6 +76,9 @@ def _same_bytes(expected, root):
 
 
 def _selection(slots, policy, role, *, random_only=False):
+    if role == 'ai' and policy.get('production_sampling'):
+        from .production_sampling import selected
+        return selected(slots, policy, random_only=random_only)
     groups = {}
     for slot in slots:
         key = slot['site_id'] if policy['stratify'] == 'site' else 'batch'
@@ -99,7 +102,7 @@ def _seal(plan):
     return plan
 
 
-def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='batch', risk_selected=None):
+def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='batch', risk_selected=None, production_context=None):
     """Freeze one candidate population; mechanical acceptance remains separate."""
     from .format_checks import run
     root = Path(dataset).resolve(); output = Path(output).resolve()
@@ -128,6 +131,11 @@ def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='
         if not isinstance(site, str) or not site.strip(): raise ValueError('Every frozen sample needs an actual site_id')
         slots.append({'slot_id': sid, 'site_id': site, 'initial': item, 'current': item,
                       'replacement_history': []})
+    if production_context is not None:
+        if ai_percent != 10 or human_percent != 0:
+            raise ValueError('Versioned production policy uses 10% base AI and no new fixed human gate')
+        from .production_sampling import attach
+        attach(policy, slots, production_context)
     for role in ('ai', 'human'):
         chosen = _selection(slots, policy, role)
         for slot in slots: slot[role + '_selected'] = slot['slot_id'] in chosen
@@ -193,6 +201,9 @@ def verify(plan_path, dataset=None, _visited=None):
     elif plan.get('implementation_sha256') != sha(__file__):
         raise ValueError('Legacy sampling implementation changed; freeze a new scope')
     policy = plan['policy']; _percent(policy['ai_percent']); _percent(policy['human_percent'])
+    if policy.get('production_sampling'):
+        from .production_sampling import verify as verify_production
+        verify_production(plan)
     if (policy.get('rounding') != 'ceil' or policy.get('replacement_human_required') is not True
             or policy.get('stratify') not in ('batch', 'site') or not isinstance(policy.get('seed'), str) or not policy['seed'].strip()):
         raise ValueError('Invalid frozen sampling policy')
@@ -209,9 +220,14 @@ def verify(plan_path, dataset=None, _visited=None):
     if parent:
         if sha(parent['path']) != parent['sha256']: raise ValueError('Replacement parent plan changed')
         previous = verify(parent['path'], _visited=visited)
-        if (plan['revision'] != previous['revision'] + 1 or policy != previous['policy']
-                or ids != [row['slot_id'] for row in previous['slots']]):
-            raise ValueError('Replacement cannot change denominator, policy or frozen slots')
+        if plan.get('expansion'):
+            from .production_sampling import verify_expansion
+            verify_expansion(plan, previous)
+            previous = None  # Expansion changes selection, never sample slots/replacement history.
+        else:
+            if (plan['revision'] != previous['revision'] + 1 or policy != previous['policy']
+                    or ids != [row['slot_id'] for row in previous['slots']]):
+                raise ValueError('Replacement cannot change denominator, policy or frozen slots')
     elif plan.get('revision') != 0 or any(slot['replacement_history'] or slot['initial'] != slot['current'] for slot in slots):
         raise ValueError('Initial sampling plan cannot invent replacement history')
     seen = []
@@ -501,6 +517,16 @@ def evaluate(plan_path, dataset, *, ai_reviews=(), human_reviews=(),ai_failures=
               'ai_failure_sources':failure_sources,
               'identity_authenticated': False, 'actual_reading_authenticated': False,
               'unselected_semantic_pass_claimed': False}
+    if plan['policy'].get('production_sampling'):
+        from .production_sampling import evaluate as evaluate_production
+        rows, effective, units = evaluate_production(plan, ai, human, failures, errors)
+        result.update(rows=rows, quality_units=units, production_policy=plan['policy']['production_sampling']['version'],
+            status='REVIEW_REQUIRED' if any(u['status'] != 'ACCEPTED' for u in units.values()) else 'PASS',
+            batch_accepted=sum(r['quality_admission']=='ACCEPTED_BY_BATCH_POLICY' for r in rows),
+            accepted_ai_pass=sum(r['quality_admission']=='ACCEPTED_BY_BATCH_POLICY' and r['ai_status']=='PASS' for r in rows),
+            accepted_not_selected=sum(r['quality_admission']=='ACCEPTED_BY_BATCH_POLICY' and r['ai_status']=='NOT_SELECTED' for r in rows),
+            ai_pending_count=sum(r['ai_status']=='REVIEW_REQUIRED' for r in rows), human_pending_count=0,
+            replacement_required_count=sum(r['ai_status']=='FAIL' for r in rows), human_queue=[])
     return result, effective
 
 

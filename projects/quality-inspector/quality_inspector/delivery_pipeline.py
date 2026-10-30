@@ -159,6 +159,8 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
     if document_review_mode not in ('ai','human'):raise ValueError('Explicit ai or human documentary review mode required')
     dataset=Path(dataset).resolve();plan_path=Path(plan_path).resolve()
     plan=delivery_sampling.verify(plan_path,dataset)
+    if plan['policy'].get('production_sampling') and mode=='real' and production_handoff is None:
+        raise ValueError('Versioned sampled production QC requires original captured handoff')
     scope=verify_delivery_scope(effective_set,cross_package_report,dataset=dataset,phase='payload')
     manifest=_read(effective_set)
     if manifest.get('schema_version')!='qc-cumulative-set-1':raise ValueError('An explicit frozen cumulative set is required')
@@ -486,6 +488,9 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
     report=inspect(None,receipt['dataset'],profile=receipt['profile']['path'],reviews=reviews,
                    inspection_stage='payload',delivery_sampling_plan=receipt['plan']['path'],
                    human_reviews=human_paths,ai_failures=failure_paths)
+    if report.get('semantic_sampling', {}).get('production_policy') and receipt['mode']=='real':
+        from .production_sampling import quality_report
+        report['production_quality'] = quality_report(report, receipt['effective_set'], receipt['cross_package_report'], receipt.get('production_handoff'))
     if receipt['mode']=='controlled':
         report['release_ready']=False;report['pipeline_execution_mode']='controlled'
     report_dir=output/'payload-qc';write_outputs(report,report_dir)
@@ -494,7 +499,7 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
     committed_history=_commit_humans(ledger,human_imports,receipt,history_before)
     sampling=report['semantic_sampling']
     human_queue=[row for row in sampling['rows'] if row['status']=='HUMAN_REQUIRED']
-    replacements=[row for row in sampling['rows'] if row['status']=='REPLACE_REQUIRED']
+    replacements=[row for row in sampling['rows'] if row['status'] in ('REPLACE_REQUIRED','REJECTED')]
     document=report['delivery_document_review'];doc_job=ledger.get(receipt['document_job']) if receipt['document_job'] else None
     raw_document=_read(worker['review_file']).get('delivery_document_review')
     from .profiles import delivery_document_review
@@ -546,6 +551,7 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
              'pipeline_model_usage':_usage(ledger,receipt),
              'elapsed_since_prepare_seconds':(datetime.now(timezone.utc)-datetime.fromisoformat(receipt['created_at_utc'])).total_seconds(),
              'job_states':dict(Counter(ledger.get(jid)['state'] for jid in receipt['jobs'])),
+             **({'production_quality': report['production_quality']} if report.get('production_quality') else {}),
              'progress_import':imported,'release_ready':False,'customer_acceptance':'UNKNOWN'}
     delivery_sampling.write(output/'status.json',summary)
     _issue_status(ledger,receipt_path,receipt,output/'status.json',committed_history)
@@ -558,6 +564,51 @@ def status(receipt_path,output,*,human_reviews=(),progress=None,request_id=None)
         _external(output,_roots(receipt),[receipt_path,*human_reviews])
         if progress is not None and receipt['mode']!='real':raise ValueError('Controlled QC must not update real site progress')
         return _status(ledger,receipt_path,output,human_reviews=human_reviews,progress=progress,request_id=request_id)
+
+
+def expand_sampling(receipt_path, status_path, output):
+    """Freeze/queue the next justified QC stage; no collection or model dispatch."""
+    from .production_sampling import advance
+    with _lock(receipt_path):
+        receipt=verify(receipt_path);ledger=_ledger(receipt);summary=_read(status_path)
+        _verify_issued_status(ledger,receipt_path,_ref(status_path),summary['human_history_sha256'])
+        if summary['receipt'] != _ref(receipt_path):
+            raise ValueError('Expansion status belongs to another pipeline')
+        report=_read(summary['report']['path']);sampling=report['semantic_sampling']
+        if not sampling.get('production_policy'):
+            raise ValueError('Only versioned sampled production QC supports staged expansion')
+        output=_external(output,_roots(receipt),[receipt_path,status_path]);output.mkdir(parents=True,exist_ok=False)
+        proof=sampling['review_sources']
+        result=advance(receipt['plan']['path'],receipt['dataset'],output/'sampling-plan.json',
+            ai_reviews=[r['path'] for r in proof['ai']],human_reviews=[r['path'] for r in proof['human']],
+            ai_failures=[r['path'] for r in sampling.get('ai_failure_sources',[])])
+        if not result['changed']:
+            return {'changed':False,'receipt':str(receipt_path),'quality_units':result['assessment']['quality_units']}
+        prepared=prepare(ledger,receipt['dataset'],result['plan'],receipt['effective_set']['path'],output/'pipeline',
+            profile=receipt['profile']['path'],mode=receipt['mode'],
+            supporting_files=[r['path'] for r in receipt['supporting_files']],
+            cross_package_report=receipt['cross_package_report']['path'],
+            collection_checks=receipt.get('collection_checks'),document_review_mode=receipt['document_review_mode'],
+            production_handoff=receipt.get('production_handoff'))
+        return {'changed':True,**prepared,'original_population_retained':True,'model_requests_dispatched':0}
+
+
+def run_sampled(receipt_path, output, *, max_jobs_per_round=100, max_rounds=3):
+    """Bounded 10/30/100 loop using the same ledger/budgets and immutable receipts."""
+    if type(max_rounds)is not int or not 1<=max_rounds<=3:
+        raise ValueError('At most the three explicit sampling stages may run')
+    current=str(receipt_path);output=Path(output).resolve();summaries=[]
+    for number in range(max_rounds):
+        summary=run(current,output/f'round-{number+1}',max_jobs=max_jobs_per_round);summaries.append(summary)
+        units=summary.get('production_quality',{}).get('quality_units',{})
+        if not any(u['required_percent']>u['stage_percent'] for u in units.values()) or number+1==max_rounds:
+            break
+        next_stage=expand_sampling(current,output/f'round-{number+1}'/'status.json',output/f'expansion-{number+1}')
+        if not next_stage['changed']:
+            break
+        current=next_stage['receipt']
+    return {'current_receipt':current,'rounds':summaries,'collection_started':False,
+            'production_quality':summaries[-1].get('production_quality'),'release_ready':False}
 
 
 def run(receipt_path,output,*,max_jobs=100,human_reviews=(),progress=None,request_id=None):
@@ -650,6 +701,9 @@ def main(argv=None):
         p.add_argument('--human-reviews',type=Path,action='append',default=[])
         if name=='run':p.add_argument('--max-jobs',type=int,default=100)
         p.add_argument('--progress-state',type=Path);p.add_argument('--production-registry',type=Path);p.add_argument('--request-id')
+    p=sub.add_parser('run-sampled');p.add_argument('--receipt',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--max-jobs-per-round',type=int,default=100);p.add_argument('--max-rounds',type=int,default=3)
+    p=sub.add_parser('expand-sampling');p.add_argument('--receipt',type=Path,required=True);p.add_argument('--status',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     p=sub.add_parser('finalize');p.add_argument('--receipt',type=Path,required=True);p.add_argument('--status',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--archive',type=Path)
     p.add_argument('--progress-state',type=Path);p.add_argument('--production-registry',type=Path);p.add_argument('--request-id')
@@ -669,6 +723,10 @@ def main(argv=None):
                            cross_package_report=args.cross_package_report,collection_checks=args.collection_checks,
                            document_review_mode=args.document_review_mode,
                            production_handoff=_ref(args.production_handoff) if args.production_handoff else None)
+        elif args.command=='run-sampled':
+            result=run_sampled(args.receipt,args.output,max_jobs_per_round=args.max_jobs_per_round,max_rounds=args.max_rounds)
+        elif args.command=='expand-sampling':
+            result=expand_sampling(args.receipt,args.status,args.output)
         elif args.command=='finalize':
             progress=None
             if args.progress_state or args.production_registry:
