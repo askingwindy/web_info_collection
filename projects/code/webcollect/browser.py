@@ -19,8 +19,13 @@ _SCREENSHOT_SESSIONS=weakref.WeakKeyDictionary()
 _CAPTURE_FRAMES=weakref.WeakKeyDictionary()
 CAPTURE_VERSION='webcollect-capture-2'
 STABILITY_V2='webcollect-related-stability-2'
-STABILITY_VERSION='webcollect-related-stability-3'
-STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_VERSION)
+STABILITY_V3='webcollect-related-stability-3'
+# v4: the repaint-noise guard now keys on the element tag (native_role) and
+# 'window'-typed opaque frames, not on element_type alone. Canvas/video/iframe
+# tags previously defaulted to 'text' and escaped their intended guard set, so
+# genuine self-painting content changes could pass as compact repaint noise.
+STABILITY_VERSION='webcollect-related-stability-4'
+STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_V3,STABILITY_VERSION)
 # Compact repaint-noise bounds, verified by the fixture set in
 # test_related_capture_stability: antialias/underline strips stay thin in one
 # dimension, tiny in area, low-amplitude, and away from text/interactive boxes.
@@ -28,6 +33,10 @@ _NOISE_MAX_COMPONENTS=4
 _NOISE_MAX_POINTS=96
 _NOISE_MAX_LONG_EDGE=384
 _NOISE_MAX_SHORT_EDGE=8
+# Self-painting surfaces whose repaint is real content, never exempted as
+# noise: opaque frames render as element_type 'window', and canvas/video/
+# iframe/embed/object tags carry their tag in native_role.
+_SELF_PAINTING_ROLES=('canvas','video','iframe','frame','embed','object')
 
 
 class EvidenceStale(ValueError):
@@ -43,6 +52,18 @@ class PlanViewportInfeasible(ValueError):
     order did not expose the target first. Never a site business failure.
     """
     responsibility = 'collector'
+
+
+class PlanLabelUnreadable(ValueError):
+    """The plan's target label is not fully visible at execution time.
+
+    Planning responsibility: the fragment cited a control whose visible label
+    evidence does not cover the planned label (e.g. clipped by the fold or a
+    collapsed container). The page itself remains usable — this is a task-level
+    replan signal, never a whole-site failure.
+    """
+    responsibility = 'model'
+    recoverable_before_dispatch = True
 
 _CAPTURE_RETRY_DELAYS=(0.1,0.25,0.5,1.0,1.5,2.0,2.5)
 _CAPTURE_WAIT_BUDGET=8.0
@@ -298,22 +319,35 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                     for point in points:mask.putpixel(point,255)
                     border_proof.append({'bbox':box,'points':[list(point) for point in sorted(points)],'rgb_deltas':deltas,
                                          'rule':'plain-nontask-border-low-contrast-1'})
-        # v3 only, never a reinterpretation of recorded v1/v2 failures: a fully
-        # identical DOM fingerprint (values, text, geometry, readiness) cannot
-        # hide a character, focus, checkbox or layout change — those all alter
-        # the fingerprint. What remains is sub-pixel repaint noise on untracked
-        # lines, tolerated only when compact, low-amplitude and away from every
-        # text/interactive element box.
+        # v3/v4 only, never a reinterpretation of recorded v1/v2 failures: a
+        # fully identical DOM fingerprint (values, text, geometry, readiness)
+        # cannot hide a character, focus, checkbox or layout change — those all
+        # alter the fingerprint. What remains is sub-pixel repaint noise on
+        # untracked lines, tolerated only when compact, low-amplitude and away
+        # from every text/interactive element box.
         paint_noise_proof=[]
-        if (rule_version==STABILITY_VERSION and allow_border and related and full
+        if (rule_version in (STABILITY_V3,STABILITY_VERSION) and allow_border and related and full
                 and before['capture_readiness'].get('document_ready')=='complete'):
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             guard=[]
             for element in before.get('elements',[]):
                 # DOM-backed text and control values cannot change under an
                 # identical fingerprint; only self-painting surfaces can, and
-                # those boxes stay guarded.
-                if element.get('element_type') not in ('image','canvas','video','iframe','embed','object'):continue
+                # those boxes stay guarded. v3 keyed on element_type, which
+                # canvas/video/iframe tags never receive (they default to
+                # 'text'); v4 additionally guards by native_role and opaque
+                # 'window' frames so real repaints of embedded paint surfaces
+                # are never exempted by the small-pixel threshold. v3 receipts
+                # keep their exact original guard on revalidation.
+                if rule_version==STABILITY_V3:
+                    if element.get('element_type') not in ('image','canvas','video','iframe','embed','object'):
+                        continue
+                else:
+                    role=(element.get('native_role') or '').lower()
+                    if (element.get('element_type') not in ('image','canvas','video','iframe','embed','object')
+                            and element.get('element_type')!='window'
+                            and role not in _SELF_PAINTING_ROLES):
+                        continue
                 box=element.get('bbox')
                 if isinstance(box,list) and len(box)==4 and box[2]-2>box[0] and box[3]-2>box[1]:
                     guard.append((box[0]+1,box[1]+1,box[2]-1,box[3]-1))
@@ -351,7 +385,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                 for component,box,deltas in compliant:
                     for x,y in component:mask.putpixel((x,y),255)
                     paint_noise_proof.append({'bbox':list(box),'points':[list(point) for point in sorted(component)],'rgb_deltas':deltas,
-                                              'rule':'compact-repaint-noise-v1'})
+                                              'rule':'compact-repaint-noise-v2' if rule_version==STABILITY_VERSION else 'compact-repaint-noise-v1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
                       'bbox':list(changed.getbbox()) if changed.getbbox() else None,
@@ -536,36 +570,69 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
         raise
 
 
+_PREVERIFY_RETRY_DELAYS=(0.25,0.5)
+
+
 async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None):
-    """Reject any changed captured state before dispatch, including non-control actions."""
+    """Reject any changed captured state before dispatch, including non-control actions.
+
+    Nothing has been dispatched here, so a transient paint mismatch may be
+    resolved by a bounded re-observation: re-verify a limited number of times,
+    escalating the border tolerance exactly like the capture retry path. A
+    changed DOM fingerprint is a real state change and never retried. Every
+    failed proof is retained; an accepted re-verification records the rejections
+    it superseded. No action is ever replayed by this function.
+    """
     options={'assertions':assertions,**({'protected_selectors':protected_selectors} if protected_selectors else {})}
     live=await observe(page,selector,index,**options)
     if 'capture_readiness' in state:
         captured=_CAPTURE_FRAMES.get(page)
         if not captured or captured['state']!=state:raise ValueError('派发缺少本次原始capture像素绑定')
-        png,method=await asyncio.wait_for(viewport_png(page),timeout=25)
-        final=await observe(page,selector,index,**options)
-        proof=stability_pair(state,live,captured['png'],png,allow_border=captured.get('border_enabled',False))
-        final_proof=stability_pair(state,final,captured['png'],png,allow_border=captured.get('border_enabled',False))
-        if not proof['accepted'] or not final_proof['accepted']:
-            error=EvidenceStale('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
-            # The later failure screenshot cannot explain this exact rejection.
-            # Reuse the collector's existing capture_failure companion to retain
-            # the rejected comparison, without replacing the original step PNG.
-            error.capture={'schema_version':'webcollect-execution-state-rejection-1',
+        rejections=[]
+        delays=iter(_PREVERIFY_RETRY_DELAYS)
+        while True:
+            png,method=await asyncio.wait_for(viewport_png(page),timeout=25)
+            final=await observe(page,selector,index,**options)
+            allow_border=captured.get('border_enabled',False) or bool(rejections)
+            proof=stability_pair(state,live,captured['png'],png,allow_border=allow_border)
+            final_proof=stability_pair(state,final,captured['png'],png,allow_border=allow_border)
+            if proof['accepted'] and final_proof['accepted']:
+                return {'matched':True,'full_state_matched':proof['full_dom_stable'] and final_proof['full_dom_stable'],
+                        'state_fingerprint':fingerprint(state),'live_state_fingerprint':fingerprint(live),
+                        'final_state_fingerprint':fingerprint(final),'target':live.get('target'),'stability':proof,'final_stability':final_proof,
+                        'live_state':live,'final_state':final,'png_base64':base64.b64encode(png).decode('ascii'),'screenshot':method,
+                        **({'superseded_rejections':rejections} if rejections else {})}
+            rejections.append({'schema_version':'webcollect-execution-state-rejection-1',
                 'snapshot_before':state,'snapshot_live':live,'snapshot_final':final,
-                'allow_border':captured.get('border_enabled',False),
+                'allow_border':allow_border,
                 'original_png_base64':base64.b64encode(captured['png']).decode('ascii'),
                 'comparison_png_base64':base64.b64encode(png).decode('ascii'),
                 'comparison_screenshot':method,'stability':proof,'final_stability':final_proof,
                 'accepted_as_formal_frame':False,'action_executed':False,
                 'mismatch_fields':[key for key in sorted(state.keys()|live.keys()|final.keys())
-                                   if state.get(key)!=live.get(key) or state.get(key)!=final.get(key)]}
-            raise error
-        return {'matched':True,'full_state_matched':proof['full_dom_stable'] and final_proof['full_dom_stable'],
-                'state_fingerprint':fingerprint(state),'live_state_fingerprint':fingerprint(live),
-                'final_state_fingerprint':fingerprint(final),'target':live.get('target'),'stability':proof,'final_stability':final_proof,
-                'live_state':live,'final_state':final,'png_base64':base64.b64encode(png).decode('ascii'),'screenshot':method}
+                                   if state.get(key)!=live.get(key) or state.get(key)!=final.get(key)]})
+            # A changed DOM fingerprint means the planned state itself is gone;
+            # only pixel-only mismatches may resolve through re-observation.
+            dom_changed=not (proof['related_dom_stable'] and final_proof['related_dom_stable'])
+            delay=next(delays,None)
+            if dom_changed or delay is None:
+                error=EvidenceStale('截图后相关状态或像素发生变化，拒绝用陈旧坐标或终态执行')
+                # The later failure screenshot cannot explain this exact rejection.
+                # Reuse the collector's existing capture_failure companion to retain
+                # the rejected comparison, without replacing the original step PNG.
+                error.capture={'schema_version':'webcollect-execution-state-rejection-1',
+                    'snapshot_before':state,'snapshot_live':live,'snapshot_final':final,
+                    'allow_border':allow_border,
+                    'original_png_base64':base64.b64encode(captured['png']).decode('ascii'),
+                    'comparison_png_base64':base64.b64encode(png).decode('ascii'),
+                    'comparison_screenshot':method,'stability':proof,'final_stability':final_proof,
+                    'accepted_as_formal_frame':False,'action_executed':False,
+                    'rejections':rejections,
+                    'mismatch_fields':[key for key in sorted(state.keys()|live.keys()|final.keys())
+                                       if state.get(key)!=live.get(key) or state.get(key)!=final.get(key)]}
+                raise error
+            await asyncio.sleep(delay)
+            live=await observe(page,selector,index,**options)
     if fingerprint(live)!=fingerprint(state):
         changed=[key for key in sorted(live.keys()|state.keys()) if live.get(key)!=state.get(key)]
         raise EvidenceStale('截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：'+','.join(changed))
@@ -591,7 +658,7 @@ def prepare_action(state, operation):
             compact=lambda text:re.sub(r'\s+','',text)
             labels=target.get('visible_label_evidence',[])
             if not any(compact(expected_label) in compact(row.get('text','')) for row in labels):
-                raise ValueError('M4_TARGET_LABEL_UNREADABLE: 目标文字未完整可读；可命中裁切框或无障碍名称不能代替可见标签')
+                raise PlanLabelUnreadable('M4_TARGET_LABEL_UNREADABLE: 目标文字未完整可读；可命中裁切框或无障碍名称不能代替可见标签')
         if action in POINTER:
             if not target['hit_valid']:raise ValueError('目标中心被其他元素遮挡')
             parameters.update(x=target['coordinate'][0],y=target['coordinate'][1])

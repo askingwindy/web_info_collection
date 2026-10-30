@@ -31,9 +31,10 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
-    from .browser import EvidenceStale, PlanViewportInfeasible
+    from .browser import EvidenceStale, PlanViewportInfeasible, PlanLabelUnreadable
     if isinstance(error,EvidenceStale):return 'program'
     if isinstance(error,PlanViewportInfeasible):return 'collector'
+    if isinstance(error,PlanLabelUnreadable):return 'model'
     from .runtime import ImageCommitConflict
     if isinstance(error, ImageCommitConflict):
         return 'duplicate'

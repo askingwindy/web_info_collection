@@ -878,6 +878,9 @@
       text:clean(visibleText(node)),target_text:name(node),value:node.matches('input,textarea,select')&&typeof node.value==='string'?node.value:null,value_visible:nativeValueVisible(node),
       display_value:node.tagName==='SELECT'?[...node.selectedOptions].map(option=>clean(option.label||option.textContent)).join(' '):
         (typeof node.value==='string'?node.value:null),
+      // Only SELECT display_value is rendered text; input/textarea display_value
+      // is the DOM value itself and can never prove screenshot visibility.
+      display_source:node.tagName==='SELECT'?'rendered-option-text':'dom-value',
       checked:control?.matches('input[type=radio],input[type=checkbox]')?control.checked:null,
       disabled:node.matches(':disabled')||node.getAttribute('aria-disabled')==='true',
       bbox:[rect.left,rect.top,rect.right,rect.bottom],...('html_table_matrix' in condition?{html_table_evidence:tableEvidence}:{}),

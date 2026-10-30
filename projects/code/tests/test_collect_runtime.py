@@ -16,6 +16,17 @@ class RecoveryAdapterTests(unittest.TestCase):
         self.assertEqual(classify_failure(TimeoutError()), 'semantic')
         self.assertEqual(classify_failure(CollectionFailure('same screenshot', 'duplicate')), 'duplicate')
 
+    def test_planning_choice_rejections_are_model_not_site_failures(self):
+        """M4_TARGET_LABEL_UNREADABLE is a plan defect: the task replans, the
+        site keeps its failure margin (sync_formal skips 'model')."""
+        from webcollect.browser import PlanLabelUnreadable, PlanViewportInfeasible
+        error = PlanLabelUnreadable('M4_TARGET_LABEL_UNREADABLE: 目标文字未完整可读')
+        self.assertEqual(classify_failure(error), 'model')
+        self.assertEqual(classify_failure(PlanViewportInfeasible('目标未出现在当前视口')), 'collector')
+        # The exact legacy message raised as a bare ValueError still maps to
+        # semantic only when it is not the typed planning exception.
+        self.assertEqual(classify_failure(ValueError('M4_TARGET_LABEL_UNREADABLE: x')), 'semantic')
+
     def test_committed_completion_is_verified_and_failed_partial_is_quarantined(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

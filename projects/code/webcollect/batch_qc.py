@@ -60,8 +60,14 @@ def main(argv=None):
 
 
 
-def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', supporting_files=(), mode='real'):
-    """Prepare existing sample and one batch documentary job; dispatch remains explicit."""
+def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', supporting_files=(), mode='real', sample_reviews=None):
+    """Prepare existing sample and one batch documentary job; dispatch remains explicit.
+
+    Actual sample reviews from a prior run of the same frozen plan are forwarded
+    as a documentary supporting file so the documents job can verify review
+    coverage instead of reporting NOT_SUPPLIED; visual/difference jobs are
+    content-addressed and reuse their completed ledger results.
+    """
     from quality_inspector.delivery_pipeline import prepare as prepare_reviews
     receipt=load_json(batch_receipt)
     if receipt['status']!='QC_NOT_RUN':raise ValueError('A mechanically checked batch is required')
@@ -70,6 +76,7 @@ def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', s
     return prepare_reviews(ledger,handoff['dataset'],receipt['handoff']['sampling_plan'],
         receipt['effective_set'],output,cross_package_report=receipt['cross_package_report'],
         document_review_mode=document_review_mode,supporting_files=supporting_files,mode=mode,
+        sample_reviews=sample_reviews,
         **({'production_handoff':{'path':receipt['handoff']['receipt'],'sha256':file_sha(receipt['handoff']['receipt'])}}
             if mode=='real' else {}),**kwargs)
 

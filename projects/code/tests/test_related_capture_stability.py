@@ -334,7 +334,11 @@ class CompactRepaintNoiseTests(unittest.TestCase):
         self.assertGreaterEqual(proof['pixel_change']['changed_pixels'], 1)
         self.assertEqual(proof['pixel_change']['outside_allowed_pixels'], 0)
         noise = proof.get('paint_noise_proof', [])
-        self.assertEqual({entry['rule'] for entry in noise}, {'compact-repaint-noise-v1'})
+        # The default rule version stamps its own noise-rule label; v4 receipts
+        # carry compact-repaint-noise-v2 (tag/window-aware paint guard).
+        self.assertEqual({entry['rule'] for entry in noise},
+                         {'compact-repaint-noise-v2' if browser.STABILITY_VERSION == 'webcollect-related-stability-4'
+                          else 'compact-repaint-noise-v1'})
         for kwargs, label in ((dict(allow_border=False), 'v3-first-attempt'),
                               (dict(allow_border=True, rule_version=browser.STABILITY_V2), 'v2-receipt')):
             with self.subTest(rule=label):
@@ -369,6 +373,31 @@ class CompactRepaintNoiseTests(unittest.TestCase):
         # Away from paint surfaces, low amplitude passes even next to DOM text.
         proof = browser.stability_pair(self._guarded_state(), self._guarded_state(), original, comparison, allow_border=True)
         self.assertTrue(proof['accepted'])
+
+    def test_v4_guards_tag_keyed_and_window_paint_surfaces(self):
+        """Snapshot reality: canvas/video/iframe tags default to element_type
+        'text' and opaque frames become 'window'; v4 must guard them anyway."""
+        original, comparison = self._strip_pair(delta=2)
+        for label, extra in (('canvas-tag', {'native_role': 'canvas'}),
+                             ('video-tag', {'native_role': 'video'}),
+                             ('iframe-tag', {'native_role': 'iframe'}),
+                             ('opaque-window', {'element_type': 'window', 'native_role': 'iframe'})):
+            with self.subTest(case=label):
+                paint_state = self._guarded_state()
+                paint_state['elements'] = [
+                    {'element_id': 'e_9', 'element_type': 'text', 'text': '', 'bbox': [0, 0, 40, 10],
+                     'visible': True, 'clickable': False, 'inputable': False, **extra}]
+                # v4 (current default) rejects repaint inside the paint surface.
+                proof = browser.stability_pair(paint_state, paint_state, original, comparison, allow_border=True)
+                self.assertFalse(proof['accepted'])
+                # A v3 receipt keeps its exact original element_type-only guard,
+                # which never covered tag-keyed paint surfaces: the same strip
+                # stayed tolerable there. Recorded v3 PASS receipts reproduce.
+                v3 = browser.stability_pair(paint_state, paint_state, original, comparison,
+                                            allow_border=True, rule_version=browser.STABILITY_V3)
+                self.assertTrue(v3['accepted'])
+                self.assertEqual({entry['rule'] for entry in v3.get('paint_noise_proof', [])},
+                                 {'compact-repaint-noise-v1'})
 
     def test_amplitude_component_and_count_limits_hold(self):
         base = self._guarded_state()
