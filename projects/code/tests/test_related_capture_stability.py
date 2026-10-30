@@ -295,4 +295,95 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaisesRegex(ValueError,'拒绝保存'):await browser.capture(self.page,'#go',retries=1)
 
 
+class CompactRepaintNoiseTests(unittest.TestCase):
+    """v3 compact-repaint tolerance; fixtures mirror the real 108ai divider case
+    (15 px, RGB ±2, 361x5 strip on input/result-box top edges), rebuilt
+    synthetically because offline verification may not read production dirs."""
+
+    def _real_like_state(self):
+        base = state(); base['capture_images'] = []; base['screen_resolution'] = [1280, 720]
+        base['visible_text'] = '单位换算器 2.54'
+        base['elements'] = [
+            {'element_id': 'e_i', 'element_type': 'input', 'text': '数值', 'bbox': [500, 45, 831, 89],
+             'visible': True, 'enabled': True, 'clickable': True, 'inputable': True},
+            {'element_id': 'e_t', 'element_type': 'text', 'text': '2.54', 'bbox': [857, 45, 1187, 98],
+             'visible': True, 'enabled': True, 'clickable': False, 'inputable': False}]
+        base['values'] = [{'element_id': 'e_i', 'value': '2.54', 'focused': False, 'readonly': False,
+                           'display_value': '2.54', 'value_visible': True}]
+        return base
+
+    def _real_like_pair(self):
+        from PIL import ImageDraw
+        first = Image.new('RGB', (1280, 720), (249, 251, 252))
+        last = first.copy()
+        # Sparse antialias jitter: 15 of the strip's pixels shift by 2 per channel,
+        # mirroring the real saved evidence without reading production dirs.
+        for x in range(500, 515):
+            last.putpixel((x, 46), (247, 249, 251))
+        streams = []
+        for bitmap in (first, last):
+            stream = BytesIO(); bitmap.save(stream, format='PNG'); streams.append(stream.getvalue())
+        return streams
+
+    def test_divider_strip_tolerated_on_retry_only(self):
+        state = self._real_like_state()
+        original, comparison = self._real_like_pair()
+        proof = browser.stability_pair(state, state, original, comparison, allow_border=True)
+        self.assertTrue(proof['accepted'])
+        self.assertTrue(proof['full_dom_stable'])
+        self.assertGreaterEqual(proof['pixel_change']['changed_pixels'], 1)
+        self.assertEqual(proof['pixel_change']['outside_allowed_pixels'], 0)
+        noise = proof.get('paint_noise_proof', [])
+        self.assertEqual({entry['rule'] for entry in noise}, {'compact-repaint-noise-v1'})
+        for kwargs, label in ((dict(allow_border=False), 'v3-first-attempt'),
+                              (dict(allow_border=True, rule_version=browser.STABILITY_V2), 'v2-receipt')):
+            with self.subTest(rule=label):
+                proof = browser.stability_pair(state, state, original, comparison, **kwargs)
+                self.assertFalse(proof['accepted'])
+                self.assertNotIn('paint_noise_proof', proof)
+
+    def _guarded_state(self, text_box=((10, 5), (30, 15))):
+        base = state(); base['capture_images'] = []; base['elements'] = [
+            {'element_id': 'e_1', 'text': '结果文本', 'bbox': [text_box[0][0], text_box[0][1], text_box[1][0], text_box[1][1]],
+             'visible': True, 'clickable': False, 'inputable': False}]
+        return base
+
+    def _strip_pair(self, delta=2):
+        first = Image.new('RGB', (40, 30), (240, 240, 240))
+        last = first.copy()
+        for x in range(14, 26):
+            last.putpixel((x, 2), (240 - delta, 240 - delta, 240 - delta))
+        streams = []
+        for bitmap in (first, last):
+            stream = BytesIO(); bitmap.save(stream, format='PNG'); streams.append(stream.getvalue())
+        return streams
+
+    def test_noise_inside_paint_surface_still_rejected(self):
+        original, comparison = self._strip_pair(delta=2)
+        paint_state = self._guarded_state()
+        paint_state['elements'] = [
+            {'element_id': 'e_9', 'element_type': 'canvas', 'text': '', 'bbox': [0, 0, 40, 10],
+             'visible': True, 'clickable': False, 'inputable': False}]
+        proof = browser.stability_pair(paint_state, paint_state, original, comparison, allow_border=True)
+        self.assertFalse(proof['accepted'])
+        # Away from paint surfaces, low amplitude passes even next to DOM text.
+        proof = browser.stability_pair(self._guarded_state(), self._guarded_state(), original, comparison, allow_border=True)
+        self.assertTrue(proof['accepted'])
+
+    def test_amplitude_component_and_count_limits_hold(self):
+        base = self._guarded_state()
+        for label, delta, limit in (('amplitude', 40, None), ('count', 2, 5)):
+            with self.subTest(case=label):
+                first = Image.new('RGB', (40, 30), (240, 240, 240))
+                last = first.copy()
+                columns = range(0, 40, 8) if label == 'count' else range(14, 26)
+                for x in columns:
+                    last.putpixel((x, 2), (240 - delta,) * 3)
+                streams = []
+                for bitmap in (first, last):
+                    stream = BytesIO(); bitmap.save(stream, format='PNG'); streams.append(stream.getvalue())
+                proof = browser.stability_pair(base, base, streams[0], streams[1], allow_border=True)
+                self.assertFalse(proof['accepted'])
+
+
 if __name__=='__main__':unittest.main()

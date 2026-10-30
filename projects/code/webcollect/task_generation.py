@@ -855,7 +855,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                   'capability':{'site_uri':record['site_uri'],'pages':record['capabilities']}}
         feedback=None
         if workflow_feedback:
-            if generator!='workflow-model':raise ValueError('Compiler feedback only applies to workflow-model')
+            if generator not in ('workflow-model','fragment-model'):raise ValueError('Compiler feedback only applies to workflow-model or fragment-model')
             from .workflow_planning import validate_feedback
             feedback=validate_feedback(ledger,record,workflow_feedback)
         if generator in ('workflow-model','fragment-model'):

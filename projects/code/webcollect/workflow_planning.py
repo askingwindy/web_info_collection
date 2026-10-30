@@ -85,10 +85,20 @@ def validate_feedback(ledger,capability,feedback):
     if not specs or {object_sha256(s) for s in specs}!={r.get('spec_sha256') for r in report['rejected']}:
         raise ValueError('Compiler feedback must cover the original rejected specifications')
     from .workflow_proposal import compile_workflow
+    from .fragment_workflow import compile_fragment
+    def compile_for(spec):
+        if spec.get('schema_version')=='webcollect-fragment-workflow-1':
+            return compile_fragment(capability,spec,'compiler-feedback-check')
+        return compile_workflow(capability,spec,'compiler-feedback-check')
     for spec in specs:
-        try:compile_workflow(capability,spec,'compiler-feedback-check')
+        try:compile_for(spec)
         except ValueError as error:
             if not any(r['spec_sha256']==object_sha256(spec) and r['reason']==str(error) for r in report['rejected']):raise ValueError('Compiler feedback reason changed')
         else:raise ValueError('Cannot revise a valid plan through rejection feedback')
-    return {'instruction':'仅修正以下明确编译错误。已满足的条件保留为前置断言、不计动作；不要凑步。无法自然达到5步返回空tasks及结构化原因。本协议最多修订一次，仍需完整重新编译与冻结。',
-            'prior_specs':specs,'rejections':report['rejected'],'binding':feedback}
+    fragments=any(spec.get('schema_version')=='webcollect-fragment-workflow-1' for spec in specs)
+    instruction=('仅修正以下明确编译错误。输入、替换或清空输入框一律用set_value并给value；'
+                 '折线下方控件必须先滚动露出再操作；保持5至8个实际动作，不要凑步；'
+                 '无法自然达到5步返回空tasks及结构化原因。本协议最多修订一次，仍需完整重新编译与冻结。'
+                 if fragments else
+                 '仅修正以下明确编译错误。已满足的条件保留为前置断言、不计动作；不要凑步。无法自然达到5步返回空tasks及结构化原因。本协议最多修订一次，仍需完整重新编译与冻结。')
+    return {'instruction':instruction,'prior_specs':specs,'rejections':report['rejected'],'binding':feedback}

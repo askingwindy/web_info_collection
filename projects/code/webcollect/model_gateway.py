@@ -153,7 +153,8 @@ class ModelGateway:
                         if (model['provider'] == 'deepseek'
                                 or (model['provider'] == 'ark' and model['model'] in
                                     ('deepseek-v4-1-flash-261017', 'deepseek-v4-1-flash-economy-261017'))
-                                or (model['provider'] == 'glm' and not model['supports_vision'])):
+                                or (model['provider'] == 'glm' and not model['supports_vision'])
+                                or (model['provider'] == 'glm' and model.get('structured_output') == 'json_object')):
                             payload['response_format'] = {'type': 'json_object'}
                     else:
                         payload.update(response_format={'type': 'json_schema', 'json_schema': {

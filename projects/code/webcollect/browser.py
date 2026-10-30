@@ -18,12 +18,31 @@ CONTROL={'click','double_click','right_click','drag','select','type'}
 _SCREENSHOT_SESSIONS=weakref.WeakKeyDictionary()
 _CAPTURE_FRAMES=weakref.WeakKeyDictionary()
 CAPTURE_VERSION='webcollect-capture-2'
-STABILITY_VERSION='webcollect-related-stability-2'
+STABILITY_V2='webcollect-related-stability-2'
+STABILITY_VERSION='webcollect-related-stability-3'
+STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_VERSION)
+# Compact repaint-noise bounds, verified by the fixture set in
+# test_related_capture_stability: antialias/underline strips stay thin in one
+# dimension, tiny in area, low-amplitude, and away from text/interactive boxes.
+_NOISE_MAX_COMPONENTS=4
+_NOISE_MAX_POINTS=96
+_NOISE_MAX_LONG_EDGE=384
+_NOISE_MAX_SHORT_EDGE=8
 
 
 class EvidenceStale(ValueError):
+    """Synchronized state/pixels changed between evidence and execution."""
     responsibility = 'collector'
     recoverable_before_dispatch = True
+
+
+class PlanViewportInfeasible(ValueError):
+    """The compiled plan interacts with a control outside the current viewport.
+
+    Planning/compilation responsibility: the page merely rendered; the step
+    order did not expose the target first. Never a site business failure.
+    """
+    responsibility = 'collector'
 
 _CAPTURE_RETRY_DELAYS=(0.1,0.25,0.5,1.0,1.5,2.0,2.5)
 _CAPTURE_WAIT_BUDGET=8.0
@@ -236,9 +255,9 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
     loaded=_loaded(before) and _loaded(after)
     full=fingerprint(before)==fingerprint(after)
     rule_version=rule_version or STABILITY_VERSION
-    if rule_version not in ('webcollect-related-stability-1',STABILITY_VERSION):raise ValueError('Unknown stability rule')
+    if rule_version not in STABILITY_RULES:raise ValueError('Unknown stability rule')
     left,right=related_projection(before),related_projection(after)
-    if rule_version==STABILITY_VERSION and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
+    if rule_version in (STABILITY_V2,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
         left['capture_readiness']['document_ready']='complete'
     related=loaded and left==right
     regions=_image_regions(before) if related else []
@@ -255,7 +274,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # New receipts only. Never reinterpret v1 failures. A local edge proof
         # and unchanged full semantic state are necessary; no whole-page score.
         border_proof=[]
-        if rule_version==STABILITY_VERSION and related and allow_border:
+        if rule_version in (STABILITY_V2,STABILITY_VERSION) and related and allow_border:
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             for region in before.get('paint_borders',[]):
                 box=region['bbox'];edges=region['edges']
@@ -279,6 +298,57 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                     for point in points:mask.putpixel(point,255)
                     border_proof.append({'bbox':box,'points':sorted(points),'rgb_deltas':deltas,
                                          'rule':'plain-nontask-border-low-contrast-1'})
+        # v3 only, never a reinterpretation of recorded v1/v2 failures: a fully
+        # identical DOM fingerprint (values, text, geometry, readiness) cannot
+        # hide a character, focus, checkbox or layout change — those all alter
+        # the fingerprint. What remains is sub-pixel repaint noise on untracked
+        # lines, tolerated only when compact, low-amplitude and away from every
+        # text/interactive element box.
+        paint_noise_proof=[]
+        if (rule_version==STABILITY_VERSION and allow_border and related and full
+                and before['capture_readiness'].get('document_ready')=='complete'):
+            rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
+            guard=[]
+            for element in before.get('elements',[]):
+                # DOM-backed text and control values cannot change under an
+                # identical fingerprint; only self-painting surfaces can, and
+                # those boxes stay guarded.
+                if element.get('element_type') not in ('image','canvas','video','iframe','embed','object'):continue
+                box=element.get('bbox')
+                if isinstance(box,list) and len(box)==4 and box[2]-2>box[0] and box[3]-2>box[1]:
+                    guard.append((box[0]+1,box[1]+1,box[2]-1,box[3]-1))
+            remaining={(x,y) for x in range(first.width) for y in range(first.height)
+                       if changed.getpixel((x,y)) and not mask.getpixel((x,y))}
+            components=[]
+            while remaining:
+                if len(components)>=_NOISE_MAX_COMPONENTS:break
+                seed=next(iter(remaining));stack=[seed];component=[];remaining.discard(seed)
+                while stack:
+                    x,y=stack.pop();component.append((x,y))
+                    for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1),(x+1,y+1),(x-1,y-1),(x+1,y-1),(x-1,y+1)):
+                        if (nx,ny) in remaining:remaining.discard((nx,ny));stack.append((nx,ny))
+                components.append(component)
+            compliant=[]
+            for component in components:
+                if len(component)>_NOISE_MAX_POINTS:continue
+                xs=[p[0] for p in component];ys=[p[1] for p in component]
+                box=(min(xs),min(ys),max(xs)+1,max(ys)+1)
+                thin=min(box[2]-box[0],box[3]-box[1])<=_NOISE_MAX_SHORT_EDGE
+                short=max(box[2]-box[0],box[3]-box[1])<=_NOISE_MAX_LONG_EDGE
+                if not (thin and short):continue
+                deltas=[];ok=True
+                for x,y in component:
+                    if any(gx1<=x<gx2 and gy1<=y<gy2 for gx1,gy1,gx2,gy2 in guard):ok=False;break
+                    a,b=rgba_first.getpixel((x,y)),rgba_last.getpixel((x,y))
+                    delta=[b[i]-a[i] for i in range(3)]
+                    if a[3]!=b[3] or max(map(abs,delta))>255/16 or max(delta)-min(delta)>1:ok=False;break
+                    deltas.append(delta)
+                if ok:compliant.append((component,box,deltas))
+            if not remaining and len(compliant)==len(components):
+                for component,box,deltas in compliant:
+                    for x,y in component:mask.putpixel((x,y),255)
+                    paint_noise_proof.append({'bbox':list(box),'points':sorted(component),'rgb_deltas':deltas,
+                                              'rule':'compact-repaint-noise-v1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
                       'bbox':list(changed.getbbox()) if changed.getbbox() else None,
@@ -289,7 +359,8 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
             'related_fingerprint':fingerprint(related_projection(before)),
             'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
-            'allowed_image_regions':regions,**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version==STABILITY_VERSION else {}),'pixel_change':pixel_change}
+            'allowed_image_regions':regions,**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_VERSION) else {}),
+            **({'paint_noise_proof':paint_noise_proof} if paint_noise_proof else {}),'pixel_change':pixel_change}
 
 
 def validate_capture_receipt(state,receipt,png):
@@ -504,7 +575,7 @@ def prepare_action(state, operation):
     parameters=dict(operation.get('arguments',{}))
     element=None
     if action in CONTROL:
-        if not target:raise ValueError('目标未出现在当前视口界面树；必须先显式滚动')
+        if not target:raise PlanViewportInfeasible('目标未出现在当前视口界面树；必须先显式滚动')
         element=next(e for e in state['elements'] if e['element_id']==target['element_id'])
         if not element['enabled']:raise ValueError('目标控件不可用')
         visual_kind=(operation.get('evidence') or {}).get('target_visual_kind','text')

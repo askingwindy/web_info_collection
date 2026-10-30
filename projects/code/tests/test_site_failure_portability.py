@@ -92,6 +92,26 @@ class SiteFailurePortabilityTests(unittest.TestCase):
         self.assertEqual(claimed['task']['site_uri'], 'https://next.example.net/')
         self.assertEqual(self.source.status('https://example.org/')['state'], 'unavailable')
 
+    def test_collector_responsibility_failures_do_not_consume_site_margin(self):
+        from webcollect.collect_runtime import classify_failure
+        from webcollect.browser import PlanViewportInfeasible
+        self.assertEqual(classify_failure(PlanViewportInfeasible('order')), 'collector')
+        self.assertEqual(classify_failure(KeyError('assertion_targets')), 'collector')
+        registry = fixtures.make_registry(self.root / 'collector-registry.sqlite3')
+        runtime = RuntimeStore(registry, 'CONTROLLED-collector')
+        runtime.initialize({'campaign_id': self.binding['campaign_id']}, now=fixtures.NOW)
+        plan, publication = fixtures.make_plan(self.root / 'collector-planning', count=3)
+        runtime.enqueue_plan(plan, publication, now=fixtures.NOW)
+        for number in range(3):
+            now = fixtures.NOW + number * 3
+            attempt = runtime.claim_next('worker', request_id='c' + str(number), now=now)
+            runtime.start_attempt(attempt['attempt_id'], 'worker', attempt['lease_token'], now=now)
+            runtime.finish_attempt(attempt['attempt_id'], 'worker', attempt['lease_token'], 'rejected',
+                failure_class='collector', root_cause='collector gate rejected', now=now + 1)
+        self.source.sync_formal(registry, self.binding['campaign_id'])
+        self.assertEqual(self.source.status('https://example.org/')['failure_count'], 0)
+        self.assertEqual(self.source.status('https://example.org/')['state'], 'available')
+
     def test_import_three_formal_failures_then_moved_registry_cannot_reset_or_double_count(self):
         registry = fixtures.make_registry(self.root / 'registry.sqlite3')
         runtime = RuntimeStore(registry, 'CONTROLLED-formal')

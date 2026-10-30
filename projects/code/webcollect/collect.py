@@ -161,6 +161,7 @@ def check_numbers(text, spec):
 
 async def assert_state(page, conditions, captured_state=None, captured_png=None, protected_selectors=None):
     """Evaluate assertions against one observation, optionally the actual saved frame."""
+    from .collect_runtime import CollectionFailure
     protection={'protected_selectors':protected_selectors} if protected_selectors else {}
     if any('visible_text' in condition and set(condition) != {'visible_text'} for condition in conditions):
         raise ValueError('Whole-page visible_text assertion cannot also bind a selector or another predicate')
@@ -186,9 +187,15 @@ async def assert_state(page, conditions, captured_state=None, captured_png=None,
             target=targets[index]
             if not target or target['selector']!=condition['selector'] or target['index']!=condition.get('index',0):
                 raise ValueError('任务断言目标不在同步界面树观察中')
-            if not target['visible']:raise ValueError('任务断言目标未完整显示在截图视口或被其他元素遮挡')
-            if target.get('value') is not None and not any(k in condition for k in ('checked','disabled')) and target.get('value_visible') is False:
-                raise ValueError('任务结果控件的完整值未在实际视口中可见，不能以后台值判定完成')
+            if not target['visible']:raise CollectionFailure('任务断言目标未完整显示在截图视口或被其他元素遮挡','collector')
+            displayed = target.get('display_value')
+            if (target.get('value') is not None and not any(k in condition for k in ('checked','disabled'))
+                    and target.get('value_visible') is False
+                    and not ('value' in condition and target['value'] == condition['value']
+                             and isinstance(displayed, str) and displayed == condition['value'])):
+                # A rendered display equal to the expected value is itself proof
+                # of visible rendering; the flag alone stays inconclusive.
+                raise CollectionFailure('任务结果控件的完整值未在实际视口中可见，不能以后台值判定完成','collector')
             if 'qr_png_payload' in condition:
                 from .qr_strategy import URI,SSID,PASSWORD,wifi_payload
                 from .qr_pixel import verify_qr_png
@@ -550,7 +557,8 @@ def observed_frame_description(state, goal='', before=None):
     if short:
         return '可见文字「'+short[0]+'」'+('，另见「'+short[1]+'」' if len(short)>1 else '')
     # Do not turn missing observations into an exportable generic success.
-    raise ValueError('NARRATIVE_VISIBLE_EVIDENCE_MISSING: 当前视口没有可绑定的标题或正文，不能生成实际变化说明')
+    from .collect_runtime import CollectionFailure
+    raise CollectionFailure('NARRATIVE_VISIBLE_EVIDENCE_MISSING: 当前视口没有可绑定的标题或正文，不能生成实际变化说明', 'collector')
 
 
 def visible_goal_links(state, goal):

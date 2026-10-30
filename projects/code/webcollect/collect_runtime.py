@@ -31,13 +31,18 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
-    from .browser import EvidenceStale
+    from .browser import EvidenceStale, PlanViewportInfeasible
     if isinstance(error,EvidenceStale):return 'program'
+    if isinstance(error,PlanViewportInfeasible):return 'collector'
     from .runtime import ImageCommitConflict
     if isinstance(error, ImageCommitConflict):
         return 'duplicate'
     if isinstance(error, NavigationTimeoutError):
         return 'network'
+    # Unhandled internal contract bugs are the collector's own fault, never
+    # the site's; they must not consume whole-site failure margin.
+    if isinstance(error,(KeyError,TypeError,AttributeError)):
+        return 'collector'
     message = str(error)
     if any(token in message for token in ('net::ERR_CONNECTION', 'net::ERR_TIMED_OUT',
                                           'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_NETWORK')):

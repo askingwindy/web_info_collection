@@ -85,6 +85,31 @@ class FragmentContracts(SemanticFixture, unittest.TestCase):
         self.assertEqual(first['task_id'], compile_fragment(cap, spec, 'other-version')['task_id'])
         self.assertIsNone(customer_history_decision(first, [{'sample_id':'CONTROLLED-history'}]))
 
+    def test_below_fold_target_requires_preceding_scroll_at_compile(self):
+        from webcollect.fragment_workflow import compile_fragment
+        from webcollect.batch_core import file_sha
+        record, _ = self.semantic()
+        page = record['capabilities'][0]
+        state = json.loads(Path(page['page_anchor']['state']['path']).read_text())
+        for element in state['elements'][:2]:
+            element['bbox'] = [10, 800, 200, 830]
+        state_path = Path(page['page_anchor']['state']['path'])
+        state_path.write_text(json.dumps(state))
+        page['page_anchor']['state']['sha256'] = file_sha(state_path)
+        def spec(with_scroll):
+            steps = [{'action': 'set_value', 'control_id': f'p0/control-{i}', 'value': str(30 + i),
+                      'goal': '填写数值', 'expected': '显示新值'} for i in range(2)]
+            if with_scroll:
+                steps.insert(0, {'action': 'scroll', 'direction': 'down', 'goal': '滚动露出输入区', 'expected': '输入区可见'})
+            return {'schema_version': VERSION, 'task_family': 'navigation-reading',
+                    'instruction': '在「受控离线页面」滚动后填写两个数值。',
+                    'task_type': ['填写表单'], 'steps': steps,
+                    'end_description': '完成一轮填写，业务未提交。'}
+        with self.assertRaisesRegex(ValueError, 'Viewport lint'):
+            compile_fragment(record, spec(False), 'fixture')
+        task = compile_fragment(record, spec(True), 'fixture')
+        self.assertEqual(task['operations'][0]['action_type'], 'scroll')
+
     def test_scroll_reading_without_form_or_result_and_no_static_steps(self):
         cap, spec = self.proposal()
         spec['steps'] = [{'action':'scroll','direction':'down','goal':'向下浏览页面内容','expected':'显示后续内容'} for _ in range(5)]

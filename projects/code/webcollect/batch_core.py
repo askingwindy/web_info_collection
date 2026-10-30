@@ -135,7 +135,7 @@ def validate_config(value, *, credentials=False, require_model=False):
     fields = {'provider', 'model', 'endpoint', 'api_key_env', 'timeout_seconds', 'reserve_input_tokens',
               'max_completion_tokens', 'max_images', 'reserve_cost_micros', 'rates'}
     capability_fields = {'supports_vision', 'image_tokens_per_image', 'request_overhead_tokens'}
-    optional_fields = capability_fields | {'image_encoding', 'reasoning_effort', 'api_key_file'}
+    optional_fields = capability_fields | {'image_encoding', 'reasoning_effort', 'api_key_file', 'structured_output'}
     if not isinstance(model, dict) or not fields <= set(model) or set(model) - fields - optional_fields:
         raise ValueError('Explicit model adapter fields required: ' + ', '.join(sorted(fields)))
     if model['provider'] not in ('synthetic', 'chat-completions', 'deepseek', 'glm', 'ark'):
@@ -155,6 +155,10 @@ def validate_config(value, *, credentials=False, require_model=False):
             raise ValueError('Vision needs positive image tokens; text-only models require zero image tokens')
     if 'request_overhead_tokens' in model:
         _integer(model['request_overhead_tokens'], 'request_overhead_tokens', 1)
+    if model.get('structured_output') is not None:
+        if (model['structured_output'] != 'json_object' or value['mode'] != 'real'
+                or model['provider'] != 'glm' or not model.get('supports_vision')):
+            raise ValueError('structured_output json_object is an explicit real-mode GLM vision experiment flag')
     if 'image_encoding' in model:
         if model['provider'] != 'glm' or model['image_encoding'] not in ('raw_base64', 'data_url'):
             raise ValueError('image_encoding must be raw_base64 or data_url for the GLM provider')

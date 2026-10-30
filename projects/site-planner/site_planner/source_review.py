@@ -25,7 +25,7 @@ def payload(pages,capabilities):
 def review(gateway,job,pages,capabilities,images):
     from .pipeline import validate_screen_coverage
     body=payload(pages,capabilities)
-    result=gateway.call(job,VERSION,json.dumps(body,ensure_ascii=False,sort_keys=True),schema(),images=images,attempts=1,output_limit=min(8192,gateway.ledger.config['model']['max_completion_tokens']))
+    result=gateway.call(job,VERSION,json.dumps(body,ensure_ascii=False,sort_keys=True),schema(),images=images,attempts=2,output_limit=min(8192,gateway.ledger.config['model']['max_completion_tokens']))
     validate_screen_coverage(pages,result['screen'])
     return {**result['screen'],'unified_review':{'version':VERSION,'result':result,
         'rules_sha256':object_sha256({'payload':body,'schema':schema()}),

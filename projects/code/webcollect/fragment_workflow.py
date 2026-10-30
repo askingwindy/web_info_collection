@@ -139,6 +139,19 @@ def compile_fragment(capability, spec, version):
             focus = None
     if not 5 <= len(operations) <= 8:
         raise ValueError(f'Fragment compiled {len(operations)} actual actions; required 5-8')
+    # Viewport lint at zero attempt cost: a control whose observed bbox starts
+    # below the fold needs a preceding scroll, or the runtime target check will
+    # burn a real attempt on the same refusal.
+    viewport_height = states[0]['screen_resolution'][1]
+    scrolled = False
+    for op in operations:
+        if op['action_type'] == 'scroll':
+            scrolled = True; continue
+        element = controls.get(
+            f"p{op['evidence']['anchor_index']}/{op['evidence']['anchor_element_id']}", {}).get('element')             if op.get('evidence') else None
+        if element and element['bbox'][1] >= viewport_height and not scrolled:
+            raise ValueError('Viewport lint: target "' + (element.get('text') or element['element_id'])
+                             + '" is below the observed fold; add an explicit scroll before interacting with it')
     start = states[0]
     metadata = {'schema_version': VERSION, 'policy_version': POLICY,
         'quality_policy_version': 'qc-sampling-v1-20261030',

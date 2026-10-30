@@ -30,7 +30,8 @@ DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_worker
                   'max_worker_seconds': None, 'resource_root': None}
 ACTIVE = ('reserved', 'running')
 RETRYABLE = ('network', 'resource')
-FAILURES = RETRYABLE + ('interrupted', 'semantic', 'unsupported', 'privacy', 'duplicate', 'program', 'other')
+FAILURES = RETRYABLE + ('interrupted', 'semantic', 'unsupported', 'privacy', 'duplicate', 'program', 'other',
+             'collector', 'model', 'configuration', 'interface')
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS m4_campaigns (

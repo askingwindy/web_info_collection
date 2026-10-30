@@ -93,3 +93,26 @@ class AnnotationRegressions(unittest.TestCase):
                 t=tasks[name];self.assertIn(term,t['final_result']);self.assertNotIn('最后一个说明段落或小节',t['final_result'])
 
 if __name__=='__main__':unittest.main(verbosity=2)
+
+
+class ValueVisibilityDisplayProof(unittest.TestCase):
+    def _target(self, **overrides):
+        target = {'selector': '#from', 'index': 0, 'visible': True, 'value': '(2021)',
+                  'value_visible': False, 'display_value': '(2021)', 'target_text': '显示页面开始于：'}
+        target.update(overrides); return target
+
+    def test_matching_display_passes_despite_inconclusive_flag(self):
+        import asyncio
+        from webcollect.collect import assert_state
+        state = {'assertion_targets': [self._target()]}
+        row = asyncio.run(assert_state(None, [{'selector': '#from', 'index': 0, 'value': '(2021)'}],
+                                       captured_state=state))
+        self.assertTrue(row[0]['passed'])
+
+    def test_mismatched_display_still_rejects(self):
+        import asyncio
+        from webcollect.collect import assert_state
+        state = {'assertion_targets': [self._target(display_value='(2020)')]}
+        with self.assertRaisesRegex(ValueError, '未在实际视口中可见'):
+            asyncio.run(assert_state(None, [{'selector': '#from', 'index': 0, 'value': '(2021)'}],
+                                     captured_state=state))
