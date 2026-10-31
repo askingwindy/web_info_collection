@@ -36,6 +36,14 @@ async def dispatch(ledger, job_id, catalog, output, registry, policy, *, site_po
     return {'dispatched':True,'queue_state':'done','execution':result,'QC_approval':False}
 
 
+async def dispatch_candidate(pool, ledger, *, worker_id, request_id, categories=None, application_id=None, **execution):
+    """Pre-planning claim; the frozen-plan queue is deliberately not its lock."""
+    from .candidate_consumer import consume
+    claim = pool.claim_next(worker_id, request_id, categories=categories, application_id=application_id)
+    if claim['state'] == 'EMPTY': return claim
+    return await consume(pool, claim, ledger, **execution)
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','ledger','catalog','output','registry','policy'):p.add_argument('--'+name,required=True)

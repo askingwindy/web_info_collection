@@ -139,6 +139,7 @@ def sync(pool_path, registry, scope):
                     'ON CONFLICT(registry,scope_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest',
                     (value['registry'], scope, value['revision'], digest))
         con.commit()
+    sync_candidate_qc(pool_path, registry)
     return value['revision']
 
 
@@ -252,6 +253,42 @@ def main(argv=None):
     store.sync_site_pool()
     print(json.dumps(store.site_pool_binding(), ensure_ascii=False))
     return 0
+
+
+
+
+def sync_candidate_qc(pool_path, registry):
+    """Candidate projection uses only the original RuntimeStore's verified QC events.
+
+    No arbitrary PASS argument. Pending/failed/accepted/published remain separate
+    from consumption success. Failure does not automatically enqueue a replacement.
+    """
+    from site_planner.candidate_pool import CandidatePool
+    base = __import__('site_planner.site_pool',fromlist=['SitePool']).SitePool(pool_path)
+    with base.connect() as con:
+        if not _exists(con,'candidate_meta'): return
+    pool=CandidatePool(pool_path)
+    registry=str(Path(registry).resolve())
+    with pool.pool.connect() as con:
+        rows=[dict(r) for r in con.execute('SELECT * FROM candidate_results WHERE effective=1')]
+    for row in rows:
+        result=json.loads(row['record'])
+        if result['registry']!=registry: continue
+        snapshot=_snapshot(registry,result['scope_id'])
+        task=next((t for t in snapshot['tasks'] if t['task_key']==result['task_key']),None)
+        if not task: raise ValueError('Original candidate runtime task missing')
+        qc=task['qc']
+        state='pending_review'; ref=None
+        if qc:
+            from .runtime import _bound_quality_report
+            _bound_quality_report([qc['report']])
+            ref=qc['report']
+            state={'PASS':'accepted','FAIL':'failed','REVIEW_REQUIRED':'pending_review'}[qc['status']]
+        if task['production_status']=='published': state='published'
+        with pool.transaction() as con:
+            con.execute('UPDATE candidate_results SET qc_state=?,qc_report=? WHERE candidate_id=? AND claim_id=?',
+                (state,canonical(ref) if ref else None,row['candidate_id'],row['claim_id']))
+            pool.event(con,row['candidate_id'],row['claim_id'],'qc_projection',{'state':state,'report':ref})
 
 
 if __name__ == '__main__':

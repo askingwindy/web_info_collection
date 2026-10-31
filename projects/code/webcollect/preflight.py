@@ -109,6 +109,7 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
 
     Also used against explicitly synthetic local fixtures. Public production
     navigation is validated by preflight_plan, never via a CLI bypass flag.
+    Controlled fragments have no static operations; inspect their page context.
     """
     from .browser import stability_pair
     from .media_preflight import probe_media, summarize_preflight, task_media_targets
@@ -119,7 +120,9 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
     probes, assessments, changes, frames = [], [], [], []
     stability_failures=[]
     previous = None
-    operation = task.get('operations', [{}])[0]
+    # Controlled fragments freeze an empty operation list by design: the
+    # runtime controller decides actions live. Preflight probes page-level.
+    operation = (task.get('operations') or [{}])[0]
     protected_selectors=sorted({target['selector'] for target in task_media_targets(task)})
     observation_options={'protected_selectors':protected_selectors} if protected_selectors else {}
     error = None

@@ -22,6 +22,71 @@ class ProducerContractBrowser(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.browser.close();await self.runtime.stop()
 
+    async def test_native_number_replacement_has_pixel_selection_and_proved_clear(self):
+        await self.context.route('**/*',lambda route:route.abort())
+        await self.page.set_content('''<!doctype html><meta charset="utf-8">
+        <label for="longitude">经度：</label><input id="longitude" type="number" value="116.20321">''')
+        frame=await capture(self.page,'#longitude');args,_=prepare_action(frame['state'],{'action_type':'click'})
+        await execute(self.page,'click',args,{'settle_ms':0})
+        focused=await capture(self.page,'#longitude')
+        await execute(self.page,'hotkey',{'keys':['meta','a']},{'settle_ms':0})
+        selected=await capture(self.page,'#longitude')
+        value=next(v for v in selected['state']['values'] if v['focused'])
+        self.assertIsNone(value['selection_start']);self.assertIsNone(value['selection_end'])
+        self.assertNotEqual(selected['png'],focused['png'])
+        await execute(self.page,'hotkey',{'keys':['backspace']},{'settle_ms':0})
+        cleared=await capture(self.page,'#longitude')
+        self.assertEqual(next(v for v in cleared['state']['values'] if v['focused'])['value'],'')
+        await execute(self.page,'type',{'text':'121.47'},{'settle_ms':0})
+        typed=await capture(self.page,'#longitude')
+        self.assertEqual(next(v for v in typed['state']['values'] if v['focused'])['value'],'121.47')
+
+    async def test_isolated_label_or_layui_prefix_needs_paint_and_unique_target(self):
+        await self.context.route('**/*',lambda route:route.abort())
+        css='<style>body{font:14px Arial}.pair{display:flex}label,.layui-input-prefix{display:block;padding:10px;color:#222}input{width:200px}</style>'
+        for label in ['<label>电阻值</label>','<div class="layui-input-prefix">电阻值</div>']:
+            await self.page.set_content(css+'<div class="pair">'+label+'<input id="target"></div>')
+            state=(await capture(self.page,'#target'))['state']
+            self.assertIn('电阻值',[r['text'] for r in state['target']['visible_label_evidence']])
+        for html in ['<label>电阻值</label><input id="target"><input>',
+                     '<span>电阻值</span><input id="target">',
+                     '<label style="opacity:0">电阻值</label><input id="target">',
+                     '<label for="another">电阻值</label><input id="target">']:
+            await self.page.set_content(css+'<div class="pair">'+html+'</div>')
+            state=(await capture(self.page,'#target'))['state']
+            self.assertNotIn('电阻值',[r['text'] for r in state['target']['visible_label_evidence']])
+
+    async def test_numeric_field_with_backed_readonly_unit_renderer_has_unique_outer_label(self):
+        await self.context.route('**/*',lambda route:route.abort())
+        css='<style>body{font:14px Arial}.layui-form-resItem{display:flex}label.layui-form-label{box-sizing:border-box;width:110px;flex:none;height:36px;padding:8px;color:#222}.layui-input-res{position:relative}.res-label{position:absolute;left:4px;color:#aaa;pointer-events:none}input{height:36px}select{display:none}</style>'
+        html='''<div class="layui-form-resItem"><label class="layui-form-label">电阻值(R)</label>
+          <div class="layui-input-res"><input id="target"><label class="res-label">电阻阻值</label></div>
+          <select><option selected>Ω</option></select><div class="layui-form-select"><input readonly value="Ω"></div></div>'''
+        await self.page.set_content(css+html)
+        state=(await capture(self.page,'#target'))['state']
+        self.assertIn('电阻值(R)',[r['text'] for r in state['target']['visible_label_evidence']],
+            await self.page.evaluate("() => [...document.querySelectorAll('.layui-form-resItem *')].map(e=>({tag:e.tagName,cls:e.className,rect:e.getBoundingClientRect().toJSON(),display:getComputedStyle(e).display,value:e.value,text:e.children.length?'':e.textContent}))"))
+        for change in [html.replace('readonly',''),html.replace('value="Ω"','value="kΩ"'),
+                       html.replace('class="res-label"','class="res-label" style="background:black"'),
+                       html.replace('<input id="target">','<input id="target" value="123">'),
+                       html.replace('<select>','<select style="display:block">'),
+                       html.replace('<input id="target">','<input id="target"><input>')]:
+            await self.page.set_content(css+change)
+            state=(await capture(self.page,'#target'))['state']
+            self.assertNotIn('电阻值(R)',[r['text'] for r in state['target']['visible_label_evidence']])
+
+    async def test_empty_rotated_decoration_does_not_block_unrotated_target(self):
+        await self.context.route('**/*',lambda route:route.abort())
+        await self.page.set_content('''<!doctype html><meta charset="utf-8">
+        <div style="width:12px;height:12px;transform:rotate(15deg);background:green"></div>
+        <label>查询条件<input id="query" style="" value="公开条件"></label>''')
+        original=await self.page.content()
+        state=(await capture(self.page,'#query'))['state']
+        self.assertTrue(state['target']['hit_valid'])
+        self.assertEqual(await self.page.content(),original)
+        await self.page.set_content('<button id="rotated" style="transform:rotate(15deg)">旋转控件</button>')
+        with self.assertRaisesRegex(Exception,'UNSUPPORTED_GEOMETRY'):await capture(self.page,'#rotated')
+
     async def test_scaled_overflow_clip_keeps_real_target_and_actual_click_pixels_at_both_dprs(self):
         for dpr in (1,2):
             context=await self.browser.new_context(viewport={'width':640,'height':480},device_scale_factor=dpr)

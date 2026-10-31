@@ -1,5 +1,15 @@
 # WebCollect 采集核心
 
+V2 候选领取后的同会话身份取证、租约恢复与保存回写见[消费者执行计划](../../docs/消费者独占领取与会话接入执行计划-20261031.md)。GLM 消息、运行时提示词、按实际动作派生短流程及试跑与正式集合验收见[规划采集 Agent 执行计划](../../docs/规划采集Agent提示词与调用链执行计划-20261031.md)。各计划附可直接交接的 prompt。
+
+2026-10-31 新候选消费适配见[职责拆分与轻量化计划](../../docs/生产者消费者职责拆分与轻量化改造计划-20261031.md)，与[同会话 Agent 改造](../../docs/规划采集Agent改造计划与验收-20261031.md)共用一个工具循环。入口可无具体目标；生产者建议与用户明确要求分开，消费者现场建立工作目标。旧领取/冻结协议、UNKNOWN、止损和保存待审/QC 区分保留。本次仅规划，未实现或启动新消费路径。
+
+2026-10-31 真实验证已达10次上限并停止。修复producer具体目标/flags协议、首次观察诊断、采集字符串路径和串行父子job槽位；原账、失败、未决与原模型回答保留。新真实验证结果见[报告](../../verify_results/pilot1000-20261028-r01/candidate-live-20261030-r01/真实验证报告.md)，不能用离线修复PASS替代真实保存。
+
+2026-10-30 新增 `python -m webcollect.candidate_consumer --pool ...`：list/claim/run/reconcile/retry，规划前领取SQLite候选，首次同步观察后复用原agent-model、execute、collect和独立QC。`site-pool --purpose data-candidates`保留完整候选清单；旧页面接口不变。见[共享池候选协议](../../docs/共享站点池与自主发现.md#候选库存协议-v12026-10-30工程与离线验证)。未安装包时需PYTHONPATH含三个包；本轮未运行真实服务。
+
+2026-10-30 agent 闭环第二轮修复（controller v2，[闭环文档](../../docs/规划采集Agent闭环-20261030.md#第二轮闭环修复controller-v22026-10-30)）：目标语义一致性、预算/完成余量匹配（观察32/决策24/模型20）、`current_trajectory` 执行记忆入 prompt、决策请求失败三级分级（本地零发送 `failed`、已结算明确失败 `MODEL_FAULT`、未决 UNKNOWN hold 保留）。回归 43 项新增，离线验证 83 项全 PASS（`verify_results/agent-loop-fix-20261030-r01/`）。不恢复生产。
+
 2026-10-30 新增[规划采集 agent 闭环](../../docs/规划采集Agent闭环-20261030.md)：`agent-model` / `site_rolling --controlled` 使用可信三态观察、原执行/QC反馈及有预算的短计划控制循环；新片段协议直接采5–8实际有效动作，复用原账、采集和独立QC，成功仍仅待审。旧冻结协议与恢复门禁保留。本轮仅代码和离线验证，真实小批方案待范围明确后执行。
 
 共享池闭环：execute自动消费资格目录的 `site-pool-binding.json`，或显式 `--site-pool`；原生产scope绑定后自动同步采集/失败/QC状态，派发前阻断重复页面和逻辑任务，同站其他功能继续可用。`webcollect site-pool --include-unavailable` 查看全部状态；`python -m webcollect.site_pool_sync --registry ... --scope ...` 只修复原绑定的状态同步。详见[状态回写与防重](../../docs/共享站点池与自主发现.md#状态回写与防重)。

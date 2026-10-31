@@ -18,6 +18,16 @@ def value(eid='e1', text='', focused=False, choice=False, input_type='search'):
             'input_type':input_type,'selection_start':0,'selection_end':len(text),'value_visible':True}
 
 class AnnotationRegressions(unittest.TestCase):
+    def test_filled_input_focus_uses_painted_label_instead_of_hidden_placeholder(self):
+        from webcollect.task_contract import narrative_evidence
+        e=element(text='请输入经度');e['visible']=True
+        before=state([e],[value(text='116.20321')],'经度：')
+        after=state([e],[value(text='116.20321',focused=True)],'经度：')
+        op={'action_type':'click','evidence':{'target_label':'经度：'}}
+        result=describe_change(before,after,op,e)
+        self.assertEqual(result,'「经度：」输入框获得焦点')
+        self.assertIsNotNone(narrative_evidence(result,before,after,op)[0])
+        self.assertEqual(describe_change(before,after,{'action_type':'click'},e),'输入框获得焦点')
     def test_invisible_native_value_cannot_supply_change_text(self):
         e=element();v=value(text='屏外完整结果');v['value_visible']=False
         # A hidden input value is not a fallback when the frame has no painted
@@ -101,13 +111,20 @@ class ValueVisibilityDisplayProof(unittest.TestCase):
                   'value_visible': False, 'display_value': '(2021)', 'target_text': '显示页面开始于：'}
         target.update(overrides); return target
 
-    def test_matching_display_passes_despite_inconclusive_flag(self):
+    def test_matching_display_with_painted_visibility_passes(self):
         import asyncio
         from webcollect.collect import assert_state
-        state = {'assertion_targets': [self._target()]}
+        state = {'assertion_targets': [self._target(value_visible=True)]}
         row = asyncio.run(assert_state(None, [{'selector': '#from', 'index': 0, 'value': '(2021)'}],
                                        captured_state=state))
         self.assertTrue(row[0]['passed'])
+
+    def test_equal_dom_display_without_visibility_cannot_prove_painted_input(self):
+        import asyncio
+        from webcollect.collect import assert_state
+        with self.assertRaisesRegex(ValueError,'未在实际视口中可见'):
+            asyncio.run(assert_state(None,[{'selector':'#from','index':0,'value':'(2021)'}],
+                captured_state={'assertion_targets':[self._target()]}))
 
     def test_mismatched_display_still_rejects(self):
         import asyncio

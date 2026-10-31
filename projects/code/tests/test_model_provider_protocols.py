@@ -42,6 +42,7 @@ class ProviderProtocolTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.opener = StubOpener()
         for mock in (patch.dict('os.environ', {'WEBCOLLECT_OFFLINE_TEST_KEY': 'offline-secret-never-export'}),
+                     patch('webcollect.model_gateway.socket.getaddrinfo',return_value=[('CONTROLLED_DNS',)]),
                      patch('urllib.request.build_opener', return_value=self.opener)):
             mock.start()
             self.addCleanup(mock.stop)
@@ -108,6 +109,50 @@ class ProviderProtocolTests(unittest.TestCase):
                 system = payload['messages'][0]['content']
                 self.assertEqual(json.loads(system.split('JSON Schema exactly:\n', 1)[1]), SCHEMA)
                 self.assertEqual(ledger.summary()['model_cost_micros'], 300)
+
+    def test_glm_native_tool_calls_are_forwarded_and_parsed(self):
+        """Official GLM function calling: forced react_decision arguments are
+        the structured output; finish_reason tool_calls is a complete answer."""
+        tools = [{'type': 'function', 'function': {
+            'name': 'react_decision', 'description': 'decide', 'parameters': SCHEMA}}]
+        forced = {'type': 'function', 'function': {'name': 'react_decision'}}
+        ledger, job, gateway = self.gateway(self.config('glm', vision=True))
+        self.opener.raw['choices'][0] = {'finish_reason': 'tool_calls', 'message': {
+            'content': '', 'tool_calls': [{'id': 'c1', 'type': 'function', 'function': {
+                'name': 'react_decision', 'arguments': '{"answer": 7}'}}]}}
+        self.assertEqual(gateway.call(job, 'decision', 'prompt', SCHEMA, tools=tools), {'answer': 7})
+        payload = json.loads(self.opener.calls[-1].data)
+        self.assertEqual(payload['tools'], tools)
+        self.assertEqual(payload['tool_choice'], forced)
+        self.assertEqual(payload['thinking'], {'type': 'enabled'})
+        self.assertNotIn('response_format', payload)
+        with ledger.connect() as con:
+            row = con.execute('SELECT response FROM model_requests ORDER BY id DESC LIMIT 1').fetchone()
+        settled = json.loads(row[0])
+        self.assertEqual(settled['tool_call_name'], 'react_decision')
+        # A content-only answer still parses while tools are declared.
+        self.opener.raw['choices'][0] = {'finish_reason': 'stop', 'message': {'content': '{"answer": 42}'}}
+        job = ledger.claim('test', job_id=ledger.enqueue('test', {'offline': 2}))
+        self.assertEqual(gateway.call(job, 'decision', 'prompt-fallback', SCHEMA, tools=tools), {'answer': 42})
+        # Other providers never receive the GLM native-tools payload shape.
+        _, job, gateway = self.gateway(self.config('deepseek'))
+        gateway.call(job, 'decision', 'prompt', SCHEMA, tools=tools)
+        payload = json.loads(self.opener.calls[-1].data)
+        self.assertNotIn('tools', payload)
+        self.assertEqual(payload['response_format'], {'type': 'json_object'})
+
+    def test_native_tool_arguments_must_stay_strict_json(self):
+        """Provider-generated arguments are strict-loaded; broken JSON is a
+        charged invalid response with bounded retries, never repaired."""
+        tools = [{'type': 'function', 'function': {
+            'name': 'react_decision', 'description': 'decide', 'parameters': SCHEMA}}]
+        _, job, gateway = self.gateway(self.config('glm', vision=True))
+        self.opener.raw['choices'][0] = {'finish_reason': 'tool_calls', 'message': {
+            'content': '', 'tool_calls': [{'function': {
+                'name': 'react_decision', 'arguments': '{"answer":'}}]}}
+        with self.assertRaisesRegex(ValueError, 'Bounded model attempts exhausted'):
+            gateway.call(job, 'decision', 'prompt', SCHEMA, tools=tools, attempts=2)
+        self.assertEqual(len(self.opener.calls), 2)
 
     def test_deepseek_vision_uses_original_png_data_uri(self):
         _, job, gateway = self.gateway(self.config(vision=True))

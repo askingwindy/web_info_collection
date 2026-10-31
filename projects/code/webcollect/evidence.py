@@ -44,7 +44,17 @@ def audit_capture(batch, sample_id):
                     expected_ground.append({'step_id':number,'element_id':target['element_id'],'text':target['text'],'bbox':target['bbox']})
                     action=step['action']
                     if (action['target_element_id'],action['target_text'],action['target_bbox'])!=(target['element_id'],target['text'],target['bbox']):fail(number,'目标标注与原始真值不一致')
-                if step['action']['action_type']=='complete' and not fragment_unclaimed and (not raw['final_assertions'] or not all(a['passed'] for a in raw['final_assertions'])):fail(number,'缺少最终页面断言的实际通过记录')
+                if step['action']['action_type']=='complete' and not fragment_unclaimed:
+                    if 'react' in raw:
+                        # React sessions close with a terminal receipt instead of
+                        # business assertions: the finish's honest stop reason and
+                        # effective-step count must match this annotation itself.
+                        terminal=read_json(evidence/'raw'/'terminal.json')
+                        if (terminal.get('stop_reason') not in ('ready','no_path','budget','blocked')
+                                or terminal.get('effective_steps')!=len(data['steps'])-1):
+                            fail(number,'react终态收据与交付步骤不一致')
+                    elif (not raw['final_assertions'] or not all(a['passed'] for a in raw['final_assertions'])):
+                        fail(number,'缺少最终页面断言的实际通过记录')
                 checked+=1
             except (OSError,ValueError,KeyError,TypeError,IndexError) as e:fail(number,'证据不完整或格式错误：'+str(e))
         if contract_path.exists() and contract.get('schema_version') == 'webcollect-controlled-fragment-evidence-1':

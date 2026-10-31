@@ -3,11 +3,19 @@ import argparse
 import json
 
 
-def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False, fragment_planning=False):
+def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False, fragment_planning=False, protocols=None):
     from site_planner.site_pool import SitePool, page_uri
     from .planning import validate_capability, verify_evidence
     from .batch_core import load_json
     pool = SitePool(path, readonly=True)
+    if purpose == 'data-candidates':
+        from site_planner.candidate_pool import CandidatePool
+        candidates = CandidatePool(path, readonly=True)
+        # Callers that do not declare the entry protocol keep seeing only
+        # webcollect-data-candidate-1 rows.
+        return {'schema_version':'webcollect-data-candidate-list-1',
+                'records':candidates.rows(categories=categories, protocols=protocols),
+                'statistics':candidates.stats(),'collection_dispatched':False,'sample_ids_allocated':0}
     if purpose not in ('candidates', 'capabilities'):
         raise ValueError('Select candidates or validated capabilities')
     rows = pool.rows()
@@ -46,7 +54,7 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pool', required=True)
-    parser.add_argument('--purpose', choices=['candidates', 'capabilities'], default='candidates')
+    parser.add_argument('--purpose', choices=['candidates', 'capabilities', 'data-candidates'], default='candidates')
     parser.add_argument('--category', action='append', dest='categories')
     parser.add_argument('--include-unavailable', action='store_true', help='Include tracked/ineligible pages for read-only audit')
     parser.add_argument('--fragment-planning', action='store_true', help='Read known synchronized pages for new source-bound fragment proposals; never dispatch')

@@ -463,3 +463,32 @@ class PlanningRuntimeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CampaignWideReapTests(PlanningRuntimeTests):
+    def test_dead_scope_expired_attempt_is_reaped_campaign_wide_only(self):
+        """Real-run v13/v14 fact: a crashed close-out leaves an expired running
+        attempt in an abandoned scope. Scope-local recovery never touches it;
+        only the campaign-wide reap clears the site-level unresolved block."""
+        self.enqueue(); first = self.claim(); self.start(first)
+        other = RuntimeStore(self.registry, 'other-batch')
+        other.initialize(self.store.snapshot()['policy'], now=NOW)
+        plan, receipt = make_plan(self.root / 'other-plan', 1, task_prefix='other',
+                                  uri='https://sub.example.org/')
+        other.enqueue_plan(plan, receipt, now=NOW)
+        # The first attempt's lease has expired, so the other scope may claim.
+        second = other.claim_next('other-worker', request_id='other-1', now=NOW + 130)
+        self.assertIsNotNone(second)
+        other.start_attempt(second['attempt_id'], 'other-worker', second['lease_token'], now=NOW + 130)
+        # Scope-local recovery only reaps its own scope's expired attempt.
+        self.store.recover_expired(now=NOW + 260)
+        with sqlite3.connect(self.registry) as con:
+            state = con.execute("SELECT status FROM m4_attempts WHERE attempt_id=?",
+                                (second['attempt_id'],)).fetchone()[0]
+        self.assertEqual(state, 'running')
+        # Campaign-wide recovery reaches the dead scope's expired attempt.
+        self.store.recover_expired(now=NOW + 261, campaign_wide=True)
+        with sqlite3.connect(self.registry) as con:
+            state = con.execute("SELECT status FROM m4_attempts WHERE attempt_id=?",
+                                (second['attempt_id'],)).fetchone()[0]
+        self.assertEqual(state, 'interrupted')

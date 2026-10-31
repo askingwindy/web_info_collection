@@ -1,5 +1,15 @@
 # 站点规划程序
 
+2026-10-31 生产者 C0/C1 改造已实施并通过离线验证：同一共享池显式安装 `candidate-pool-2` 扩展后，`python -m site_planner.candidate_discovery produce-entries ...` 以 `candidate-producer-3` 逐条发布 `webcollect-data-candidate-2` 入口/目标候选——空目标入口为默认产物，`requested_goal` 只来自调用方 goals 文件，分类/建议留在来源上下文；模型网关只校验外层数组，逐行由程序判定 `NEW/DUPLICATE/REJECTED/OVER_LIMIT/HELD`，行身份=原session+批次+请求+原响应行号，中断只按原响应恢复。搜索词按 `producer-query-policy-1`（最少已完成方向优先、连续零新增停换、每方向上限、规范化去重）在会话级 checkpoint 上可复现地调整；UNKNOWN/401/403/整站 hold 按原作用域零新派发。旧 `webcollect-data-candidate-1`、`produce --strict`、旧 claim 语义不变，未声明新协议的领取端看不到新行。交接样例与验证记录见 `verify_results/producer-entry-offline-20261031-r01/`（36项PASS，仅离线，未恢复生产）。
+
+2026-10-31 下一版生产者按[职责拆分与轻量化计划](../../docs/生产者消费者职责拆分与轻量化改造计划-20261031.md)改造：可信入口为默认库存，目标建议可选，文章类型作提示，逐条入库并报告缺额；来源归属、原账预算、UNKNOWN 和整站止损不放松。新协议须显式启用，旧严格模式保留。本次只更新规划，当前代码仍按下文原契约运行。
+
+2026-10-31 新轻量生产者严格入口为 `python -m site_planner.candidate_discovery produce --strict --batch-key ROUND_ID ...`，共用原session冻结配置与模型/搜索预算，旧协议保留。本轮同版本连续3批各5条原始候选通过AI来源核对并入库，共15条；7/10次后停止，未运行消费者或轨迹QC。详见[严格生产者说明](../../docs/共享站点池与自主发现.md#轻量生产者)及[真实报告](../../verify_results/pilot1000-20261028-r01/producer-validation-20261031-r01/真实验证报告.md)。
+
+2026-10-31 轻量生产者真实验证修复：拒绝泛网页空目标，支持显式correction-report及reconcile-response（原明确invalid_response且有usage）；flags只按版本规则归入parameters，原回答/请求状态不覆盖，UNKNOWN不复发。5条具体候选已形成，10次运行已停止；详见[真实报告](../../verify_results/pilot1000-20261028-r01/candidate-live-20261030-r01/真实验证报告.md)。
+
+2026-10-30 新增轻量 `python -m site_planner.candidate_discovery {install,produce}`，以及 `discovery_agent.discover_candidates`：有限搜索/已有来源一次结构化AI分类并生成候选清单，分批写入共享池附加表，无页面浏览/资格审核。支持target=1000、原搜索缓存及BatchLedger预算/恢复；旧discover_ai冻结流程保留。见[共享池候选协议](../../docs/共享站点池与自主发现.md#候选库存协议-v12026-10-30工程与离线验证)。本轮只做模拟离线验证。
+
 共享池的生产状态按页面/任务记录，不标记整站完成。绑定生产scope后自动保留尝试及QC结果；候选导出默认排除在途、待审、审核通过和同步未完成页面，发现身份和历史记录仍保留。同站其他功能页独立可用，详见[状态回写与防重](../../docs/共享站点池与自主发现.md#状态回写与防重)。
 
 共享站点池、自主发现新入口：`python -m site_planner pool --help`、`python -m site_planner discover-ai --help`；命令、真实配置模板、恢复及计数边界见[共享站点池与自主发现](../../docs/共享站点池与自主发现.md)。

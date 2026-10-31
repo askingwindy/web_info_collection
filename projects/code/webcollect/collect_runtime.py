@@ -34,7 +34,10 @@ def classify_failure(error):
     from .agent_controller import ControllerStop
     if isinstance(error, ControllerStop):
         return {'UNRESOLVED':'interrupted', 'DUPLICATE':'duplicate', 'EXECUTION_FAILED':'model',
-                'ENGINEERING_ERROR':'program'}.get(getattr(error,'category',''), 'collector')
+                'ENGINEERING_ERROR':'program', 'MODEL_FAULT':'model'}.get(getattr(error,'category',''), 'collector')
+    from .react_session import ReactStop
+    if isinstance(error, ReactStop):
+        return getattr(error, 'failure_class', None) or 'collector'
     from .browser import EvidenceStale, PlanViewportInfeasible, PlanLabelUnreadable
     if isinstance(error,EvidenceStale):return 'program'
     if isinstance(error,PlanViewportInfeasible):return 'collector'
@@ -67,7 +70,8 @@ def source_identity():
              '__main__.py', 'validate.py', 'evidence.py', 'metadata.py', 'task_instruction.py', 'telemetry.py',
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
              'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
-             'workflow_proposal.py', 'fragment_workflow.py', 'agent_controller.py', 'agent_observation.py', 'agent_audit.py', 'agent_feedback.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py']
+             'workflow_proposal.py', 'fragment_workflow.py', 'agent_controller.py', 'agent_observation.py', 'agent_audit.py', 'agent_feedback.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py',
+             'react_session.py', 'postprocess.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     return {name: sha(base / name) for name in names}
@@ -106,14 +110,20 @@ def verify_committed_samples(output, attempts):
                 for row in evidence):
             raise ValueError('已完成样本缺少已提交的保存收据，停止续跑：' + attempt['sample_id'])
         receipt = read_json(receipt_path)
-        expected = receipt.get('sample_files_sha256')
+        excluded = ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl',
+                    'planning-feedback-collected_pending_review.json')
+        expected = {name: digest for name, digest in (receipt.get('sample_files_sha256') or {}).items()}
         actual = sample_hashes(Path(output) / 'samples' / attempt['sample_id'])
         if (receipt.get('attempt_id') != attempt['attempt_id'] or
                 receipt.get('sample_id') != attempt['sample_id'] or not expected or actual != expected):
             raise ValueError('已完成样本缺失或证据改变，停止续跑：' + attempt['sample_id'])
+        # Post-seal close-out receipts (append-only derivation ledger, attempt
+        # feedback) never belong to the frozen capture hash on either side.
+        expected_raw = {name: digest for name, digest in (receipt.get('capture_files_sha256') or {}).items()
+                        if name not in excluded}
         actual_raw = {name: digest for name, digest in sample_hashes(receipt_path.parent).items()
-                      if name not in ('saved_sample.json', 'context_cleanup_error.json')}
-        if not receipt.get('capture_files_sha256') or receipt['capture_files_sha256'] != actual_raw:
+                      if name not in excluded}
+        if not expected_raw or expected_raw != actual_raw:
             raise ValueError('已完成样本的原始采集证据改变，停止续跑：' + attempt['sample_id'])
 
 
@@ -246,6 +256,10 @@ def refresh_metadata(output):
 async def collect_m4(plan_path, output, registry, **options):
     """The lease protects tasks; an output lock protects derived files and snapshots."""
     import fcntl
+    plan_path, registry = Path(plan_path), Path(registry)
+    for key in ('publication_path','policy_path'):
+        if options.get(key) is not None:
+            options[key]=Path(options[key])
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     lock_path = output.parent / ('.' + runtime_scope(output) + '.lock')
@@ -279,8 +293,124 @@ def close_scope_for_replan(output, registry, reason, evidence, *, now=None):
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def react_close_event(store, attempt, kind, now, payload):
+    """Record a react close-out event through the store's transaction API."""
+    with store._transaction() as con:
+        store._event(con, kind, now, payload,
+                     task_key=attempt['task_key'], attempt_id=attempt['attempt_id'])
+
+
+async def _react_collection(context, task, attempt, sample, evidence, output, store, *,
+                            ledger, parent_job, registry, manifest, index, navigation=None):
+    """One react session in one browser context; raw first, derivation offline.
+
+    The attempt is always finished here once the raw journal is saved: derived
+    delivery commits collected_pending_review; every other honest closure
+    (no path, budget, length-unqualified, derivation failure) keeps the raw
+    receipt in the attempt evidence and records its own failure class.
+    """
+    from .react_session import ReactSession, react_chooser
+    from .postprocess import process as postprocess_derivation
+    from .collect import checkpoint_json, now, verify_public_url
+    from .agent_feedback import save_attempt_feedback, site_context
+    from .production_quality import require_public_task_state
+    from .scaffold import program_version
+    ids = {**{key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')},
+           'attempt_id': attempt['attempt_id']}
+    entry_host = verify_public_url(task['initial_url'])
+    allowed_hosts = {verify_public_url(task['site_uri']), entry_host, *task.get('allowed_hosts', [])}
+    def url_check(url):
+        verify_public_url(url, allowed_hosts)
+        require_public_task_state({'url': url})
+    def frame_guard(ref):
+        from .planning import verify_evidence
+        verify_evidence([ref])
+        conflicts = [row for row in store.exact_image_claims()
+                     if row['digest'] == ref['sha256'] and row['sample_id'] != attempt['sample_id']]
+        for row in conflicts:
+            verify_evidence([{'path': row['path'], 'sha256': row['digest']}])
+        return conflicts
+    async def preflight(page, directory):
+        ledger.consume('probe_pages', (parent_job or {'id': 'collection'})['id'] + ':react-preflight', 1)
+        from .preflight import inspect_page
+        return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
+    feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger)
+    if feedback_context['unresolved']:
+        if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
+            raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
+    chooser = react_chooser(ledger, task, attempt['attempt_id'], parent_job=parent_job)
+    page = await context.new_page()
+    page.set_default_timeout(15000)
+    session = ReactSession(task, evidence / 'raw', chooser, page, steps_directory=evidence,
+        navigation=navigation, url_check=url_check, preflight=preflight,
+        frame_guard=frame_guard, site_context=feedback_context)
+    summary = await session.run()
+    raw_receipt = summary['raw_receipt']
+    def _event_now():
+        return datetime.now(timezone.utc).isoformat()
+    def finish_failure(failure_class, root_cause, extra_evidence=()):
+        failure = evidence / 'failure.json'
+        if not failure.exists():
+            write_json(failure, {'error': root_cause, 'timestamp': now(),
+                'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
+                'failure_class': failure_class, 'raw_saved': True,
+                'stop_reason': summary['stop_reason']})
+        feedback_ref = save_attempt_feedback(evidence, attempt, 'rejected', root_cause)
+        store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+            'rejected', failure_class=failure_class, root_cause=root_cause,
+            evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
+        if failure_class == 'program':
+            store.set_scope_paused(True,
+                'React derivation program failure; raw execution preserved and dispatch stopped')
+        return {'status': 'rejected', 'failure_class': failure_class,
+                'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt}
+    if summary['unknown'] or summary['failure_class'] == 'interrupted':
+        react_close_event(store, attempt, 'react_raw_unknown', _event_now(),
+            {'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, 'unknown': True})
+        return finish_failure('interrupted',
+                              'react_unknown:' + str(summary['stop_summary'] or summary['stop_reason']))
+    def audit_validator(delivery_root):
+        from .evidence import audit_capture
+        audited = audit_capture(output, attempt['sample_id'])
+        write_json(evidence / 'capture_audit.json', audited)
+        if not audited['capture_evidence_pass']:
+            return ['capture_audit: ' + str(audited['issues'])[:400]]
+        return []
+    def dedup_validator(delivery_root):
+        conflicts = index.conflicts(delivery_root)
+        write_json(evidence / 'producer_dedup.json', {'exact_conflicts': conflicts,
+            'other_routes': 'independent_QC_required', 'not_qualified': True})
+        return ['producer_exact_dedup: ' + str(conflicts)[:400]] if conflicts else []
+    # The structural check validates a runtime-manifest shape: inherit the
+    # real manifest (schema_version pins rule_version=m4-1) with this sample.
+    delivery_manifest = {**manifest, 'samples': list(manifest.get('samples') or []) + [ids['sample_id']]}
+    derived = postprocess_derivation(evidence, sample, ids, delivery_manifest,
+                                     validators=(audit_validator, dedup_validator))
+    react_close_event(store, attempt, 'react_raw_saved', _event_now(),
+        {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
+         'derivation_status': derived['status'], 'raw_receipt': raw_receipt})
+    if derived['status'] != 'derived_saved':
+        if derived['status'] in ('processing_failed', 'delivery_rejected'):
+            return finish_failure('program', 'derivation_' + derived['status'] + ': ' +
+                                  str(derived.get('error') or derived.get('errors') or '')[:300])
+        return finish_failure('collector', 'react_' + derived['status'] +
+                              '（原始执行已保存；不足5步且未声明短流程不构成交付样本）')
+    saved = evidence / 'saved_sample.json'
+    feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
+    derived_ref = {'path': str((evidence / 'derived.json').resolve()),
+                   'sha256': sha(evidence / 'derived.json')}
+    store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+        'collected_pending_review',
+        evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
+        exact_images=index.sample_images(sample))
+    index.add_sample(sample)
+    return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
+            'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
+            'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve())}
+
+
 async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
-                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None):
+                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None, controller_parent_job=None):
     from playwright.async_api import async_playwright
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
@@ -426,7 +556,12 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         if site_pool is not None:
             store.bind_site_pool(site_pool)
         store.enqueue_plan(plan, publication)
-    store.recover_expired()
+    # Reap this scope's expired leases plus any other dead-scope attempt of
+    # the same campaign: an expired lease can never be resumed by its owner
+    # (lease fencing), and without a campaign-wide reap a crashed close-out in
+    # an abandoned scope would block its whole site as an unresolved attempt
+    # with no remaining reaper (real-run v13/v14 fact).
+    store.recover_expired(campaign_wide=True)
     attempts = store.attempt_ledger()['attempts']
     verify_committed_samples(output, attempts)
     quarantine_interrupted(output, attempts)
@@ -478,65 +613,76 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         ids = {key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')}
                         task = {**attempt['task'], '_plan_schema_version': plan['schema_version'],
                                 'require_public_origin': True}
-                        from .agent_controller import is_controlled, FragmentController, model_chooser
-                        controller_options = {}
-                        if is_controlled(task):
+                        from .react_session import is_react_task
+                        if is_react_task(task):
                             if controller_ledger is None:
-                                raise ValueError('Dynamic controller requires original BatchLedger')
-                            from .agent_feedback import site_context
-                            planning_context = plan.get('generation',{}).get('site_planning_context') or {}
-                            feedback_context = site_context(registry, task['site_uri'], model_ledger=controller_ledger,
-                                generation=planning_context.get('history',[]),
-                                quality=[q['reference'] for q in planning_context.get('quality_feedback',[])])
-                            if feedback_context['unresolved']:
-                                # Exclude only this already claimed attempt.
-                                if any(r.get('attempt_id') != attempt['attempt_id'] for r in feedback_context['unresolved']):
-                                    raise ValueError('Unresolved prior attempt blocks dynamic dispatch')
-                            def frame_guard(ref):
-                                from .planning import verify_evidence
-                                verify_evidence([ref])
-                                conflicts = [row for row in store.exact_image_claims()
-                                        if row['digest'] == ref['sha256'] and row['sample_id'] != attempt['sample_id']]
-                                for row in conflicts:
-                                    verify_evidence([{'path':row['path'],'sha256':row['digest']}])
-                                return conflicts
-                            def controller_factory(bound_task, directory):
-                                return FragmentController(bound_task, directory,
-                                    model_chooser(controller_ledger, bound_task, attempt['attempt_id']),
-                                    frame_guard=frame_guard, site_context=feedback_context)
-                            controller_options['controller_factory'] = controller_factory
-                        with phase(phase_ledger, 'browser_collection', scope=meter_identity):
-                            await collect_one(context, task, sample, evidence, ids,
-                                **({'navigation': navigation} if navigation is not None else {}), **controller_options)
-                        with phase(phase_ledger, 'structural_check', scope=meter_identity):
-                            report = await asyncio.to_thread(validate_sample, sample, 'delivery', {**manifest,
-                                'samples': manifest['samples'] + [attempt['sample_id']]})
-                        write_json(evidence / 'structural_report.json', report)
-                        if not report['structural_pass']:
-                            raise CollectionFailure('结构检查不通过：' + str(report['issues']), 'program')
-                        with phase(phase_ledger, 'capture_audit', scope=meter_identity):
-                            audited = await asyncio.to_thread(audit_capture, output, attempt['sample_id'])
-                        write_json(evidence / 'capture_audit.json', audited)
-                        if not audited['capture_evidence_pass']:
-                            raise CollectionFailure('采集证据核对不通过：' + str(audited['issues']), 'program')
-                        with phase(phase_ledger, 'producer_exact_dedup', scope=meter_identity):
-                            conflicts = await asyncio.to_thread(index.conflicts, sample)
-                        write_json(evidence / 'producer_dedup.json', {'exact_conflicts': conflicts,
-                            'other_routes': 'independent_QC_required', 'not_qualified': True})
-                        if conflicts:
-                            raise CollectionFailure('跨样本截图重复，需重新规划：' + str(conflicts), 'duplicate')
-                        meter.ensure_recorded()
-                        from .agent_feedback import save_attempt_feedback
-                        feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
-                        saved = evidence / 'saved_sample.json'
-                        write_json(saved, {'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id'],
-                            'sample_files_sha256': await asyncio.to_thread(sample_hashes, sample),
-                            'capture_files_sha256': await asyncio.to_thread(sample_hashes, evidence),
-                            'semantic_review': 'REVIEW_REQUIRED'})
-                        store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
-                                             'collected_pending_review', evidence=_evidence(saved) + [feedback_ref],
-                                             exact_images=index.sample_images(sample))
-                        index.add_sample(sample)
+                                raise ValueError('React session requires its original BatchLedger')
+                            react_result = await _react_collection(context, task, attempt, sample, evidence, output,
+                                store, ledger=controller_ledger, parent_job=controller_parent_job,
+                                registry=registry, manifest=manifest, index=index,
+                                navigation=navigation)
+                            if react_result['status'] == 'collected_pending_review':
+                                meter.ensure_recorded()
+                        else:
+                            from .agent_controller import is_controlled, FragmentController, model_chooser
+                            controller_options = {}
+                            if is_controlled(task):
+                                if controller_ledger is None:
+                                    raise ValueError('Dynamic controller requires original BatchLedger')
+                                from .agent_feedback import site_context
+                                planning_context = plan.get('generation',{}).get('site_planning_context') or {}
+                                feedback_context = site_context(registry, task['site_uri'], model_ledger=controller_ledger,
+                                    generation=planning_context.get('history',[]),
+                                    quality=[q['reference'] for q in planning_context.get('quality_feedback',[])])
+                                if feedback_context['unresolved']:
+                                    # Exclude only this already claimed attempt.
+                                    if any(r.get('attempt_id') != attempt['attempt_id'] for r in feedback_context['unresolved']):
+                                        raise CollectionFailure('Unresolved prior attempt blocks dynamic dispatch', 'program')
+                                def frame_guard(ref):
+                                    from .planning import verify_evidence
+                                    verify_evidence([ref])
+                                    conflicts = [row for row in store.exact_image_claims()
+                                            if row['digest'] == ref['sha256'] and row['sample_id'] != attempt['sample_id']]
+                                    for row in conflicts:
+                                        verify_evidence([{'path':row['path'],'sha256':row['digest']}])
+                                    return conflicts
+                                def controller_factory(bound_task, directory):
+                                    return FragmentController(bound_task, directory,
+                                        model_chooser(controller_ledger, bound_task, attempt['attempt_id'],parent_job=controller_parent_job),
+                                        frame_guard=frame_guard, site_context=feedback_context)
+                                controller_options['controller_factory'] = controller_factory
+                            with phase(phase_ledger, 'browser_collection', scope=meter_identity):
+                                await collect_one(context, task, sample, evidence, ids,
+                                    **({'navigation': navigation} if navigation is not None else {}), **controller_options)
+                            with phase(phase_ledger, 'structural_check', scope=meter_identity):
+                                report = await asyncio.to_thread(validate_sample, sample, 'delivery', {**manifest,
+                                    'samples': manifest['samples'] + [attempt['sample_id']]})
+                            write_json(evidence / 'structural_report.json', report)
+                            if not report['structural_pass']:
+                                raise CollectionFailure('结构检查不通过：' + str(report['issues']), 'program')
+                            with phase(phase_ledger, 'capture_audit', scope=meter_identity):
+                                audited = await asyncio.to_thread(audit_capture, output, attempt['sample_id'])
+                            write_json(evidence / 'capture_audit.json', audited)
+                            if not audited['capture_evidence_pass']:
+                                raise CollectionFailure('采集证据核对不通过：' + str(audited['issues']), 'program')
+                            with phase(phase_ledger, 'producer_exact_dedup', scope=meter_identity):
+                                conflicts = await asyncio.to_thread(index.conflicts, sample)
+                            write_json(evidence / 'producer_dedup.json', {'exact_conflicts': conflicts,
+                                'other_routes': 'independent_QC_required', 'not_qualified': True})
+                            if conflicts:
+                                raise CollectionFailure('跨样本截图重复，需重新规划：' + str(conflicts), 'duplicate')
+                            meter.ensure_recorded()
+                            from .agent_feedback import save_attempt_feedback
+                            feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
+                            saved = evidence / 'saved_sample.json'
+                            write_json(saved, {'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id'],
+                                'sample_files_sha256': await asyncio.to_thread(sample_hashes, sample),
+                                'capture_files_sha256': await asyncio.to_thread(sample_hashes, evidence),
+                                'semantic_review': 'REVIEW_REQUIRED'})
+                            store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
+                                                 'collected_pending_review', evidence=_evidence(saved) + [feedback_ref],
+                                                 exact_images=index.sample_images(sample))
+                            index.add_sample(sample)
                     except asyncio.CancelledError:
                         # A normal stop owns its lease and can close its partial
                         # attempt immediately. If lease ownership was lost,

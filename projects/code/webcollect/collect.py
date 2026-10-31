@@ -658,7 +658,7 @@ def describe_change(before, after, op, element):
     # URLs is never sufficient evidence of same-article navigation.
     html_path_pair=any(html==plain+'.html' and plain.rsplit('/',1)[-1]
         and '.' not in plain.rsplit('/',1)[-1] for plain,html in [paths,paths[::-1]])
-    fragment_link=re.fullmatch(r'''a\[href=(["'])#([^"']+)\1\]''',op.get('selector',''))
+    fragment_link=re.fullmatch(r'''a\[href=(["'])#([^"']+)\1\]''',op.get('selector') or '')
     clicked_fragment_link=(action=='click' and fragment_link is not None and fragment_link.group(2)==after_fragment)
     same_canonical_article=(before_parts.scheme in {'http','https'} and
         (before_parts.scheme,before_parts.netloc)==(after_parts.scheme,after_parts.netloc) and
@@ -776,7 +776,11 @@ def describe_change(before, after, op, element):
     focused=next((v for v in after['values'] if v['focused']),None)
     current=next((e for e in after['elements'] if focused and e['element_id']==focused['element_id']),None)
     if action=='click' and element and element['inputable'] and current and current['text']==element['text']:
-        return f'「{element["text"]}」输入框获得焦点' if element['text'] else '输入框获得焦点'
+        label=op.get('evidence',{}).get('target_label') or element.get('text','')
+        # A filled input's placeholder is an accessible-name fallback, not
+        # painted text. Focus is observed independently; quote only a label
+        # actually present in the after frame.
+        return f'「{label}」输入框获得焦点' if label and label in after.get('visible_text','') else '输入框获得焦点'
 
     changed=[]
     for eid,(name,value,choice) in new_values.items():
@@ -829,6 +833,15 @@ def validate_plan(plan):
     required=['task_id','site_uri','site_category','app_name','instruction','task_type','initial_url','operations','final_result','completion_judgement','final_assertions']
     task_type_schema=json.loads(SCHEMAS.joinpath('annotation.schema.json').read_text(encoding='utf-8'))['properties']['task_type']
     for task in plan['tasks']:
+        from .react_session import is_react_task
+        if is_react_task(task):
+            from .react_session import validate_task as validate_react
+            validate_react(task)
+            validate_task_instruction(task['instruction'])
+            type_errors=list(StrictValidator(task_type_schema).iter_errors(task['task_type']))
+            if type_errors: raise ValueError('Invalid react task_type')
+            verify_public_url(task['initial_url'], {verify_public_url(task['site_uri']), *task.get('allowed_hosts', [])})
+            continue
         from .agent_controller import is_controlled, validate_task as validate_controlled
         if is_controlled(task):
             validate_controlled(task)
@@ -1125,6 +1138,9 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     'input_text':arguments['text'] if op['action_type']=='type' else '+'.join(arguments['keys']) if op['action_type']=='hotkey' else '',
                     'precondition':op.get('precondition',f'当前页面为「{state["title"]}」'+((f'，可见「{element["text"]}」控件' if element['text'] else '，可见目标控件') if element else '')),
                     'expected_result':op['expected']}
+            if element and op.get('evidence',{}).get('observation_protocol')=='webcollect-trusted-observation-1':
+                label=op['evidence']['target_label']
+                action['precondition']=f'当前页面为「{state["title"]}」，可见「{label}」目标控件'
             if element:action.update(target_bbox=element['bbox'],target_control_type=element['element_type'])
             if op['action_type']=='drag':action['end_coordinate']=[arguments['end_x'],arguments['end_y']]
             step={'step_id':i,'image_path':image_path,'ui_tree_path':f'ui_tree/step_{i:03}.json','page_name':op.get('page_name','网页「'+state['title']+'」'),
@@ -1329,14 +1345,36 @@ def checkpoint_manifest(output, manifest):
     checkpoint_json(Path(output)/'manifest.json',manifest)
 
 
+def dynamic_controller_ledger(plan_path, config_path):
+    """Open the exact original model ledger a dynamic (react/model) plan bound.
+
+    Resume of a dynamic plan must reuse its original ledger/config: UNKNOWN
+    model requests are retained there and never resent through a replacement.
+    The plan carries the bound ledger path and config digest; the caller only
+    supplies the original config file.
+    """
+    plan = read_json(Path(plan_path))
+    expected = (plan.get('generation') or {}).get('controller_ledger') or {}
+    if not expected.get('path'):
+        raise ValueError('动态计划未绑定控制器账本路径；严格M4计划续跑无需 --config')
+    from .agent_controller import verify_ledger_binding
+    from .batch_core import BatchLedger
+    ledger = BatchLedger(Path(expected['path']), read_json(Path(config_path)))
+    verify_ledger_binding(plan, ledger)
+    return ledger
+
+
 async def collect_plan(plan_path, output, registry, channel='chrome', headless=True,
-                       *, publication_path=None, policy_path=None, resume=False):
+                       *, publication_path=None, policy_path=None, resume=False,
+                       controller_ledger=None):
     from playwright.async_api import async_playwright
     plan=read_json(Path(plan_path));validate_plan(plan)
     if plan.get('schema_version') == 'webcollect-plan-m4-1':
         from .collect_runtime import collect_m4
         return await collect_m4(plan_path, output, registry, publication_path=publication_path,
-                                policy_path=policy_path, resume=resume, channel=channel, headless=headless)
+                                policy_path=policy_path, resume=resume, channel=channel,
+                                headless=headless,
+                                **({'controller_ledger': controller_ledger} if controller_ledger is not None else {}))
     if publication_path or policy_path or resume:
         raise ValueError('发布收据、预算和恢复入口仅适用于严格M4计划；旧计划保留原采集行为')
     if 'media_preflight' in plan:

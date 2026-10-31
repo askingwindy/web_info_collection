@@ -6,6 +6,7 @@ Unsupported or naturally short workflows remain rejected candidates, never
 padded or allocated an ID. Parameter/route changes are not new business tasks.
 """
 import asyncio
+from copy import deepcopy
 import hashlib
 import re
 from contextlib import closing
@@ -44,7 +45,7 @@ def generation_source_identity():
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py',
-        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py')
+        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -84,6 +85,13 @@ SPEC_SCHEMA = strict_object({'tasks':{'type':'array','items':strict_object({
 def task_signature(task):
     """Conservative: argument/keyword substitutions have the same identity."""
     from .fragment_workflow import is_fragment, logical_key
+    from .react_session import is_react_task
+    if is_react_task(task):
+        # A react task is a frozen dynamic-execution boundary, not a static
+        # control list: two empty-operation tasks on one page (react vs an old
+        # controlled task) are different executions unless the react spec AND
+        # its re-registration version are identical.
+        return 'react:' + task['task_id'] + ':' + task['task_version']
     if is_fragment(task):
         return 'fragment:' + logical_key(task)
     controls = [(op.get('action_type'), op.get('selector'), op.get('index',0))
@@ -607,7 +615,8 @@ def check_live_m4_history(plan, registry, output):
                 if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
                     continue
                 from .fragment_workflow import is_fragment
-                same_structure = (task_signature(old) == signature and (is_fragment(task) or
+                from .react_session import is_react_task
+                same_structure = (task_signature(old) == signature and (is_fragment(task) or is_react_task(task) or
                                   not _different_verified_business(task, old) and not _different_supported_path(task, old)))
                 if same_structure or (semantic and semantic_signature(old) == semantic
                                       and proposal_signature(old) == proposal_signature(task)):
@@ -777,7 +786,150 @@ def compile_form(capability, spec, *, _observer_sha256=None):
     return task
 
 
-def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None, fragment_context=None, site_filter=None):
+def _generate_react_url(ledger, output, *, history_registry=None, history_set=None, url=None,
+                        goal=None, site_category='综合', app_name=None, catalog_path=None,
+                        site_filter=None, page_identities=None, react_task_version='1',
+                        react_candidate=None):
+    """One react session task per URL: host identity now, working goal in-loop.
+
+    No model call and no goal freezing happen here; the entry capability is a
+    host-bound placeholder whose qualification runs in the session preflight.
+    react_candidate={'claim','claim_reference'} binds the task to one claimed
+    pool candidate (webcollect-data-candidate-2 entries included); the frozen
+    claim snapshot becomes the read-only requested_goal identity.
+    """
+    from datetime import datetime, timedelta, timezone
+    from .react_session import build_url_task, build_capability_task, REACT_VERSION, SYSTEM_PROMPT, GOAL_BUDGETS
+    from .planning import validate_capability
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError('react-url generator requires the entry URL')
+    if site_filter is not None and site_filter != url:
+        raise ValueError('react-url entry differs from the site filter')
+    sources = generation_source_identity()
+    if ledger.config['mode'] == 'real' and history_registry is None:
+        raise ValueError('Real generation must consult the existing production registry')
+    if ledger.config['mode'] == 'real' and history_set is None:
+        raise ValueError('Real generation requires --history-set with frozen customer packages')
+    customer_history, history_scope = read_customer_history(history_set) if history_set else ([], None)
+    if ledger.config['mode'] == 'real':
+        history_scope = bind_formal_history(history_scope)
+    output = Path(output).resolve(); output.mkdir(parents=True, exist_ok=True)
+    scoped_history = read_history(history_registry, include_scopes=True) if history_registry else []
+    history = [task for _, task in scoped_history]
+    history_hash = object_sha256({'m4_tasks': history, 'customer_history': history_scope,
+                                  'replan_closures': []})
+    identities = {'schema_version': 'webcollect-page-identities-1', 'pages': {}}
+    if page_identities is not None:
+        identities = load_json(page_identities)
+        if not isinstance(identities, dict) or identities.get('schema_version') != 'webcollect-page-identities-1':
+            raise ValueError('Explicit original-frame page identities required')
+    supplied = None
+    if catalog_path is not None:
+        supplied_catalog = load_json(catalog_path)
+        if supplied_catalog.get('schema_version') != 'webcollect-capability-catalog-1':
+            raise ValueError('react-url capability catalog must use the versioned catalog schema')
+        ready = [record for record in supplied_catalog.get('records', [])
+                 if record.get('site_uri') == url and record.get('status') == 'ready'
+                 and record.get('mode') == ledger.config['mode']]
+        if len(ready) > 1:
+            raise ValueError('Multiple ready capabilities for the react entry URL')
+        supplied = ready[0] if ready else None
+    task_version = VERSION + '/react-' + str(react_task_version)
+    if supplied is not None:
+        task = build_capability_task(supplied, identities['pages'].get(url), task_version,
+                                     registration=react_task_version)
+    else:
+        task = build_url_task(url=url, task_version=task_version, site_category=site_category,
+                              app_name=app_name, registration=react_task_version)
+    if isinstance(goal, dict) and goal:
+        spec = task['workflow_proposal']['spec']
+        spec['goal']['structured'] = deepcopy(goal)
+        task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
+        from .react_session import validate_task as validate_react
+        validate_react(task)
+    if react_candidate is not None:
+        from copy import deepcopy
+        bound_claim = react_candidate['claim']
+        task['candidate_binding'] = {
+            'schema_version': 'webcollect-candidate-consumption-1',
+            'candidate_id': bound_claim['candidate_id'], 'claim_id': bound_claim['claim_id'],
+            'version': bound_claim['version'], 'candidate': deepcopy(bound_claim['snapshot']),
+            'claim_reference': react_candidate['claim_reference'],
+            'application_registry': bound_claim.get('application_registry')}
+        task['fragment']['entry_mode'] = 'candidate'
+        task['fragment']['candidate_attempt'] = bound_claim['claim_id']
+        # The claim identity joins the frozen spec: a sanctioned retry of the
+        # same entry under a new claim is a new transparent task version.
+        task['workflow_proposal']['spec']['candidate_claim'] = bound_claim['claim_id']
+        task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
+        from .candidate_contract import validate_task_binding
+        from .react_session import validate_task as validate_react
+        validate_react(task)
+        validate_task_binding(task)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    natives = [action for action in task['fragment']['allowed_actions'] if action != 'set_value']
+    record = supplied or {'schema_version': 'webcollect-site-capability-1',
+        'capability_id': task['capability_id'], 'version': REACT_VERSION,
+        'site_uri': task['site_uri'], 'site_category': site_category,
+        'mode': ledger.config['mode'], 'status': 'review_required',
+        'reason': 'React URL entry; qualification runs in the session preflight',
+        'observed_at': now_iso,
+        'expires_at': (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat(),
+        'supported_actions': natives or ['click'],
+        'task_families': [task['task_family']],
+        # A candidate-bound entry carries its frozen claim file as the original
+        # evidence; qualification evidence is earned in the session preflight.
+        'evidence': [deepcopy(react_candidate['claim_reference'])] if react_candidate is not None else [],
+        'capabilities': []}
+    validate_capability(record, require_ready=False)
+    catalog = {'schema_version': 'webcollect-capability-catalog-1',
+               'mode': ledger.config['mode'], 'records': [record]}
+    # The working catalog is always a fresh copy in the generation output; a
+    # supplied qualification catalog is an immutable source artifact.
+    catalog_file = output / 'catalog.json'
+    save_json(catalog_file, catalog)
+    plan = {'schema_version': 'webcollect-plan-m4-1', 'tasks': [task],
+        'generation': {'version': VERSION, 'generator': 'react-url', 'source_identity': sources,
+            'replan_closures': [], 'strategy_version': None,
+            'catalog_sha256': file_sha(catalog_file), 'history_sha256': history_hash,
+            'history_scope': history_scope, 'mode': ledger.config['mode'],
+            'synthetic_results_are_production': False, 'admission_reference_manifests': [],
+            'post_collection_quality_reviews': [], 'capability_review_required': True,
+            'site_planning_context': {'history': [], 'quality_feedback': []},
+            'controller_ledger': {'path': str(ledger.path), 'config_sha256': object_sha256(ledger.config)},
+            'react_protocol': REACT_VERSION},
+        'production_facts': {'accounts_and_privacy': '仅使用公开无账号页面；任务中的输入为程序生成的测试值。'
+                             if ledger.config['mode'] == 'real' else '仅受控合成工程页面，无账号，不进入正式交付。',
+            'narrative_generation': '采集会话保存原始执行；交付叙述由后加工依据实际相邻截图与同步观察生成。',
+            'narrative_mode': 'mixed', 'prompt_stages': {
+                'planning': {'mode': 'model',
+                    'description': '单一 ReAct 循环按真实工具返回逐步决策（observe/inspect/act/finish）。',
+                    'prompt': SYSTEM_PROMPT},
+                'narrative': {'mode': 'template', 'template_version': 'actual-state-describe_change',
+                              'description': '沿用采集器实际可见状态及相邻截图对应的叙述生成。'}}}}
+    from .task_contract import validate_m4_plan
+    from .collect import validate_plan
+    validate_m4_plan(plan); validate_plan(plan)
+    save_json(output / 'plan.json', plan)
+    queue_id = ledger.enqueue('frozen-plan', {'plan': str(output / 'plan.json'),
+        'plan_sha256': file_sha(output / 'plan.json'), 'history_sha256': history_hash,
+        'mode': ledger.config['mode']})
+    result = {'schema_version': 'webcollect-task-generation-summary-1',
+        'catalog_candidates': 1, 'strategy_form_candidates': 0, 'strategy_widget_candidates': 0,
+        'model_responses': [], 'generated_task_details': [task], 'generated_tasks': 1,
+        'queue_job_id': queue_id, 'rejected': [], 'pending': [], 'empty_results': [],
+        'sample_ids_allocated': 0, 'plan_file': str(output / 'plan.json'),
+        'mode': ledger.config['mode'], 'generator': 'react-url',
+        'capability_review_required': True, 'post_collection_quality_reviews': [],
+        'historical_tasks_consulted': len(history),
+        'explicit_closed_failed_tasks_for_repair': 0, 'history_scope': history_scope,
+        'historical_customer_samples_consulted': len(customer_history),
+        'real_collection_executed': False}
+    save_json(output / ('generation-' + object_sha256(result)[:16] + '.json'), result)
+    return result
+
+
+def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None, fragment_context=None, site_filter=None, react_url=None, react_goal=None, react_site_category='综合', react_app_name=None, react_task_version='1', react_candidate=None):
     if max_tasks is not None and (type(max_tasks) is not int or max_tasks < 1):
         raise ValueError('max_tasks must be an explicit positive integer')
     from .task_contract import validate_m4_plan
@@ -785,10 +937,18 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     # Explicit fixture responses preserve the old controlled/model test API.
     # Ordinary API and CLI calls default to the no-model strategy path.
     generator=generator or ('model' if synthetic_specs is not None else 'deterministic')
-    if generator not in ('deterministic','model','reviewed','workflow-model','fragment-model','agent-model'):
+    if generator not in ('deterministic','model','reviewed','workflow-model','fragment-model','agent-model','react-url'):
         raise ValueError('Unknown task generator')
     if generator in ('model','workflow-model','fragment-model','agent-model') and ledger.config.get('model') is None:
         raise ValueError('Model task generator requires an explicitly enabled model branch')
+    if generator == 'react-url' and ledger.config.get('model') is None:
+        raise ValueError('React sessions decide through the model gateway; enable the model branch')
+    if generator == 'react-url':
+        return _generate_react_url(ledger, output, history_registry=history_registry,
+            history_set=history_set, url=react_url, goal=react_goal,
+            site_category=react_site_category, app_name=react_app_name,
+            catalog_path=catalog_path, site_filter=site_filter, page_identities=page_identities,
+            react_task_version=react_task_version, react_candidate=react_candidate)
     if synthetic_specs is not None and (generator not in ('model','workflow-model','fragment-model','agent-model') or ledger.config['mode']!='synthetic'):
         raise ValueError('Synthetic responses are only allowed by the explicit synthetic model fixture')
     sources = generation_source_identity()
@@ -844,7 +1004,16 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                                  'error_message': record.get('error_message'), 'visit_ids': record.get('visit_ids', []),
                                  'kind': 'probe_failure', 'evidence': record.get('evidence', [])})
                 continue
-            validate_capability(record,require_ready=generator in ('model','workflow-model','fragment-model','agent-model'))
+            if 'candidate_observation' in record:
+                from .candidate_contract import validate_observation
+                binding = validate_observation(record)
+                from .candidate_contract import guard_reference
+                guard_reference(binding['claim_reference'])
+                if generator != 'agent-model' or (fragment_context or {}).get('candidate_consumption') != binding:
+                    raise ValueError('Candidate observation requires explicit versioned consumer context')
+                validate_capability(record, require_ready=False)
+            else:
+                validate_capability(record,require_ready=generator in ('model','workflow-model','fragment-model','agent-model'))
             if record.get('status')=='rejected' or timestamp(record['expires_at'])<=time.time():
                 raise ValueError('Capability rejected or expired')
             proposed = [spec for spec in proposals['tasks'] if spec.get('capability_id') == record['capability_id']]
@@ -955,7 +1124,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
                 else:
                     task = compile_form(record,spec)
                 from .agent_controller import is_controlled
-                if is_controlled(task) and history_registry is not None:
+                if is_controlled(task) and 'candidate_binding' not in task and history_registry is not None:
                     from .agent_feedback import known_start_conflicts
                     conflicts = known_start_conflicts(history_registry, record, spec)
                     if conflicts:
@@ -1279,8 +1448,15 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     async def work():
         if has_legacy_admissions:
             verify_task_admissions(plan, catalog, registry, output)
+        from .react_session import is_react_task
+        react_only = bool(plan['tasks']) and all(is_react_task(task) for task in plan['tasks'])
         pf=output/'preflight'; publication=output/'publication.json'
-        if not publication.exists():
+        if react_only:
+            # React sessions preflight the already-open entry page themselves;
+            # re-running an outer preflight would open a second site context.
+            if not publication.exists():
+                save_json(publication,publish_plan(plan,catalog,require_preflight=False))
+        elif not publication.exists():
             if not (pf/'report.json').exists():
                 ledger.consume('probe_pages',jid+':preflight',len(plan['tasks']))
                 await preflight_plan(plan_path,pf,samples=2,interval_ms=100,preserve_order=True,navigation=navigation)
@@ -1289,9 +1465,10 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         check_live_m4_history(plan, registry, output)
         if has_legacy_admissions:
             verify_task_admissions(plan, catalog, registry, output)
-        result=await collect_m4(pf/'scheduled-plan.json',output/'capture',registry,
+        result=await collect_m4(plan_path if react_only else pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
-            navigation=navigation, controller_ledger=ledger, **({'site_pool': site_pool} if site_pool is not None else {}))
+            navigation=navigation, controller_ledger=ledger, controller_parent_job=job,
+            **({'site_pool': site_pool} if site_pool is not None else {}))
         if result['collection_status']=='paused_pending_resume':
             return {'collection':result,'candidate':None,'stopped':'existing runtime paused; budget and queued work retained'}
         facts_path=output/'facts.json'; client=output/'candidate'
@@ -1342,8 +1519,13 @@ def main(argv=None):
             p.add_argument('--workflow-specs',type=Path,help='Explicit original-frame DOM workflow proposals; no rehearsal or admission required')
             p.add_argument('--page-identities',type=Path,help='Explicit whole application name, task/shared roles and original anchors, frozen before generation')
             p.add_argument('--max-tasks',type=int,help='Bound the generated plan before registration; does not grant production quota')
-            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model','agent-model'),default='deterministic',
+            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model','agent-model','react-url'),default='deterministic',
                            help='Registered no-model strategies by default; model is an explicit budgeted option')
+            p.add_argument('--react-url',help='Entry URL for the react-url generator; working goal is established in-loop')
+            p.add_argument('--react-goal',help='Optional structured business goal JSON for the react entry (read-only requested_goal)')
+            p.add_argument('--react-site-category',default='综合')
+            p.add_argument('--react-app-name')
+            p.add_argument('--react-task-version', default='1', help='Explicit react task re-registration version (sanctioned replan identity)')
         else:
             for name in ('plan','registry','policy'):p.add_argument('--'+name,type=Path,required=True)
             p.add_argument('--resume',action='store_true')
@@ -1352,7 +1534,13 @@ def main(argv=None):
     args=parser.parse_args(argv)
     try:
         ledger=BatchLedger(args.ledger,load_json(args.config))
-        result=generate(ledger,args.catalog,args.output,history_registry=args.history_registry,history_set=args.history_set,generator=args.generator,replan_closures=args.replan_closure,admission_reviews=args.admission_reviews,workflow_specs=args.workflow_specs,page_identities=args.page_identities,max_tasks=args.max_tasks) if args.command=='generate' else asyncio.run(
+        react_goal=json.loads(args.react_goal) if getattr(args, 'react_goal', None) else None
+        react_url = getattr(args, 'react_url', None)
+        if args.command=='generate':
+            if (react_goal is not None and not isinstance(react_goal, dict)) or (args.generator=='react-url') != bool(react_url):
+                raise ValueError('--react-url is required exactly for the react-url generator; --react-goal must be a JSON object')
+        result=generate(ledger,args.catalog,args.output,history_registry=args.history_registry,history_set=args.history_set,generator=args.generator,replan_closures=args.replan_closure,admission_reviews=args.admission_reviews,workflow_specs=args.workflow_specs,page_identities=args.page_identities,max_tasks=args.max_tasks,
+            react_url=react_url,react_goal=react_goal,react_site_category=getattr(args,'react_site_category','综合'),react_app_name=getattr(args,'react_app_name',None),react_task_version=getattr(args,'react_task_version','1')) if args.command=='generate' else asyncio.run(
             execute(ledger,args.plan,args.catalog,args.output,args.registry,args.policy,resume=args.resume,qc_policy=args.qc_policy,
                     site_pool=args.site_pool))
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0

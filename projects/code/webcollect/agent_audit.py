@@ -8,6 +8,9 @@ def terminal_proof(task, records, final_binding):
     actions = [r for r in records if r['operation']['action_type'] not in ('wait','complete')]
     if not 5 <= len(actions) <= task['fragment']['budgets']['max_actions'] or not final_binding.get('screenshot_sha256'):
         raise ValueError('Controlled fragment requires 5-8 actual actions and saved ending')
+    if 'candidate_binding' in task:
+        from .candidate_navigation import verify_path
+        verify_path(task, [r['state'] for r in records], [r['operation'] for r in records])
     seen = set()
     for raw in actions:
         if not raw.get('ended_at') or raw.get('execution_error'):

@@ -162,9 +162,9 @@ class ArkProviderTests(unittest.TestCase):
         self.assertFalse(result['real_model_verified'])
         self.assertNotIn('offline-ark-file', out.getvalue())
 
-    def test_yaml_selects_ark1_for_ark_and_glm1_for_glm_without_cross_provider_keys(self):
+    def test_yaml_selects_ark1_for_ark_and_glm_account_for_glm_without_cross_provider_keys(self):
         source = self.root / 'token.yaml'
-        source.write_text('glm1: "offline-glm-yaml-secret"\nark1: "  offline-ark-yaml-secret  "\n')
+        source.write_text('glm: "offline-glm-yaml-secret"\nark1: "  offline-ark-yaml-secret  "\n')
         config = self.config(); config['model']['api_key_file'] = str(source)
         with patch.dict('os.environ', {}, clear=True):
             self.assertEqual(model_credentials.credential(config['model']), 'offline-ark-yaml-secret')
@@ -176,22 +176,37 @@ class ArkProviderTests(unittest.TestCase):
         for secret in (b'offline-glm-yaml-secret', b'offline-ark-yaml-secret'):
             self.assertNotIn(secret, ledger.path.read_bytes())
 
-    def test_yaml_missing_duplicate_or_invalid_ark1_never_uses_glm1(self):
+    def test_glm_account_list_picks_one_randomly_per_session_and_keeps_it(self):
+        source = self.root / 'token.yaml'
+        keys = [f'offline-glm-key-{index}.secret{index}' for index in range(3)]
+        source.write_text('glm:\n' + ''.join(f'  - {key}\n' for key in keys) + 'ark1: "offline-ark-yaml-secret"\n')
+        config = self.config(); config['model']['api_key_file'] = str(source)
+        glm = dict(config['model'], provider='glm')
+        with patch.dict('os.environ', {}, clear=True):
+            picks = {model_credentials.credential(glm) for _ in range(60)}
+            self.assertTrue(picks <= set(keys), picks)
+            # Uniform selection over 60 draws of three keys shows more than one.
+            self.assertGreater(len(picks), 1)
+            source.write_text('glm: []\nark1: "offline-ark-yaml-secret"\n')
+            with self.assertRaisesRegex(ValueError, 'suppressed'):
+                model_credentials.credential(glm)
+
+    def test_yaml_missing_duplicate_or_invalid_ark1_never_uses_glm(self):
         source = self.root / 'token.yaml'
         config = self.config(); config['model']['api_key_file'] = str(source)
-        for text in ('glm1: "offline-glm-only"\n', 'ark1: "one"\nark1: "two"\n',
-                     'glm1: "offline-glm-only"\nark1: ["invalid"]\n'):
+        for text in ('glm: "offline-glm-only"\n', 'ark1: "one"\nark1: "two"\n',
+                     'glm: "offline-glm-only"\nark1: ["invalid"]\n'):
             source.write_text(text)
             with patch.dict('os.environ', {}, clear=True), self.assertRaisesRegex(ValueError, 'suppressed'):
                 model_credentials.credential(config['model'])
-        source.write_text('glm1: {api_key: "offline-glm-nested"}\nark1: {api_key: "offline-ark-nested"}\n')
+        source.write_text('glm: {api_key: "offline-glm-nested"}\nark1: {api_key: "offline-ark-nested"}\n')
         with patch.dict('os.environ', {}, clear=True):
             self.assertEqual(model_credentials.credential(config['model']), 'offline-ark-nested')
 
     def test_renamed_yaml_with_legacy_labels_reads_only_explicit_top_level_ark1(self):
         source = self.root / 'token.yaml'
         config = self.config(); config['model']['api_key_file'] = str(source)
-        source.write_text('glm1: [unfinished legacy content\nark1: offline-ark-labelled-only\n')
+        source.write_text('glm: [unfinished legacy content\nark1: offline-ark-labelled-only\n')
         with patch.dict('os.environ', {}, clear=True):
             self.assertEqual(model_credentials.credential(config['model']), 'offline-ark-labelled-only')
             ledger, job, gateway = self.gateway(config)
@@ -202,10 +217,10 @@ class ArkProviderTests(unittest.TestCase):
     def test_legacy_yaml_fallback_rejects_missing_duplicate_or_nested_only_ark1(self):
         source = self.root / 'token.yaml'
         config = self.config(); config['model']['api_key_file'] = str(source)
-        for text in ('glm1: [unfinished\n',
-                     'glm1: [unfinished\nark1: one\nark1: two\n',
-                     'glm1: [unfinished\n  ark1: nested-only\n',
-                     'glm1: [unfinished\nark1: "unclosed\n'):
+        for text in ('glm: [unfinished\n',
+                     'glm: [unfinished\nark1: one\nark1: two\n',
+                     'glm: [unfinished\n  ark1: nested-only\n',
+                     'glm: [unfinished\nark1: "unclosed\n'):
             source.write_text(text)
             with patch.dict('os.environ', {}, clear=True), self.assertRaisesRegex(ValueError, 'suppressed'):
                 model_credentials.credential(config['model'])

@@ -115,6 +115,25 @@ class CurrentChainTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'historical population'):
             assert_current_evidence(self.scope, reference(raw))
 
+    def test_explicit_rejected_frame_relocation_keeps_dispatch_and_checks_original_bytes(self):
+        old=self.results/'capture/samples/S-current/images/step_001.png'
+        old.parent.mkdir(parents=True);old.write_bytes(b'CONTROLLED ORIGINAL PNG BYTES')
+        original=reference(old);dispatch=self.results/'capture/evidence/dispatch.json'
+        save_json(dispatch,{'formal_frame':original});digest=file_sha(dispatch)
+        moved=self.results/'capture/rejected/S-current/images/step_001.png'
+        moved.parent.mkdir(parents=True);old.rename(moved)
+        value={'dispatch':reference(dispatch),'frame_relocations':[{
+            'schema_version':'webcollect-rejected-frame-relocation-1','original_path':str(old),
+            'original_sha256':original['sha256'],'current':reference(moved),'dispatch':reference(dispatch)}]}
+        self.assertTrue(assert_current_evidence(self.scope,value))
+        self.assertEqual(file_sha(dispatch),digest);self.assertFalse(old.exists())
+        forged=deepcopy(value);forged['frame_relocations'][0]['current']=reference(self.manifest)
+        with self.assertRaisesRegex(ValueError,'original samples-to-rejected'):
+            assert_current_evidence(self.scope,forged)
+        moved.write_bytes(b'CHANGED')
+        with self.assertRaisesRegex(ValueError,'bytes changed'):
+            assert_current_evidence(self.scope,value)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -20,9 +20,14 @@ def ensure_schema(con):
     con.execute('CREATE INDEX IF NOT EXISTS m4_quality_group ON m4_quality_admissions(campaign_id,group_id,quality_status,force_full)')
 
 
+def _is_react(task):
+    from .react_session import is_react_task
+    return is_react_task(task)
+
+
 def register_capture(con, row):
     task = json.loads(row['task_json'])
-    if not is_fragment(task):
+    if not (is_fragment(task) or _is_react(task)):
         return
     ensure_schema(con); group = group_key(task); campaign = row['campaign_id']
     prior = con.execute('SELECT task_sha256 FROM m4_fragment_captures WHERE sample_id=?', (row['sample_id'],)).fetchone()
@@ -37,7 +42,9 @@ def register_capture(con, row):
 
 
 def group_key(task):
-    if not is_fragment(task) or task['fragment'].get('quality_policy_version') != POLICY:
+    if not (is_fragment(task) or _is_react(task)):
+        raise ValueError('Sampled production policy requires an explicitly versioned fragment/react boundary')
+    if not _is_react(task) and task['fragment'].get('quality_policy_version') != POLICY:
         raise ValueError('New sampled production policy requires an explicitly versioned fragment')
     from .application_identity import host_key
     app = task.get('pilot_identity', {}).get('application', {}).get('canonical_uri', task['site_uri'])

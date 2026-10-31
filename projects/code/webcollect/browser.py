@@ -462,7 +462,8 @@ async def viewport_png(page):
         return base64.b64decode(result['data'],validate=True),{'method':'chrome_rendered_viewport','font_wait_error':str(error),'device_metrics_reasserted':metrics,'font_rendering_policy':'actual browser fallback; no page content or resource modification'}
 
 
-async def _capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None):
+async def _capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
+                   timeout=15):
     """Capture full evidence; only proved unrelated decorative IMG pixels may vary.
 
     retries remains the total number of attempts, including when explicitly
@@ -486,7 +487,8 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
         observed_wait+=native_window['observed_wait_ms']/1000
         started=time.time_ns()
         options={**({'assertions':assertions} if assertions else {}),
-                 **({'protected_selectors':protected_selectors} if protected_selectors else {})}
+                 **({'protected_selectors':protected_selectors} if protected_selectors else {}),
+                 'timeout': timeout}
         before=await observe(page,selector,index,**options)
         try:png,screenshot_evidence=await asyncio.wait_for(viewport_png(page),timeout=25)
         except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
@@ -546,9 +548,10 @@ class SnapshotFault(ValueError):
     responsibility = 'collector'
 
 
-async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None):
+async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
+                  timeout=15):
     try:
-        return await _capture(page, selector, index, retries, assertions, protected_selectors)
+        return await _capture(page, selector, index, retries, assertions, protected_selectors, timeout=timeout)
     except Exception as error:
         # Preserve the exact comparison on EvidenceStale. A script exception may
         # precede any tree; retain the available PNG without claiming synchrony.
@@ -573,7 +576,8 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
 _PREVERIFY_RETRY_DELAYS=(0.25,0.5)
 
 
-async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None):
+async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None,
+                                 timeout=15):
     """Reject any changed captured state before dispatch, including non-control actions.
 
     Nothing has been dispatched here, so a transient paint mismatch may be
@@ -583,7 +587,8 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
     failed proof is retained; an accepted re-verification records the rejections
     it superseded. No action is ever replayed by this function.
     """
-    options={'assertions':assertions,**({'protected_selectors':protected_selectors} if protected_selectors else {})}
+    options={'assertions':assertions,'timeout':timeout,
+             **({'protected_selectors':protected_selectors} if protected_selectors else {})}
     live=await observe(page,selector,index,**options)
     if 'capture_readiness' in state:
         captured=_CAPTURE_FRAMES.get(page)

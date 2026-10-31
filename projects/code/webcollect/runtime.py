@@ -624,17 +624,34 @@ class RuntimeStore:
             self._event(con, 'attempt_finished', current, {'outcome': outcome, 'failure_class': failure_class, 'root_cause': root_cause, 'evidence': evidence, **transition}, row['task_key'], attempt_id)
             return self._view(saved)
 
-    def recover_expired(self, *, now=None, reason='lease expired; prior process must not resume its trajectory'):
+    def recover_expired(self, *, now=None, reason='lease expired; prior process must not resume its trajectory',
+                        campaign_wide=False):
         current = timestamp(now)
         recovered = []
         with self._transaction() as con:
             policy = self._policy(con)
-            ids = [r[0] for r in con.execute("SELECT attempt_id FROM m4_attempts WHERE scope_id=? AND status IN ('reserved','running') AND lease_expires_at<=?", (self.scope_id, current))]
+            if campaign_wide:
+                # Dead-scope attempts of this campaign only: an expired lease
+                # can never be resumed by its original owner anyway.
+                rows_sql = ("SELECT attempt_id FROM m4_attempts WHERE status IN ('reserved','running') "
+                            "AND lease_expires_at<=? AND campaign_id=?")
+                params = [current, policy['campaign_id']]
+            else:
+                rows_sql = ("SELECT attempt_id FROM m4_attempts WHERE scope_id=? "
+                            "AND status IN ('reserved','running') AND lease_expires_at<=?")
+                params = [self.scope_id, current]
+            ids = [r[0] for r in con.execute(rows_sql, params)]
             for attempt_id in ids:
-                row = self._attempt(con, attempt_id)
+                if campaign_wide:
+                    row = con.execute('SELECT a.*,t.task_id,t.task_version,t.task_json,t.domain_key,t.capability_expires_at FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.attempt_id=?', (attempt_id,)).fetchone()
+                    if row is None:
+                        continue
+                else:
+                    row = self._attempt(con, attempt_id)
                 status = 'interrupted' if row['started_at'] is not None else 'abandoned'
                 con.execute("UPDATE m4_attempts SET status=?,finished_at=?,failure_class='interrupted',root_cause='lease_expired' WHERE attempt_id=?", (status, current, attempt_id))
-                saved = self._attempt(con, attempt_id)
+                saved = (con.execute('SELECT a.*,t.task_id,t.task_version,t.task_json,t.domain_key,t.capability_expires_at FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.attempt_id=?', (attempt_id,)).fetchone()
+                         if campaign_wide else self._attempt(con, attempt_id))
                 if row['started_at'] is not None:
                     transition = self._failure_transition(con, saved, current, policy)
                 else:

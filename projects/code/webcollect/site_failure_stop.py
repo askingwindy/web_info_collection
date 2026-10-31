@@ -61,22 +61,31 @@ def _verify_persisted_reassessment_evidence(refs):
     """
     from .planning import verify_evidence
     source_root = Path(__file__).resolve().parent
-    data, code = [], []
+    criteria_root = source_root.parents[2] / 'request'
+    data, provenance = [], []
     for ref in refs:
         if isinstance(ref, dict) and isinstance(ref.get('path'), str) and ref['path']:
+            resolved = None
             try:
-                inside = Path(ref['path']).resolve().is_relative_to(source_root)
+                resolved = Path(ref['path']).resolve()
             except OSError:
-                inside = False
-            (code if inside else data).append(ref)
+                resolved = None
+            inside_source = bool(resolved and resolved.is_relative_to(source_root))
+            # Criteria documents under request/ are living requirement texts:
+            # like collector source refs they are provenance (the receipt keeps
+            # the reviewed sha256), never byte-frozen dispatch preconditions —
+            # otherwise any authorized criteria revision blocks all dispatch.
+            inside_criteria = bool(resolved and criteria_root.is_dir()
+                                   and resolved.is_relative_to(criteria_root))
+            (provenance if inside_source or inside_criteria else data).append(ref)
         else:
             data.append(ref)
     if data:
         verify_evidence(data)
-    for ref in code:
+    for ref in provenance:
         path = Path(ref['path'])
         if ref.get('sha256') and (not path.is_file() or path.is_symlink()):
-            raise ValueError('Reviewed source provenance file no longer exists: ' + ref['path'])
+            raise ValueError('Reviewed provenance file no longer exists: ' + ref['path'])
 
 
 class SiteFailureStore:
@@ -187,7 +196,11 @@ class SiteFailureStore:
                 original=con.execute('SELECT * FROM site_executions WHERE execution_id=? AND application_key=?',(identity,key)).fetchone()
                 if not original:raise ValueError('Original execution required')
                 if original[3]=='unknown':
-                    self._verify_closed_visit(original, decision.get('visit_proofs',{}).get(identity))
+                    reconciled=decision.get('reconciliation_proofs',{}).get(identity)
+                    if reconciled is not None:
+                        self._verify_reconciled_interruption(original, reconciled)
+                    else:
+                        self._verify_closed_visit(original, decision.get('visit_proofs',{}).get(identity))
                 elif original[3]!='failed':raise ValueError('Original failure or proved closed visit required')
                 rows=con.execute('SELECT receipt FROM site_reassessments WHERE execution_id=?',(identity,)).fetchall()
                 values=[json.loads(row[0]) for row in rows]
@@ -202,6 +215,64 @@ class SiteFailureStore:
             con.execute('INSERT OR IGNORE INTO site_reassessment_decisions VALUES(?,?,?)',(object_sha256(value),key,canonical(value)))
             con.commit()
         return self.status(application)
+
+    @staticmethod
+    def _verify_reconciled_interruption(original, proof):
+        """Release an interrupted-unknown only through the original books.
+
+        The production attempt must carry an explicit m4_events
+        'attempt_reconciled' receipt from interrupted to an engineering
+        responsibility, the registry row must already hold that class, and
+        the receipt's controller terminal must prove zero dispatched actions.
+        Failure counts are never cleared by this route.
+        """
+        from .planning import verify_evidence
+        if not isinstance(proof, dict):
+            raise ValueError('Reconciliation proof required')
+        verify_evidence([proof['terminal']])
+        usage = json.loads(original[6])
+        registry = proof.get('registry') or next(
+            (ref.get('registry') for ref in usage if isinstance(ref, dict) and ref.get('registry')), None)
+        attempt = proof.get('attempt_id') or next(
+            (ref.get('attempt_id') for ref in usage if isinstance(ref, dict) and ref.get('attempt_id')), None)
+        if not registry or not attempt:
+            raise ValueError('Original usage references lack the registry attempt identity')
+        terminal = load_json(proof['terminal']['path'])
+        zero_dispatch = (terminal.get('used') or {}).get('max_actions') == 0
+        sealed_react = False
+        if terminal.get('protocol') == 'webcollect-react-session-1':
+            # A react interruption may carry fully evidenced dispatched actions:
+            # every trajectory row has a proven after observation and the raw
+            # receipt seals the whole journal by SHA. The only remaining
+            # unknown is the retained model request itself.
+            from .batch_core import file_sha
+            raw_dir = Path(proof['terminal']['path']).parent
+            receipt_path = raw_dir / 'raw-receipt.json'
+            if receipt_path.is_file():
+                receipt = load_json(receipt_path)
+                rows = [json.loads(line) for line in
+                        (raw_dir / 'trajectory.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
+                sealed_react = (receipt.get('protocol') == 'webcollect-react-session-1'
+                                and terminal.get('unknown') is True
+                                and receipt.get('files_sha256', {}).get('terminal.json')
+                                    == file_sha(raw_dir / 'terminal.json')
+                                and receipt.get('files_sha256', {}).get('trajectory.jsonl')
+                                    == file_sha(raw_dir / 'trajectory.jsonl')
+                                and all(row.get('effective') and row.get('after_observation_id') for row in rows))
+        if not ((terminal.get('kind') == 'terminal' and zero_dispatch) or sealed_react):
+            raise ValueError('Terminal evidence does not prove zero dispatched actions')
+        engineering = ('program', 'configuration', 'model', 'interface', 'collector')
+        with closing(sqlite3.connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute('SELECT status,failure_class FROM m4_attempts WHERE attempt_id=?', (attempt,)).fetchone()
+            if not row or row['status'] != 'rejected' or row['failure_class'] not in engineering:
+                raise ValueError('Registry attempt was not reconciled to an engineering responsibility')
+            events = [json.loads(r[0]) for r in con.execute(
+                "SELECT payload_json FROM m4_events WHERE event_type='attempt_reconciled' AND attempt_id=?", (attempt,))]
+        terminal_path = str(Path(proof['terminal']['path']).resolve())
+        if not any(item.get('from') == 'interrupted' and item.get('to') == row['failure_class']
+                   and str(Path(item.get('evidence', '')).resolve()) == terminal_path for item in events):
+            raise ValueError('No original reconciliation receipt binds this terminal evidence')
 
     @staticmethod
     def _verify_closed_visit(original, proof):
@@ -448,7 +519,11 @@ class SiteFailureStore:
                     for identity in decision['execution_ids']:
                         if identity in unknown_ids:
                             original=con.execute('SELECT * FROM site_executions WHERE execution_id=?',(identity,)).fetchone()
-                            self._verify_closed_visit(original,authorization.get('visit_proofs',{}).get(identity))
+                            reconciled=authorization.get('reconciliation_proofs',{}).get(identity)
+                            if reconciled is not None:
+                                self._verify_reconciled_interruption(original,reconciled)
+                            else:
+                                self._verify_closed_visit(original,authorization.get('visit_proofs',{}).get(identity))
                     applied.update(identity for identity in decision['execution_ids'] if len(reviewed.get(identity,set()))==1)
         effective=failed-len(applied & failed_ids)
         effective_unknown=unknown-len(applied & unknown_ids)

@@ -1,5 +1,6 @@
 """Runtime-only model credentials; never return them in configuration or logs."""
 import os
+import random
 import re
 from pathlib import Path
 
@@ -9,7 +10,19 @@ from pathlib import Path
 PROJECT_GLM_TOKEN = Path(__file__).resolve().parents[3] / 'request' / 'token'
 PROJECT_GLM_YAML = PROJECT_GLM_TOKEN.with_name('token.yaml')
 PROJECT_GLM_ACCOUNT = 'glm'
-PROJECT_GLM_ACCOUNT_INDEX = 0  # Pin one authorized account; never rotate after failure.
+
+
+def _glm_session_key(account_keys):
+    """One uniform random pick per session; kept for the whole session.
+
+    2026-10-30 user authorization: the glm account list holds several equally
+    authorized keys; each ModelGateway (one planning-collection trajectory)
+    selects one when it starts. A failing key is never rotated mid-session —
+    the failure is recorded in the original ledger like any other.
+    """
+    if not account_keys:
+        raise ValueError('Empty credential account list')
+    return random.SystemRandom().choice(account_keys)
 
 
 def _yaml_account(path, account):
@@ -41,8 +54,7 @@ def _yaml_account(path, account):
         else:
             value=accounts[account]
             if account=='glm' and isinstance(value,list):
-                if not value:raise ValueError('Empty credential account list')
-                value=value[PROJECT_GLM_ACCOUNT_INDEX]
+                value=_glm_session_key(value)
             if isinstance(value,dict):value=value['api_key']
         if not isinstance(value,str):raise ValueError('String account key required')
         return value.strip()

@@ -604,10 +604,30 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
             if generic in ('确认最终页面符合任务要求','确认任务完成','确认最终状态','完成任务'):
                 checks.append(qc_rule('C10','FAIL',str(path/'annotation.json'),['需求书§6：user_goal写明确认最终页面'],
                     'Final user_goal is generic and does not name the actual final page/content.','Generate a concrete terminal confirmation from the delivered final state.',scope='sample'))
-        for rid,route,key in [('DUPLICATE_SEQUENCE','route2','confirmed_pairs'),('NEAR_DUPLICATES','route3','candidates'),('NEAR_DUPLICATES','route4','candidates')]:
+        # Unified duplicate verdict: exact/sequence pairs (routes 1/2) stay
+        # per-sample hard failures (duplicate registration of the same data);
+        # near-duplicate proxies (routes 3/4) are judged once against the
+        # explicit effective set's near-duplicate sample rate (<=0.1%,
+        # historical samples never dilute the denominator). All four-route
+        # hit facts remain reported either way.
+        rate=resolution.get('near_duplicate_sample_rate')
+        rate_ok=resolution.get('sample_rate_within_requested_limit')
+        for rid,route,key in [('DUPLICATE_SEQUENCE','route2','confirmed_pairs')]:
             hit=any(sid in row['sample_ids'] for row in duplicates[route][key])
             checks.append(qc_rule(rid,'FAIL' if hit else 'REVIEW_REQUIRED' if duplicates.get('error') else 'PASS',str(path),['需求书§6：四路去重'],
-                'Any configured route hit is a near duplicate; no semantic exemption.','Resolve by repair/recollection, never by changing the denominator or labels.',scope='sample',route=route))
+                'Exact duplicate sequence registration is a hard per-sample failure.','Resolve by repair/recollection, never by changing the denominator or labels.',scope='sample',route=route))
+        for rid,route,key in [('NEAR_DUPLICATES','route3','candidates'),('NEAR_DUPLICATES','route4','candidates')]:
+            hit=any(sid in row['sample_ids'] for row in duplicates[route][key])
+            if hit and rate_ok is False:
+                status='FAIL'
+            elif hit or duplicates.get('error') or rate_ok is None:
+                status='REVIEW_REQUIRED'
+            else:
+                status='PASS'
+            checks.append(qc_rule(rid,status,str(path),['需求书§6：四路去重；近重复按显式有效集合比例≤0.1%判定'],
+                'Near-duplicate proxies judged by the effective-set sample rate; hit facts retained verbatim.',
+                'Resolve by repair/recollection, never by changing the denominator or labels.',scope='sample',route=route,
+                near_duplicate_sample_rate=rate,rate_within_limit=rate_ok))
         sampling_row=next((row for row in semantic_sampling['rows'] if row['sample_id']==sid),None) if semantic_sampling else None
         semantic_names=SEMANTIC if sampling_row is None or sid in accepted else []
         for name in semantic_names:
@@ -644,6 +664,13 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         'Every required document role must resolve to an actual nonempty delivered file; names may be explicitly mapped.',
         'Supply missing document roles or an accurate role mapping; presence is not semantic approval.',scope='batch',evidence=roles))
     stats,distribution_checks=_delivery_statistics(dataset,outputs,profile);batch+=distribution_checks
+    batch.append(qc_rule('DELIVERY_NEAR_DUPLICATE_RATE',
+        'FAIL' if resolution.get('sample_rate_within_requested_limit') is False
+        else 'REVIEW_REQUIRED' if resolution.get('sample_rate_within_requested_limit') is None else 'PASS',
+        str(dataset),['需求书§6：四路去重；近重复按显式有效集合样本比例≤0.1%（历史样本不稀释分母）'],
+        'near_duplicate_sample_rate=' + str(resolution.get('near_duplicate_sample_rate')) +
+        '; four-route hit facts retained in the duplicates block.',
+        'Resolve by repair/recollection, never by changing the denominator, labels or exemption.',scope='batch'))
     checksum=verify_manifest(dataset)
     batch.append(qc_rule('ROOT_CHECKSUM','PASS' if checksum.get('pass') is True else 'FAIL',str(dataset/'SHA256SUMS'),
         ['需求书§3'], 'Complete delivered file manifest independently verified.','Seal the final unchanged package with a complete manifest.',scope='batch',evidence=checksum))

@@ -482,6 +482,15 @@
     if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0 ||
         rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= height || rect.left >= width) continue;
     if (element.checkVisibility && !element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) continue;
+    // Empty, noninteractive decoration never enters the visible tree. Do not
+    // demand target geometry from it before applying that existing filter.
+    // Real text, controls, images, frames and explicit targets remain strict.
+    const candidateScroll=/(auto|scroll)/.test(style.overflowY+style.overflowX)&&
+      (element.scrollHeight>element.clientHeight||element.scrollWidth>element.clientWidth);
+    if(element!==target&&!clean(element.textContent)&&
+       !['aria-label','aria-labelledby','title','placeholder'].some(k=>element.hasAttribute(k))&&
+       !element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio]')&&
+       !element.hasAttribute('onclick')&&style.cursor!=='pointer'&&!candidateScroll)continue;
     axisScale(element);
     const opaqueFrame=element.matches('iframe,frame');
     const clip=clipFor(element);
@@ -697,7 +706,7 @@
       if(!target.matches('input,textarea,select')||target.readOnly||target.disabled||
          target.matches('input[type=hidden],input[type=range],input[type=color],input[type=file],input[type=checkbox],input[type=radio],input[type=button],input[type=submit],input[type=reset],input[type=image]'))return '';
       const parent=target.parentElement;
-      let group,label,branch,uploadLabel=null;
+      let group,label,branch,uploadLabel=null,unitCompanions=[],fieldCompanions=[],valueButton=null;
       if(parent?.matches('.input-group')) {
         group=parent;
         if(group.children.length!==2||group.querySelector('.input-group'))return '';
@@ -723,15 +732,61 @@
            e.hasAttribute('tabindex')||getComputedStyle(e).cursor==='pointer'))return '';
         if(label.hasAttribute('for')&&label.control!==target)return '';
         if([...parent.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent)))return '';
+      } else if(parent?.matches('div.layui-input-res')&&parent.parentElement?.matches('div.layui-form-resItem')) {
+        group=parent.parentElement;
+        if(group.children.length!==4||parent.children.length!==2||
+           ![...parent.children].some(e=>e!==target&&e.matches('label.res-label')&&!e.children.length))return '';
+        const labels=[...group.children].filter(e=>e.matches('label.layui-form-label'));
+        const selects=[...group.children].filter(e=>e.matches('select'));
+        const renderers=[...group.children].filter(e=>e.matches('div.layui-form-select'));
+        if(labels.length!==1||selects.length!==1||renderers.length!==1)return '';
+        label=labels[0];branch=label;
+        if(label.children.length||label.control===target||label.hasAttribute('for')&&label.control!==target)return '';
+        const backing=selects[0],units=[...renderers[0].querySelectorAll('input')];
+        if(backing.getClientRects().length||backing.selectedOptions.length!==1||units.length!==1||
+           !units[0].readOnly||clean(units[0].value)!==clean(backing.selectedOptions[0].textContent))return '';
+        unitCompanions=[backing,units[0]];
+        const hint=parent.querySelector('label.res-label'),hs=getComputedStyle(hint),hr=hint.getBoundingClientRect(),tr=target.getBoundingClientRect();
+        if(target.value===''&&clean(hint.textContent).length<=40&&
+           frameworkColor(hs.backgroundColor)?.[3]===0&&hs.backgroundImage==='none'&&hs.boxShadow==='none'&&hs.filter==='none'&&
+           ['Top','Right','Bottom','Left'].every(side=>parseFloat(hs['border'+side+'Width'])===0)&&
+           ['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(hint,p).content))&&
+           hr.left>=tr.left&&hr.right<=tr.right&&hr.top>=tr.top&&hr.bottom<=tr.bottom&&hr.width<=0.8*tr.width)
+          fieldCompanions=[hint]; // Transparent text hint over its own empty field.
+      } else if(parent?.children.length===2) {
+        // A direct, isolated label/input pair (including a leaf Layui prefix)
+        // has no competing target. The shared paint/geometry proof below still
+        // applies; arbitrary nearby prose and multiple controls stay unknown.
+        let labels=[...parent.children].filter(e=>e!==target&&
+          (e.matches('label')||e.matches('div.layui-input-prefix'))&&!e.children.length);
+        if(!labels.length) {
+          // Bare input paired with a value-labeled button: the button's painted
+          // text names the group (e.g. an unlabeled search box next to a
+          // "搜索" submit). The button itself is a control and is excluded
+          // from the group scan below; the same paint proof still applies.
+          const others=[...parent.children].filter(e=>e!==target&&!e.children.length&&
+            (e.matches('input[type=button],input[type=submit]')||e.matches('button')));
+          if(others.length===1&&others[0].getClientRects().length) {
+            const button=others[0];
+            if(button.matches('input')) {
+              if(clean(button.value)&&nativeValueVisible(button,true)) {valueButton=button;labels=[button];}
+            } else if(clean(button.textContent))labels=[button];
+          }
+        }
+        if(labels.length!==1)return '';
+        group=parent;label=labels[0];branch=label;
+        if(label.control===target)return ''; // Keep native association provenance.
+        if(label.hasAttribute('for')&&label.control!==target)return '';
       } else return '';
       const controls=[...group.querySelectorAll('input,textarea,select,button,[contenteditable],[role=textbox],[role=combobox],[role=spinbutton],[role=button]')]
-        .filter(e=>!uploadLabel||e!==uploadLabel.button&&e!==uploadLabel.file);
+        .filter(e=>(!uploadLabel||e!==uploadLabel.button&&e!==uploadLabel.file)&&!unitCompanions.includes(e)&&e!==valueButton);
       if(controls.length!==1||controls[0]!==target)return '';
       const hasOwnText=node=>[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&clean(child.textContent));
       if(hasOwnText(group)||(branch!==label&&hasOwnText(branch)))return '';
       // Full original text must survive the existing per-grapheme clipping and
       // occlusion checks. Partial visible fragments cannot name the control.
-      const source=uploadLabel?.source||clean(label.textContent),text=uploadLabel?.text||clean(visibleText(label));
+      const source=uploadLabel?.source||(valueButton?clean(valueButton.value):clean(label.textContent)),
+            text=uploadLabel?.text||(valueButton?source:clean(visibleText(label)));
       if(!source||text!==source)return '';
       const style=getComputedStyle(label);
       if(parseFloat(style.fontSize)<10||style.textTransform!=='none'||
@@ -766,7 +821,7 @@
       };
       const labelBox=stacked?stackedBox(a,b):unsharedBox(a,b),targetBox=stacked?stackedBox(b,a):unsharedBox(b,a);
       if(!exposedRect(labelBox,label,clipFor(label))||!exposedRect(targetBox,target,clipFor(target)))return '';
-      if(!frameworkAreaExposed(labelBox,label)||!frameworkAreaExposed(targetBox,target))return '';
+      if(!frameworkAreaExposed(labelBox,label)||!frameworkAreaExposed(targetBox,target,fieldCompanions))return '';
       const shared={left:Math.max(a.left,b.left),right:Math.min(a.right,b.right),
         top:Math.max(a.top,b.top),bottom:Math.min(a.bottom,b.bottom)};
       if(shared.right>shared.left&&shared.bottom>shared.top&&!frameworkAreaExposed(shared,label,[target]))return '';
@@ -1011,7 +1066,7 @@
       const siblings=n.parentElement?[...n.parentElement.children].filter(s=>s.localName===n.localName):[n];
       parts.unshift(n.localName+':nth-of-type('+(siblings.indexOf(n)+1)+')');n=n.parentElement;
     }
-    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
+    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
       options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:clean(o.label),disabled:o.disabled})):[]};
   });
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,

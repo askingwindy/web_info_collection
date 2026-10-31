@@ -67,6 +67,12 @@ def validate_m4_task(task):
     from .fragment_workflow import is_fragment, POLICY
     fragment = is_fragment(task)
     from .agent_controller import is_controlled, validate_task
+    from .react_session import is_react_task
+    if is_react_task(task):
+        from .production_identity import validate_identity
+        validate_identity(task)
+        from .react_session import validate_task as validate_react
+        return validate_react(task)
     if is_controlled(task):
         from .production_identity import validate_identity
         validate_identity(task)

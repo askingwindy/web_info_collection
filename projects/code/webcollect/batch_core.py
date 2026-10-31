@@ -275,10 +275,44 @@ class BatchLedger:
         con.execute('INSERT INTO batch_events(at,event,detail) VALUES(?,?,?)',
                     (time.time(), event, canonical(detail)))
 
-    def _time_limit(self, con):
+    def _runtime_deadline(self, con):
         start = con.execute('SELECT started FROM batch_meta').fetchone()[0]
-        if time.time() - start >= self.config['budget']['max_run_seconds']:
+        deadline=start+self.config['budget']['max_run_seconds']
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_windows'").fetchone():
+            from .planning import verify_evidence
+            for row in con.execute('SELECT reference,deadline FROM runtime_windows'):
+                ref=json.loads(row[0]);verify_evidence([ref]);body=load_json(ref['path'])
+                if body['deadline']!=row[1]:raise ValueError('Authorized runtime window changed')
+                deadline=max(deadline,row[1])
+        return deadline
+
+    def _time_limit(self, con):
+        if time.time() >= self._runtime_deadline(con):
             raise BudgetStop('max_run_seconds reached (resume retains original start)')
+
+    def authorize_runtime_window(self, reference):
+        """Append an explicit continuation window; all counters/config stay frozen."""
+        from .planning import verify_evidence
+        verify_evidence([reference]);value=load_json(reference['path'])
+        with self.transaction() as con:
+            start=con.execute('SELECT started FROM batch_meta').fetchone()[0]
+            if (value.get('schema_version')!='webcollect-runtime-window-1' or value.get('run_id')!=self.config['run_id']
+                    or value.get('ledger')!=str(self.path) or value.get('config_sha256')!=object_sha256(self.config)
+                    or value.get('original_started')!=start or not value.get('user_instruction')
+                    or not time.time()<value.get('deadline',0)<=time.time()+86400
+                    or type(value.get('max_new_consumer_runs')) is not int or not 1<=value['max_new_consumer_runs']<=10):
+                raise ValueError('Explicit bounded continuation authorization required')
+            if con.execute("SELECT 1 FROM model_requests WHERE state IN ('reserved','unknown') LIMIT 1").fetchone():
+                raise OutcomeUnknown('Original model request unresolved; runtime continuation cannot resend')
+            if con.execute("SELECT 1 FROM jobs WHERE state='running' LIMIT 1").fetchone():
+                raise ValueError('Original worker still active; do not add a concurrent window')
+            con.execute('CREATE TABLE IF NOT EXISTS runtime_windows(id TEXT PRIMARY KEY, reference TEXT NOT NULL, deadline REAL NOT NULL)')
+            identity=object_sha256(reference)
+            inserted=con.execute('INSERT OR IGNORE INTO runtime_windows VALUES(?,?,?)',
+                                 (identity,canonical(reference),value['deadline'])).rowcount
+            if inserted:self.event(con,'runtime_window_authorized',{'reference':reference,'original_started':start,
+                'deadline':value['deadline'],'budgets_and_counters_reset':False})
+        return value
 
     def enqueue(self, kind, payload):
         identity = object_sha256({'kind': kind, 'payload': payload})
@@ -302,7 +336,7 @@ class BatchLedger:
                 self.event(con, 'lease_expired', {'job_id': row['id'], 'unknown_requests': len(unknown)})
         return len(rows)
 
-    def claim(self, kind, *, job_id=None, domain=None):
+    def claim(self, kind, *, job_id=None, domain=None, parent_job=None):
         self.recover()
         with self.transaction() as con:
             self._time_limit(con)
@@ -319,8 +353,18 @@ class BatchLedger:
                             ('max_job_attempts reached; original attempts retained', time.time(), row['id']))
                 self.event(con, 'job_attempt_limit', {'job_id': row['id'], 'attempts': row['attempts'], 'limit': attempt_cap})
                 return None
-            running = con.execute("SELECT COUNT(*) FROM jobs WHERE state='running' AND kind!='frozen-plan'").fetchone()[0]
-            if running >= self.config['budget']['max_concurrent_jobs']:
+            con.execute('CREATE TABLE IF NOT EXISTS job_parents ('
+                        'job_id TEXT PRIMARY KEY REFERENCES jobs(id), parent_id TEXT NOT NULL REFERENCES jobs(id), '
+                        'parent_owner TEXT NOT NULL)')
+            if parent_job is not None:
+                self._owned(con,parent_job)
+                if kind not in ('fragment-decision','react-decision') or parent_job['kind']!='collection' or json.loads(row['payload']).get('parent_job_id')!=parent_job['id']:
+                    raise ValueError('Only a bound collection decision may share its parent slot')
+                if con.execute("SELECT 1 FROM job_parents p JOIN jobs j ON j.id=p.job_id WHERE p.parent_id=? AND j.state='running'",(parent_job['id'],)).fetchone():
+                    raise BudgetStop('Parent already has an active decision; no parallel child')
+            running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
+                                  'AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)').fetchone()[0]
+            if parent_job is None and running >= self.config['budget']['max_concurrent_jobs']:
                 raise BudgetStop('max_concurrent_jobs reached; queued work retained')
             if domain:
                 last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
@@ -330,6 +374,8 @@ class BatchLedger:
             owner = uuid.uuid4().hex
             con.execute("UPDATE jobs SET state='running',owner=?,lease=?,attempts=attempts+1,updated=? WHERE id=?",
                         (owner, time.time() + self.config['budget']['lease_seconds'], time.time(), row['id']))
+            if parent_job is not None:
+                con.execute('INSERT INTO job_parents VALUES(?,?,?)',(row['id'],parent_job['id'],parent_job['owner']))
             self.event(con, 'job_claimed', {'job_id': row['id'], 'kind': kind})
             return {**dict(row), 'payload': json.loads(row['payload']), 'owner': owner}
 
@@ -337,6 +383,10 @@ class BatchLedger:
         row = con.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone()
         if not row or row['owner'] != job['owner'] or row['state'] != 'running' or row['lease'] < time.time():
             raise ValueError('Lost/expired job lease')
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name='job_parents'").fetchone():
+            parent=con.execute('SELECT j.state,j.owner,j.lease,p.parent_owner FROM job_parents p JOIN jobs j ON j.id=p.parent_id WHERE p.job_id=?',(job['id'],)).fetchone()
+            if parent and (parent[0]!='running' or parent[1]!=parent[3] or parent[2]<time.time()):
+                raise ValueError('Lost/expired parent collection lease')
 
     def heartbeat(self, job):
         with self.transaction() as con:
@@ -398,7 +448,7 @@ class BatchLedger:
     def remaining_seconds(self):
         with self.connect() as con:
             self._time_limit(con)
-            return self.config['budget']['max_run_seconds'] - (time.time() - con.execute('SELECT started FROM batch_meta').fetchone()[0])
+            return self._runtime_deadline(con)-time.time()
 
     def reserve_visit(self, job, target_uri, purpose, domain, *, timeout_seconds=20):
         """Count each dispatch, including failed/repeated visits; never cache-dedup.
@@ -424,7 +474,7 @@ class BatchLedger:
             now = time.time()
             last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
             delay = last[0] + self.config['budget']['min_domain_interval_seconds'] - now if last else 0
-            remaining = self.config['budget']['max_run_seconds'] - (now - con.execute('SELECT started FROM batch_meta').fetchone()[0])
+            remaining = self._runtime_deadline(con)-now
             if delay > 0:
                 if delay >= remaining: raise BudgetStop('max_run_seconds: insufficient time for domain interval')
                 raise VisitRateWait(delay)
@@ -559,7 +609,7 @@ class BatchLedger:
             if used[2] + tokens > budget['max_reserved_tokens']:
                 raise BudgetStop('max_reserved_tokens reached')
             started=con.execute('SELECT started FROM batch_meta').fetchone()[0]
-            if started+budget['max_run_seconds']-time.time()<model['timeout_seconds']:
+            if self._runtime_deadline(con)-time.time()<model['timeout_seconds']:
                 raise BudgetStop('Insufficient remaining run time for the next bounded model request')
             exceeded = ("error='reservation_exceeded'" if budget.get('cost_control', 'capped') == 'observe_only'
                         else "cost>reserved_cost OR error='reservation_exceeded'")

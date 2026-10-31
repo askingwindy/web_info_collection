@@ -253,27 +253,35 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
     from .task_contract import validate_m4_plan
     from .collect import validate_plan
     from .preflight import validate_preflight_binding
+    from .react_session import is_react_task
     if not isinstance(plan, dict) or plan.get('schema_version') != 'webcollect-plan-m4-1':
         raise ValueError('规划发布仅接受严格M4计划')
     validate_m4_plan(plan)
     validate_plan(plan)
-    if not require_preflight or not plan.get('media_preflight'):
+    # React sessions preflight the already-open entry page inside their own
+    # browser session (same-context requirement); an outer preflight binding
+    # would re-open the site in a second context before any action.
+    react_only = bool(plan['tasks']) and all(is_react_task(task) for task in plan['tasks'])
+    if react_only and plan.get('media_preflight'):
+        raise ValueError('React 计划在同会话内预检，不携带外部预检绑定')
+    if not react_only and (not require_preflight or not plan.get('media_preflight')):
         raise ValueError('M4计划发布不能跳过正式预检绑定')
-    validate_preflight_binding(plan)
-    report = json.loads(Path(plan['media_preflight']['report_path']).read_text())
-    if any(row.get('error') for row in report['records']):
-        raise ValueError('预检仍有失败任务，必须重新规划并保留原分母')
-    # Advisory review routing excludes only that task; the denominator and the
-    # retained preflight report keep the risk visible for post-hoc QC.
-    advisory = {row.get('task_id') for row in report['records']
-                if row.get('summary', {}).get('routing') == 'REVIEW_REQUIRED'}
-    if advisory:
-        from .fragment_workflow import is_fragment
-        blocked = {task['task_id'] for task in plan['tasks'] if task['task_id'] in advisory and is_fragment(task)}
-        if blocked:
-            plan['tasks'] = [task for task in plan['tasks'] if task['task_id'] not in blocked]
-        if any(task_id in advisory and task_id not in blocked for task_id in advisory):
-            raise ValueError('非片段任务的预检待审仍须重新规划并保留原分母')
+    if plan.get('media_preflight'):
+        validate_preflight_binding(plan)
+        report = json.loads(Path(plan['media_preflight']['report_path']).read_text())
+        if any(row.get('error') for row in report['records']):
+            raise ValueError('预检仍有失败任务，必须重新规划并保留原分母')
+        # Advisory review routing excludes only that task; the denominator and the
+        # retained preflight report keep the risk visible for post-hoc QC.
+        advisory = {row.get('task_id') for row in report['records']
+                    if row.get('summary', {}).get('routing') == 'REVIEW_REQUIRED'}
+        if advisory:
+            from .fragment_workflow import is_fragment
+            blocked = {task['task_id'] for task in plan['tasks'] if task['task_id'] in advisory and is_fragment(task)}
+            if blocked:
+                plan['tasks'] = [task for task in plan['tasks'] if task['task_id'] not in blocked]
+            if any(task_id in advisory and task_id not in blocked for task_id in advisory):
+                raise ValueError('非片段任务的预检待审仍须重新规划并保留原分母')
         if not plan['tasks']:
             raise ValueError('预检待审排除后无可派发任务，保留原分母')
     catalog = _records(capabilities)
@@ -288,9 +296,23 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
         key = (task.get('capability_id'), task.get('capability_version'))
         if not all(isinstance(value, str) and value for value in key) or key not in catalog:
             raise ValueError('任务缺少精确版本的站点能力记录')
-        capability = validate_capability(catalog[key], now=current)
-        from .workflow_proposal import verify_task
-        verify_task(task, capability)
+        if 'candidate_binding' in task:
+            from .candidate_contract import validate_task_binding, guard_claim
+            validate_task_binding(task, catalog[key]); guard_claim(task)
+            capability = validate_capability(catalog[key], now=current, require_ready=False)
+            if timestamp(capability['expires_at']) <= current:
+                raise ValueError('Consumer observation expired')
+        elif is_react_task(task):
+            # React URL entries qualify inside their own session preflight;
+            # the catalog record is a host-bound placeholder capability.
+            capability = validate_capability(catalog[key], now=current, require_ready=False)
+            if timestamp(capability['expires_at']) <= current:
+                raise ValueError('React entry capability expired')
+        else:
+            capability = validate_capability(catalog[key], now=current)
+        if not is_react_task(task):
+            from .workflow_proposal import verify_task
+            verify_task(task, capability)
         if (capability['site_uri'], capability['site_category']) != (task['site_uri'], task['site_category']):
             raise ValueError('任务URI/类目与能力记录不一致')
         page_uris = _scoped_page_uris(capability)
@@ -313,7 +335,9 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
                       'capability_expires_at': timestamp(capability['expires_at'])})
     receipt = {'schema_version': 'webcollect-plan-publication-1', 'published_at': current,
                'plan_sha256': object_sha256(plan), 'task_count': len(tasks), 'tasks': tasks,
-               'capabilities': list(used.values()), 'preflight_report_sha256': plan['media_preflight']['report_sha256'],
+               'capabilities': list(used.values()),
+               'preflight_report_sha256': (plan['media_preflight']['report_sha256']
+                                           if plan.get('media_preflight') else None),
                'capability_catalog': catalog_records,
                'capability_catalog_sha256': object_sha256(catalog_records),
                'capability_candidate_count': len(capabilities.get('records', [])) if isinstance(capabilities, dict) else len(capabilities),

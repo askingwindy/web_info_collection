@@ -113,10 +113,19 @@ def validate_identity(task, *, observed_states=None):
     if task.get('initial_url'):
         _require(page_url(task['initial_url']) in aliases | shared_urls, 'starting page has no reviewed role')
     if observed_states is not None:
-        _require(observed_states and all(page_url(row['url']) in aliases | shared_urls for row in observed_states),
+        from .candidate_contract import same_application
+        from .react_session import is_react_task
+        # A react session earns its page scope by real same-host navigation;
+        # the frozen task cannot list those pages, so the earned set is the
+        # observed workflow itself restricted to the evidence-backed
+        # application host — exactly the in-session authorization rule.
+        earned = ({page_url(row['url']) for row in observed_states
+                   if canonical_key(row['url'], registry) == whole}
+                  if is_react_task(task) else set())
+        _require(observed_states and all((same_application(task,row['url']) if 'candidate_binding' in task else page_url(row['url']) in aliases | shared_urls | earned) for row in observed_states),
                  'actual workflow includes an unbound page')
         from .fragment_workflow import is_fragment
-        _require(page_url(observed_states[-1]['url']) in (aliases | shared_urls if is_fragment(task) else aliases), 'actual result page cannot be excluded as shared')
+        _require((same_application(task,observed_states[-1]['url']) if 'candidate_binding' in task else page_url(observed_states[-1]['url']) in (aliases | shared_urls | earned if is_fragment(task) or is_react_task(task) else aliases)), 'actual result page cannot be excluded as shared')
         _require(any(page_url(row['url']) in aliases and state_key(row, page['kind']) == state_key(state, page['kind'])
                      for row in observed_states), 'actual task page does not corroborate original content/function anchor')
     return {'binding_sha256': object_sha256(value), 'application_uri': app['canonical_uri'],
@@ -126,6 +135,14 @@ def validate_identity(task, *, observed_states=None):
 
 def require_actions(task, count, *, final=False, required=False):
     if task.get('pilot_identity') is None and not required:
+        return
+    from .react_session import is_react_task
+    if is_react_task(task):
+        # The react protocol has no product step cap: delivery length is
+        # judged at derivation and QC (>=5 effective or a documented short
+        # flow). Only actually executed actions reach a final proof.
+        if type(count) is not int or (final and count < 1):
+            raise ValueError('REACT_EXECUTION_BOUNDS: react final proof requires at least one real action')
         return
     if type(count) is not int or count > 10 or final and count < 5:
         raise ValueError('COLLECTION_ACTION_BOUNDS: collection requires 5-10 actual necessary operations; wait/complete do not count')
@@ -145,6 +162,10 @@ def state_allowed(task, state):
     if task.get('pilot_identity') is None:
         return
     binding = validate_identity(task)
+    if 'candidate_binding' in task:
+        from .candidate_contract import same_application
+        _require(same_application(task,state['url']), 'candidate left application')
+        return  # Exact action/source navigation is checked by controller and terminal audit.
     _require(page_url(state.get('url')) in set(binding['task_page_urls'] + binding['shared_page_urls']),
              'actual page has no independently reviewed task/shared role')
 
@@ -158,6 +179,9 @@ def actual_proof(task, raw_records, *, final_state=None):
     states = [row['state'] for row in rows]
     if final_state is not None:
         states.append(final_state)
+    if 'candidate_binding' in task:
+        from .candidate_navigation import verify_path
+        verify_path(task,states,[row['operation'] for row in rows])
     identity = validate_identity(task, observed_states=states)
     return {'version': VERSION, **identity, 'effective_actions': len(actions),
             'preparation_actions': sum(row.get('operation_origin') == 'preparation' for row in actions),
@@ -175,7 +199,8 @@ def validate_plan(plan, *, required=False):
         for task in pilot:
             binding = validate_identity(task)
             from .agent_controller import is_controlled
-            if not is_controlled(task):
+            from .react_session import is_react_task
+            if not is_controlled(task) and not is_react_task(task):
                 require_actions(task, sum(op.get('action_type') not in ('wait', 'complete') for op in task['operations']), final=True)
             from .fragment_workflow import is_fragment, logical_key
             if is_fragment(task):
@@ -206,12 +231,26 @@ def _keys(binding):
         'content:' + object_sha256([binding['application_key'], binding['content_key']])]
 
 
+def react_key(task):
+    """Versioned dynamic-execution claim for react tasks.
+
+    Like a fragment key, one claim per frozen boundary+spec; the explicit
+    registration version makes a sanctioned re-registration a new transparent
+    slot instead of colliding with (or silently reusing) the old one.
+    """
+    return object_sha256({'url': task['initial_url'], 'boundary': task['fragment'],
+                          'spec': task['workflow_proposal']['spec']})
+
+
 def reserve(con, task_key, task):
     binding = validate_identity(task)
     if binding is None:
         return
     from .fragment_workflow import is_fragment, logical_key
-    if is_fragment(task):
+    from .react_session import is_react_task
+    if is_react_task(task):
+        binding['fragment_key'] = react_key(task)
+    elif is_fragment(task):
         binding['fragment_key'] = logical_key(task)
     ensure_schema(con)
     app = task['pilot_identity']['application']
@@ -238,7 +277,10 @@ def guard(con, task_key, task, *, required=False):
     if binding is None:
         return
     from .fragment_workflow import is_fragment, logical_key
-    if is_fragment(task):
+    from .react_session import is_react_task
+    if is_react_task(task):
+        binding['fragment_key'] = react_key(task)
+    elif is_fragment(task):
         binding['fragment_key'] = logical_key(task)
     app = con.execute('SELECT canonical_uri,name FROM m4_pilot_applications WHERE application_key=?',
                       (binding['application_key'],)).fetchone()

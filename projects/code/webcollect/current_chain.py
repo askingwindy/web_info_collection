@@ -246,6 +246,26 @@ def assert_current_evidence(scope, value):
     evidence_root = _path(scope['manifest']['path']).parent.parent
     roots = [evidence_root, *[_path(root) for root in scope['current_result_roots']]]
     visited = set()
+    relocations = {}
+    def find_relocations(item):
+        if isinstance(item,list):
+            for entry in item:find_relocations(entry)
+        elif isinstance(item,dict):
+            if item.get('schema_version')=='webcollect-rejected-frame-relocation-1':
+                old=_path(item['original_path']);current=_path(item['current']['path']);dispatch=_path(item['dispatch']['path'])
+                _require(all(any(p.is_relative_to(root) for root in roots) for p in (old,current,dispatch)),
+                         'out-of-chain frame relocation rejected')
+                _require(old.suffix=='.png' and len(old.parents)>3 and old.parent.name=='images'
+                         and old.parents[2].name=='samples'
+                         and current==old.parents[3]/'rejected'/old.parents[1].name/'images'/old.name,
+                         'frame relocation must be original samples-to-rejected move')
+                _require(_ref(current)==item['current'] and item['current']['sha256']==item['original_sha256']
+                         and _ref(dispatch)==item['dispatch'], 'frame relocation bytes changed')
+                _require(load_json(dispatch).get('formal_frame')=={'path':item['original_path'],'sha256':item['original_sha256']},
+                         'frame relocation lacks original dispatch binding')
+                relocations[(str(old),item['original_sha256'])]=current
+            for entry in item.values():find_relocations(entry)
+    find_relocations(value)
     def walk(item):
         if isinstance(item, list):
             for entry in item:
@@ -257,7 +277,11 @@ def assert_current_evidence(scope, value):
                 path = _path(item['path'])
                 _require(any(path.is_relative_to(root) for root in roots),
                          'historical/out-of-chain observation reference rejected')
-                _require(_ref(path) == item, 'current observation reference changed')
+                if not path.is_file() and (str(path),item['sha256']) in relocations:
+                    path=relocations[(str(path),item['sha256'])]
+                    _require(_ref(path)['sha256']==item['sha256'],'relocated frame bytes changed')
+                else:
+                    _require(_ref(path) == item, 'current observation reference changed')
                 if path.suffix == '.json' and str(path) not in visited:
                     visited.add(str(path)); walk(load_json(path))
             else:

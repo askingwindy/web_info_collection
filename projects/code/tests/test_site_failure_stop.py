@@ -2,6 +2,7 @@
 import asyncio
 import importlib.util
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
@@ -34,6 +35,61 @@ class SiteFailureStopTests(unittest.TestCase):
         plan, publication = fixtures.make_plan(self.root / 'plan', count=count, uri='https://example.org/other')
         runtime.enqueue_plan(plan, publication, now=fixtures.NOW)
         return runtime
+
+    def test_interrupted_unknown_releases_only_through_original_reconciliation(self):
+        """2026-10-31: an interrupted unknown hold releases only with the
+        original registry's attempt_reconciled receipt, an engineering class
+        on the attempt row and a controller terminal proving zero dispatch.
+        Failure counts are never cleared by this route."""
+        from webcollect.batch_core import save_json, file_sha
+        registry = self.root / 'reconciled.sqlite3'
+        con = sqlite3.connect(registry)
+        con.execute('CREATE TABLE m4_events (scope_id TEXT, campaign_id TEXT, event_type TEXT, '
+                    'task_key TEXT, attempt_id TEXT, at REAL, payload_json TEXT)')
+        con.execute('CREATE TABLE m4_attempts (attempt_id TEXT PRIMARY KEY, status TEXT, failure_class TEXT)')
+        con.execute("INSERT INTO m4_attempts VALUES('att-1','rejected','program')")
+        con.execute("INSERT INTO m4_events(scope_id,campaign_id,event_type,task_key,attempt_id,at,payload_json) "
+                    "VALUES('s','c','attempt_reconciled','k','att-1',0,?)",
+                    (json.dumps({'from': 'interrupted', 'to': 'program',
+                                 'evidence': str(self.root / 'terminal.json')}),))
+        con.commit(); con.close()
+        terminal = {'kind': 'terminal', 'used': {'max_actions': 0, 'max_decisions': 1}}
+        save_json(self.root / 'terminal.json', terminal)
+        proof = {'terminal': {'path': str(self.root / 'terminal.json'), 'sha256': file_sha(self.root / 'terminal.json')}}
+        self.fail('unknown-1', state='unknown',
+            usage_refs=[{'registry': str(registry), 'attempt_id': 'att-1', 'usage': 'UNKNOWN', 'cost': 'UNKNOWN'}])
+        identity = 'unknown-1'
+        controlled = self.root / 'controlled-evidence.json'
+        save_json(controlled, {'fixture': 'controlled-reconciliation'})
+        self.store.append_reassessment(identity, responsibility='collector',
+            reason='CONTROLLED engineering interruption with zero dispatch',
+            evidence=[{'path': str(controlled), 'sha256': file_sha(controlled)}])
+        with self.assertRaises(SiteStopped):
+            self.store.guard('https://example.org/page?q=1')
+        # Wrong terminal (dispatched actions) must not release.
+        save_json(self.root / 'terminal-bad.json', {'kind': 'terminal', 'used': {'max_actions': 2}})
+        bad = {'terminal': {'path': str(self.root / 'terminal-bad.json'), 'sha256': file_sha(self.root / 'terminal-bad.json')}}
+        authorization = self.root / 'auth.json'
+        save_json(authorization, {'action': 'apply_evidenced_failure_reassessments',
+            'application_key': application_key('https://example.org/page?q=1'),
+            'campaign_id': self.binding['campaign_id'],
+            'user_instruction': 'CONTROLLED: reconcile evidenced engineering interruption',
+            'execution_ids': [identity], 'reconciliation_proofs': {identity: bad}})
+        with self.assertRaises(ValueError):
+            self.store.apply_reassessments('https://example.org/page?q=1',
+                {'path': str(authorization), 'sha256': file_sha(authorization)})
+        # The original-books proof releases the hold without touching failures.
+        save_json(self.root / 'auth-ok.json', {'action': 'apply_evidenced_failure_reassessments',
+            'application_key': application_key('https://example.org/page?q=1'),
+            'campaign_id': self.binding['campaign_id'],
+            'user_instruction': 'CONTROLLED: reconcile evidenced engineering interruption',
+            'execution_ids': [identity], 'reconciliation_proofs': {identity: proof}})
+        authorization = self.root / 'auth-ok.json'
+        state = self.store.apply_reassessments('https://example.org/page?q=1',
+            {'path': str(authorization), 'sha256': file_sha(authorization)})
+        self.assertEqual(state['state'], 'available')
+        self.assertEqual(state['failure_count'], 0)
+        self.store.guard('https://example.org/page?q=1')
 
     def test_cross_page_parameter_scheme_and_restart_never_reset_three_failures(self):
         for number, uri in enumerate(('https://Example.org/a?q=1', 'http://example.org/b#x', 'https://example.org/c')):
@@ -151,3 +207,81 @@ class SiteFailureStopTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class SealedReactReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.binding = {'ledger': str(self.root / 'stop.sqlite3'), 'campaign_id': 'CONTROLLED-current-chain',
+                        'formal_since': fixtures.NOW - 1}
+        self.store = SiteFailureStore.initialize(self.binding)
+
+    def record_unknown(self, identity, usage_refs):
+        self.store.record({'site_uri': 'https://example.org/page?q=1', 'task_id': 't'},
+                          identity, stage='formal', state='unknown', reason='interrupted',
+                          real_execution=True, evidence=usage_refs, usage_refs=usage_refs)
+
+    def test_sealed_react_journal_releases_mid_trajectory_unknown(self):
+        """Real-run v19: a react interruption with fully evidenced dispatched
+        actions releases through the sealed raw receipt, not only zero-dispatch
+        terminals; a tampered trajectory must stay held."""
+        from webcollect.batch_core import save_json, file_sha
+        registry = self.root / 'reconciled.sqlite3'
+        con = sqlite3.connect(registry)
+        con.execute('CREATE TABLE m4_events (scope_id TEXT, campaign_id TEXT, event_type TEXT, '
+                    'task_key TEXT, attempt_id TEXT, at REAL, payload_json TEXT)')
+        con.execute('CREATE TABLE m4_attempts (attempt_id TEXT PRIMARY KEY, status TEXT, failure_class TEXT)')
+        con.execute("INSERT INTO m4_attempts VALUES('att-r','rejected','model')")
+        con.commit(); con.close()
+        raw = self.root / 'raw'
+        raw.mkdir()
+        rows = [{'operation_id': 'react-1', 'effective': True, 'after_observation_id': 'obs-1'},
+                {'operation_id': 'react-2', 'effective': True, 'after_observation_id': 'obs-2'}]
+        (raw / 'trajectory.jsonl').write_text(
+            '\n'.join(json.dumps(r, sort_keys=True) for r in rows) + '\n', encoding='utf-8')
+        save_json(raw / 'terminal.json', {'protocol': 'webcollect-react-session-1', 'unknown': True,
+                                          'used': {'max_actions': 2}})
+        save_json(raw / 'raw-receipt.json', {'protocol': 'webcollect-react-session-1',
+            'files_sha256': {'terminal.json': file_sha(raw / 'terminal.json'),
+                             'trajectory.jsonl': file_sha(raw / 'trajectory.jsonl')}})
+        con = sqlite3.connect(registry)
+        con.execute("INSERT INTO m4_events(scope_id,campaign_id,event_type,task_key,attempt_id,at,payload_json) "
+                    "VALUES('s','c','attempt_reconciled','k','att-r',0,?)",
+                    (json.dumps({'from': 'interrupted', 'to': 'model',
+                                 'evidence': str(raw / 'terminal.json')}),))
+        con.commit(); con.close()
+        proof = {'terminal': {'path': str(raw / 'terminal.json'), 'sha256': file_sha(raw / 'terminal.json')},
+                 'registry': str(registry), 'attempt_id': 'att-r'}
+        refs = [{'registry': str(registry), 'attempt_id': 'att-r', 'usage': 'UNKNOWN', 'cost': 'UNKNOWN'}]
+        self.record_unknown('unknown-r', refs)
+        controlled = self.root / 'controlled.json'
+        save_json(controlled, {'fixture': 'controlled'})
+        self.store.append_reassessment('unknown-r', responsibility='model',
+            reason='CONTROLLED provider interruption mid-trajectory',
+            evidence=[{'path': str(controlled), 'sha256': file_sha(controlled)}])
+        # A trajectory row without a proven effect must not release.
+        tampered = [{'operation_id': 'react-1', 'effective': False, 'after_observation_id': None},
+                    *rows[1:]]
+        (raw / 'trajectory.jsonl').write_text(
+            '\n'.join(json.dumps(r, sort_keys=True) for r in tampered) + '\n', encoding='utf-8')
+        bad_auth = self.root / 'auth-bad.json'
+        save_json(bad_auth, {'action': 'apply_evidenced_failure_reassessments',
+            'application_key': application_key('https://example.org/page?q=1'),
+            'campaign_id': self.binding['campaign_id'],
+            'user_instruction': 'CONTROLLED', 'execution_ids': ['unknown-r'],
+            'reconciliation_proofs': {'unknown-r': proof}})
+        with self.assertRaises(ValueError):
+            self.store.apply_reassessments('https://example.org/page?q=1',
+                {'path': str(bad_auth), 'sha256': file_sha(bad_auth)})
+        # Restore the sealed trajectory; the same proof now releases.
+        (raw / 'trajectory.jsonl').write_text(
+            '\n'.join(json.dumps(r, sort_keys=True) for r in rows) + '\n', encoding='utf-8')
+        save_json(raw / 'raw-receipt.json', {'protocol': 'webcollect-react-session-1',
+            'files_sha256': {'terminal.json': file_sha(raw / 'terminal.json'),
+                             'trajectory.jsonl': file_sha(raw / 'trajectory.jsonl')}})
+        state = self.store.apply_reassessments('https://example.org/page?q=1',
+            {'path': str(bad_auth), 'sha256': file_sha(bad_auth)})
+        self.assertEqual(state['state'], 'available')
+        self.assertEqual(state['effective_unknown_execution_count'], 0)

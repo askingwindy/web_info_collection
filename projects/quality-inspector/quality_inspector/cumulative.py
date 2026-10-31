@@ -146,8 +146,15 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
     duplicate = None
     try:
         duplicate = analyze_inputs(annotations, cache=cache, verify_exhaustive=verify_exhaustive, dataset_label='cumulative:' + digest(raw))
-        if any(duplicate[route].get('confirmed_pair_count' if route == 'route1' else 'count', 0) for route in ('route1', 'route2', 'route3', 'route4')):
-            errors.append({'reason': 'one or more cumulative duplicate routes hit; no semantic exemption'})
+        # Unified verdict: the explicit effective set's near-duplicate sample
+        # rate must stay <=0.1%; exact/sequence pairs (routes 1/2) are also
+        # duplicate registration facts and always fail regardless of the rate.
+        summary = duplicate.get('summary', {})
+        if summary.get('sample_rate_within_requested_limit') is False:
+            errors.append({'reason': 'cumulative near-duplicate sample rate exceeds 0.1% of the explicit effective set'})
+        if any(duplicate[route].get('confirmed_pair_count' if route == 'route1' else 'count', 0)
+               for route in ('route1', 'route2')):
+            errors.append({'reason': 'cumulative exact/sequence duplicate routes hit; duplicate registration is not near-duplicate quota'})
         if duplicate['search']['exhaustive_verification']['status'] == 'FAIL':
             errors.append({'reason': 'index/exhaustive or cached/raw fingerprint disagreement'})
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:

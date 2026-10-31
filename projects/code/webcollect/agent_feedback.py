@@ -7,6 +7,10 @@ from .planning import verify_evidence, object_sha256
 from .agent_controller import exclusive
 
 VERSION = 'webcollect-site-agent-feedback-1'
+# Every decision request carries only the current observation image plus at
+# most this many most-recent context images; older evidence stays on disk and
+# is reachable through the session's inspect tool instead of growing prompts.
+PLANNING_IMAGES_LIMIT = 4
 
 
 def reference(path):
@@ -17,15 +21,31 @@ def reference(path):
 def save_attempt_feedback(evidence, attempt, outcome, error=None):
     """Companion receipt captured before finish_attempt binds step/image bytes."""
     evidence = Path(evidence)
+    from .batch_core import file_sha
+    import shutil
+    packaged_root = evidence.parent.parent / ('samples' if outcome == 'collected_pending_review' else 'rejected')
     steps = []
     for path in sorted(evidence.glob('step_*.json')):
         if not path.stem[5:].isdigit():
             continue
         raw = load_json(path)
+        declared = packaged_root / attempt['sample_id'] / 'images' / f"step_{raw['step_id']:03}.png"
+        if not declared.is_file():
+            # React close-out orders: the receipt declares packaging paths the
+            # later bind step materializes. Verify every later reader against
+            # real bytes immediately: copy the preserved original whose digest
+            # equals the step's own capture screenshot receipt, when present.
+            want = (raw.get('capture') or {}).get('screenshot_sha256')
+            if want:
+                source = next((png for png in (evidence / 'raw').glob('*.png')
+                               if file_sha(png) == want), None)
+                if source is not None:
+                    declared.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, declared)
         steps.append({'step_id': raw['step_id'], 'operation': raw['operation'],
             'target': raw.get('target_element'), 'execution_error': raw.get('execution_error'),
             'ended_at': raw.get('ended_at'), 'state': raw['state'], 'raw': reference(path),
-            'image': {'path': str((evidence.parent.parent/('samples' if outcome == 'collected_pending_review' else 'rejected')/attempt['sample_id']/f"images/step_{raw['step_id']:03}.png").resolve()),
+            'image': {'path': str(declared.resolve()),
                       'sha256': raw['capture']['screenshot_sha256']}})
     diagnostics = []
     for name in ('producer_dedup.json', 'capture_failure.json', 'failure_after.json', 'preparation_failure.json'):
@@ -67,15 +87,49 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                         if value.get('schema_version') == VERSION:
                             step_refs = [s['raw'] for s in value['steps']] + [s['image'] for s in value['steps']]
                             if step_refs: verify_evidence(step_refs)
+                            for step in value['steps']:
+                                raw=load_json(step['raw']['path'])
+                                dispatch=raw.get('controller_dispatch')
+                                if not dispatch:continue
+                                verify_evidence([dispatch]);formal=load_json(dispatch['path']).get('formal_frame')
+                                if formal and not Path(formal['path']).exists():
+                                    result.setdefault('frame_relocations',[]).append({
+                                        'schema_version':'webcollect-rejected-frame-relocation-1',
+                                        'original_path':formal['path'],'original_sha256':formal['sha256'],
+                                        'current':step['image'],'dispatch':dispatch})
                             diagnostic_refs = [d['reference'] for d in value['diagnostics']] + [d['image'] for d in value['diagnostics'] if 'image' in d]
                             if diagnostic_refs: verify_evidence(diagnostic_refs)
-                            entry.update(feedback=value, feedback_status='BOUND_ORIGINAL_STEPS')
-                            result['images'].extend(s['image'] for s in value['steps'])
-                            result['images'].extend(d['image'] for d in value['diagnostics'] if 'image' in d)
+                            # Rolling context bound: only the two most recent attempts
+                            # (rows arrive newest-first) keep full step states and
+                            # attach images. Older attempts keep every reason,
+                            # operation and reference in a compact form; without
+                            # this bound the growing prompt exceeds the gateway
+                            # input reservation and blocks all later rounds.
+                            recent = len(result['executions']) < 2
+                            if recent:
+                                # Diagnostic bodies can be large; the advisory
+                                # context carries references only — the original
+                                # companion files remain on disk unchanged.
+                                entry.update(feedback={**{k: v for k, v in value.items() if k != 'diagnostics'},
+                                    'diagnostics': [{dk: dv for dk, dv in d.items() if dk != 'actual'}
+                                                    for d in value['diagnostics']]},
+                                    feedback_status='BOUND_ORIGINAL_STEPS')
+                                result['images'].extend(s['image'] for s in value['steps'])
+                                result['images'].extend(d['image'] for d in value['diagnostics'] if 'image' in d)
+                            else:
+                                entry.update(feedback={k: value[k] for k in ('schema_version', 'attempt_id',
+                                    'sample_id', 'task_id', 'outcome', 'error')},
+                                    feedback_status='BOUND_COMPACT_OLD_ATTEMPT',
+                                    steps=[{'step_id': s['step_id'], 'operation': s['operation'],
+                                            'execution_error': s['execution_error']} for s in value['steps']],
+                                    diagnostics=[{'name': Path(d['reference']['path']).name} for d in value['diagnostics']])
                             for s in value['steps']:
                                 if s.get('execution_error'):
-                                    result['avoid'].append({'operation':s['operation'], 'reason':s['execution_error'],
-                                        'state':s['state'], 'image':s['image'], 'source':ref})
+                                    row_avoid = {'operation':s['operation'], 'reason':s['execution_error'],
+                                        'image':s['image'], 'source':ref}
+                                    if recent:
+                                        row_avoid['state'] = s['state']
+                                    result['avoid'].append(row_avoid)
                     if 'm4_reviews' in tables:
                         reviewed = con.execute('SELECT evidence_json FROM m4_reviews WHERE sample_id=?', (row['sample_id'],)).fetchone()
                         if reviewed:
@@ -89,25 +143,59 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                         result['unresolved'].append(entry)
     if model_ledger is not None:
         with model_ledger.connect() as con:
-            for row in con.execute("SELECT id,kind,state,payload,result FROM jobs WHERE kind IN ('fragment-decision','task-generation')"):
+            generation_rows = con.execute("SELECT id,payload,result,created FROM jobs WHERE kind='task-generation' "
+                                          "AND state='done' ORDER BY created DESC").fetchall()
+            for row in con.execute("SELECT id,kind,state,payload FROM jobs WHERE kind IN ('fragment-decision','task-generation')"):
                 payload = json.loads(row['payload'])
                 matching = payload.get('site_uri') and host_key(payload['site_uri']) == host_key(site_uri)
-                if row['state'] != 'done' and (not payload.get('site_uri') or matching):
+                if row['state'] in ('queued', 'running', 'review_required') and (not payload.get('site_uri') or matching):
+                    # Only the payload identity enters the advisory context:
+                    # payloads embed the full prior prompt, and embedding them
+                    # back would compound context growth every round. The
+                    # original payload stays in the ledger for audit.
                     result['unresolved'].append({'job_id':row['id'], 'state':row['state'],
-                        'category':'UNRESOLVED_REQUEST', 'payload':payload})
-                elif row['state'] == 'done' and row['kind'] == 'task-generation' and matching:
-                    # Works for direct generate/execute too, without requiring
-                    # a caller to manually pass a rolling-round summary path.
-                    outputs = [json.loads(e[0]) for e in con.execute(
-                        "SELECT detail FROM batch_events WHERE event='phase_output' ORDER BY seq")]
-                    result['generation'].append({'job_id':row['id'], 'original_payload':payload,
+                        'category':'UNRESOLVED_REQUEST',
+                        'payload_identity':{k: payload.get(k) for k in ('site_uri', 'capability_sha256', 'version', 'generator')}})
+            # Rolling generation feedback: the two most recent done rounds keep
+            # full responses and frozen tasks; older rounds reduce to counts and
+            # compile reasons so the advisory context stays inside the gateway
+            # input reservation as rounds accumulate.
+            outputs = [json.loads(e[0]) for e in con.execute(
+                "SELECT detail FROM batch_events WHERE event='phase_output' ORDER BY seq")]
+            for position, row in enumerate(generation_rows):
+                payload = json.loads(row['payload'])
+                if not (payload.get('site_uri') and host_key(payload['site_uri']) == host_key(site_uri)):
+                    continue
+                compilation = [e for e in outputs if e.get('job_id') == row['id']]
+                if position < 2:
+                    # The payload body embeds the previous round's prompt (which
+                    # embeds its own context); carrying it verbatim compounds
+                    # growth. Keep only its identity keys; the original stays in
+                    # the ledger for audit.
+                    result['generation'].append({'job_id':row['id'],
+                        'payload_identity':{k: payload[k] for k in payload if k in ('site_uri', 'task_id', 'attempt_id', 'decision')},
                         'model_response':json.loads(row['result']) if row['result'] else None,
-                        'compilation':[e for e in outputs if e.get('job_id') == row['id']],
+                        'compilation':compilation,
                         'frozen_tasks':[json.loads(t[0]) for t in con.execute(
                             'SELECT DISTINCT task_json FROM generated_task_index WHERE job_id=?',(row['id'],))]})
+                else:
+                    result['generation'].append({'job_id':row['id'], 'summary_only':True,
+                        'frozen_task_count':con.execute(
+                            'SELECT COUNT(DISTINCT task_json) FROM generated_task_index WHERE job_id=?',
+                            (row['id'],)).fetchone()[0],
+                        'compilation_reasons':[e.get('reason') for e in compilation if e.get('reason')]})
     from .runtime import _bound_quality_report
-    for group in {object_sha256(g):g for g in quality_groups}.values():
-        report, binding = _bound_quality_report(group)
+    from .client_reports import StaleSemanticRules
+    for digest, group in {object_sha256(g):g for g in quality_groups}.items():
+        # Advisory planning context only: a cached report that merely predates the
+        # current semantic rules is dropped with an explicit marker instead of
+        # blocking every new round on that site. Review/packaging gates keep
+        # rejecting it; nothing here reuses or re-signs the stale PASS.
+        try:
+            report, binding = _bound_quality_report(group)
+        except StaleSemanticRules as error:
+            result.setdefault('quality_stale', []).append({'reason': str(error), 'group_sha256': digest})
+            continue
         result['quality'].append({'binding':binding, 'report':report})
         # Dataset bytes are verified by the original QC binding gate above.
         for sample in (Path(report['dataset'])/'samples').iterdir():

@@ -97,16 +97,26 @@ async def source(pool_path, uri, config_path, ledger_path, output, *, chain):
     return result
 
 
-def identity(catalog_path, output, *, registry=None):
+def identity(catalog_path, output, *, registry=None, candidate_observation=False):
     from .production_identity import VERSION
     catalog = load_json(catalog_path)
     if len(catalog['records']) != 1:
         raise ValueError('Single-record runner requires exactly one capability')
-    record = validate_capability(catalog['records'][0], require_ready=True)
+    record = catalog['records'][0]
+    if candidate_observation:
+        from .candidate_contract import validate_observation
+        validate_observation(record)
+    record = validate_capability(record, require_ready=not candidate_observation)
     page = record['capabilities'][0]
     anchor = page['page_anchor']; verify_evidence(list(anchor.values()))
     state = load_json(anchor['state']['path']); parsed = urlsplit(record['site_uri'])
     root_uri = urlunsplit((parsed.scheme, parsed.netloc, '/', '', ''))
+    application_registry=(record.get('candidate_observation') or {}).get('application_registry') if candidate_observation else None
+    if application_registry is not None:
+        from .application_identity import canonical_key
+        canonical_host=canonical_key(root_uri,application_registry)
+        root_uri=next((row['canonical_uri'] for row in load_json(application_registry['path'])['applications']
+                       if canonical_key(row['canonical_uri'],application_registry)==canonical_host),root_uri)
     application_name = page['title']
     if registry is not None:
         import sqlite3
@@ -129,6 +139,8 @@ def identity(catalog_path, output, *, registry=None):
                 c.get('editable') and c.get('tag') in ('input','textarea','select') for c in page.get('controls',[])) else 'content',
             'description': 'Current observed task page; original synchronized source anchor', 'anchor': anchor},
         'shared_pages': []}}}
+    if application_registry is not None:
+        result['pages'][record['site_uri']]['application']['application_registry']=application_registry
     if state['url'] != record['site_uri']:
         raise ValueError('Cross-page landing requires explicit identity reconciliation')
     save_json(output, result)

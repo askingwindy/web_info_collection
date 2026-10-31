@@ -38,6 +38,7 @@ def main(argv=None):
     collect.add_argument('--publication',type=Path,help='严格M4计划的发布收据，含已验证站点能力与预检绑定')
     collect.add_argument('--policy',type=Path,help='M4初始运行预算JSON；续跑沿用已冻结策略')
     collect.add_argument('--resume',action='store_true',help='恢复同目录M4任务；不拼接中断轨迹或回收编号')
+    collect.add_argument('--config',type=Path,help='动态(react/模型)计划续跑所需的原始模型账本配置；账本路径由计划绑定')
     publish=sub.add_parser('plan-publish',help='校验并冻结M4计划、能力和预检证据；不启动浏览器或分配编号')
     publish.add_argument('--plan',required=True,type=Path)
     publish.add_argument('--capabilities',required=True,type=Path)
@@ -139,9 +140,12 @@ def main(argv=None):
                 handle.write('\n')
         elif args.command=='collect':
             import asyncio
-            from .collect import collect_plan
+            from .collect import collect_plan, dynamic_controller_ledger
+            controller_ledger = (dynamic_controller_ledger(args.plan, args.config)
+                                 if args.config is not None else None)
             result=asyncio.run(collect_plan(args.plan,args.output,args.registry,
-                publication_path=args.publication,policy_path=args.policy,resume=args.resume))
+                publication_path=args.publication,policy_path=args.policy,resume=args.resume,
+                controller_ledger=controller_ledger))
         elif args.command=='scaffold':
             result=scaffold(args.output,args.registry)
         elif args.command=='metadata':

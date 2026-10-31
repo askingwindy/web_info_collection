@@ -272,6 +272,34 @@ class AgentLoop(SemanticFixture, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ControllerStop): await c.next(self.surface)
         self.assertEqual(seen[0]['executions'][0]['feedback']['steps'][0]['execution_error'],'当前目标点击失败')
 
+    async def test_rejected_step_images_are_materialized_from_preserved_originals(self):
+        """Real-run v9/v10/v11 lesson: a react rejection declared packaged step
+        images that no later bind materialized, and the next run's site context
+        failed closed on the dangling absolute paths. The receipt itself must
+        leave only resolvable references behind."""
+        from webcollect.agent_feedback import site_context, save_attempt_feedback
+        from test_p0_production import seed_captures
+        from webcollect.batch_core import file_sha
+        sid='CONTROLLED-materialize';registry=self.root/'production-fixture.db'
+        rawdir=self.root/'capture/evidence'/sid;rawdir.mkdir(parents=True)
+        (rawdir/'raw').mkdir()
+        frame=await self.surface.capture(None,'#control-0')
+        (rawdir/'raw'/'dispatch-frame-001.png').write_bytes(frame['png'])
+        op={'action_type':'click','selector':'#control-0','goal':'填写当前数量','arguments':{},'evidence':{}}
+        save_json(rawdir/'step_001.json',{'step_id':1,'state':frame['state'],'capture':frame['capture'],
+            'operation':op,'target_element':frame['state']['elements'][0],'execution_error':'受控失败'})
+        attempt={'attempt_id':'attempt-'+sid,'task_id':sid,'sample_id':sid}
+        ref=save_attempt_feedback(rawdir,attempt,'rejected','受控失败')
+        declared=json.loads(Path(ref['path']).read_text())['steps'][0]['image']
+        packaged=Path(declared['path'])
+        self.assertTrue(packaged.is_file(),'declared step image must exist right after the receipt')
+        self.assertEqual(file_sha(packaged),declared['sha256'])
+        seed_captures(registry,[sid],prefix=0,evidence={sid:[ref]})
+        with sqlite3.connect(registry) as con:
+            con.execute("UPDATE m4_attempts SET status='rejected',failure_class='collector',root_cause='controlled'")
+        context=site_context(registry,self.cap['site_uri'])
+        self.assertTrue(context['executions'][0]['feedback']['steps'][0]['execution_error']=='受控失败')
+
     async def test_old_frozen_fragment_roundtrip_keeps_all_original_bytes(self):
         from webcollect.fragment_workflow import compile_fragment, VERSION
         from webcollect.workflow_proposal import verify_task

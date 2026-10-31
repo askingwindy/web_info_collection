@@ -131,6 +131,9 @@ class SitePool:
                 if con.execute('SELECT 1 FROM collection_tasks c JOIN pages p ON p.id=c.page_id '
                                'WHERE p.application_id IN (?,?)', (source,target)).fetchone():
                     raise ValueError('Tracked applications require explicit collection reconciliation before merge')
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name='data_candidates'").fetchone() and con.execute(
+                    'SELECT 1 FROM data_candidates WHERE application_id IN (?,?)',(source,target)).fetchone():
+                raise ValueError('Candidate applications require explicit identity reconciliation before merge')
             if source == target or len(con.execute('SELECT id FROM applications WHERE id IN (?,?)', (source,target)).fetchall()) != 2:
                 raise ValueError('Two existing distinct application IDs required')
             if con.execute('SELECT 1 FROM merges WHERE source IN (?,?) OR target=?', (source,target,source)).fetchone():

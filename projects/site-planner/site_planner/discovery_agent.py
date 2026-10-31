@@ -372,3 +372,9 @@ async def discover_ai(config, **kwargs):
         return await _discover_legacy(config,**kwargs)
     from .discovery_batch import discover
     return await discover(config,**kwargs)
+
+
+async def discover_candidates(config, **kwargs):
+    """Explicit lightweight protocol; old frozen discover_ai runs never convert."""
+    from .candidate_discovery import produce
+    return await asyncio.to_thread(produce, config, **kwargs)

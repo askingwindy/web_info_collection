@@ -37,6 +37,10 @@ def _protect_scope_output(output, scope):
         raise ValueError('Release output cannot replace delivery binding evidence')
 
 
+class StaleSemanticRules(ValueError):
+    """A cached report predates the current semantic rule versions."""
+
+
 def validate_report_semantic_rules(report):
     """Reject stale cached PASS without rerunning or inventing a review."""
     from quality_inspector.semantic import rule_ids
@@ -45,7 +49,7 @@ def validate_report_semantic_rules(report):
     if isinstance(saved, dict):
         affected = [name for name in affected if name not in saved or name not in current or saved[name] != current[name]]
     if affected:
-        raise ValueError('Cached QC report has missing/changed semantic rules; affected checks: '
+        raise StaleSemanticRules('Cached QC report has missing/changed semantic rules; affected checks: '
                          + ', '.join(affected) + '; run independent deterministic QC again before packaging')
     return current
 
