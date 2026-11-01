@@ -1,5 +1,22 @@
 # WebCollect
 
+生产者与消费者是两个可单独启动的 Python 程序。生产者对有来源的入口执行一次轻量 GET，最终响应为 2xx 才将新候选写入本地 SQLite。403、404 留有拒绝收据，消费者无法领取。消费者可在同机多进程运行，独占领取候选，为每个候选新建浏览器上下文，在同一页面完成首次取证、ReAct 规划和执行。GLM-5.3-Flash 的生产者采用 `low`，规划采集采用 `max`，均开启 thinking 和原生工具调用。[工程入口与启动顺序](docs/工程说明.md#候选-v2-的两个-python-入口)
+
+## 当前入口与运行结果
+
+**生产状态为 `STOPPED_BY_USER`。** 2026-11-01 的完整离线联测中，同一条 V2 候选从生产者入库、独占领取、ReAct 保存一路到独立 QC 入队。完整套件 385 项，376 项通过、9 项失败。9 个普通采集用例单独运行均通过，在同一进程中前置一个会遗留模拟对象的 ReAct 测试后全部失败。现场已记录，真实审核与发布仍待独立证据。[本机联测报告](verify_results/producer-consumer-react-qc-offline-20261101-094824-1251/联测报告.md) · [问题与最小复现](verify_results/producer-consumer-react-qc-offline-20261101-094824-1251/问题记录.md)
+
+启动脚本每次只启动一个角色。同一台机器上，生产者、消费者和只读日志监视器各用一个终端，共用本轮 scope 文件。消费者可以先等候，也可以在生产者退出后再领取。下面两条命令可直接在仓库根目录预览，仅读模板。[启动脚本](projects/code/scripts/start_candidates.py) · [范围模板](projects/code/config/candidate-scope.example.json) · [运行准备、启动顺序与日志](docs/工程说明.md#本机有界批次启动)
+
+```sh
+projects/code/.venv/bin/python projects/code/scripts/start_candidates.py --scope projects/code/config/candidate-scope.example.json --dry-run consumer --limit 20 --poll-seconds 3
+projects/code/.venv/bin/python projects/code/scripts/start_candidates.py --scope projects/code/config/candidate-scope.example.json --dry-run producer --query 中文在线工具 --target 20 --batch-size 8 --max-batches 8 --max-searches 8
+```
+
+### 历史改造与运行记录
+
+下列带日期的记录描述各自当时的实现、授权和验收范围。当前命令与离线结果以上节为准。
+
 2026-10-31 联调后的执行任务分为[消费者独占领取与会话接入](docs/消费者独占领取与会话接入执行计划-20261031.md)和[规划采集 Agent 提示词与调用链](docs/规划采集Agent提示词与调用链执行计划-20261031.md)。两份计划都附有新 Agent 可直接使用的执行 prompt。当前交接范围是离线工程，真实试跑和正式批次分别验收。
 
 2026-10-31 下一步上游改造见[生产者消费者职责拆分与轻量化计划](docs/生产者消费者职责拆分与轻量化改造计划-20261031.md)：新协议允许可信 URL 入口和可选目标建议，消费者根据同会话页面观察形成工作目标；来源归属、原账/UNKNOWN 与整站止损保持约束。按契约兼容、逐条入库、同会话接入、保存/QC、联合验收分阶段实施，旧严格模式与冻结候选保留原义。当前只完成规划，不表示代码已支持或恢复真实运行。
@@ -60,13 +77,13 @@ WebCollect 是中文网页操作轨迹的采集、审核和交付工程。它用
 
 ## 当前状态与范围
 
-最新授权已进入[今日单条真实闭环计划](docs/今日单条真实闭环计划-20261029.md)：设计实施后自主测试与修复，范围限1条真实采集和独立QC，复用原当前链与失败账；不扩到15条或批量生产。入口为 `python -m webcollect.single_record --help`。
+当前授权为离线联测和文档维护。以下为 2026-10-29 的单条真实运行记录。[当时的单条真实闭环计划](docs/今日单条真实闭环计划-20261029.md)
 
 该单条已完成真实采集及独立QC，运行证据、修复和费用见[本轮完成报告](verify_results/single-record-20261029-r01/完成报告.md)。后续不自动扩批或发布。
 
 本轮（2026-10-29）的最新授权范围是共享站点池工程改造及真实GLM站点发现验证，不启动任务生成或轨迹采集。入口与边界见[共享站点池与自主发现](docs/共享站点池与自主发现.md)；以下此前端到端授权记录保留为历史，不作为本轮采集派发指令。
 
-当前试点为 `pilot1000-20261028-r01 / current-chain-r01`，目标 1000 条新增真实合格轨迹，先完成首条闭环，100 条为报告检查点。文档核对时，本地进度账为 `STOPPED_BY_USER`，新增采集、终审合格、待审均为 0。最新源码改造有离线验证记录，尚不能据此宣称真实链路或规模生产已通过。
+试点为 `pilot1000-20261028-r01 / current-chain-r01`，目标 1000 条新增真实合格轨迹，100 条为报告检查点。进度以试点原账为准。本次离线样本只记入验证记录，生产仍为 `STOPPED_BY_USER`。
 
 当前代码采用**单次执行采集、独立后置质检**：仍有只读页面预检，但普通新任务不再必须先完整演练、独立准入后再重放。旧准入/观察轨迹入口继续兼容；不能把其旧流程说明当作新入口的必经步骤。参见[源码修复记录](projects/code/REPAIR_PLAN.md)。
 
@@ -92,7 +109,7 @@ WebCollect/
 │   ├── code/
 │   │   ├── webcollect/                # 采集核心、账本、任务策略、导出
 │   │   ├── config/                    # 运行配置模板
-│   │   ├── scripts/                   # 离线验证及历史兼容工具
+│   │   ├── scripts/                   # 本机角色启动脚本、离线验证和维护工具
 │   │   └── tests/                     # unittest 回归
 │   ├── site-planner/
 │   │   └── site_planner/              # 发现、探测、能力审核
@@ -131,12 +148,13 @@ projects/code/.venv/bin/python -m quality_inspector.delivery_pipeline --help
 
 ```mermaid
 flowchart LR
-    A[来源发现与能力库存] --> B[任务生成与冻结]
-    B --> C[只读预检与计划发布]
-    C --> D[单次执行采集]
-    D --> E[完整待审证据与候选包]
-    E --> F[全量机械检查]
-    F --> H[冻结有效集合与跨包检查]
+    A[生产者发现入口] --> B[GET 最终 2xx]
+    B --> C[本地 SQLite 候选池]
+    C --> D[消费者独占领取并新建页面会话]
+    D --> E[同页 ReAct 执行、原始证据和待审保存]
+    E --> F[按 QC 策略冻结交接收据和抽样计划]
+    F --> K[独立 QC 入队和全量机械检查]
+    K --> H[累计有效集合与跨包检查]
     H --> G[显式AI和人工抽检]
     G --> I[payload检查与final封包复验]
     I --> J[ZIP及校验文件]

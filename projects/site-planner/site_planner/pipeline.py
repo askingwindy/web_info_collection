@@ -62,19 +62,26 @@ class Links(HTMLParser):
                 self.hrefs.append(value)
 
 
-def fetch_public(uri, *, timeout=20, metrics=None):
-    verify_public_url(uri)
-    metrics = metrics if metrics is not None else {}
-    deadline = time.monotonic() + timeout
+def open_public_get(uri, deadline, metrics, check_url=verify_public_url):
+    check_url(uri)
     class Redirects(HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
-            verify_public_url(newurl)
+            check_url(newurl)
             metrics['redirect_request_events'] = metrics.get('redirect_request_events',0) + 1
             metrics.setdefault('redirects',[]).append({'from':req.full_url,'to':newurl,'status':code})
             req.timeout = max(0.01, deadline-time.monotonic())
             if time.monotonic() >= deadline: raise TimeoutError('Source fetch total deadline reached during redirect')
             return super().redirect_request(req,fp,code,msg,headers,newurl)
-    with build_opener(Redirects()).open(Request(uri, headers={'User-Agent': 'WebCollectSitePlanner/0.1'}), timeout=timeout) as response:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('Source fetch total deadline reached before dispatch')
+    return build_opener(Redirects()).open(Request(uri, headers={'User-Agent': 'WebCollectSitePlanner/0.1'}), timeout=remaining)
+
+
+def fetch_public(uri, *, timeout=20, metrics=None):
+    metrics = metrics if metrics is not None else {}
+    deadline = time.monotonic() + timeout
+    with open_public_get(uri, deadline, metrics) as response:
         metrics.update(response_status=response.status,landed_uri=response.url)
         verify_public_url(response.url)
         if response.status != 200 or 'html' not in response.headers.get('Content-Type', ''):

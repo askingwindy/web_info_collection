@@ -56,7 +56,7 @@ class ReactSurface:
     async def capture(self, page, selector=None, index=0, **kw):
         state = deepcopy(self.state)
         state['visible_text'] += '\n' + '\n'.join(e.get('text', '') for e in state['elements'])
-        for value in self.state['values']:
+        for value in state['values']:
             value['display_value'] = value['value']
         binding = next((b for b in state['capture_controls'] if b['selector'] == selector), None)
         if binding:
@@ -202,7 +202,8 @@ class ReactHarness(SemanticFixture):
         state = load_json(record['capabilities'][0]['page_anchor']['state']['path'])
         self.surface = ReactSurface(state)
         self.page = FakePage(self.surface)
-        self.task = build_url_task(url=self.surface.state['url'], task_version='fixture')
+        self.task = build_url_task(url=self.surface.state['url'], task_version='fixture',
+                                   decision_protocol=REACT_VERSION)
         for name, target in (('webcollect.browser.capture', self.surface.capture),):
             p = patch(target if False else name, side_effect=target)
             p.start()

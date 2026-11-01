@@ -145,7 +145,8 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
         with model_ledger.connect() as con:
             generation_rows = con.execute("SELECT id,payload,result,created FROM jobs WHERE kind='task-generation' "
                                           "AND state='done' ORDER BY created DESC").fetchall()
-            for row in con.execute("SELECT id,kind,state,payload FROM jobs WHERE kind IN ('fragment-decision','task-generation')"):
+            for row in con.execute("""SELECT id,kind,state,payload FROM jobs
+                    WHERE kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')"""):
                 payload = json.loads(row['payload'])
                 matching = payload.get('site_uri') and host_key(payload['site_uri']) == host_key(site_uri)
                 if row['state'] in ('queued', 'running', 'review_required') and (not payload.get('site_uri') or matching):

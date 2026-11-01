@@ -4,6 +4,7 @@ An interrupted browser trajectory is retained as a failed attempt. Resume never
 stitches it to another session or reuses its allocated sample ID.
 """
 import asyncio
+from contextlib import asynccontextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -74,6 +75,8 @@ def source_identity():
              'react_session.py', 'postprocess.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
+    if (base / 'react_protocol.py').is_file():
+        names.append('react_protocol.py')
     return {name: sha(base / name) for name in names}
 
 
@@ -301,7 +304,8 @@ def react_close_event(store, attempt, kind, now, payload):
 
 
 async def _react_collection(context, task, attempt, sample, evidence, output, store, *,
-                            ledger, parent_job, registry, manifest, index, navigation=None):
+                            ledger, parent_job, registry, manifest, index, navigation=None,
+                            page=None, entry_observation=None):
     """One react session in one browser context; raw first, derivation offline.
 
     The attempt is always finished here once the raw journal is saved: derived
@@ -310,6 +314,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     receipt in the attempt evidence and records its own failure class.
     """
     from .react_session import ReactSession, react_chooser
+    from .react_protocol import VERSION as NATIVE_REACT
     from .postprocess import process as postprocess_derivation
     from .collect import checkpoint_json, now, verify_public_url
     from .agent_feedback import save_attempt_feedback, site_context
@@ -320,7 +325,13 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     entry_host = verify_public_url(task['initial_url'])
     allowed_hosts = {verify_public_url(task['site_uri']), entry_host, *task.get('allowed_hosts', [])}
     def url_check(url):
-        verify_public_url(url, allowed_hosts)
+        if 'candidate_binding' in task:
+            from .candidate_contract import same_application, guard_claim
+            guard_claim(task)
+            if not same_application(task, url):
+                raise ValueError('Candidate navigation left the evidence-backed application')
+        else:
+            verify_public_url(url, allowed_hosts)
         require_public_task_state({'url': url})
     def frame_guard(ref):
         from .planning import verify_evidence
@@ -331,7 +342,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             verify_evidence([{'path': row['path'], 'sha256': row['digest']}])
         return conflicts
     async def preflight(page, directory):
-        ledger.consume('probe_pages', (parent_job or {'id': 'collection'})['id'] + ':react-preflight', 1)
+        if entry_observation is None:
+            ledger.consume('probe_pages', (parent_job or {'id': 'collection'})['id'] + ':react-preflight', 1)
         from .preflight import inspect_page
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
     feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger)
@@ -339,11 +351,13 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
     chooser = react_chooser(ledger, task, attempt['attempt_id'], parent_job=parent_job)
-    page = await context.new_page()
+    if page is None:
+        page = await context.new_page()
     page.set_default_timeout(15000)
     session = ReactSession(task, evidence / 'raw', chooser, page, steps_directory=evidence,
         navigation=navigation, url_check=url_check, preflight=preflight,
-        frame_guard=frame_guard, site_context=feedback_context)
+        frame_guard=frame_guard, site_context=feedback_context,
+        **({'entry_observation': entry_observation} if entry_observation is not None else {}))
     summary = await session.run()
     raw_receipt = summary['raw_receipt']
     def _event_now():
@@ -390,28 +404,54 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt})
     if derived['status'] != 'derived_saved':
+        errors = derived.get('errors') or []
+        if (task['fragment'].get('decision_protocol') == NATIVE_REACT and derived['status'] == 'delivery_rejected'
+                and errors and all(error.startswith('producer_exact_dedup:') for error in errors)):
+            return finish_failure('collector', 'react_exact_image_conflict',
+                                  _evidence(evidence / 'producer_dedup.json') + [derived['record_ref']])
         if derived['status'] in ('processing_failed', 'delivery_rejected'):
             return finish_failure('program', 'derivation_' + derived['status'] + ': ' +
                                   str(derived.get('error') or derived.get('errors') or '')[:300])
-        return finish_failure('collector', 'react_' + derived['status'] +
-                              '（原始执行已保存；不足5步且未声明短流程不构成交付样本）')
+        return finish_failure('collector', 'react_' + derived['status'])
     saved = evidence / 'saved_sample.json'
     feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
     derived_ref = {'path': str((evidence / 'derived.json').resolve()),
                    'sha256': sha(evidence / 'derived.json')}
-    store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
-        'collected_pending_review',
-        evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
-        exact_images=index.sample_images(sample))
+    from .runtime import ImageCommitConflict
+    try:
+        store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+            'collected_pending_review',
+            evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
+            exact_images=index.sample_images(sample))
+    except ImageCommitConflict as conflict:
+        if task['fragment'].get('decision_protocol') != NATIVE_REACT:
+            raise
+        collision = evidence / 'concurrent_image_conflict.json'
+        write_json(collision, {'exact_conflicts': conflict.conflicts})
+        return finish_failure('collector', 'react_exact_image_commit_conflict',
+                              _evidence(collision) + [derived_ref])
     index.add_sample(sample)
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
             'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve())}
 
 
-async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
-                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None, controller_parent_job=None):
+@asynccontextmanager
+async def _collection_browser(channel, headless, entry_session):
+    if entry_session is not None:
+        yield entry_session['browser']
+        return  # The candidate consumer owns and closes its context/browser.
     from playwright.async_api import async_playwright
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(channel=channel, headless=headless)
+        try:
+            yield browser
+        finally:
+            await asyncio.wait_for(browser.close(), timeout=10)
+
+
+async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
+                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None, controller_parent_job=None, entry_session=None):
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
     from .planning import verify_publication, object_sha256
@@ -422,6 +462,14 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
 
     plan = read_json(plan_path)
     validate_plan(plan)
+    if entry_session is not None:
+        from .candidate_contract import guard_claim
+        from .react_session import is_react_task
+        if len(plan['tasks']) != 1 or not is_react_task(plan['tasks'][0]):
+            raise ValueError('Candidate entry session requires exactly one ReAct task')
+        guard_claim(plan['tasks'][0])
+        if plan['tasks'][0]['candidate_binding']['claim_id'] != entry_session['claim_id']:
+            raise ValueError('Entry page belongs to another candidate claim')
     from .agent_controller import verify_ledger_binding
     verify_ledger_binding(plan, controller_ledger)
     from .batch_protocol import verify_plan_shard, verify_shard_policy
@@ -570,8 +618,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     index = ConcurrentExactImageIndex(roots, store)
     worker_id = 'serial-' + str(uuid.uuid4())
     phase_ledger = output / 'metering' / 'phases.jsonl'
-    async with worker_measurement(store, worker_id, output), async_playwright() as playwright:
-        browser = await playwright.chromium.launch(channel=channel, headless=headless)
+    async with worker_measurement(store, worker_id, output), _collection_browser(channel, headless, entry_session) as browser:
         manifest.update(browser_version=browser.version, playwright_version=version('playwright'))
         idle_waited = 0
         try:
@@ -599,6 +646,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 idle_waited = 0
                 snapshot = sync_manifest(store, output, manifest)
                 attempt = store.start_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'])
+                if entry_session is not None:
+                    entry_session['bind_attempt'](attempt)
                 sample = output / 'samples' / attempt['sample_id']
                 evidence = output / 'evidence' / attempt['sample_id']
                 context = None
@@ -607,8 +656,9 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 async def execute_and_finish():
                     nonlocal context, meter
                     try:
-                        context = await browser.new_context(viewport={'width': 1280, 'height': 720},
-                            device_scale_factor=1, locale='zh-CN', timezone_id='Asia/Shanghai')
+                        context = (entry_session['context'] if entry_session is not None else
+                            await browser.new_context(viewport={'width': 1280, 'height': 720},
+                                device_scale_factor=1, locale='zh-CN', timezone_id='Asia/Shanghai'))
                         meter = NetworkMeter(context, output / 'metering' / attempt['attempt_id'], meter_identity)
                         ids = {key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')}
                         task = {**attempt['task'], '_plan_schema_version': plan['schema_version'],
@@ -620,7 +670,9 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             react_result = await _react_collection(context, task, attempt, sample, evidence, output,
                                 store, ledger=controller_ledger, parent_job=controller_parent_job,
                                 registry=registry, manifest=manifest, index=index,
-                                navigation=navigation)
+                                navigation=navigation,
+                                **({'page': entry_session['page'], 'entry_observation': entry_session['entry_observation']}
+                                   if entry_session is not None else {}))
                             if react_result['status'] == 'collected_pending_review':
                                 meter.ensure_recorded()
                         else:
@@ -732,7 +784,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                     with phase(phase_ledger, 'attempt_runner', scope=meter_identity):
                         await _with_lease(execute_and_finish(), store, attempt, snapshot['policy']['lease_seconds'])
                 finally:
-                    if context is not None:
+                    if context is not None and entry_session is None:
                         try:
                             await asyncio.wait_for(context.close(), timeout=10)
                         except Exception as cleanup_error:
@@ -746,12 +798,11 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             store.set_scope_paused(True, 'Network measurement incomplete; retain original attempt outcome')
                             raise ValueError('网络计量不完整；保留真实attempt结果并暂停后续任务')
                     snapshot = sync_manifest(store, output, manifest)
+                if entry_session is not None:
+                    break  # A second formal attempt requires a fresh candidate session.
                 await asyncio.sleep(snapshot['policy']['task_interval_seconds'])
         finally:
-            try:
-                await asyncio.wait_for(browser.close(), timeout=10)
-            finally:
-                sync_manifest(store, output, manifest)
+            sync_manifest(store, output, manifest)
     # Include the durable worker-finish event in the derived snapshot too.
     sync_manifest(store, output, manifest)
     # This second content read prevents an incrementally cached root from hiding changes.

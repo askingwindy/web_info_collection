@@ -205,7 +205,8 @@ def collection_context(reference, sample_ids):
     return ref,bysample
 
 
-def prepare(ledger, dataset, output, *, effective_set=None, sample_ids=None, sampling_binding=None,collection_checks=None):
+def prepare(ledger, dataset, output, *, effective_set=None, sample_ids=None, sampling_binding=None,collection_checks=None,
+            trial=False):
     from .duplicates import analyze_inputs
     dataset=Path(dataset).resolve(); output=Path(output).resolve()
     if output.is_relative_to(dataset):raise ValueError('QC output must be outside candidates')
@@ -216,6 +217,10 @@ def prepare(ledger, dataset, output, *, effective_set=None, sample_ids=None, sam
     if layout.errors:raise ValueError('; '.join(layout.errors))
     before=package_files(dataset)
     formats=format_run(None,dataset)
+    if trial:
+        available = {row['sample_id'] for row in formats['samples']}
+        if not effective_set or not sample_ids or not set(sample_ids) <= available or sampling_binding is not None:
+            raise ValueError('Trial review requires named samples in the candidate dataset and an explicit effective set')
     collection_ref,pending_checks=collection_context(collection_checks,{row['sample_id'] for row in formats['samples']})
     history=[]; set_snapshot=[]
     if effective_set:
@@ -232,6 +237,8 @@ def prepare(ledger, dataset, output, *, effective_set=None, sample_ids=None, sam
                 if historical.errors:raise ValueError('; '.join(historical.errors))
                 history+=historical.annotations
             set_snapshot.append(item)
+        if trial and not any((Path(effective_set).resolve().parent / item['path']).resolve() == dataset for item in set_snapshot):
+            raise ValueError('Trial dataset must belong to its frozen effective set')
     valid=[]; blocked=[]
     for sample in formats['samples']:
         issues=list(sample['errors'])
@@ -270,6 +277,8 @@ def prepare(ledger, dataset, output, *, effective_set=None, sample_ids=None, sam
                   'semantic_rule_ids':rule_ids()}
         if sampling_binding is not None:
             identity['sampling_binding']=sampling_binding
+        if trial:
+            identity['trial_set_sha256']=object_sha256(manifest)
         visual=ledger.enqueue('ai-visual',identity)
         # Rank task text + application context. No producer evaluation or prior AI decision is read.
         others=[]
@@ -305,6 +314,8 @@ def prepare(ledger, dataset, output, *, effective_set=None, sample_ids=None, sam
     if collection_ref:result['collection_checks']=collection_ref
     if sampling_binding is not None:
         result['sampling_binding']=sampling_binding
+    if trial:
+        result['trial']={'sample_ids':sorted(set(sample_ids)), 'set_sha256':object_sha256(manifest)}
     if package_files(dataset)!=before:raise ValueError('Candidate changed during preparation')
     queue=output/('queue-'+object_sha256(result)[:20]+'.json');save_json(queue,result)
     return {'queue_file':str(queue),'queued_samples':len(selected),'mechanically_blocked':len(blocked),
@@ -754,7 +765,7 @@ def do_documents(ledger,gateway,job):
 
 
 def report(ledger,queue_path,output,*,profile=None,document_job=None):
-    from .engine import inspect
+    from .engine import inspect, aggregate
     from .reporting import write_outputs
     queue=load_json(queue_path);dataset=Path(queue['dataset']);output=Path(output).resolve()
     if output.is_relative_to(dataset):raise ValueError('Reports must be outside candidates')
@@ -770,6 +781,8 @@ def report(ledger,queue_path,output,*,profile=None,document_job=None):
     records=[];pending=[]
     for row in queue['jobs']:
         visual=ledger.get(row['visual_job']);difference=ledger.get(row['difference_job'])
+        if any(job['payload'].get('trial_set_sha256') != queue.get('trial',{}).get('set_sha256') for job in (visual,difference)):
+            raise ValueError('Review job belongs to a different trial or delivery scope')
         if visual['state']!='done' or difference['state']!='done':
             pending.append({'sample_id':row['sample_id'],'visual':visual['state'],'difference':difference['state']});continue
         candidate=visual['payload']['candidate'];verify_snapshot(candidate)
@@ -794,6 +807,10 @@ def report(ledger,queue_path,output,*,profile=None,document_job=None):
         records.append(record)
     exported={'schema_version':'qc-review-2' if ledger.config['mode']=='real' else 'webcollect-synthetic-review-test-1',
               'records':records,'customer_acceptance':'UNKNOWN'}
+    if queue.get('trial'):
+        if document_job:
+            raise ValueError('A trial reviews samples only')
+        exported.update(schema_version='webcollect-trial-review-1', trial=queue['trial'], mode=ledger.config['mode'])
     if document_job:
         doc=ledger.get(document_job)
         if doc['kind']!='ai-documents':raise ValueError('Document review job has the wrong kind')
@@ -822,7 +839,7 @@ def report(ledger,queue_path,output,*,profile=None,document_job=None):
             exported['delivery_document_review']=result
     review_path=output/('reviews-'+object_sha256(exported)[:20]+'.json');save_json(review_path,exported)
     checked=None
-    if profile:
+    if profile and not queue.get('trial'):
         checked=inspect(None,dataset,reviews=review_path if ledger.config['mode']=='real' else None,
                         profile=profile,inspection_stage='payload')
         target=output/('qc-'+object_sha256(checked)[:20])
@@ -834,6 +851,14 @@ def report(ledger,queue_path,output,*,profile=None,document_job=None):
         'independent_qc_status':checked['status'] if checked else 'NOT_RUN',
         'release_ready':checked.get('release_ready',False) if checked and ledger.config['mode']=='real' else False,
         'human_review_count':0,'customer_acceptance':'UNKNOWN'}
+    if queue.get('trial'):
+        outcomes = {sid:'PENDING' for sid in queue['trial']['sample_ids']}
+        outcomes.update({r['sample_id']:'MECHANICALLY_BLOCKED' for r in queue['mechanically_blocked']
+                         if r['sample_id'] in outcomes})
+        for record in records:
+            outcomes[record['sample_id']] = (aggregate(x['status'] for x in record['checks'].values())
+                                             if ledger.config['mode']=='real' else 'SYNTHETIC')
+        summary.update(independent_qc_status='TRIAL_SAMPLE_REVIEW', trial_results=outcomes)
     save_json(output/('summary-'+object_sha256(summary)[:20]+'.json'),summary);return summary
 
 
@@ -845,7 +870,9 @@ def main(argv=None):
         p.add_argument('--config',type=Path,required=True);p.add_argument('--ledger',type=Path,required=True)
         if name in ('prepare','documents'):
             p.add_argument('--input',type=Path,required=True)
-        if name=='prepare':p.add_argument('--effective-set',type=Path)
+        if name=='prepare':
+            p.add_argument('--effective-set',type=Path)
+            p.add_argument('--trial-sample',action='append',help='Review this frozen sample for trial calibration only, repeatable')
         if name!='run':p.add_argument('--output',type=Path,required=True)
         if name in ('documents','report'):p.add_argument('--profile',type=Path,required=True)
         if name=='documents':p.add_argument('--supporting-file',action='append',type=Path,default=[])
@@ -855,7 +882,8 @@ def main(argv=None):
     args=parser.parse_args(argv)
     try:
         ledger=BatchLedger(args.ledger,load_json(args.config))
-        if args.command=='prepare':result=prepare(ledger,args.input,args.output,effective_set=args.effective_set)
+        if args.command=='prepare':result=prepare(ledger,args.input,args.output,effective_set=args.effective_set,
+            sample_ids=args.trial_sample, trial=bool(args.trial_sample))
         elif args.command=='run':result=run(ledger,max_jobs=args.max_jobs)
         elif args.command=='documents':result={'document_job':documents_job(ledger,args.input,args.profile,args.output,
                                                                          supporting_files=args.supporting_file)}

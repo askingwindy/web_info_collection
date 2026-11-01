@@ -126,12 +126,17 @@ def initialize_chain(manifest_path, registry, *, chain_id, current_result_roots,
     return read_chain_history(manifest_path)[1]
 
 
-def read_chain_history(manifest_path):
+def read_chain_scope(manifest_path):
     data, reference = _manifest(manifest_path)
     scope = {'schema_version': SCOPE_SCHEMA, 'manifest': reference, 'chain_id': data['chain_id'],
              'registry': data['registry'], 'current_result_roots': data['current_result_roots']}
     assert_registry_scope(scope, data['registry'])
-    with closing(sqlite3.connect(Path(data['registry']).as_uri() + '?mode=ro', uri=True)) as con:
+    return scope
+
+
+def read_chain_history(manifest_path):
+    scope = read_chain_scope(manifest_path)
+    with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True)) as con:
         stored = list(con.execute('SELECT sample_id,annotation_path,annotation_sha256,site_uri,task_key '
                                   'FROM current_chain_results ORDER BY sample_id'))
         records, references = [], []
@@ -235,6 +240,16 @@ def validate_history_context(value):
     return True
 
 
+def current_evidence_roots(scope):
+    return [_path(scope['manifest']['path']).parent.parent, *(_path(root) for root in scope['current_result_roots'])]
+
+
+def require_evidence_path(path, roots):
+    path = _path(path)
+    _require(any(path.is_relative_to(root) for root in roots), 'historical/out-of-chain observation reference rejected')
+    return path
+
+
 def assert_current_evidence(scope, value):
     """Fence adoption of this run's raw evidence, without changing its bytes.
 
@@ -243,8 +258,7 @@ def assert_current_evidence(scope, value):
     old delivery/candidate/registry references are not followed.
     """
     assert_registry_scope(scope, scope['registry'])
-    evidence_root = _path(scope['manifest']['path']).parent.parent
-    roots = [evidence_root, *[_path(root) for root in scope['current_result_roots']]]
+    roots = current_evidence_roots(scope)
     visited = set()
     relocations = {}
     def find_relocations(item):
@@ -274,9 +288,7 @@ def assert_current_evidence(scope, value):
             if item.get('schema_version') in ('webcollect-task-history-scope-1', 'qc-cumulative-set-1'):
                 raise ValueError('CURRENT_CHAIN: historical population reference rejected')
             if set(item) == {'path', 'sha256'}:
-                path = _path(item['path'])
-                _require(any(path.is_relative_to(root) for root in roots),
-                         'historical/out-of-chain observation reference rejected')
+                path = require_evidence_path(item['path'], roots)
                 if not path.is_file() and (str(path),item['sha256']) in relocations:
                     path=relocations[(str(path),item['sha256'])]
                     _require(_ref(path)['sha256']==item['sha256'],'relocated frame bytes changed')

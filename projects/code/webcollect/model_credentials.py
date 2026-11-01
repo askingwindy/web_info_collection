@@ -1,4 +1,5 @@
 """Runtime-only model credentials; never return them in configuration or logs."""
+import hashlib
 import os
 import random
 import re
@@ -12,7 +13,12 @@ PROJECT_GLM_YAML = PROJECT_GLM_TOKEN.with_name('token.yaml')
 PROJECT_GLM_ACCOUNT = 'glm'
 
 
-def _glm_session_key(account_keys):
+def account_id(value):
+    """Opaque, non-secret identity used only for local account scheduling."""
+    return 'glm-' + hashlib.sha256(value.encode()).hexdigest()
+
+
+def _glm_session_key(account_keys, excluded_accounts=()):
     """One uniform random pick per session; kept for the whole session.
 
     2026-10-30 user authorization: the glm account list holds several equally
@@ -20,12 +26,20 @@ def _glm_session_key(account_keys):
     selects one when it starts. A failing key is never rotated mid-session —
     the failure is recorded in the original ledger like any other.
     """
+    available = []
+    for entry in account_keys:
+        key = entry.get('api_key') if isinstance(entry, dict) else entry
+        if not isinstance(key, str):
+            raise ValueError('String account key required')
+        if account_id(key.strip()) not in excluded_accounts:
+            available.append(entry)
+    account_keys = available
     if not account_keys:
-        raise ValueError('Empty credential account list')
+        raise ValueError('No authorized credential account available; reconcile original account hold')
     return random.SystemRandom().choice(account_keys)
 
 
-def _yaml_account(path, account):
+def _yaml_account(path, account, excluded_accounts=()):
     import yaml
     class UniqueLoader(yaml.SafeLoader):
         pass
@@ -54,7 +68,7 @@ def _yaml_account(path, account):
         else:
             value=accounts[account]
             if account=='glm' and isinstance(value,list):
-                value=_glm_session_key(value)
+                value=_glm_session_key(value, excluded_accounts)
             if isinstance(value,dict):value=value['api_key']
         if not isinstance(value,str):raise ValueError('String account key required')
         return value.strip()
@@ -74,7 +88,7 @@ def _ark_value(value):
     return value  # A dedicated ark1 file or environment variable is one token.
 
 
-def credential(model):
+def credential(model, *, excluded_accounts=()):
     value = os.environ.get(model['api_key_env'])
     if not value:
         source = model.get('api_key_file')
@@ -89,7 +103,7 @@ def credential(model):
                 source = Path(source) / 'ark1'
             if Path(source).suffix.lower() in ('.yaml','.yml'):
                 account = 'ark1' if model['provider'] == 'ark' else PROJECT_GLM_ACCOUNT
-                value=_yaml_account(source,account)
+                value=_yaml_account(source,account,excluded_accounts)
             else:
                 with Path(source).open('r', encoding='utf-8') as stream:
                     value = stream.read(4097).strip()
@@ -109,4 +123,6 @@ def credential(model):
     if (not value or len(value) > 4096 or value.startswith(('{', '['))
             or any(not 33 <= ord(char) <= 126 for char in value)):
         raise ValueError('Model credential must be a single bounded token; secret content suppressed')
+    if model['provider'] == 'glm' and account_id(value) in excluded_accounts:
+        raise ValueError('Selected authorized account is held in original ledger')
     return value

@@ -358,7 +358,7 @@ class BatchLedger:
                         'parent_owner TEXT NOT NULL)')
             if parent_job is not None:
                 self._owned(con,parent_job)
-                if kind not in ('fragment-decision','react-decision') or parent_job['kind']!='collection' or json.loads(row['payload']).get('parent_job_id')!=parent_job['id']:
+                if kind not in ('fragment-decision','react-decision','react-native-decision') or parent_job['kind']!='collection' or json.loads(row['payload']).get('parent_job_id')!=parent_job['id']:
                     raise ValueError('Only a bound collection decision may share its parent slot')
                 if con.execute("SELECT 1 FROM job_parents p JOIN jobs j ON j.id=p.job_id WHERE p.parent_id=? AND j.state='running'",(parent_job['id'],)).fetchone():
                     raise BudgetStop('Parent already has an active decision; no parallel child')
@@ -579,6 +579,28 @@ class BatchLedger:
                 raise ValueError('Task form/action structure already generated in this run; parameter-only replacement rejected')
             con.execute('INSERT OR IGNORE INTO generated_task_index VALUES(?,?,?)',(signature,job_id,canonical(task)))
 
+    def _unavailable_model_accounts(self, con):
+        """Read account health from original request records; never reset UNKNOWN.
+        1113 needs explicit reconciliation. Rate limits use Retry-After, with a
+        conservative 60s local fallback. 1305 is scoped to this configured model.
+        """
+        unavailable = set()
+        for row in con.execute("SELECT request_json,response,finished FROM model_requests WHERE state='unknown'"):
+            material = json.loads(row['request_json'] or '{}')
+            if not material or not material.get('account_id'):
+                continue
+            detail = (json.loads(row['response'] or '{}') or {}).get('provider_error', {})
+            code = detail.get('provider_code')
+            if code == '1113' or (code in ('1302', '1305') and
+                    (row['finished'] or 0) + detail.get('retry_after_seconds', 60) > time.time()):
+                if code != '1305' or material.get('model') == self.config['model']['model']:
+                    unavailable.add(material['account_id'])
+        return unavailable
+
+    def unavailable_model_accounts(self):
+        with self.connect() as con:
+            return self._unavailable_model_accounts(con)
+
     def reserve_request(self, job, purpose, attempt, request_json=None):
         if self.config['model'] is None:
             raise ValueError('Model branch disabled (model:null); no model reservation or dispatch allowed')
@@ -598,6 +620,40 @@ class BatchLedger:
             from .provider_recovery import holds, permits_probe
             if holds(con) and not permits_probe(con,job['id'],request_json,attempt):
                 raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
+            if request_json and request_json.get('protocol') == 'native-tool-1' and request_json.get('http_dispatch'):
+                aid = request_json.get('dispatch_attempt_id')
+                cap = request_json.get('dispatch_max_requests')
+                if aid is not None:
+                    if not isinstance(aid, str) or not aid.strip() or type(cap) is not int or cap < 1:
+                        raise ValueError('Invalid attempt request budget')
+                    # A cancelled caller may leave its job on review hold even
+                    # when the HTTP thread later settles a known provider reply.
+                    # That late reply never authorizes a replacement decision.
+                    if con.execute("SELECT 1 FROM model_requests r JOIN jobs j ON j.id=r.job_id "
+                        "WHERE json_extract(r.request_json,'$.dispatch_attempt_id')=? "
+                        "AND (r.state='unknown' OR j.state='review_required')", (aid,)).fetchone():
+                        raise OutcomeUnknown('Original attempt request/decision unresolved; no replacement dispatch')
+                    prior = con.execute("SELECT COUNT(*),MIN(json_extract(request_json,'$.dispatch_max_requests')),"
+                        "MAX(json_extract(request_json,'$.dispatch_max_requests')) FROM model_requests "
+                        "WHERE json_extract(request_json,'$.dispatch_attempt_id')=? "
+                        "AND json_extract(request_json,'$.http_dispatch')=1", (aid,)).fetchone()
+                    if prior[0] and (prior[1] != cap or prior[2] != cap):
+                        raise ValueError('Frozen attempt request cap differs')
+                    if prior[0] >= cap:
+                        raise BudgetStop('max_requests reached for original attempt')
+                account = request_json.get('account_id')
+                if account in self._unavailable_model_accounts(con):
+                    raise OutcomeUnknown('Original account/model hold; no replacement request')
+                if con.execute("SELECT 1 FROM model_requests WHERE state='reserved' "
+                    "AND json_extract(request_json,'$.account_id')=? "
+                    "AND json_extract(request_json,'$.model')=?", (account, model['model'])).fetchone():
+                    raise ModelRateWait(1)
+                # A known/unknown request pins its attempt to one account. A new
+                # independent attempt may select another healthy authorized key.
+                if aid is not None and con.execute("SELECT 1 FROM model_requests "
+                    "WHERE json_extract(request_json,'$.dispatch_attempt_id')=? "
+                    "AND json_extract(request_json,'$.account_id')<>?", (aid, account)).fetchone():
+                    raise OutcomeUnknown('Original attempt account differs; no account rotation')
             used = con.execute('''SELECT COUNT(*),COALESCE(SUM(COALESCE(cost,reserved_cost)),0),
                 COALESCE(SUM(CASE WHEN usage IS NULL THEN reserved_tokens ELSE
                 json_extract(usage,'$.input_tokens')+json_extract(usage,'$.output_tokens') END),0)

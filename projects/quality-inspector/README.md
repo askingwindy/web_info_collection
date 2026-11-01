@@ -1,5 +1,7 @@
 # WebCollect 独立质检器
 
+V2 消费者通过启动范围中的 `qc_policy` 冻结本次 `execution/qc-inputs/` 下的收据、采样计划、有效集合和收集检查。独立 QC 可以据此将同一样本送入逐帧视觉与差异检查队列。入队时仍为 `QC_NOT_RUN`，实际 AI、人工审核与发布各自计数。[启动与交接说明](../../docs/工程说明.md#本机有界批次启动) · [离线同一样本交接记录](../../verify_results/producer-consumer-react-qc-offline-20261101-094824-1251/联测报告.md)
+
 `delivery_pipeline prepare --production-handoff /absolute/qc-inputs/receipt.json` 可绑定原当前链采集交接；run/status生成独立报告后核对原件与样本集合，自动登记待审/审核通过/失败并同步已绑定共享池。`single_record.qc` 自动传递该收据，已保存结果恢复只回写、不重审。受控模式不能绑定生产回写；真人、发布和客户验收仍独立记录。见[状态回写与防重](../../docs/共享站点池与自主发现.md#状态回写与防重)。
 
 2026-10-29一致性修复为累计集合profile增加显式 `release.kind/version`。`formal` 要求200000有效样本、20包每包10000、总体分布执行且无重复/被替代副本；`experiment` 仅声明局部实验范围。旧profile的局部PASS不补签正式发行。审核复用和当前链门禁继续独立执行，见[有限修复计划](../../docs/需求一致性修复计划-20261028.md)。
@@ -188,6 +190,10 @@ C12另依据附件A的`step_result`实际观察要求，拦截已确认的待审
 
 
 ## M4 累计集合与审核版本边界（0.5.0）
+
+正式 5,000 条质量批次在原累计清单上增加 `set-manifest --quality-batch-ids <本批ID数组.json>`，随后照常运行 `check-set`。程序按绑定的本批 ID 和全部有效历史分别核验短流程、四路重复、站点类目和视口。报告的 `statistics.quality_batch` 列出本批数量、近重复受影响的当前样本以及任务类型、动作和步数分布。精确帧和全动作序列要求零命中，近重复分母是当前 5,000 条，一条样本命中多个历史邻居只算一次。该质量批次独立于物理交付分包。
+
+小规模试跑使用 `python -m quality_inspector.ai_worker prepare --trial-sample <sample_id> --effective-set <试跑清单>`，另按 `--help` 提供配置、原账、数据和输出目录。可重复传 `--trial-sample`。试跑队列和审核件与正式用途分开，report 逐条区分实审结果、机械阻断和待审，小样本比例用于诊断。正式流水线继续要求有效的跨包报告和绑定的审核证据。
 
 `contract.py` 的 `webcollect-delivery-contract-2` 指纹包含需求书、澄清记录、附件 A/B 四份安装原文及 SHA，字段和动作规则、五类审核与逐帧策略、参与判定的代码 SHA。安装资源在 `quality_inspector/authority/`，运行不依赖仓库内历史目录。规则变化会产生新指纹，不能把旧审核的 `baseline_sha256` 改写后当作新审核。
 

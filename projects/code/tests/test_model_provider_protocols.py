@@ -384,5 +384,174 @@ class ProviderProtocolTests(unittest.TestCase):
         self.assertEqual(self.opener.calls, [])
 
 
+
+class NativeToolProtocolTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = ProviderProtocolTests('test_text_provider_payloads_include_schema_and_use_max_tokens')
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.tools = [{'type': 'function', 'function': {'name': 'act', 'parameters': SCHEMA}}]
+
+    def message(self, cid='tc1', name='act', arguments='{"answer":7}'):
+        return {'role': 'assistant', 'content': None, 'reasoning_content': 'opaque-offline-protocol-field',
+                'tool_calls': [{'id': cid, 'type': 'function',
+                                'function': {'name': name, 'arguments': arguments}}]}
+
+    def response(self, message):
+        self.fixture.opener.raw['choices'] = [{'finish_reason': 'tool_calls', 'message': message}]
+
+    def call(self, gateway, job, **kw):
+        return gateway.call_tool(job, 'tools', 'current observation', self.tools,
+                                 system='trusted policy', reasoning_effort='low', **kw)
+
+    def test_glm_native_roundtrip_id_history_reasoning_and_current_png(self):
+        f = self.fixture
+        ledger, job, gateway = f.gateway(f.config('glm', vision=True))
+        self.response(self.message())
+        first = self.call(gateway, job, images=[f.image], attempt_id='one', max_requests=3)
+        self.assertEqual((first['name'], first['arguments'], first['tool_call_id']), ('act', {'answer': 7}, 'tc1'))
+        history = [first['user_message'], first['assistant_message'],
+                   {'role': 'tool', 'tool_call_id': 'tc1', 'content': '{"actual":"scrolled"}'}]
+        self.response(self.message('tc2'))
+        second = self.call(gateway, job, history=history, images=[f.image], attempt_id='one', max_requests=3)
+        payload = json.loads(f.opener.calls[-1].data)
+        self.assertEqual(payload['messages'], [{'role':'system','content':'trusted policy'}] + history + [second['user_message']])
+        self.assertEqual(payload['tools'], self.tools)
+        self.assertEqual(payload['tool_choice'], 'auto')
+        self.assertEqual(payload['thinking'], {'type':'enabled', 'clear_thinking':False})
+        self.assertEqual(payload['reasoning_effort'], 'low')
+        self.assertNotIn('response_format', payload)
+        self.assertTrue(first['user_message']['content'][1]['image_url']['url'].startswith('data:image/png;base64,'))
+        with patch('webcollect.model_gateway.socket.getaddrinfo', side_effect=AssertionError('cached call must not resolve DNS')):
+            self.assertEqual(self.call(gateway, job, history=history, images=[f.image], attempt_id='one', max_requests=3), second)
+        self.assertEqual(len(f.opener.calls), 2)
+        ledger.export(f.root / 'native-export')
+        self.assertNotIn('opaque-offline-protocol-field', ''.join(p.read_text() for p in (f.root/'native-export').glob('*.json')))
+
+    def test_history_png_transport_bytes_use_image_allowance_without_mutating_wire(self):
+        f = self.fixture
+        ledger, job, gateway = f.gateway(f.config('glm', vision=True))
+        url = 'data:image/png;base64,' + 'A'*60000
+        history = [{'role':'user','content':[{'type':'image_url','image_url':{'url':url}}]},
+                   self.message(), {'role':'tool','tool_call_id':'tc1','content':'actual result'}]
+        self.response(self.message('tc2'))
+        self.call(gateway, job, history=history, images=[f.image])
+        payload = json.loads(f.opener.calls[-1].data)
+        self.assertEqual(payload['messages'][1]['content'][0]['image_url']['url'], url)
+        self.assertEqual(history[0]['content'][0]['image_url']['url'], url)
+
+    def test_bad_tool_protocol_is_charged_without_content_fallback(self):
+        messages = [self.message(name='wrong'), self.message(cid=''), self.message(cid='  '),
+                    self.message(arguments='{"answer":'), self.message(arguments='[]'),
+                    self.message(arguments='{"answer":"bad"}'), self.message(arguments='{"answer":7,"extra":1}'),
+                    {'content':'{"answer":7}'}, self.message()]
+        messages[-1]['tool_calls'].append(deepcopy(messages[-1]['tool_calls'][0]))
+        for message in messages:
+            with self.subTest(message=message):
+                ledger, job, gateway = self.fixture.gateway(self.fixture.config('glm'))
+                self.response(message)
+                before = len(self.fixture.opener.calls)
+                with self.assertRaisesRegex(ValueError, 'attempts exhausted'):
+                    self.call(gateway, job)
+                self.assertEqual(len(self.fixture.opener.calls), before + 1)
+                with ledger.connect() as con:
+                    row = con.execute('SELECT state,cost FROM model_requests').fetchone()
+                self.assertEqual(tuple(row), ('invalid_response', 300))
+
+    def test_history_and_schema_validation_are_zero_send(self):
+        f = self.fixture
+        ledger, job, gateway = f.gateway(f.config('glm'))
+        for history in ([{'role':'system','content':'duplicate system'}],
+                        [self.message()], [self.message(), {'role':'tool','tool_call_id':'wrong','content':'x'}],
+                        [{'role':'tool','tool_call_id':'tc1','content':'x'}]):
+            with self.subTest(history=history), self.assertRaises(ValueError):
+                self.call(gateway, job, history=history)
+        with self.assertRaises(ValueError):
+            gateway.call_tool(job, 't', 'x', self.tools*2, system='s')
+        with self.assertRaises(ValueError):
+            self.call(gateway, job, attempt_id='x')
+        self.assertEqual(f.opener.calls, [])
+        self.assertEqual(ledger.summary()['model_requests'], 0)
+
+    def test_history_images_and_reasoning_are_in_input_reservation(self):
+        f = self.fixture
+        cfg = f.config('glm', vision=True)
+        cfg['model']['reserve_input_tokens'] = 2500
+        ledger, job, gateway = f.gateway(cfg)
+        history = [{'role':'user','content':[{'type':'image_url','image_url':{'url':'data:image/png;base64,controlled'}}]},
+                   self.message(), {'role':'tool','tool_call_id':'tc1','content':'x'}]
+        with self.assertRaisesRegex(ValueError, 'reservation'):
+            self.call(gateway, job, history=history, images=[f.image])
+        self.assertEqual(f.opener.calls, [])
+        self.assertEqual(ledger.summary()['model_requests'], 0)
+        ledger, job, gateway = f.gateway(f.config('glm'))
+        history[1]['reasoning_content'] = 'x'*60000
+        with self.assertRaisesRegex(ValueError, 'reservation'):
+            self.call(gateway, job, history=history)
+        self.assertEqual(f.opener.calls, [])
+
+    def test_http_unknown_is_not_reissued_under_another_purpose_or_job_in_attempt(self):
+        f = self.fixture
+        ledger, job, gateway = f.gateway(f.config('glm'))
+        f.opener.error = TimeoutError('controlled')
+        for purpose in ('original', 'different-purpose'):
+            with self.assertRaises(OutcomeUnknown):
+                gateway.call_tool(job, purpose, 'x', self.tools, system='s', attempt_id='a', max_requests=2)
+        self.assertEqual(len(f.opener.calls), 1)
+        self.assertEqual(ledger.summary()['model_cost_micros'], 'UNKNOWN')
+
+    def test_actual_http_retry_and_frozen_attempt_cap(self):
+        from webcollect.batch_core import BudgetStop
+        f = self.fixture
+        ledger, job, gateway = f.gateway(f.config('glm'))
+        self.response(self.message(name='wrong'))
+        with self.assertRaisesRegex(BudgetStop, 'max_requests'):
+            self.call(gateway, job, attempts=3, attempt_id='one', max_requests=2)
+        self.assertEqual(len(f.opener.calls), 2)
+        with self.assertRaisesRegex(ValueError, 'Frozen attempt'):
+            self.call(gateway, job, attempt_id='one', max_requests=3)
+        self.assertEqual(len(f.opener.calls), 2)
+
+    def test_synthetic_fixture_is_explicit_assistant_and_counts_no_http(self):
+        f = self.fixture
+        ledger, job, gateway = f.gateway(load_json(CONFIG))
+        with self.assertRaisesRegex(ValueError, 'explicit assistant'):
+            self.call(gateway, job)
+        self.assertEqual(ledger.summary()['model_requests'], 0)
+        result = self.call(gateway, job, synthetic_response=self.message(), attempt_id='a', max_requests=1)
+        self.assertEqual(result['tool_call_id'], 'tc1')
+        with ledger.connect() as con:
+            material = json.loads(con.execute('SELECT request_json FROM model_requests').fetchone()[0])
+        self.assertFalse(material['http_dispatch'])
+        self.assertEqual(f.opener.calls, [])
+
+    def test_twenty_fifth_concurrent_dispatch_is_denied_in_original_transaction(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from webcollect.batch_core import BudgetStop
+        f = self.fixture
+        cfg = f.config('glm')
+        cfg['budget'].update(max_model_cost_micros=10_000_000, lease_seconds=3600)
+        # Controlled elapsed provider intervals keep this SQLite concurrency
+        # regression independent of 24 seconds of wall-clock rate waiting.
+        import itertools
+        import time
+        ticks = itertools.count(time.time(), 2)
+        self.response(self.message())
+        with patch('webcollect.batch_core.time.time', side_effect=lambda: next(ticks)):
+            ledger, job, gateway = f.gateway(cfg)
+            def send(index):
+                try:
+                    gateway.call_tool(job, 'parallel-' + str(index), 'x', self.tools, system='s',
+                                      attempt_id='shared-attempt', max_requests=24)
+                    return 'sent'
+                except BudgetStop:
+                    return 'denied'
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                outcomes = list(executor.map(send, range(25)))
+        self.assertEqual(outcomes.count('sent'), 24)
+        self.assertEqual(outcomes.count('denied'), 1)
+        self.assertEqual(len(f.opener.calls), 24)
+        self.assertEqual(ledger.summary()['model_requests'], 24)
+
 if __name__ == '__main__':
     unittest.main()

@@ -22,6 +22,7 @@ def main(argv=None):
     manifest=sub.add_parser('set-manifest',help='Freeze current package file hashes without approving them')
     manifest.add_argument('--input',type=Path,action='append',required=True);manifest.add_argument('--output',type=Path,required=True)
     manifest.add_argument('--version-policy',type=Path,help='Explicit qc-sample-versions-1 supersedes relations; no automatic newest selection')
+    manifest.add_argument('--quality-batch-ids',type=Path,help='JSON array of current formal batch sample IDs; check-set verifies these 5000 and the cumulative set')
     migration=sub.add_parser('migration-plan',help='Create pending legacy-review impact assessments only')
     migration.add_argument('--input',type=Path,required=True);migration.add_argument('--source-reviews',type=Path,required=True)
     migration.add_argument('--output',type=Path,required=True)
@@ -54,7 +55,13 @@ def main(argv=None):
                         or policy['schema_version']!='qc-sample-versions-1' or not isinstance(policy['supersedes'],list)):
                     raise ValueError('Explicit qc-sample-versions-1 policy required')
                 supersedes=policy['supersedes']
-            value=build_set_manifest(roots,supersedes=supersedes) if args.cmd=='set-manifest' else migration_template(args.source_reviews,run(None,args.input)['samples'],fingerprint()[1])
+            if args.cmd == 'set-manifest':
+                members = json.loads(args.quality_batch_ids.read_text()) if args.quality_batch_ids else None
+                if args.quality_batch_ids and members is None:
+                    raise ValueError('Quality batch file must contain an array of sample IDs')
+                value = build_set_manifest(roots, supersedes=supersedes, quality_batch_ids=members)
+            else:
+                value = migration_template(args.source_reviews,run(None,args.input)['samples'],fingerprint()[1])
             args.output.parent.mkdir(parents=True,exist_ok=True)
             with args.output.open('x',encoding='utf-8') as stream:json.dump(value,stream,ensure_ascii=False,indent=2);stream.write('\n')
             print(json.dumps({'output':str(args.output),'not_an_acceptance':True},ensure_ascii=False));return 0

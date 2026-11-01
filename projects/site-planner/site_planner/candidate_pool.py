@@ -6,6 +6,7 @@ import time
 import unicodedata
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from webcollect.batch_core import load_json
 from webcollect.planning import canonical, object_sha256, verify_evidence
 from .site_pool import SitePool, category, host_identity, page_uri
 
@@ -296,11 +297,15 @@ class CandidatePool:
         return record if isinstance(record, dict) else {'row_id':row_header['row_id'],'raw_index':row_header['raw_index'],
                                                         'result':'DUPLICATE','candidate_id':record,'reason':row_header.get('reason')}
 
-    def record_row_conclusion(self, row_header, *, result, reason, original_row=None):
+    def record_row_conclusion(self, row_header, *, result, reason, original_row=None, entry_http=None):
         if result not in ('REJECTED','OVER_LIMIT','HELD') or not reason:
             raise ValueError('Conclusion-only rows record REJECTED/OVER_LIMIT/HELD with a reason')
         record = {'row_id':row_header['row_id'],'raw_index':row_header['raw_index'],'result':result,
                   'reason':reason,'candidate_id':None,'row':original_row}
+        if entry_http is not None:
+            verify_evidence([entry_http])
+            record['entry_http'] = entry_http
+            record['http_status'] = load_json(entry_http['path'])['http_status']
         with self.transaction() as con:
             prior = con.execute('SELECT response_sha256,record FROM candidate_batch_rows WHERE row_id=?',
                                 (row_header['row_id'],)).fetchone()
@@ -416,7 +421,7 @@ class CandidatePool:
         value['sources'] = json.loads(value['sources']) if value.get('sources') else None
         return value
 
-    def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, protocols=None):
+    def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, protocols=None, producer_batch=None):
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, unique request and bounded lease required')
         if protocols is None:
@@ -424,6 +429,8 @@ class CandidatePool:
         protocols = tuple(protocols)
         if protocols and not set(protocols) <= set(PROTOCOLS):
             raise ValueError('Supported candidate body protocols required')
+        if producer_batch and protocols != (VERSION2,):
+            raise ValueError('Producer batch selection requires the entry protocol')
         if VERSION2 in protocols:
             self._require_v2()
         with self.transaction() as con:
@@ -440,8 +447,13 @@ class CandidatePool:
             if prior:
                 if prior['worker_id'] != worker_id: raise ValueError('Claim request owner conflict')
                 if candidate_id and prior['candidate_id']!=candidate_id:raise ValueError('Claim request target conflict')
+                if producer_batch and not con.execute("SELECT 1 FROM candidate_batch_rows WHERE run_id=? AND result='NEW' AND candidate_id=?", (producer_batch, prior['candidate_id'])).fetchone():
+                    raise ValueError('Claim request producer batch conflict')
                 return self._claim(prior)
-            for row in con.execute("SELECT * FROM data_candidates WHERE state='pending' ORDER BY created,candidate_id"):
+            sql = "SELECT * FROM data_candidates WHERE state='pending'"
+            if producer_batch:
+                sql += " AND candidate_id IN (SELECT candidate_id FROM candidate_batch_rows WHERE run_id=? AND result='NEW')"
+            for row in con.execute(sql+' ORDER BY created,candidate_id', (producer_batch,) if producer_batch else ()):
                 if candidate_id and row['candidate_id']!=candidate_id:continue
                 body = json.loads(row['body'])
                 if body.get('schema_version') not in protocols: continue
@@ -467,6 +479,13 @@ class CandidatePool:
             con.execute('INSERT INTO candidate_empty_requests VALUES(?,?,?)',(request_id,worker_id,now))
             return {'state':'EMPTY'}
 
+    def producer_batch_drained(self, producer_batch):
+        # A producer can insert the last row between the worker's empty poll and this read.
+        with self.pool.connect() as con:
+            return bool(con.execute("""SELECT EXISTS(SELECT 1 FROM checkpoints WHERE run_id=? AND key LIKE 'entry-complete/%')
+                AND NOT EXISTS(SELECT 1 FROM candidate_batch_rows b JOIN data_candidates c USING(candidate_id)
+                    WHERE b.run_id=? AND b.result='NEW' AND c.state='pending')""", (producer_batch, producer_batch)).fetchone()[0])
+
     def _fence(self, con, claim):
         row = con.execute('SELECT * FROM candidate_claims WHERE claim_id=?', (claim['claim_id'],)).fetchone()
         if not row or row['token'] != claim['token'] or row['worker_id'] != claim['worker_id'] or row['state'] != 'consuming' or row['expires'] <= time.time():
@@ -481,15 +500,18 @@ class CandidatePool:
             self._fence(con,claim)
             con.execute('UPDATE candidate_claims SET expires=?,updated=? WHERE claim_id=?', (time.time()+seconds,time.time(),claim['claim_id']))
 
-    def stage(self, claim, stage, binding=None):
+    def stage(self, claim, stage, binding=None, *, expected_stage=None):
         with self.transaction() as con:
             row = self._fence(con,claim)
+            if expected_stage is not None and row['stage'] != expected_stage:
+                return False
             old = json.loads(row['binding'] or '{}')
             for key,value in (binding or {}).items():
                 if key in old and old[key] != value: raise ValueError('Original execution binding cannot change')
                 old[key] = value
             con.execute('UPDATE candidate_claims SET stage=?,binding=?,updated=? WHERE claim_id=?', (stage,canonical(old),time.time(),claim['claim_id']))
             self.event(con,row['candidate_id'],row['claim_id'],stage,old)
+            return True
 
     def finish(self, claim, *, state, reason, stage):
         if state not in ('failed','reconcile') or not reason: raise ValueError('Failure/uncertainty reason required')

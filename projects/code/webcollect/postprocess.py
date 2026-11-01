@@ -15,9 +15,10 @@ import platform
 from .batch_core import file_sha, load_json
 from .planning import object_sha256, verify_evidence
 from .agent_controller import exclusive
-from .react_session import REACT_VERSION, is_react_task, struct_goal, describe_goal
+from .react_session import REACT_VERSION, is_react_task, struct_goal, describe_goal, validate_task
+from .react_protocol import VERSION as NATIVE_VERSION, atomic_effect
 
-VERSION = 'webcollect-postprocess-1'
+VERSION = 'webcollect-postprocess-2'
 
 
 def _observation_state(record, observation_id):
@@ -39,10 +40,14 @@ def session_record(raw_root):
     task = boundary['task']
     if not is_react_task(task) or boundary['protocol'] != REACT_VERSION:
         raise ValueError('Raw journal is not a react execution')
+    validate_task(task)
     files = {p.relative_to(raw_root).as_posix(): file_sha(p)
              for p in sorted(raw_root.rglob('*')) if p.is_file()}
     expected = {name: digest for name, digest in receipt['files_sha256'].items()
                 if name != 'raw-receipt.json'}
+    for name, digest in expected.items():
+        if files.get(name) != digest:
+            raise ValueError('封存原件缺失或字节改变：' + name)
     for name in ('boundary.json', 'terminal.json', 'trajectory.jsonl'):
         if name not in files or files[name] != expected.get(name):
             raise ValueError('原始执行关键文件缺失或字节改变：' + name)
@@ -95,6 +100,92 @@ def natural_instruction(task, record, effective):
     return f'在「{app}」上连续完成{effective}步真实网页操作并查看实际状态'
 
 
+def _same_view(before, after):
+    return all(before.get(key) == after.get(key) for key in
+               ('url', 'scroll', 'values', 'elements', 'visible_text'))
+
+
+def effective_trajectory(record):
+    """Recount native atomic dispatches from sealed evidence, never model labels.
+
+    A gap, unknown dispatch or ineffective operation rejects the whole chain;
+    it cannot be dropped to join otherwise disconnected pieces.
+    """
+    if record['task']['fragment'].get('decision_protocol') != NATIVE_VERSION:
+        return record['trajectory']
+    rows, seen = [], {}
+    for row in record['trajectory']:
+        dispatch_key = row['dispatch']['sha256']
+        if dispatch_key in seen:
+            if row != seen[dispatch_key]:
+                raise ValueError('同一派发身份对应不同原子操作')
+            continue
+        seen[dispatch_key] = row
+        if any(item['operation_id'] == row['operation_id'] for item in rows):
+            raise ValueError('原子操作身份重复')
+        raw_ref = row.get('raw_step') or {}
+        verify_evidence([raw_ref])
+        raw = load_json(raw_ref['path'])
+        before = _observation_state(record, row['before_observation_id'])
+        after = _observation_state(record, row['after_observation_id'])
+        dispatch = load_json(row['dispatch']['path'])
+        operation = raw.get('operation') or {}
+        if (raw.get('dispatched') is not True or raw.get('action_executed') is not True
+                or raw.get('postconditions_checked') is not True or raw.get('execution_error')
+                or operation.get('operation_id') != row['operation_id']
+                or operation.get('action_type') != row['action']
+                or operation.get('arguments') != row['arguments']
+                or operation.get('evidence', {}).get('state_sha256') != object_sha256(before)
+                or raw.get('react', {}).get('before_observation_id') != row['before_observation_id']
+                or raw.get('react', {}).get('after_observation_id') != row['after_observation_id']
+                or dispatch.get('operation') != operation
+                or raw.get('controller_dispatch', {}).get('sha256') != dispatch_key
+                or raw.get('state') != before
+                or raw.get('capture', {}).get('screenshot_sha256') != record['observations'][row['before_observation_id']]['evidence']['image']['sha256']):
+            raise ValueError('原子动作缺少成功派发或同步前后证据：' + row['operation_id'])
+        if row['action'] in ('wait', 'complete', 'observe', 'inspect'):
+            raise ValueError('非有效操作不能进入连续动作轨迹')
+        effect = atomic_effect(before, after, row['action'], row['arguments'],
+                               operation.get('evidence', {}).get('anchor_element_id') or
+                               operation.get('evidence', {}).get('focused_element_id'))
+        if not effect['verified']:
+            raise ValueError('动作对应效果不可核验：' + row['operation_id'])
+        if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before):
+            raise ValueError('连续轨迹存在未解释的状态缺口')
+        if rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
+            raise ValueError('存在两步后回到原样的无效往返')
+        rows.append(row)
+    if rows and record['terminal'].get('actual_actions') != len(rows):
+        raise ValueError('实际派发数与有证据的原子操作数不一致，不能跳过未记录的动作')
+    return rows
+
+
+def terminal_outcome(task, record, final_state):
+    """Describe the delivered frame; host stop and business success stay separate."""
+    from .collect import observed_frame_description
+    description = observed_frame_description(final_state, task['instruction'])
+    title = (final_state.get('title') or '').strip().casefold()
+    visible = (final_state.get('visible_text') or '').strip().casefold()
+    denial = ('您的访问被阻止', '访问被拒绝', '访问受限', 'access denied', 'verify you are human',
+              '请求被拦截', '请求被阻止', '无法访问此网站', '网页无法打开', '网站暂时无法访问')
+    challenge = ('安全验证', '人机验证', '验证码', 'captcha')
+    first_line = visible.splitlines()[0].strip() if visible else ''
+    blocked = (title.startswith(denial) or first_line.startswith(denial)
+               or title in challenge or first_line in challenge
+               or ('samwaf' in title + ' ' + visible and any(phrase in visible for phrase in denial)))
+    terminal = record['terminal']
+    if blocked or terminal.get('unknown') or terminal.get('stop_reason') in ('blocked', 'no_path'):
+        # Exception eligibility must be frozen by the trusted caller. A model
+        # finish summary or a WAF page cannot grant it.
+        if (blocked and task['fragment'].get('allow_controlled_exception') is True
+                and not terminal.get('unknown')):
+            return 'controlled_exception', description
+        return 'failed', description
+    if terminal.get('stop_reason') not in ('ready', 'budget'):
+        return 'failed', description
+    return 'success', description
+
+
 def derive(task, record, delivery, ids, manifest):
     """Build the complete delivery sample from the raw execution; no IO models."""
     from .collect import chinese_ratio, describe_change, observed_frame_description
@@ -104,14 +195,26 @@ def derive(task, record, delivery, ids, manifest):
     from .browser import POINTER
     from .validate import CONTROL
     delivery = Path(delivery)
-    (delivery / 'images').mkdir(parents=True, exist_ok=True)
-    (delivery / 'ui_tree').mkdir(parents=True, exist_ok=True)
-    trajectory = record['trajectory']
+    native = task['fragment'].get('decision_protocol') == NATIVE_VERSION
+    try:
+        trajectory = effective_trajectory(record)
+    except (ValueError, KeyError, TypeError) as error:
+        return {'status': 'processing_failed', 'error': str(error), 'effective_steps': 0}
     if not trajectory:
         return {'status': 'no_actions', 'effective_steps': 0}
     effective = len(trajectory)
-    short = bool(record['terminal'].get('short_flow'))
+    short = effective < 5 if native else bool(record['terminal'].get('short_flow'))
     reason = record['terminal'].get('short_flow_reason')
+    if native and short:
+        terminal = record['terminal']
+        final_id = terminal.get('final_observation_id') or trajectory[-1]['after_observation_id']
+        final_state = _observation_state(record, final_id)
+        reason = (f'实际完成{effective}个有效操作；' +
+                  {'ready': '当前连续片段结束', 'budget': '宿主预算耗尽',
+                   'no_path': '当前无可行路径', 'blocked': '当前路径受阻'}.get(terminal.get('stop_reason'), '会话停止') +
+                  f'；末页为「{final_state.get("title") or "当前页面"}」。')
+        if not (terminal.get('stop_summary') or '').strip():
+            reason = None
     length_qualified = effective >= 5 or (short and bool((reason or '').strip()))
     result = {'status': 'length_unqualified' if not length_qualified else 'deriving',
               'effective_steps': effective, 'short_flow': short,
@@ -119,6 +222,18 @@ def derive(task, record, delivery, ids, manifest):
               'length_qualified': length_qualified}
     if not length_qualified:
         return result
+    final_id = record['terminal'].get('final_observation_id') or trajectory[-1]['after_observation_id']
+    final_state = _observation_state(record, final_id)
+    completion_status, final_result = terminal_outcome(task, record, final_state) if native else ('success', None)
+    if completion_status == 'failed':
+        return {**result, 'status': 'terminal_failed', 'completion_status': 'failed',
+                'final_result': final_result}
+    # Require a fresh destination, including on reprocessing after failure.
+    # Raw files and an earlier partial/complete delivery can never be replaced.
+    if native and delivery.exists():
+        raise FileExistsError('后加工必须使用新目录，不能覆盖原交付或失败派生：' + str(delivery))
+    (delivery / 'images').mkdir(parents=True, exist_ok=not native)
+    (delivery / 'ui_tree').mkdir(exist_ok=not native)
     instruction = natural_instruction(task, record, effective)
     steps = []
     ratios = []
@@ -223,7 +338,7 @@ def derive(task, record, delivery, ids, manifest):
         steps[position]['tool_result']['return_value']['screen_changed'] = \
             file_sha(delivery / steps[position]['image_path']) != file_sha(delivery / steps[position + 1]['image_path'])
     stop_summary = (record['terminal'].get('stop_summary') or '').strip()
-    final_result = stop_summary or task['final_result']
+    final_result = final_result if native else stop_summary or task['final_result']
     annotation = {'sample_id': ids['sample_id'], 'task_instruction': instruction,
         'task_type': task['task_type'], 'terminal_type': 'Web',
         'device_info': {'device_model': '', 'os_name': 'macOS' if platform.system() == 'Darwin' else platform.system(),
@@ -236,7 +351,7 @@ def derive(task, record, delivery, ids, manifest):
         'trajectory_source': {'source_type': 'agent', 'data_type': 'webcollect_agent_v1',
                               'action_space': 'unified_gui_v4'},
         'steps': steps, 'final_state_image': final_image, 'final_result': final_result,
-        'completion_status': 'success', 'completion_judgement': final_result}
+        'completion_status': completion_status, 'completion_judgement': final_result}
     if short:
         annotation['short_flow'] = True
         annotation['short_flow_reason'] = reason
@@ -305,6 +420,10 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     browser_calls = 0
     model_calls = 0
     try:
+        # The same canonical, dispatch-deduplicated list drives annotation,
+        # terminal complete numbering, capture summaries and sealed receipts.
+        # Raw journal bytes and their original order remain unchanged.
+        record = {**record, 'trajectory': effective_trajectory(record)}
         derived = derive(task, record, delivery_root, ids, manifest)
     except Exception as error:  # noqa: BLE001 - recorded verbatim, raw stays intact
         failure = {'schema_version': VERSION, 'derivation': version, 'status': 'processing_failed',

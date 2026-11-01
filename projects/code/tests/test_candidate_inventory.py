@@ -18,8 +18,14 @@ from site_planner.discovery_tools import reference
 from webcollect.batch_core import load_json, save_json, OutcomeUnknown, BatchLedger
 
 
+def mock_entry_http(test):
+    return test.enterContext(patch('site_planner.entry_access.fetch_status',
+                                   side_effect=lambda uri,*_: (200,uri)))
+
+
 class Inventory(unittest.TestCase):
     def setUp(self):
+        self.entry_http = mock_entry_http(self)
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); self.root=Path(self.tmp.name)
         SitePool(self.root/'pool.db',initialize=True)
         self.pool=CandidatePool(self.root/'pool.db',install=True)
@@ -117,7 +123,9 @@ class Inventory(unittest.TestCase):
         self.assertEqual(fixed['listed_unique_candidates'],1)
         self.assertEqual(self.pool.stats()['failed'],1);self.assertEqual(self.pool.stats()['pending'],1)
         ledger=BatchLedger(self.root/'p.db',self.config())
-        with ledger.connect() as con:self.assertEqual(con.execute('SELECT SUM(amount) FROM resources').fetchone()[0],1)
+        with ledger.connect() as con:
+            self.assertEqual(dict(con.execute('SELECT kind,SUM(amount) FROM resources GROUP BY kind')),
+                             {'discovery_candidates':1,'probe_pages':2})
         self.assertEqual(self.pool.stats()['consumption_attempts'],0)
 
     def test_flags_normalization_preserves_values_rejects_conflict_and_unknown_recovery(self):
@@ -184,6 +192,19 @@ class Inventory(unittest.TestCase):
         row={k:v for k,v in self.candidate(n).items() if k not in ('schema_version','entry_url')}
         return {'source_index':0,**row,**extra}
 
+    def test_legacy_producer_rejects_http_status_before_inventory_write(self):
+        self.entry_http.side_effect = lambda uri,*_: (403,uri)
+        args = self.strict_args('legacy-http')
+        with patch('webcollect.model_gateway.ModelGateway.call',return_value={'candidates':[self.wire(1),self.wire(2)]}):
+            report = produce(self.config(),**args)
+            self.assertEqual(report['listed_unique_candidates'],0,report)
+            self.assertEqual(report['deficit'],2)
+            self.assertEqual(len(report['rejected']),2)
+            self.assertTrue(all(load_json(r['entry_http']['path'])['http_status']==403 for r in report['rejected']))
+            self.assertEqual(self.pool.claim_next('legacy-consumer','empty-legacy'),{'state':'EMPTY'})
+            produce(self.config(),**args)
+        self.assertEqual(self.entry_http.call_count,1)
+
     def strict_args(self,key):
         return dict(pool_path=self.pool.path,ledger_path=self.root/'strict.db',output=self.root/key,
             sources=[{'uri':'https://example.org/','title':'受控来源','content':'书籍检索','reference':reference(self.proof)}],
@@ -199,7 +220,9 @@ class Inventory(unittest.TestCase):
         self.assertEqual([first['listed_unique_candidates'],second['listed_unique_candidates'],replay['listed_unique_candidates']],[2,2,2])
         self.assertTrue(first['strict_raw_output']);self.assertEqual(self.pool.stats()['candidate_total'],4)
         ledger=BatchLedger(self.root/'strict.db',self.config())
-        with ledger.connect() as con:self.assertEqual(con.execute('SELECT SUM(amount) FROM resources').fetchone()[0],4)
+        with ledger.connect() as con:
+            self.assertEqual(dict(con.execute('SELECT kind,SUM(amount) FROM resources GROUP BY kind')),
+                             {'discovery_candidates':4,'probe_pages':2})
         for row in self.pool.rows():self.assertEqual(row['sources'][0]['normalization'],[])
 
     def test_strict_wrong_count_flat_flags_generic_and_duplicate_publish_nothing(self):
@@ -285,7 +308,8 @@ class EntryInventory(unittest.TestCase):
     """candidate-producer-3 / webcollect-data-candidate-2 offline acceptance."""
 
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); self.root=Path(self.tmp.name)
+        self.entry_http = mock_entry_http(self)
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); self.root=Path(self.tmp.name).resolve()
         SitePool(self.root/'pool.db',initialize=True)
         self.pool=CandidatePool(self.root/'pool.db',install=True)
         self.proof=self.root/'source.json'; save_json(self.proof,{'CONTROLLED':'entry source only'})
@@ -690,7 +714,7 @@ class EntryInventory(unittest.TestCase):
         self.assertIn('SHA',stopped['stopped']['reason'])
 
     def test_thousand_unique_entries_without_full_pool_entity_reads(self):
-        sources=[self.hit(0,f'bulk{i}.example.org') for i in range(1000)]
+        sources=[self.hit(0,f'bulk{i}.org') for i in range(1000)]
         def model(job,purpose,prompt,schema,**kw):
             return {'candidates':[{'source_index':i} for i in range(50)]}
         traces=[]
@@ -705,8 +729,9 @@ class EntryInventory(unittest.TestCase):
              patch('webcollect.model_gateway.ModelGateway.call',side_effect=model) as call:
             args=dict(pool_path=self.pool.path,ledger_path=self.root/'p.db',sources=sources,target=1000,
                       max_batches=20,batch_size=50)
-            bulk=produce_entries(self.config('entry-producer-bulk'),output=self.root/'bulk',**args)
-            replay=produce_entries(self.config('entry-producer-bulk'),output=self.root/'bulk',**args)
+            cfg=self.config('entry-producer-bulk'); cfg['budget']['max_probe_pages']=1000
+            bulk=produce_entries(cfg,output=self.root/'bulk',**args)
+            replay=produce_entries(cfg,output=self.root/'bulk',**args)
         self.assertEqual(bulk['listed_unique_candidates'],1000,bulk)
         self.assertEqual(replay['listed_unique_candidates'],1000)
         self.assertEqual(call.call_count,20)
@@ -714,6 +739,35 @@ class EntryInventory(unittest.TestCase):
         self.assertEqual(self.pool.pool.stats()['applications'],1000)
         full_scans=[sql for sql in traces if sql.strip().upper().startswith('SELECT *') and 'WHERE' not in sql.upper()]
         self.assertEqual(full_scans,[],full_scans)
+
+    def test_caller_goals_do_not_bypass_http_or_repeat_unknown_visits(self):
+        cfg = self.config('offline-explicit-access')
+        path = self.root/'goals-http.json'
+        uris = ['https://forbidden.example.org/a','https://missing.example.net/b',
+                'https://slow.example.edu/c','https://slow.example.edu/c']
+        save_json(path,{'schema_version':'webcollect-caller-goals-1','goals':[
+            {'uri':uri,'requested_goal':{'kind':'search','entity':'books','parameters':{'term':str(i)}}}
+            for i,uri in enumerate(uris)]})
+        def status(uri,*_):
+            if uri==uris[2]: raise TimeoutError('controlled connection timeout')
+            return (403 if uri==uris[0] else 404),uri
+        self.entry_http.side_effect = status
+        args = dict(pool_path=self.pool.path,ledger_path=self.root/'access.db',goals_path=path,
+                    target=4,max_batches=1,output=self.root/'goal-output')
+        with patch('webcollect.model_gateway.ModelGateway.call',side_effect=AssertionError('No model for caller goals')):
+            report = produce_entries(cfg,**args)
+            rows = self.pool.batch_rows(report['batch_scope'],-1)
+            self.assertEqual(report['row_results'],{'REJECTED':2,'HELD':2},report)
+            self.assertEqual(report['explicit_target_candidates'],0)
+            self.assertEqual(report['listed_unique_candidates'],0)
+            self.assertEqual(self.pool.claim_next('worker','empty',protocols=(VERSION2,)),{'state':'EMPTY'})
+            first = [load_json(r['entry_http']['path']) for r in rows]
+            self.assertEqual([r['http_status'] for r in first],[403,404,None,None])
+            self.assertEqual(rows[2]['entry_http'],rows[3]['entry_http'])
+            self.assertEqual(produce_entries(cfg,**args)['row_results'],report['row_results'])
+            self.assertEqual(self.entry_http.call_count,3)
+            visits=BatchLedger(args['ledger_path'],cfg).visits()
+            self.assertEqual([v['state'] for v in visits],['failed','failed','unknown'])
 
     def test_caller_goals_publish_targets_without_model(self):
         goals=self.root/'goals.json'
@@ -724,6 +778,8 @@ class EntryInventory(unittest.TestCase):
             report=produce_entries(self.config('entry-producer-goals'),pool_path=self.pool.path,
                 ledger_path=self.root/'p.db',output=self.root/'goals',goals_path=goals,target=2,max_batches=1)
         self.assertEqual(report['explicit_target_candidates'],2)
+        self.assertEqual(self.entry_http.call_count,1)
+        self.assertEqual(len(self.pool.batch_rows(report['batch_scope'],-1)),2)
         self.assertEqual(report['listed_unique_candidates'],2)
         self.assertEqual(report['status'],'TARGET_REACHED')
         rows=self.pool.rows(protocols=(VERSION2,))
@@ -747,3 +803,40 @@ class EntryInventory(unittest.TestCase):
         self.assertEqual(mismatch['new_protocol_claimer_requesting_legacy_id'],{'state':'EMPTY'})
         self.assertEqual(mismatch['legacy_claimer_requesting_entry_id'],{'state':'EMPTY'})
         self.assertEqual(mismatch['unsupported_protocol_declaration']['error_type'],'ValueError')
+
+
+class ConsumerPolling(unittest.IsolatedAsyncioTestCase):
+    setUp = Inventory.setUp
+
+    async def test_consumer_started_first_claims_new_row_with_a_new_request_id(self):
+        from unittest.mock import AsyncMock, Mock
+        from webcollect.candidate_consumer import run
+        ledger = Mock()
+        ledger.remaining_seconds.return_value = 30
+        async def publish(_seconds):
+            self.pool.put({'schema_version': VERSION2, 'candidate_kind': 'entry',
+                           'entry_url': 'https://example.org/', 'requested_goal': None}, self.source)
+        consumed = AsyncMock(return_value={'state': 'succeeded'})
+        with (patch('webcollect.candidate_consumer.startup_check', return_value={}),
+              patch('webcollect.candidate_consumer.asyncio.sleep', side_effect=publish) as slept,
+              patch('webcollect.candidate_consumer.consume', consumed)):
+            result = await run(self.pool, ledger, worker_id='worker', request_prefix='wait',
+                               protocols=(VERSION2,), poll_seconds=2)
+        slept.assert_awaited_once_with(2)
+        self.assertEqual(result, [{'state': 'succeeded'}])
+        self.assertEqual(self.pool.claim_next('worker', 'wait/0', protocols=(VERSION2,)), {'state': 'EMPTY'})
+        self.assertEqual(consumed.await_args.args[1]['request_id'], 'wait/1')
+
+    async def test_empty_bounded_consumer_returns_and_waiting_consumer_observes_deadline(self):
+        from unittest.mock import Mock
+        from webcollect.batch_core import BudgetStop
+        from webcollect.candidate_consumer import run
+        ledger = Mock()
+        ledger.remaining_seconds.side_effect = BudgetStop('original runtime expired')
+        with patch('webcollect.candidate_consumer.startup_check', return_value={}):
+            result = await run(self.pool, ledger, worker_id='worker', request_prefix='once')
+            self.assertEqual(result, [{'state': 'EMPTY'}])
+            with self.assertRaises(BudgetStop):
+                await run(self.pool, ledger, worker_id='worker', request_prefix='wait', poll_seconds=2)
+        with self.pool.pool.connect() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM candidate_empty_requests').fetchone()[0], 1)

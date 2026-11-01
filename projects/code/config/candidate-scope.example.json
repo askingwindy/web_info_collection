@@ -1,0 +1,16 @@
+{
+  "batch": "example-discovery/entry-batch/trial20",
+  "pool": "/absolute/trial/pool.sqlite3",
+  "history_set": "/absolute/current-trial/current-chain-r01/manifest.json",
+  "producer_config": "/absolute/trial/producer-config.json",
+  "producer_db": "/absolute/trial/producer-jobs.sqlite3",
+  "consumer_config": "/absolute/trial/consumer-config.json",
+  "consumer_db": "/absolute/trial/consumer-jobs.sqlite3",
+  "consumer_worker": "trial20-worker-1",
+  "request_prefix": "trial20-worker-1",
+  "output": "/absolute/current-results/trial20/worker-1",
+  "registry": "/absolute/current-results/state/production-registry.sqlite3",
+  "policy": "/absolute/current-trial/campaign-policy.json",
+  "qc_policy": "/absolute/current-trial/qc-policy.json",
+  "started_at": 0
+}

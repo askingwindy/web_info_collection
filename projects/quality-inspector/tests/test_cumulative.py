@@ -7,7 +7,7 @@ import shutil
 import unittest
 
 import test_delivery
-from quality_inspector.cumulative import build_set_manifest, inspect_set
+from quality_inspector.cumulative import build_set_manifest, inspect_set, _check_quality_batch
 from quality_inspector.duplicates import analyze, exhaustive_routes, hamming_candidates, indexed_routes
 
 
@@ -25,6 +25,49 @@ class CumulativeTests(unittest.TestCase):
         self.assertEqual(result['customer_actual_acceptance'],'UNKNOWN')
         self.assertEqual(manifest,before)
         self.assertEqual(result['duplicates']['search']['exhaustive_verification']['status'],'PASS')
+
+    def test_formal_batch_membership_is_bound_and_a_small_trial_cannot_pass_as_5000(self):
+        sample = next((self.client / 'samples').iterdir()).name
+        manifest = build_set_manifest([self.client], quality_batch_ids=[sample])
+        result = inspect_set(manifest, self.profile)
+        self.assertEqual(result['manifest']['quality_batch_ids'], [sample])
+        self.assertEqual(result['mechanical_status'], 'FAIL')
+        self.assertEqual(result['statistics']['quality_batch']['sample_count'], 1)
+        distributions = result['statistics']['quality_batch']['distributions']
+        self.assertEqual(sum(distributions['effective_steps'].values()), 1)
+        self.assertTrue(distributions['task_types'])
+        self.assertEqual(distributions['actions']['complete'], 1)
+        self.assertIn('quality batch requires exactly 5000 effective samples',
+                      result['statistics']['quality_batch']['errors'])
+        with self.assertRaisesRegex(ValueError, 'unique sample IDs'):
+            build_set_manifest([self.client], quality_batch_ids=[sample, sample])
+        manifest['quality_batch_ids'] = ['not-in-the-effective-set']
+        result = inspect_set(manifest, self.profile)
+        self.assertEqual(result['statistics']['quality_batch']['status'], 'FAIL')
+
+    def test_formal_batch_limits_use_current_affected_samples_not_pairs_or_history(self):
+        ids = [f'B{i:04d}' for i in range(5000)]
+        categories = {sid: str(i % 5) for i, sid in enumerate(ids)}
+        targets = {'max_short_flow_share': .02, 'max_category_share': .2}
+        pairs = [{'sample_ids': [ids[i], 'old-A']} for i in range(5)]
+        pairs.append({'sample_ids': [ids[0], 'old-B']})
+        scan = {'rows': [{'sample_id': sid} for sid in ids + ['old-A', 'old-B']],
+                'summary': {'analysis_status': 'COMPLETE', 'unadjudicated_pair_count': 0},
+                'route1': {'confirmed_pair_count': 0, 'pairs': []},
+                'route2': {'count': 0, 'confirmed_pairs': []},
+                'route3': {'count': 6, 'candidates': pairs},
+                'route4': {'count': 0, 'candidates': []}}
+        allowed = _check_quality_batch(ids, categories, set(ids[:100]), scan, targets)
+        self.assertEqual(allowed['status'], 'PASS')
+        self.assertEqual(allowed['near_duplicate_sample_rate'], .001)
+        self.assertEqual(allowed['route_pair_counts']['route3'], 6)
+        categories[ids[1]] = categories[ids[0]]
+        pairs.append({'sample_ids': [ids[5], 'old-A']})
+        scan['route3']['count'] += 1
+        rejected = _check_quality_batch(ids, categories, set(ids[:101]), scan, targets)
+        self.assertEqual(rejected['status'], 'FAIL')
+        self.assertEqual(len(rejected['errors']), 3)
+        self.assertEqual(rejected['near_duplicate_sample_rate'], 6 / 5000)
 
     def test_manifest_is_invalidated_by_changed_package_bytes(self):
         manifest=build_set_manifest([self.client]);(self.client/'README.md').write_text('Changed after freezing')

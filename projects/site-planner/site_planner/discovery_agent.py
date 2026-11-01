@@ -54,6 +54,33 @@ def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), outp
         raise
 
 
+
+def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, reasoning_effort='low'):
+    """One durable selection tool call, without a follow-up completion to ack IO."""
+    frozen = {'protocol': 'native-tool-1', 'input': payload, 'tools': tools,
+              'system': system, 'reasoning_effort': reasoning_effort}
+    jid = ledger.enqueue(purpose, frozen)
+    old = ledger.get(jid)
+    if old['state'] == 'done':
+        return jid, old['result']
+    if old['state'] != 'queued' or old['attempts']:
+        raise OutcomeUnknown('Original tool selection unresolved; no replacement: ' + jid)
+    with ledger.connect() as con:
+        if con.execute("SELECT 1 FROM model_requests WHERE state IN ('reserved','unknown') LIMIT 1").fetchone():
+            raise OutcomeUnknown('Original model request unresolved; no new entry tool dispatch')
+    job = ledger.claim(purpose, job_id=jid)
+    if not job:
+        raise OutcomeUnknown('Original tool selection already claimed: ' + jid)
+    try:
+        result = gateway.call_tool(job, purpose, json.dumps(payload, ensure_ascii=False), tools,
+            system=system, attempts=1, reasoning_effort=reasoning_effort,
+            attempt_id=jid, max_requests=1)
+        ledger.finish(job, result=result)
+        return jid, result
+    except BaseException as error:
+        ledger.finish(job, 'review_required', error=type(error).__name__)
+        raise
+
 def selection_job_id(payload):
     return object_sha256({'kind':'ai-select-results','payload':{'input':payload,'schema':SELECT_SCHEMA,'image_refs':[]}})
 

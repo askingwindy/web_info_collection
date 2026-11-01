@@ -9,12 +9,13 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 REPO=Path(__file__).resolve().parents[3]
 sys.path[:0]=[str(REPO/'projects/site-planner')]
 from site_planner.pipeline import fetch_public
+from site_planner.entry_access import fetch_status, RedirectBlocked
 from webcollect.collect import verify_public_url
 
 
@@ -31,6 +32,34 @@ class FakeResponse:
 
 
 class TLSFetchGuards(unittest.TestCase):
+    def test_entry_get_uses_final_redirect_status_and_does_not_read_html(self):
+        start, final = 'https://example.org/start','https://www.example.org/final'
+        response=FakeResponse()
+        response.geturl=lambda:final
+        def opener(redirect):
+            def follow(request, timeout):
+                forwarded=redirect.redirect_request(request,None,302,'redirect',{},final)
+                self.assertEqual((request.get_method(),forwarded.get_method()),('GET','GET'))
+                if response.status==404:
+                    raise HTTPError(final,404,'controlled missing',{},None)
+                return response
+            return Mock(open=follow)
+        with patch('site_planner.pipeline.build_opener',side_effect=opener):
+            for code in (200,404):
+                response.status=code; metrics={}
+                self.assertEqual(fetch_status(start,10,metrics,'real',None),(code,final))
+                self.assertEqual(metrics['redirects'],[{'from':start,'to':final,'status':302}])
+        self.assertEqual(response.reads,0)
+
+    def test_entry_redirect_does_not_dispatch_to_an_unrelated_application(self):
+        def opener(redirect):
+            def follow(request, timeout):
+                redirect.redirect_request(request,None,302,'redirect',{},'https://other.example.net/')
+                self.fail('foreign redirect should stop before dispatch')
+            return Mock(open=follow)
+        with patch('site_planner.pipeline.build_opener',side_effect=opener):
+            with self.assertRaises(RedirectBlocked): fetch_status('https://example.org/',10,{},'real',None)
+
     def test_initial_private_url_rejected_before_dispatch(self):
         with patch('site_planner.pipeline.build_opener') as opener:
             with self.assertRaises(ValueError):fetch_public('https://127.0.0.1/')

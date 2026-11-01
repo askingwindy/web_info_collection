@@ -23,6 +23,7 @@ from site_planner.discovery_tools import reference
 
 
 class Consumption(SemanticFixture, unittest.IsolatedAsyncioTestCase):
+    chain_manifest = 'chain.json'
     def setUp(self):
         super().setUp()
         self.root=self.root.resolve(); self.fixture.root=self.root
@@ -47,7 +48,7 @@ class Consumption(SemanticFixture, unittest.IsolatedAsyncioTestCase):
         cfg['budget']['min_domain_interval_seconds']=1
         cfg['budget']['max_concurrent_jobs']=1
         from webcollect.current_chain import initialize_chain
-        self.registry=self.root/'results/registry.db';self.chain=self.root/'chain.json'
+        self.registry=self.root/'results/registry.db';self.chain=self.root/self.chain_manifest
         initialize_chain(self.chain,self.registry,chain_id='CONTROLLED-candidate',current_result_roots=[self.root/'results'])
         from webcollect.site_failure_stop import SiteFailureStore
         guard=SiteFailureStore.initialize({'ledger':str(self.root/'stop.db'),'campaign_id':'CONTROLLED-candidate','formal_since':time.time()-1}).binding

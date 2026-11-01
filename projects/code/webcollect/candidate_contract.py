@@ -41,26 +41,31 @@ def validate_observation(record):
     observed=project(load_json(anchor['state']['path']),anchor)
     if binding.get('application_registry')!=claim.get('application_registry'):
         raise ValueError('Original application aliases changed')
+    if binding.get('sources', claim.get('sources')) != claim.get('sources'):
+        raise ValueError('Original frozen candidate sources changed')
     if not observed['capture_verified'] or not observed['document_identity'] or not application_matches(claim['snapshot']['entry_url'],observed['url'],claim.get('application_registry')):
         raise ValueError('First observation lacks synchronized capture or proven application landing')
-    if record['site_category']!=binding['candidate']['parent_category'] or record['site_uri']!=observed['url']:
+    category = binding['candidate'].get('parent_category')
+    if (category is not None and record['site_category']!=category) or record['site_uri']!=observed['url']:
         raise ValueError('Candidate classification/page binding differs')
     return binding
 
 
-def capability(claim, anchor, claim_reference, mode):
+def capability(claim, anchor, claim_reference, mode, *, category=None, name=None):
     state=load_json(anchor['state']['path']); now=datetime.now(timezone.utc)
     candidate=claim['snapshot']
     result={'schema_version':'webcollect-site-capability-1','capability_id':'candidate-observation-'+claim['claim_id'],
-        'version':VERSION,'site_uri':state['url'],'site_category':candidate['parent_category'],'mode':mode,
+        'version':VERSION,'site_uri':state['url'],'site_category':candidate.get('parent_category', category),'mode':mode,
         'status':'review_required','reason':'Consumer first observation; qualification NOT_RUN',
         'observed_at':now.isoformat(),'expires_at':(now+timedelta(hours=4)).isoformat(),
         'supported_actions':['click','double_click','right_click','type','select','hotkey','scroll','open_url','back'],
         'task_families':['navigation-reading'], 'evidence':list(anchor.values())+[claim_reference],
-        'capabilities':[{'page_uri':state['url'],'title':state.get('title') or candidate['name'],'page_anchor':anchor}],
+        'capabilities':[{'page_uri':state['url'],'title':state.get('title') or candidate.get('name',name),'page_anchor':anchor}],
         'candidate_observation':{'schema_version':VERSION,'candidate_id':claim['candidate_id'],'claim_id':claim['claim_id'],
             'version':claim['version'],'candidate':deepcopy(candidate),'claim_reference':claim_reference,
             'application_registry':claim.get('application_registry')}}
+    if candidate.get('schema_version') == 'webcollect-data-candidate-2':
+        result['candidate_observation']['sources'] = deepcopy(claim.get('sources', []))
     validate_observation(result)
     return result
 
@@ -75,14 +80,17 @@ def validate_task_binding(task, record=None):
         raise ValueError('Frozen claim target changed')
     if binding.get('application_registry')!=claim.get('application_registry'):
         raise ValueError('Frozen application aliases changed')
+    if binding.get('sources', claim.get('sources')) != claim.get('sources'):
+        raise ValueError('Frozen candidate sources changed')
     if task['fragment'].get('candidate_attempt')!=binding['claim_id']:
         raise ValueError('Candidate attempt boundary differs')
     from .react_session import is_react_task
     if is_react_task(task):
-        # New protocol: goal identity stays the structured claimed candidate
-        # (read-only requested_goal); the natural delivery instruction is
-        # generated at derivation and is no longer compared for equality with
-        # the goal JSON. Claim identity and scope checks above still bind.
+        candidate = binding['candidate']
+        if candidate.get('schema_version') == 'webcollect-data-candidate-2':
+            expected = candidate['requested_goal'] if candidate['candidate_kind'] == 'target' else None
+            if task['workflow_proposal']['spec']['goal']['structured'] != expected:
+                raise ValueError('Frozen V2 requested goal differs from original claim')
         if record is not None and binding!=validate_observation(record):
             raise ValueError('Task and first observation refer to different candidates')
         return binding

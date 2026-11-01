@@ -51,6 +51,8 @@ def generation_source_identity():
         names += ('hmac_strategy.py',)
     if (base / 'pbkdf2_strategy.py').is_file():
         names += ('pbkdf2_strategy.py',)
+    if (base / 'react_protocol.py').is_file():
+        names += ('react_protocol.py',)
     return {name: file_sha(base / name) for name in names}
 
 # These are deliberately narrow business strategies, not generic guesses about
@@ -829,18 +831,25 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         if supplied_catalog.get('schema_version') != 'webcollect-capability-catalog-1':
             raise ValueError('react-url capability catalog must use the versioned catalog schema')
         ready = [record for record in supplied_catalog.get('records', [])
-                 if record.get('site_uri') == url and record.get('status') == 'ready'
+                 if record.get('site_uri') == url and (record.get('status') == 'ready' or
+                     react_candidate is not None and record.get('candidate_observation'))
                  and record.get('mode') == ledger.config['mode']]
         if len(ready) > 1:
             raise ValueError('Multiple ready capabilities for the react entry URL')
         supplied = ready[0] if ready else None
     task_version = VERSION + '/react-' + str(react_task_version)
-    if supplied is not None:
+    if supplied is not None and not supplied.get('candidate_observation'):
         task = build_capability_task(supplied, identities['pages'].get(url), task_version,
                                      registration=react_task_version)
     else:
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
-                              app_name=app_name, registration=react_task_version)
+                              app_name=app_name, registration=react_task_version,
+                              pilot_identity=identities['pages'].get(url))
+        if supplied is not None:
+            task['capability_id'] = supplied['capability_id']
+            task['capability_version'] = supplied['version']
+        if task.get('pilot_identity'):
+            task['app_name'] = task['pilot_identity']['application']['name']
     if isinstance(goal, dict) and goal:
         spec = task['workflow_proposal']['spec']
         spec['goal']['structured'] = deepcopy(goal)
@@ -848,12 +857,12 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         from .react_session import validate_task as validate_react
         validate_react(task)
     if react_candidate is not None:
-        from copy import deepcopy
         bound_claim = react_candidate['claim']
         task['candidate_binding'] = {
             'schema_version': 'webcollect-candidate-consumption-1',
             'candidate_id': bound_claim['candidate_id'], 'claim_id': bound_claim['claim_id'],
             'version': bound_claim['version'], 'candidate': deepcopy(bound_claim['snapshot']),
+            'sources': deepcopy(bound_claim.get('sources', [])),
             'claim_reference': react_candidate['claim_reference'],
             'application_registry': bound_claim.get('application_registry')}
         task['fragment']['entry_mode'] = 'candidate'
@@ -1314,7 +1323,7 @@ def _prepare_qc_handoff(candidate, history_set, output, sampling, checks):
     return {'qc_status': 'QC_NOT_RUN', 'qc_inputs': receipt}
 
 
-async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False, qc_policy=None, site_pool=None):
+async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False, qc_policy=None, site_pool=None, entry_session=None):
     """Collect once into pending evidence; freeze explicit QC inputs without reviewing.
 
     Pilot and delivery use this same entry. Optional legacy admission receipts
@@ -1468,6 +1477,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         result=await collect_m4(plan_path if react_only else pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
             navigation=navigation, controller_ledger=ledger, controller_parent_job=job,
+            **({'entry_session': entry_session} if entry_session is not None else {}),
             **({'site_pool': site_pool} if site_pool is not None else {}))
         if result['collection_status']=='paused_pending_resume':
             return {'collection':result,'candidate':None,'stopped':'existing runtime paused; budget and queued work retained'}

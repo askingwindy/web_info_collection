@@ -1,8 +1,30 @@
 # 站点规划程序
 
+使用[本机启动说明](../../docs/工程说明.md#本机有界批次启动)中的 `start_candidates.py --scope <范围文件> producer` 并传入搜索方向与数量上限。脚本将同一批次键与 manifest 传给 `produce-entries`，由生产者选择链内证据根。批次报告按实际 `NEW` 计数。
+
+新批次对将要入库的入口执行有预算的公开 GET，仅最终 2xx 允许发布。403、404 等状态逐条留下拒绝收据，未取得响应也不产生可领取候选。模型提交的入口与显式 `--goals` 都经过检查，同批同 URL 只访问一次。[检查和日志](../../docs/工程说明.md#候选-v2-的两个-python-入口)
+
+当前链的 `produce-entries` 使用与消费者相同的 `--history-set`。省略 `--output` 时，生产者按批次身份创建链内证据目录，实际路径见报告的 `evidence_output`。独立试验的运行日志可以放在另一目录。[证据目录与监视命令](../../docs/工程说明.md#候选-v2-的两个-python-入口)
+
+2026-10-31 新的 GLM-5.3-Flash 生产会话默认使用原生工具协议 `entry-tools-1`。继续原会话时，程序读取池中已冻结的协议，早期无协议字段的记录沿用 `entry-content-1`。可用 `--model-protocol` 显式选择新作业的协议，原会话拒绝切换。新协议以简洁 goal 和有限来源上下文注册 `submit_candidates`，使用 `tool_choice=auto`、`thinking={type:enabled, clear_thinking:false}`、`reasoning_effort=low`。按智谱[函数调用](https://docs.bigmodel.cn/cn/guide/capabilities/function-calling)及[思考模式](https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode)处理原生工具和不透明历史字段；每轮严格要求恰一个已声明函数、非空且未重复的 ID、合法 JSON 对象及对应 Schema。错名、多调用、缺 ID、纯内容等响应结算为协议失败，不触发入库。外层仅约束 candidates 数组，每行独立判定，非对象坏行不会丢弃其他合法行。
+
+该协议为每批保存 `batch-NNNN-tool-call.json` 和 `batch-NNNN-tool-result.json`：前者只含工具名/ID、参数及原模型作业和请求 ID，后者是绑定同一个 `tool_call_id` 的真实逐行发布结论。候选来源同时引用搜索请求 ID、原命中序号、过滤后索引、模型请求 ID 和行身份；它们不相互替代。工具回执落本地后结束，无额外 completion 确认写库。可选建议仍不能生成 frozen goal；显式 goals 路径仍无需模型。费用及 UNKNOWN 保留原账，候选不是已采样本。
+
+显式 `--goals` 的每项可附 `category_hint`，例如 `{"uri":"https://example.org/tool","requested_goal":{"kind":"edit","entity":"fields","parameters":{"quantity":20}},"category_hint":"在线工具"}`。该提示保存在冻结来源中，不进入 `requested_goal`；旧文件不提供时保持 UNKNOWN，消费者不会用显示回退类别占正式配额。
+
+共享调用入口是 `ModelGateway.call_tool(job, purpose, text, tools, *, system, history=(), images=(), attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None, max_requests=None, synthetic_response=None)`。返回 `name`、字典 `arguments`、`tool_call_id`、`assistant_message`、本轮实际 `user_message` 和原账 `request_id`。下一轮将原 user/assistant 和匹配 ID 的真实 `role=tool` 结果按序放入 history；system 只放一次，当前文字和原始 PNG 由网关构造。完整 history、图片和 Schema 纳入预留与请求身份，不截断或改写 reasoning_content；它仅留在受控账本/通信历史，不进入普通报告或候选来源。synthetic_response 显式传 assistant 消息对象（含 tool_calls），离线格式见 `test_model_provider_protocols.NativeToolProtocolTests`。
+
+`attempt_id/max_requests` 在原 BatchLedger 短事务中共同冻结并限制实际 HTTP 派发：缓存及本地预检零发送不计，格式错误重试和 UNKNOWN 计，UNKNOWN 禁止同尝试换作业/目的重发。同账本以不含密钥的账户散列限制账户/模型在途数，沿用原派发间隔；新独立会话排除原账记录的 1113 账户 hold、1302 账户退避、1305 模型退避（优先 Retry-After，否则 60 秒），同尝试不可换号。未带账户身份的旧 UNKNOWN 无法据此归到某个 key，仍遵守旧冻结恢复门禁；此处不跨独立账本建立全局健康服务，也不清除历史 hold。
+
+ReAct 接入复查：请求计数直接使用原模型请求 `request_json.dispatch_attempt_id` 与 `http_dispatch=true`，覆盖同尝试的全部工具请求；逻辑决策轮次与实际格式重试分别记录。入口导航前和每轮决策前先核对原尝试的 `reserved/unknown`，再判断剩余额度，最后一份额度为 UNKNOWN 时仍保持待核实。明确预算耗尽按宿主 budget 封存；旧决策零发送失败、已结算格式失败和未决请求保留各自分类，均不自动重发。取消等待后即使后台 HTTP 晚到并结算成功，原决策作业的 review_required 仍在同尝试预留事务中阻止新派发，原模型用量与费用照实保留。原缓存回读与未决拒绝路径不选择模型账户；需要新派发时才为该会话初始化共享网关。成功和宿主拒绝的工具结果均按原非空 ID 回传，原 assistant/reasoning 历史保持不透明。
+
+共享网关与 ReAct 接入复查的最终证据为 `verify_results/parallel-producer-react-compat-20261031-r10/{tests.log,summary.json}`：8 个直接相关测试模块共 110 项通过，源码和测试文件在验证期间稳定。新增假 HTTP 接入夹具覆盖成功/宿主拒绝的工具历史、实际重试计数、缓存与零发送、额度耗尽、UNKNOWN 重启防重发，以及取消等待后晚到成功仍保持原尝试待核实。前几轮复现失败和并行源码变动报告均保留，仅为离线工程验证。
+
+本轮最终离线证据为 `verify_results/parallel-producer-20261031-r05/{tests.log,summary.json}`：选定 6 个直接影响模块共 109 项通过，源码/测试文件在验证期间稳定。假 GLM 验证 24 次实际派发通过、第 25 次并发请求在原账事务中拒绝；混合批次 `NEW=2 / DUPLICATE=1 / REJECTED=2`，发布中断后按原工具响应恢复且新增 HTTP 为零。r01 保留新增搜索夹具字段错误及源码变动记录，r02–r04 测试零失败但源码变化门禁未过，不记最终 PASS。以上仅临时库与假网关，不代表真实采集、独立 QC、发布或客户验收。
+
 2026-10-31 生产者 C0/C1 改造已实施并通过离线验证：同一共享池显式安装 `candidate-pool-2` 扩展后，`python -m site_planner.candidate_discovery produce-entries ...` 以 `candidate-producer-3` 逐条发布 `webcollect-data-candidate-2` 入口/目标候选——空目标入口为默认产物，`requested_goal` 只来自调用方 goals 文件，分类/建议留在来源上下文；模型网关只校验外层数组，逐行由程序判定 `NEW/DUPLICATE/REJECTED/OVER_LIMIT/HELD`，行身份=原session+批次+请求+原响应行号，中断只按原响应恢复。搜索词按 `producer-query-policy-1`（最少已完成方向优先、连续零新增停换、每方向上限、规范化去重）在会话级 checkpoint 上可复现地调整；UNKNOWN/401/403/整站 hold 按原作用域零新派发。旧 `webcollect-data-candidate-1`、`produce --strict`、旧 claim 语义不变，未声明新协议的领取端看不到新行。交接样例与验证记录见 `verify_results/producer-entry-offline-20261031-r01/`（36项PASS，仅离线，未恢复生产）。
 
-2026-10-31 下一版生产者按[职责拆分与轻量化计划](../../docs/生产者消费者职责拆分与轻量化改造计划-20261031.md)改造：可信入口为默认库存，目标建议可选，文章类型作提示，逐条入库并报告缺额；来源归属、原账预算、UNKNOWN 和整站止损不放松。新协议须显式启用，旧严格模式保留。本次只更新规划，当前代码仍按下文原契约运行。
+2026-10-31 的[职责拆分与轻量化计划](../../docs/生产者消费者职责拆分与轻量化改造计划-20261031.md)记录了可信入口、可选目标建议、逐条入库及缺额的设计。当前 V2 批次使用本页开头的 `produce-entries` 入口，以下严格模式记录适用于其原协议。
 
 2026-10-31 新轻量生产者严格入口为 `python -m site_planner.candidate_discovery produce --strict --batch-key ROUND_ID ...`，共用原session冻结配置与模型/搜索预算，旧协议保留。本轮同版本连续3批各5条原始候选通过AI来源核对并入库，共15条；7/10次后停止，未运行消费者或轨迹QC。详见[严格生产者说明](../../docs/共享站点池与自主发现.md#轻量生产者)及[真实报告](../../verify_results/pilot1000-20261028-r01/producer-validation-20261031-r01/真实验证报告.md)。
 

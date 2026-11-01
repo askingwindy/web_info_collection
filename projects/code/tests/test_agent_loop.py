@@ -503,6 +503,21 @@ class AgentLedgerBindings(SemanticFixture, unittest.TestCase):
         self.assertEqual(context['unresolved'][0]['job_id'],original)
         self.assertEqual(ledger.get(original)['state'],'queued')
 
+    def test_react_decisions_are_visible_to_their_own_site_until_settled(self):
+        from webcollect.agent_feedback import site_context
+        config = load_json(Path(__file__).parents[1] / 'config/batch-synthetic.json')
+        ledger = BatchLedger(self.root / 'react-model.db', config, initialize=True)
+        site = 'https://example.org/'
+        legacy = ledger.enqueue('react-decision', {'site_uri': site})
+        native = ledger.enqueue('react-native-decision', {'site_uri': site})
+        ledger.enqueue('react-native-decision', {'site_uri': 'https://elsewhere.test/'})
+        def unresolved():
+            return {row['job_id'] for row in site_context(None, site, model_ledger=ledger)['unresolved']}
+        self.assertEqual(unresolved(), {legacy, native})
+        job = ledger.claim('react-native-decision', job_id=native)
+        ledger.finish(job, result={'settled': True})
+        self.assertEqual(unresolved(), {legacy})
+
     def test_precommit_feedback_does_not_overwrite_rejected_outcome(self):
         from webcollect.agent_feedback import save_attempt_feedback
         evidence=self.root/'raw';evidence.mkdir()

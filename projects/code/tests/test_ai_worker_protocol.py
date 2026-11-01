@@ -27,6 +27,7 @@ class ProtocolTests(unittest.TestCase):
     def ledger(self,config=None):return BatchLedger(self.root/'ops.sqlite3',config or self.config,initialize=True)
 
     def real_config(self):
+        self.enterContext(patch('webcollect.model_gateway.socket.getaddrinfo', return_value=[('CONTROLLED_DNS',)]))
         config=deepcopy(self.config);config['mode']='real';config['budget'].update(currency='TEST_UNITS',max_model_cost_micros=100000,min_model_interval_seconds=1)
         config['model'].update(provider='chat-completions',model='controlled-http-protocol-model',
             endpoint='https://provider.invalid/v1/chat/completions',api_key_env='WEBCOLLECT_TEST_KEY',reserve_cost_micros=100000)
@@ -103,6 +104,29 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(queued['queued_samples'],0)
         self.assertEqual(queued['mechanically_blocked'],1)
         self.assertEqual(run(ledger)['cost']['model_requests'],0)
+
+    def test_single_trial_sample_has_its_own_queue_and_review_format(self):
+        from quality_inspector.cumulative import build_set_manifest
+        ledger = self.ledger()
+        dataset = self.root / 'fixture/batch'
+        effective = self.root / 'trial-set.json'
+        effective.write_text(json.dumps(build_set_manifest([dataset])))
+        trial = prepare(ledger, dataset, self.root/'trial', effective_set=effective,
+                        sample_ids=[self.sample.name], trial=True)
+        ordinary = prepare(ledger, dataset, self.root/'ordinary', effective_set=effective)
+        queue = load_json(trial['queue_file'])
+        self.assertEqual(queue['trial']['sample_ids'], [self.sample.name])
+        self.assertNotEqual(queue['jobs'][0]['visual_job'], load_json(ordinary['queue_file'])['jobs'][0]['visual_job'])
+        with self.assertRaisesRegex(ValueError, 'named samples'):
+            prepare(ledger, dataset, self.root/'unknown', effective_set=effective, sample_ids=['missing'], trial=True)
+        pending = report(ledger, trial['queue_file'], self.root/'result')
+        self.assertEqual(pending['trial_results'][self.sample.name], 'PENDING')
+        run(ledger)
+        reviewed = report(ledger, trial['queue_file'], self.root/'result')
+        self.assertEqual(reviewed['trial_results'][self.sample.name], 'SYNTHETIC')
+        self.assertEqual(load_json(reviewed['review_file'])['schema_version'], 'webcollect-trial-review-1')
+        self.assertEqual(reviewed['actual_ai_reviewed'], 0)
+        self.assertFalse(reviewed['release_ready'])
 
     def test_model_missing_observation_routes_pending_and_is_not_retried_on_restart(self):
         ledger=self.ledger();queued=prepare(ledger,self.root/'fixture/batch',self.root/'qc')

@@ -6,14 +6,24 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .contract import digest, fingerprint
-from .duplicates import analyze_inputs, analysis_error
+from .duplicates import analyze_inputs, analysis_error, summarize
 from .format_checks import run as format_run
 from .layout import discover
 from .profiles import load as load_profile, package_files, DEFAULT_DELIVERY_PROFILE
 from .version_compare import compare_versions, POLICY
 
 
-def build_set_manifest(package_paths, *, supersedes=()):
+QUALITY_BATCH_SIZE = 5000
+
+
+def _quality_batch_ids(value):
+    if (not isinstance(value, list) or not value or any(not isinstance(sid, str) or not sid.strip() for sid in value)
+            or len(value) != len(set(value))):
+        raise ValueError('Quality batch membership must be a nonempty list of unique sample IDs')
+    return sorted(value)
+
+
+def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None):
     """Return facts, not approval. Caller persists this versioned manifest explicitly."""
     paths = [Path(path).resolve() for path in package_paths]
     if not paths or len(paths) != len(set(paths)):
@@ -26,7 +36,39 @@ def build_set_manifest(package_paths, *, supersedes=()):
             'not_an_acceptance': True}
     if supersedes:
         result['version_policy'] = {'schema_version': POLICY, 'supersedes': list(supersedes)}
+    if quality_batch_ids is not None:
+        result['quality_batch_ids'] = _quality_batch_ids(quality_batch_ids)
     return result
+
+
+def _check_quality_batch(ids, categories, short_ids, duplicate, targets):
+    """The explicitly frozen batch is the denominator; the other effective IDs are history."""
+    count = len(ids)
+    missing = set(ids) - categories.keys()
+    if missing:
+        raise ValueError('Quality batch IDs missing from effective metadata: ' + ', '.join(sorted(missing)[:10]))
+    if (duplicate['summary'].get('analysis_status') != 'COMPLETE'
+            or duplicate['summary'].get('unadjudicated_pair_count') != 0):
+        raise ValueError('Quality batch requires a complete four-route scan with no unresolved pairs')
+    distribution = Counter(categories[sid] for sid in ids)
+    short = len(short_ids.intersection(ids))
+    resolution = summarize(duplicate, ids)
+    routes = resolution['current_route_pair_counts']
+    errors = []
+    if count != QUALITY_BATCH_SIZE:
+        errors.append('quality batch requires exactly 5000 effective samples')
+    if short / count > targets['max_short_flow_share']:
+        errors.append('quality batch short-flow share exceeds the limit')
+    if max(distribution.values()) / count > targets['max_category_share']:
+        errors.append('quality batch category share exceeds the limit')
+    if (not resolution['sample_rate_within_requested_limit'] or resolution['unadjudicated_pair_count'] != 0
+            or routes['route1'] or routes['route2']):
+        errors.append('quality batch four-route duplicate check failed')
+    return {'status': 'FAIL' if errors else 'PASS', 'errors': errors, 'sample_count': count,
+            'short_flow_count': short, 'categories': dict(distribution), 'route_pair_counts': routes,
+            'near_duplicate_sample_rate': resolution['near_duplicate_sample_rate'],
+            'affected_sample_ids': resolution['affected_current_sample_ids'],
+            'unadjudicated_pair_count': resolution['unadjudicated_pair_count']}
 
 
 def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
@@ -122,11 +164,22 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
                 sites[sid] = identity; uri_owners[site['uri']] = sid
         except (OSError, ValueError, KeyError, TypeError, AttributeError, csv.Error) as error:
             errors.append({'package': str(root), 'reason': 'cumulative metadata/source error: ' + str(error)})
+    batch_ids = _quality_batch_ids(raw['quality_batch_ids']) if 'quality_batch_ids' in raw else None
     categories = Counter(row.get('site_category', '') for row in rows); resolutions = set(); short = 0
+    short_ids = set()
+    batch_members = set(batch_ids or ())
+    task_types, action_types, lengths = Counter(), Counter(), Counter()
     for path in annotations:
         try:
             annotation = json.loads(path.read_text())
             resolutions.add(tuple(annotation['device_info']['screen_resolution'])); short += int(annotation.get('short_flow') is True)
+            if annotation.get('sample_id') in batch_members:
+                if annotation.get('short_flow') is True:
+                    short_ids.add(annotation['sample_id'])
+                actions = [step['action']['action_type'] for step in annotation['steps']]
+                task_types.update(annotation['task_type'])
+                action_types.update(actions)
+                lengths[str(sum(action not in ('wait', 'complete') for action in actions))] += 1
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append({'sample': str(path), 'reason': str(error)})
     count = len(samples); share = max(categories.values(), default=0) / count if count else 0
@@ -141,7 +194,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         errors.append({'reason': 'cumulative viewport specifications exceed contract limit or are missing'})
     if not count or short / count > targets['max_short_flow_share']:
         errors.append({'reason': 'cumulative short-flow share exceeds contract limit or population is empty'})
-    if targets['category_share'] == 'enforced' and share > targets['max_category_share']:
+    if (batch_ids is not None or targets['category_share'] == 'enforced') and share > targets['max_category_share']:
         errors.append({'reason': 'cumulative category share exceeds configured contract limit'})
     duplicate = None
     try:
@@ -160,6 +213,17 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         duplicate = analysis_error(error,sample_count=count,dataset_label='cumulative:' + digest(raw))
         errors.append({'reason': 'cumulative duplicate inspection failed: ' + str(error)})
+    batch_statistics = {}
+    if batch_ids is not None:
+        try:
+            batch = _check_quality_batch(batch_ids, {r['sample_id']: r['site_category'] for r in rows},
+                                         short_ids, duplicate, targets)
+        except (KeyError, ValueError, TypeError) as error:
+            batch = {'status': 'FAIL', 'errors': [str(error)], 'sample_count': len(batch_ids)}
+        batch['distributions'] = {'task_types': dict(task_types), 'actions': dict(action_types),
+                                  'effective_steps': dict(lengths)}
+        batch_statistics['quality_batch'] = batch
+        errors.extend({'reason': reason} for reason in batch['errors'])
     for root in paths:
         if package_files(root) != snapshots[str(root)]:
             errors.append({'package': str(root), 'reason': 'input changed during cumulative inspection'})
@@ -172,7 +236,8 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             'manifest': raw, 'manifest_sha256': digest(raw), 'contract_sha256': contract_hash,
             'local_profile': selected, 'sample_count': count, 'site_count': len(active_sites),
             'statistics': {'categories': dict(categories), 'maximum_category_share': share,
-                           'viewport_specs': sorted(map(list, resolutions)), 'short_flow_count': short},
+                           'viewport_specs': sorted(map(list, resolutions)), 'short_flow_count': short,
+                           **batch_statistics},
             'packages': packages, 'duplicates': duplicate, 'errors': errors,
             'input_files_sha256': snapshots, 'input_integrity_checked_before_and_after': True,
             'internal_targets': selected['configuration'].get('internal_targets', {}),
