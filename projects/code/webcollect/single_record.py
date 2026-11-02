@@ -117,7 +117,9 @@ def identity(catalog_path, output, *, registry=None, candidate_observation=False
         canonical_host=canonical_key(root_uri,application_registry)
         root_uri=next((row['canonical_uri'] for row in load_json(application_registry['path'])['applications']
                        if canonical_key(row['canonical_uri'],application_registry)==canonical_host),root_uri)
-    application_name = page['title']
+    binding = record.get('candidate_observation') or {}
+    v2 = binding.get('candidate', {}).get('schema_version') == 'webcollect-data-candidate-2'
+    application_name = parsed.hostname if v2 else page['title']
     if registry is not None:
         import sqlite3
         from .production_identity import page_url
@@ -288,7 +290,7 @@ def qc(config_path, ledger_path, execution_result, profile, output, *, supportin
             from .site_pool_sync import apply_qc
             apply_qc(result['report']['path'], ref(inputs['receipt']))
         return result
-    return run(receipt, output / ('run-' + str(len(runs)+1).zfill(3)), max_jobs=10)
+    return run(receipt, output / ('run-' + str(len(runs)+1).zfill(3)))
 
 
 def main(argv=None):

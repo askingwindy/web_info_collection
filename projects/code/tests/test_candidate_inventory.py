@@ -13,7 +13,8 @@ import unittest
 from unittest.mock import patch
 from site_planner.site_pool import SitePool
 from site_planner.candidate_pool import CandidatePool, CandidatePool as _Pool, VERSION, VERSION2, DDL as V1_DDL
-from site_planner.candidate_discovery import produce, produce_entries, QueryPolicy
+from site_planner.candidate_discovery import produce, QueryPolicy
+from producer_legacy_fixture import produce_entries
 from site_planner.discovery_tools import reference
 from webcollect.batch_core import load_json, save_json, OutcomeUnknown, BatchLedger
 
@@ -345,6 +346,19 @@ class EntryInventory(unittest.TestCase):
         with self.pool.pool.connect() as con:
             return [json.loads(r[0])['reason'] for r in con.execute(
                 "SELECT record FROM candidate_batch_rows WHERE result='REJECTED'")]
+
+    def test_explicit_search_scope_counts_only_its_batch_and_deduplicates_original_input(self):
+        from webcollect.batch_core import BudgetStop
+        pool = self.pool.pool
+        first, _ = pool.reserve_tool('shared','search','a',{},maximum=1,batch_scope='first')
+        pool.settle_tool(first,'succeeded',{'value':'a'})
+        pool.checkpoint('first','entry-batch/0/input',{'kind':'search','search_request_id':first})
+        self.assertEqual(pool.reserve_tool('shared','search','a',{},maximum=1,batch_scope='first'),(first,{'value':'a'}))
+        second, _ = pool.reserve_tool('shared','search','b',{},maximum=2,batch_scope='first')
+        with self.assertRaises(BudgetStop):
+            pool.reserve_tool('shared','search','c',{},maximum=2,batch_scope='first')
+        third, _ = pool.reserve_tool('shared','search','c',{},maximum=1,batch_scope='second')
+        self.assertEqual(len({first,second,third}),3)
 
     def test_v1_pool_refuses_v2_writes_until_install_and_install_rolls_back(self):
         other=self.root/'v1.db'; SitePool(other,initialize=True)
@@ -827,16 +841,17 @@ class ConsumerPolling(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.pool.claim_next('worker', 'wait/0', protocols=(VERSION2,)), {'state': 'EMPTY'})
         self.assertEqual(consumed.await_args.args[1]['request_id'], 'wait/1')
 
-    async def test_empty_bounded_consumer_returns_and_waiting_consumer_observes_deadline(self):
+    async def test_empty_idle_consumer_returns_and_explicit_poll_can_be_cancelled(self):
         from unittest.mock import Mock
-        from webcollect.batch_core import BudgetStop
+        import asyncio
         from webcollect.candidate_consumer import run
         ledger = Mock()
-        ledger.remaining_seconds.side_effect = BudgetStop('original runtime expired')
         with patch('webcollect.candidate_consumer.startup_check', return_value={}):
             result = await run(self.pool, ledger, worker_id='worker', request_prefix='once')
             self.assertEqual(result, [{'state': 'EMPTY'}])
-            with self.assertRaises(BudgetStop):
-                await run(self.pool, ledger, worker_id='worker', request_prefix='wait', poll_seconds=2)
+            with patch('webcollect.candidate_consumer.asyncio.sleep', side_effect=asyncio.CancelledError):
+                with self.assertRaises(asyncio.CancelledError):
+                    await run(self.pool, ledger, worker_id='worker', request_prefix='wait', poll_seconds=2)
+            ledger.remaining_seconds.assert_not_called()
         with self.pool.pool.connect() as con:
-            self.assertEqual(con.execute('SELECT COUNT(*) FROM candidate_empty_requests').fetchone()[0], 1)
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM candidate_empty_requests').fetchone()[0], 2)

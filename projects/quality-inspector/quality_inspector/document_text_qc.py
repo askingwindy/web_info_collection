@@ -183,7 +183,8 @@ def _materials(receipt, old_ledger, state, report, ledger, supporting_files):
     value['implementation_sha256'] = _implementation()
     value['parent_binding'] = {'receipt_sha256': receipt['receipt_sha256'],
                                'human_history_sha256': state['human_history_sha256']}
-    ai_worker._document_budget(ledger, *_request(value))
+    if not ledger.config.get('model'):
+        raise ValueError('Documentary model review requires an explicit model')
     return value
 
 
@@ -290,7 +291,7 @@ def verify(receipt_path):
 
 def _response(job, ledger, gateway):
     value = job['payload']; actual = ai_worker._verify_document_materials(value)
-    text, schema = _request(value); ai_worker._document_budget(ledger, text, schema)
+    text, schema = _request(value)
     first = next(iter(value['documents']))
     blank = {'checks': {name: {'status': 'REVIEW_REQUIRED', 'note': 'SYNTHETIC protocol; no actual documentary AI approval',
         'evidence': [{'path': first, 'sha256': actual[first], 'detail': 'SYNTHETIC fixture'}]} for name in DELIVERY_DOCUMENT_CHECKS}}
@@ -421,7 +422,7 @@ def finalize(receipt_path, status_path, output, *, archive=None):
     return pipeline.finalize(value['parent_receipt']['path'], status_path, output, archive=archive)
 
 
-def run_samples(parent_receipt, output, *, max_jobs=100):
+def run_samples(parent_receipt, output, *, max_jobs=None):
     """Future entry: dispatch visual/difference only, never legacy documents."""
     with pipeline._lock(parent_receipt):
         receipt = pipeline.verify(parent_receipt); ledger = pipeline._ledger(receipt)
@@ -455,7 +456,7 @@ def main(argv=None):
         if name == 'finalize':
             p.add_argument('--status', type=Path, required=True); p.add_argument('--archive', type=Path)
     p = sub.add_parser('run-samples'); p.add_argument('--parent-receipt', type=Path, required=True)
-    p.add_argument('--output', type=Path, required=True); p.add_argument('--max-jobs', type=int, default=100)
+    p.add_argument('--output', type=Path, required=True); p.add_argument('--max-jobs', type=int)
     args = parser.parse_args(argv)
     try:
         if args.command == 'prepare':

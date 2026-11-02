@@ -37,11 +37,15 @@ def execution_id(stage, source, identity):
 
 def validate_binding(value):
     if (not isinstance(value, dict) or not {'ledger', 'campaign_id', 'formal_since'} <= set(value)
-            or set(value) - {'ledger', 'campaign_id', 'formal_since', 'application_registry'}
+            or set(value) - {'ledger', 'campaign_id', 'formal_since', 'application_registry', 'dispatch_rules'}
             or not isinstance(value['ledger'], str) or not Path(value['ledger']).is_absolute()
             or not isinstance(value['campaign_id'], str) or not value['campaign_id'].strip()
             or type(value['formal_since']) not in (int, float) or not 0 < value['formal_since'] < float('inf')):
         raise ValueError('Whole-site failure guard requires a fixed absolute ledger, campaign and formal_since')
+    if 'dispatch_rules' in value:
+        from .current_chain import PROJECT_RULES
+        if value['dispatch_rules'] != PROJECT_RULES:
+            raise ValueError('Unsupported site dispatch rules')
     if value.get('application_registry') is not None:
         from .application_identity import aliases
         aliases(value['application_registry'])
@@ -92,9 +96,11 @@ class SiteFailureStore:
     def __init__(self, binding, *, _seeding=False):
         self.binding = validate_binding(binding)
         self.path = Path(self.binding['ledger'])
+        self.failure_limit = None if 'dispatch_rules' in self.binding else LIMIT
+        self.facts_schema = 'webcollect-site-execution-facts-2' if self.failure_limit is None else 'webcollect-site-execution-facts-1'
         with self.connect() as con:
             meta = json.loads(con.execute('SELECT value FROM stop_meta WHERE id=1').fetchone()[0])
-        if meta['binding'] != self.binding or meta['version'] != VERSION or meta['failure_limit'] != LIMIT:
+        if meta['binding'] != self.binding or meta['version'] != VERSION or meta['failure_limit'] != self.failure_limit:
             raise ValueError('Whole-site failure ledger identity/policy changed')
         if meta.get('seed_policy') and not _seeding:
             seed_ref = meta['seed_policy']
@@ -110,6 +116,8 @@ class SiteFailureStore:
     @classmethod
     def initialize(cls, binding, *, seed_policy=None, source_root=None):
         binding = validate_binding(binding); path = Path(binding['ledger'])
+        if seed_policy is not None and 'dispatch_rules' in binding:
+            raise ValueError('New candidate projects start without historical site decisions')
         seed = load_json(seed_policy) if seed_policy else None
         if seed_policy is not None and (not isinstance(seed, dict) or seed.get('failure_limit') != LIMIT or not source_root):
             raise ValueError('Seed policy must preserve limit three and explicit original source root')
@@ -128,7 +136,7 @@ class SiteFailureStore:
                 'stage TEXT NOT NULL,state TEXT NOT NULL,reason TEXT NOT NULL,evidence_json TEXT NOT NULL,'
                 'usage_refs_json TEXT NOT NULL,recorded_at REAL NOT NULL);')
             con.execute('INSERT INTO stop_meta VALUES(1,?)', (canonical({'version': VERSION, 'binding': binding,
-                'failure_limit': LIMIT, 'seed_policy': {'path': str(Path(seed_policy).resolve()),
+                'failure_limit': None if 'dispatch_rules' in binding else LIMIT, 'seed_policy': {'path': str(Path(seed_policy).resolve()),
                 'sha256': file_sha(seed_policy)} if seed_policy else None}),))
             con.commit()
         store = cls(binding, _seeding=True)
@@ -142,7 +150,7 @@ class SiteFailureStore:
                         usage_refs=[{**attempt, 'ledger': str(source)}])
         return cls(binding)
 
-    def record(self, application, identity, *, stage, state, reason, real_execution, evidence, usage_refs):
+    def record(self, application, identity, *, stage, state, reason, real_execution, evidence, usage_refs, return_status=True):
         if (real_execution is not True or state not in ('failed', 'unknown') or stage not in ('probe', 'observation', 'formal')
                 or not isinstance(reason, str) or not reason.strip() or not identity or not evidence
                 or not isinstance(usage_refs, list)):
@@ -157,7 +165,96 @@ class SiteFailureStore:
             if not old:
                 con.execute('INSERT INTO site_executions VALUES(?,?,?,?,?,?,?,?)', (*body, time.time()))
             con.commit()
-        return self.status(application)
+        if return_status:
+            return self.status(application)
+
+    def enable_closed_entry_uri_scope(self, manifest, producer_ledger, reason):
+        """Bind this local decision to the original new project's producer book."""
+        from .current_chain import check_project_guard, read_chain_scope
+        chain = read_chain_scope(Path(manifest).absolute())
+        if not chain.get('candidate_project') or not reason.strip():
+            raise ValueError('Original candidate project and explicit URI isolation instruction required')
+        check_project_guard(chain, self.binding, producer_ledger, role='producer')
+        record = {'producer_ledger':str(Path(producer_ledger).resolve()), 'manifest':chain['manifest'],
+                  'reason':reason, 'policy':'closed-read-only-entry-get-uri-1'}
+        with self.connect(True) as con:
+            con.execute('BEGIN IMMEDIATE')
+            con.execute('CREATE TABLE IF NOT EXISTS entry_get_uri_policy(id INTEGER PRIMARY KEY CHECK(id=1), decision TEXT NOT NULL, created REAL NOT NULL)')
+            con.execute('INSERT OR IGNORE INTO entry_get_uri_policy VALUES(1,?,?)',(canonical(record),time.time()))
+            original = json.loads(con.execute('SELECT decision FROM entry_get_uri_policy WHERE id=1').fetchone()[0])
+            if original['producer_ledger'] != record['producer_ledger'] or original['manifest'] != record['manifest']:
+                raise ValueError('Original entry GET isolation binding changed')
+            con.commit()
+        return original
+
+    @staticmethod
+    def _closed_producer_get_uri(ledger, database, fact):
+        """A finished visit alone is insufficient. Require the sealed, zero-model GET job."""
+        from .planning import verify_evidence
+        identity, _, stage, reason, evidence, usage = fact
+        refs = json.loads(usage)
+        if stage != 'probe' or len(refs) != 1 or not isinstance(refs[0],dict) or refs[0].get('ledger') != database:
+            return None
+        visit_id = refs[0].get('visit_id')
+        if not visit_id or identity != execution_id('probe', database, visit_id):
+            return None
+        row = ledger.execute(
+            "SELECT v.*,j.payload,j.result FROM top_level_visits v JOIN jobs j ON j.id=v.job_id "
+            "WHERE v.id=? AND v.purpose='candidate-entry-http' AND v.state='unknown' AND v.finished_at IS NOT NULL "
+            "AND v.response_status IS NULL AND v.error_type=? AND j.kind='candidate-entry-http' AND j.state='done' "
+            "AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.job_id=j.id)",(visit_id,reason)).fetchone()
+        if row is None or not row['result']:
+            return None
+        original = {k:row[k] for k in ('id','job_id','target_uri','dispatched_at')}
+        if json.loads(evidence) != [{'visit_fact':original}]:
+            return None
+        payload, ref = json.loads(row['payload']), json.loads(row['result'])
+        verify_evidence([ref])
+        receipt = load_json(ref['path'])
+        if (payload.get('uri') == row['target_uri'] == receipt.get('entry_uri') and
+                payload.get('policy') == receipt.get('policy') == 'producer-entry-http-get-1' and
+                receipt.get('method') == 'GET' and receipt.get('job_id') == row['job_id'] and
+                receipt.get('visit_id') == visit_id and receipt.get('result') == 'HELD' and
+                'http_status' in receipt and receipt['http_status'] is None and
+                receipt.get('reason') == row['error_message'] and receipt.get('checked_at',0) >= row['finished_at']):
+            return row['target_uri']
+        return None
+
+    def _entry_uri_holds(self, application, key, applied):
+        from site_planner.candidate_pool import entry_identity
+        uri = (application.get('initial_url') or application.get('site_uri')) if isinstance(application,dict) else application
+        if not uri or application_key(uri,self.binding.get('application_registry')) != key:
+            return 0, []
+        # HTTP never transmits fragments. A www alias or tracking suffix must not re-send an isolated page.
+        def endpoint(url):
+            parsed = urlsplit(entry_identity(url))
+            return (parsed.path.rstrip('/') or '/', parsed.query)
+        netloc = urlsplit(key).netloc
+        other = '//'+(netloc[4:] if netloc.startswith('www.') else 'www.'+netloc)+'/'
+        with self.connect() as con:
+            if not con.execute("SELECT 1 FROM sqlite_master WHERE name='entry_get_uri_policy'").fetchone():
+                return 0, []
+            policy = json.loads(con.execute('SELECT decision FROM entry_get_uri_policy WHERE id=1').fetchone()[0])
+            facts = con.execute("SELECT execution_id,application_key,stage,reason,evidence_json,usage_refs_json "
+                                "FROM site_executions WHERE application_key IN (?,?) AND state='unknown' AND stage='probe'",
+                                (key,other)).fetchall()
+        if not facts:
+            return 0, []
+        target = endpoint(uri)
+        database = policy['producer_ledger']
+        scoped = 0
+        blocking = []
+        with closing(sqlite3.connect(Path(database).as_uri()+'?mode=ro',uri=True)) as ledger:
+            ledger.row_factory = sqlite3.Row
+            for fact in facts:
+                if fact[0] in applied:
+                    continue
+                closed_uri = self._closed_producer_get_uri(ledger,database,fact)
+                if closed_uri is not None:
+                    scoped += int(fact[1] == key)
+                    if endpoint(closed_uri) == target:
+                        blocking.append(fact[0])
+        return scoped, blocking
 
     def append_reassessment(self, identity, *, responsibility, reason, evidence):
         """Append evidence only. Original counts and stop/hold decisions remain binding."""
@@ -346,9 +443,9 @@ class SiteFailureStore:
             self._validate_fact(fact)
         for fact in successes:
             self._validate_fact(fact, True)
-        core = {'schema_version': 'webcollect-site-execution-facts-1',
+        core = {'schema_version': self.facts_schema,
                 'campaign_id': self.binding['campaign_id'], 'formal_since': self.binding['formal_since'],
-                'failure_limit': LIMIT, 'executions': executions, 'successes': successes}
+                'failure_limit': self.failure_limit, 'executions': executions, 'successes': successes}
         apps = sorted({row['application_key'] for row in executions + successes})
         return {**core, 'facts_sha256': object_sha256(core),
                 'application_states': [self.status('https:' + app) for app in apps]}
@@ -386,12 +483,13 @@ class SiteFailureStore:
     def import_facts(self, payload):
         """Atomic, idempotent merge; neither reclassify nor reset original facts."""
         keys = ('schema_version', 'campaign_id', 'formal_since', 'failure_limit', 'executions', 'successes')
-        if not isinstance(payload, dict) or set(payload) - set(keys) - {'facts_sha256', 'application_states'}:
+        if (not isinstance(payload, dict) or not set(keys).issubset(payload)
+                or set(payload) - set(keys) - {'facts_sha256', 'application_states'}):
             raise ValueError('Unsupported portable site ledger fields')
         core = {key: payload.get(key) for key in keys}
-        if (core['schema_version'] != 'webcollect-site-execution-facts-1'
+        if (core['schema_version'] != self.facts_schema
                 or core['campaign_id'] != self.binding['campaign_id']
-                or core['formal_since'] != self.binding['formal_since'] or core['failure_limit'] != LIMIT
+                or core['formal_since'] != self.binding['formal_since'] or core['failure_limit'] != self.failure_limit
                 or not isinstance(core['executions'], list) or not isinstance(core['successes'], list)
                 or payload.get('facts_sha256') != object_sha256(core)):
             raise ValueError('Portable ledger campaign/cutoff/policy/hash changed; no implicit new round')
@@ -527,16 +625,21 @@ class SiteFailureStore:
                     applied.update(identity for identity in decision['execution_ids'] if len(reviewed.get(identity,set()))==1)
         effective=failed-len(applied & failed_ids)
         effective_unknown=unknown-len(applied & unknown_ids)
-        unavailable=effective>=LIMIT and not verified
-        state='unknown_hold' if effective_unknown else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
-        return {'application_key': key, 'failure_count': failed,'historical_stopped':failed>=LIMIT,
+        scoped, uri_holds = self._entry_uri_holds(application,key,applied) if self.failure_limit is None else (0,[])
+        whole_unknown = effective_unknown - scoped
+        stopped=self.failure_limit is not None and effective>=self.failure_limit
+        unavailable=stopped and not verified
+        state='unknown_hold' if whole_unknown else 'entry_uri_hold' if uri_holds else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
+        return {'application_key': key, 'failure_count': failed,'historical_stopped':self.failure_limit is not None and failed>=self.failure_limit,
                 'effective_site_failure_count':effective,'explicitly_reassessed_executions':sorted(applied),'reassessment_count':len(reassessments),
                 'reassessed_site_failure_count':max(0,adjusted),'reassessment_changes_dispatch':bool(applied), 'unknown_execution_count': unknown,
-                'effective_unknown_execution_count':effective_unknown, 'failure_limit': LIMIT, 'qualified_success_count': verified,
+                'effective_unknown_execution_count':effective_unknown, 'failure_limit': self.failure_limit, 'qualified_success_count': verified,
                 'source_reported_success_count': successes - verified, 'used': bool(failed or unknown or successes),
                 'unavailable_before_first_valid': unavailable, 'state': state,
                 'round_id': self.binding['campaign_id'], 'automatic_round_reentry': False,
-                'stopped': effective >= LIMIT, 'dispatch_blocked': effective >= LIMIT or bool(effective_unknown)}
+                **({'closed_entry_uri_unknowns':scoped, 'matching_entry_uri_holds':uri_holds,
+                    'whole_application_unknowns':whole_unknown} if scoped or uri_holds else {}),
+                'stopped': stopped, 'dispatch_blocked': stopped or bool(whole_unknown or uri_holds)}
 
     def guard(self, application):
         state = self.status(application)
@@ -602,7 +705,7 @@ def main(argv=None):
             parser.error('import requires --facts')
         result = store.import_facts(load_json(args.facts))
     else:
-        result = store.status(args.application) if args.application else {'binding': store.binding, 'failure_limit': LIMIT}
+        result = store.status(args.application) if args.application else {'binding': store.binding, 'failure_limit': store.failure_limit}
     print(json.dumps(result, ensure_ascii=False))
 
 

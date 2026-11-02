@@ -16,7 +16,7 @@ import socket
 
 from jsonschema import Draft202012Validator
 
-from .batch_core import OutcomeUnknown, ModelRateWait, _integer, validate_config, file_sha
+from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, _integer, validate_config, file_sha
 from .planning import object_sha256
 
 
@@ -84,8 +84,8 @@ class ModelGateway:
         self.ledger = ledger
         self.config = validate_config(ledger.config, require_model=True)
         from .model_credentials import credential
-        self._credential = (credential(self.config['model'], excluded_accounts=ledger.unavailable_model_accounts())
-                            if self.config['mode'] == 'real' else None)
+        self._credential = None
+        self._session_id = None
 
     def _account_id(self):
         from .model_credentials import account_id
@@ -105,10 +105,10 @@ class ModelGateway:
             raise ValueError('Tool protocol needs explicit system and user text')
         if type(attempts) is not int or attempts < 1:
             raise ValueError('Positive bounded tool attempts required')
-        if (attempt_id is None) != (max_requests is None):
-            raise ValueError('attempt_id and max_requests must be supplied together')
+        if max_requests is not None and attempt_id is None:
+            raise ValueError('An explicit request limit requires its original attempt_id')
         if attempt_id is not None and (not isinstance(attempt_id, str) or not attempt_id.strip()
-                or len(attempt_id) > 200 or type(max_requests) is not int or max_requests < 1):
+                or len(attempt_id) > 200 or (max_requests is not None and (type(max_requests) is not int or max_requests < 1))):
             raise ValueError('Explicit attempt identity and positive request cap required')
         if reasoning_effort is not None and reasoning_effort not in ('low', 'high', 'max'):
             raise ValueError('Invalid reasoning effort')
@@ -189,31 +189,6 @@ class ModelGateway:
             system += '\nReturn JSON matching this complete JSON Schema exactly:\n' + json.dumps(schema, ensure_ascii=False, sort_keys=True)
         if native_context:
             system = native_context['system']
-        # UTF-8 bytes are a conservative text-token upper bound, images require
-        # an explicit per-request allowance. Reject before any reservation/call.
-        input_bound = len(text.encode()) + len(json.dumps(schema).encode())
-        if 'request_overhead_tokens' in model:
-            input_bound = (len(system.encode()) + len(text.encode()) + model['request_overhead_tokens']
-                           + len(images) * model['image_tokens_per_image']
-                           + (0 if compatible_provider else len(json.dumps(schema).encode())))
-        if native_context:
-            # Image transport bytes are not text tokens. Keep original URLs in
-            # the wire history, but account for each image using the explicit
-            # configured image allowance, as for the current original PNG.
-            metered_history = deepcopy(native_context['history'])
-            history_image_count = 0
-            for message in metered_history:
-                if isinstance(message.get('content'), list):
-                    for part in message['content']:
-                        if isinstance(part, dict) and part.get('type') == 'image_url':
-                            part['image_url'] = {'url': '[original image]'}
-                            history_image_count += 1
-            input_bound = (len(system.encode()) + len(text.encode()) + len(json.dumps(tools, ensure_ascii=False).encode())
-                           + len(json.dumps(metered_history, ensure_ascii=False).encode())
-                           + model.get('request_overhead_tokens', 128)
-                           + (len(images) + history_image_count) * model.get('image_tokens_per_image', 0))
-        if input_bound > model['reserve_input_tokens']:
-            raise ValueError('Text/schema exceed configured input reservation')
         parts = [{'type': 'text', 'text': text}]
         for path in images:
             path = Path(path)
@@ -254,7 +229,34 @@ class ModelGateway:
                 raise ValueError('History and current images exceed image limit')
             if historical_images and not model.get('supports_vision', True):
                 raise ValueError('Configured model does not support original-image review')
-        for attempt in range(attempts):
+        with self.ledger.connect() as con:
+            original_requests = list(con.execute('SELECT id,state,response FROM model_requests WHERE job_id=? AND purpose=? ORDER BY attempt', (job['id'],purpose)))
+        settled = [row for row in original_requests if row['state'] == 'succeeded']
+        if settled:
+            with self.ledger.transaction() as con:
+                self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':settled[-1]['id']})
+            return json.loads(settled[-1]['response'])['result']
+        with self.ledger.connect() as con:
+            if any(row['state'] == 'reserved' or (row['state'] == 'unknown'
+                    and not self.ledger.timeout_retry_answered(con, row['id'])) for row in original_requests):
+                raise OutcomeUnknown('Original request unresolved; no credential selection or replacement')
+        if self.config['mode'] == 'real':
+            session_id = (native_context or {}).get('attempt_id') or job['id']
+            if native_context and self.ledger.real_glm:
+                with self.ledger.connect() as con:
+                    prior = self.ledger.session_http_usage(con, session_id)
+                if prior['held']:
+                    raise OutcomeUnknown('Original session request unresolved; no credential selection')
+                from .batch_core import SessionGLMCallLimit
+                if prior['used'] >= SessionGLMCallLimit.limit:
+                    raise SessionGLMCallLimit(session_id, prior['used'])
+            if self._session_id != session_id:
+                self._credential = self.ledger.bind_model_session(session_id)
+                self._session_id = session_id
+        correction = None
+        timeout_retry = {}
+        timeout_retries = invalid_attempts = 0
+        for attempt in range(attempts + 3):
             if model['provider']!='synthetic':
                 # DNS resolution is provably before HTTP dispatch. Do not turn
                 # a local resolution failure into a sent/chargeable UNKNOWN;
@@ -276,7 +278,9 @@ class ModelGateway:
             while True:
                 try:
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
-                        'system':system,'text':text,'schema':schema,'images':[{'path':str(Path(p).resolve()),'sha256':file_sha(p)} for p in images],
+                        'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
+                        'accounting_mode':'tokens-1', **timeout_retry,
+                        'schema':schema,'images':[{'path':str(Path(p).resolve()),'sha256':file_sha(p)} for p in images],
                         'provider':model['provider'],'model':model['model'],'prompt_identity':purpose,
                         **({'tools':tools,'tool_choice':tool_choice} if native_tools else {}),
                         **({'protocol':native_context['version'], 'history':native_context['history'],
@@ -294,6 +298,10 @@ class ModelGateway:
                     self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':request['id']})
                 return json.loads(request['response'])['result']
             if request['state'] != 'new':
+                if request['state'] == 'invalid_response':
+                    invalid_attempts += 1
+                    if invalid_attempts >= attempts:
+                        break
                 continue  # Previously charged invalid response is retained, never resent under the same identity.
             rid = request['id']
             usage, parsed, raw = None, None, None
@@ -312,6 +320,8 @@ class ModelGateway:
                         {'role': 'system', 'content': system}, {'role': 'user', 'content': parts}]}
                     if native_context:
                         payload['messages'] = [{'role':'system','content':system}] + native_context['history'] + [user_message]
+                        if correction:
+                            payload['messages'][-1]['content'] = deepcopy(parts) + [{'type':'text','text':correction}]
                         payload.update(tools=tools, tool_choice='auto')
                         payload['max_tokens' if compatible_provider else 'max_completion_tokens'] = output_limit or model['max_completion_tokens']
                         if model['provider'] == 'glm':
@@ -421,13 +431,34 @@ class ModelGateway:
                                            response={'provider_error': detail})
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
             except (urllib.error.URLError, TimeoutError, OSError) as error:
-                # HTTP errors, disconnects and timeouts can be billed. No blind retry.
+                # Retain each timeout as UNKNOWN; retry only within this active call.
                 root=error.reason if isinstance(error,urllib.error.URLError) else error
                 detail={'error_type':type(error).__name__,'reason_type':type(root).__name__}
                 for key in ('errno','verify_code'):
                     value=getattr(root,key,None)
                     if type(value) is int:detail[key]=value
                 self.ledger.settle_request(rid, state='unknown', error=type(error).__name__,response={'transport_error':detail})
+                retry_allowed = isinstance(root, TimeoutError) and timeout_retries < 3
+                if retry_allowed and native_context:
+                    with self.ledger.connect() as con:
+                        used = self.ledger.session_http_usage(con, native_context['attempt_id'])['used']
+                    cap = native_context['max_requests']
+                    if (cap is not None and used >= cap) or (self.ledger.real_glm and used >= SessionGLMCallLimit.limit):
+                        retry_allowed = False
+                if retry_allowed:
+                    delay = (5, 10, 20)[timeout_retries]
+                    timeout_retries += 1
+                    timeout_retry = {'timeout_retry_of':rid,
+                        'timeout_retry_root':timeout_retry.get('timeout_retry_root', rid),
+                        'timeout_retry_number':timeout_retries}
+                    with self.ledger.transaction() as con:
+                        self.ledger.event(con, 'model_timeout_retry_scheduled', {
+                            'job_id':job['id'], **timeout_retry, 'delay_seconds':delay,
+                            'original_outcome':'UNKNOWN'})
+                    for _ in range(delay):
+                        self.ledger.heartbeat(job)
+                        time.sleep(1)
+                    continue
                 raise OutcomeUnknown('Provider outcome/charge UNKNOWN; request retained: ' + rid) from None
             except Exception as error:
                 # A received malformed answer still costs money. If usage is absent
@@ -439,4 +470,13 @@ class ModelGateway:
                                            response={'result': parsed, 'provider_response': raw}, error=type(error).__name__)
                 if not valid_usage:
                     raise OutcomeUnknown('Missing provider usage; reservation retained') from None
+                invalid_attempts += 1
+                timeout_retry = {}
+                if invalid_attempts >= attempts:
+                    break
+                if native_context:
+                    path = list(getattr(error, 'absolute_path', ()))
+                    correction = json.dumps({'protocol_error':type(error).__name__,
+                        'field_path':path, 'detail':str(error).splitlines()[0][:1200],
+                        'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
         raise ValueError('Bounded model attempts exhausted; semantic review remains pending')

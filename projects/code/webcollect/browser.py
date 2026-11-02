@@ -24,8 +24,9 @@ STABILITY_V3='webcollect-related-stability-3'
 # 'window'-typed opaque frames, not on element_type alone. Canvas/video/iframe
 # tags previously defaulted to 'text' and escaped their intended guard set, so
 # genuine self-painting content changes could pass as compact repaint noise.
-STABILITY_VERSION='webcollect-related-stability-4'
-STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_V3,STABILITY_VERSION)
+STABILITY_V4='webcollect-related-stability-4'
+STABILITY_VERSION='webcollect-related-stability-5'
+STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION)
 # Compact repaint-noise bounds, verified by the fixture set in
 # test_related_capture_stability: antialias/underline strips stay thin in one
 # dimension, tiny in area, low-amplitude, and away from text/interactive boxes.
@@ -261,6 +262,26 @@ def _image_regions(state):
     return regions
 
 
+def _media_regions(state):
+    width,height=state['screen_resolution'];regions=[]
+    for media in state.get('capture_media',[]):
+        box=media.get('bbox');proof=media.get('proof',{})
+        if not (media.get('kind')=='peripheral_video' and media.get('eligible') is True
+                and media.get('ready') is True and media.get('actions_supported') is False
+                and proof.get('schema_version')=='webcollect-peripheral-video-1'
+                and proof.get('peripheral') is True and proof.get('controls') is False
+                and proof.get('geometry_and_style_clear') is True
+                and proof.get('hit_samples')==[True]*9 and isinstance(box,list) and len(box)==4
+                and all(type(n) is int for n in box) and 0<=box[0]<box[2]<=width and 0<=box[1]<box[3]<=height):
+            continue
+        guards=proof.get('protected_boxes')
+        if not isinstance(guards,list) or any(not isinstance(b,list) or len(b)!=4 or
+                min(box[2],b[2])>max(box[0],b[0]) and min(box[3],b[3])>max(box[1],b[1]) for b in guards):
+            continue
+        regions.append({'kind':'peripheral_video','bbox':box})
+    return regions
+
+
 def related_projection(state):
     """Drop only source strings with a complete read-only decorative-image proof."""
     result=deepcopy(state)
@@ -278,10 +299,11 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
     rule_version=rule_version or STABILITY_VERSION
     if rule_version not in STABILITY_RULES:raise ValueError('Unknown stability rule')
     left,right=related_projection(before),related_projection(after)
-    if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
+    if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
         left['capture_readiness']['document_ready']='complete'
     related=loaded and left==right
     regions=_image_regions(before) if related else []
+    media_regions=_media_regions(before) if related and rule_version==STABILITY_VERSION else []
     with Image.open(BytesIO(png_before)) as first,Image.open(BytesIO(png_after)) as last:
         if first.format!='PNG' or last.format!='PNG' or list(first.size)!=before['screen_resolution'] or first.size!=last.size:
             raise ValueError('同步像素证明需要相同视口分辨率的完整原始PNG')
@@ -290,12 +312,12 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         for channel in channels[1:]:diff=ImageChops.lighter(diff,channel)
         changed=diff.point(lambda value:255 if value else 0)
         mask=Image.new('L',first.size,0);draw=ImageDraw.Draw(mask)
-        for region in regions:
+        for region in regions+media_regions:
             x1,y1,x2,y2=region['bbox'];draw.rectangle((x1,y1,x2-1,y2-1),fill=255)
         # New receipts only. Never reinterpret v1 failures. A local edge proof
         # and unchanged full semantic state are necessary; no whole-page score.
         border_proof=[]
-        if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_VERSION) and related and allow_border:
+        if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION) and related and allow_border:
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             for region in before.get('paint_borders',[]):
                 box=region['bbox'];edges=region['edges']
@@ -326,7 +348,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # untracked lines, tolerated only when compact, low-amplitude and away
         # from every text/interactive element box.
         paint_noise_proof=[]
-        if (rule_version in (STABILITY_V3,STABILITY_VERSION) and allow_border and related and full
+        if (rule_version in (STABILITY_V3,STABILITY_V4,STABILITY_VERSION) and allow_border and related and full
                 and before['capture_readiness'].get('document_ready')=='complete'):
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             guard=[]
@@ -385,7 +407,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                 for component,box,deltas in compliant:
                     for x,y in component:mask.putpixel((x,y),255)
                     paint_noise_proof.append({'bbox':list(box),'points':[list(point) for point in sorted(component)],'rgb_deltas':deltas,
-                                              'rule':'compact-repaint-noise-v2' if rule_version==STABILITY_VERSION else 'compact-repaint-noise-v1'})
+                                              'rule':'compact-repaint-noise-v2' if rule_version in (STABILITY_V4,STABILITY_VERSION) else 'compact-repaint-noise-v1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
                       'bbox':list(changed.getbbox()) if changed.getbbox() else None,
@@ -396,7 +418,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
             'related_fingerprint':fingerprint(related_projection(before)),
             'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
-            'allowed_image_regions':regions,**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_VERSION) else {}),
+            'allowed_image_regions':regions,**({'allowed_media_regions':media_regions} if rule_version==STABILITY_VERSION else {}),**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION) else {}),
             **({'paint_noise_proof':paint_noise_proof} if paint_noise_proof else {}),'pixel_change':pixel_change}
 
 
@@ -432,7 +454,14 @@ async def observe(page, selector=None, index=0, timeout=15, assertions=None, pro
         options={'selector':selector,'index':index}
         if assertions:options['assertions']=assertions
         if protected_selectors:options['protected_selectors']=protected_selectors
-        return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,options),timeout=timeout)
+        try:
+            return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,options),timeout=timeout)
+        except Exception as error:
+            if 'DOCUMENT_NOT_READY' not in str(error) and 'Execution context was destroyed' not in str(error):
+                raise
+            # Read-only recovery: never replay a navigation or action.
+            await page.wait_for_function('document.body && document.readyState !== "loading"', timeout=timeout*1000)
+            return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,options),timeout=timeout)
     except asyncio.TimeoutError as error:
         raise TimeoutError(f'页面同步观察超过{timeout}秒，停止该任务并保留检查点') from error
 
@@ -536,10 +565,11 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
                     'screenshot':screenshot_evidence,
                     'observer_sha256':hashlib.sha256(SNAPSHOT_JS.encode()).hexdigest()}}
         delay_before=next_delay
-    error=EvidenceStale('截图前后页面结构持续变化，拒绝保存不同步界面树')
+    error=EvidenceStale('单帧取证期间未能确认截图与界面树同步，拒绝保存该帧')
     # Rejected evidence remains rejected. Callers may preserve this diagnostic
     # alongside their failure checkpoint without treating any PNG as accepted.
-    error.capture={'attempts':attempts,'natural_wait_requested_ms':round(requested_wait*1000),
+    error.capture={'comparison_scope':'single_frame','accepted_as_formal_frame':False,
+                   'attempts':attempts,'natural_wait_requested_ms':round(requested_wait*1000),
                    'natural_wait_observed_ms':round(observed_wait*1000),'natural_wait_budget_ms':8000}
     raise error
 

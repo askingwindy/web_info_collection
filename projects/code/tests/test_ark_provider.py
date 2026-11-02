@@ -2,9 +2,11 @@
 from copy import deepcopy
 from contextlib import redirect_stdout
 import io
+import itertools
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import time
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -106,7 +108,7 @@ class ArkProviderTests(unittest.TestCase):
             self.assertEqual(saved['provider_response']['choices'][0]['message']['content'], content)
             self.assertTrue(saved['content_envelope_normalized'])
 
-    def test_http_timeout_or_unknown_usage_never_switches_or_resends(self):
+    def test_timeout_retries_are_bounded_other_unknowns_never_switch_or_resend(self):
         failures = (TimeoutError(), urllib.error.HTTPError(ENDPOINT, 401, 'suppressed', {}, None),
                     urllib.error.HTTPError(ENDPOINT, 429, 'suppressed', {}, None), None)
         for error in failures:
@@ -114,12 +116,15 @@ class ArkProviderTests(unittest.TestCase):
             self.opener.error = error
             if error is None: self.opener.raw['usage'].pop('prompt_tokens_details')
             before = len(self.opener.calls)
-            for _ in range(2):
-                with self.assertRaises(OutcomeUnknown):
-                    gateway.call(job, 'unknown', 'JSON', protocol.SCHEMA)
-            self.assertEqual(len(self.opener.calls), before + 1)
+            with patch('webcollect.model_gateway.time.sleep'), patch('webcollect.batch_core.time', wraps=time) as clock:
+                clock.time.side_effect=itertools.count(time.time(),2).__next__
+                for _ in range(2):
+                    with self.assertRaises(OutcomeUnknown):
+                        gateway.call(job, 'unknown', 'JSON', protocol.SCHEMA)
+            self.assertEqual(len(self.opener.calls), before + (4 if isinstance(error,TimeoutError) else 1))
             self.assertEqual(json.loads(self.opener.calls[-1].data)['model'], MODELS[0])
-            self.assertEqual(ledger.summary()['model_cost_micros'], 'UNKNOWN')
+            self.assertEqual(ledger.summary()['model_request_states']['unknown'],
+                             4 if isinstance(error,TimeoutError) else 1)
 
     def test_text_only_capability_blocks_images_before_reservation(self):
         ledger, job, gateway = self.gateway(self.config(vision=False))
@@ -236,15 +241,15 @@ class ArkProviderTests(unittest.TestCase):
                 ModelGateway(ledger)
         self.assertEqual(ledger.summary()['model_requests'], 0)
 
-    def test_examples_are_bounded_and_glm_is_the_preferred_profile(self):
+    def test_examples_omit_cumulative_ceilings_and_glm_is_the_preferred_profile(self):
         folder = Path(__file__).resolve().parents[1] / 'config'
         for name, model in zip(('glm', 'deepseek'), MODELS):
             config = json.loads((folder / f'batch-ark-{name}.example.json').read_text())
             self.assertEqual(validate_config(config), config)
             self.assertEqual(config['model']['provider'], 'ark')
             self.assertEqual(config['model']['model'], model)
-            self.assertEqual(config['budget']['max_model_requests'], 1)
-            self.assertEqual(config['budget']['max_probe_pages'], 0)
+            self.assertNotIn('max_model_requests',config['budget'])
+            self.assertNotIn('max_probe_pages',config['budget'])
 
     def test_delivery_pipeline_accepts_explicit_ark_vision_and_rejects_wrong_versions(self):
         from quality_inspector.delivery_pipeline import _mode
@@ -276,9 +281,8 @@ class ArkProviderTests(unittest.TestCase):
 
     def test_discovery_search_uses_separate_glm_key_and_never_sends_ark_key_to_bigmodel(self):
         from site_planner.discovery_tools import glm_search, SEARCH_ENDPOINT
-        settled = []
-        pool = SimpleNamespace(reserve_tool=lambda *a, **kw: ('offline-search-id', None),
-                               settle_tool=lambda *a: settled.append(a))
+        from site_planner.site_pool import SitePool
+        pool = SitePool(self.root/'search-pool.sqlite3',initialize=True)
         config = self.config()
         self.opener.raw = {'search_result': []}
         with patch.dict('os.environ', {'GLM_API_KEY': 'offline-glm-search-only'}):
@@ -288,7 +292,8 @@ class ArkProviderTests(unittest.TestCase):
         self.assertEqual(request.full_url, SEARCH_ENDPOINT)
         self.assertEqual(request.get_header('Authorization'), 'Bearer offline-glm-search-only')
         self.assertNotIn(b'offline-secret-never-export', request.data)
-        self.assertEqual(settled[0][1], 'succeeded')
+        with pool.connect() as con:
+            self.assertEqual(con.execute('SELECT state FROM tool_requests WHERE id=?',(result['request_id'],)).fetchone()[0], 'succeeded')
 
 
 if __name__ == '__main__': unittest.main()

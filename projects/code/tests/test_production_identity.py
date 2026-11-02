@@ -20,6 +20,29 @@ import m4_runtime_fixtures as runtime_fixture
 
 
 class PilotIdentityTests(unittest.TestCase):
+    def test_native_content_hydration_preserves_original_body_in_same_document(self):
+        from webcollect.react_session import build_url_task
+        from webcollect.batch_core import save_json
+        task=build_url_task(url=workflow_fixture.URI,task_version='hydration',app_name='受控矩形工具')
+        task['mode']='synthetic'
+        state=load_json(self.anchor['state']['path'])
+        state.update(title='中文问答',visible_text='这是关于维护版本兼容许可与性能的原始中文正文。'*4,
+                     document_identity={'performance_time_origin':123,'url_without_fragment':workflow_fixture.URI})
+        state_path=self.root/'hydrated-anchor-state.json';save_json(state_path,state)
+        capture=load_json(self.anchor['capture']['path'])
+        from webcollect.browser import fingerprint
+        capture['attempts'][-1].update(before_fingerprint=fingerprint(state),after_fingerprint=fingerprint(state))
+        capture_path=self.root/'hydrated-anchor-capture.json';save_json(capture_path,capture)
+        anchor={**self.anchor,'state':reference(state_path),'capture':reference(capture_path)}
+        task['pilot_identity']=self.identity(anchor=anchor);task['pilot_identity']['task_page']['kind']='content'
+        task['candidate_binding']={'candidate':{'entry_url':workflow_fixture.URI}}
+        actual=deepcopy(state);actual['visible_text']='新增导航栏\n'+state['visible_text']+'\n新增后续正文'
+        actual['elements'] += [{'element_id':'nav','native_role':'button','text':'搜索','visible':True}]
+        validate_identity(task,observed_states=[actual])
+        for field,value in [('document_identity',{'performance_time_origin':456}),('visible_text','另一篇中文正文。'*10)]:
+            bad={**actual,field:value}
+            with self.assertRaisesRegex(ValueError,'corroborate'):validate_identity(task,observed_states=[bad])
+
     def setUp(self):
         self.fixture = workflow_fixture.ObservedWorkflowTests('runTest')
         self.fixture.setUp(); self.addCleanup(self.fixture.doCleanups)

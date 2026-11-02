@@ -1,6 +1,8 @@
 """Actual gateway + ReAct wiring on fake HTTP, page, PNGs and disposable SQLite."""
 import io
 import json
+import itertools
+import time
 import unittest
 from copy import deepcopy
 from unittest.mock import patch
@@ -8,7 +10,7 @@ from unittest.mock import patch
 import test_model_provider_protocols as provider_fixtures
 import test_react_native as native_fixtures
 from test_react_session import ReactHarness
-from webcollect.batch_core import BatchLedger, OutcomeUnknown
+from webcollect.batch_core import BatchLedger, OutcomeUnknown, SessionGLMCallLimit, load_json
 from webcollect.agent_controller import DecisionRequestError, DecisionModelFault
 from webcollect.react_session import ReactSession, build_url_task, react_chooser
 
@@ -47,6 +49,94 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.choose = react_chooser(self.ledger, self.task, 'original-attempt')
         return ReactSession(self.task, self.root/'session/raw', self.choose, self.page)
 
+    async def test_default_25_glm_dispatches_stop_only_this_session_and_keep_original_images(self):
+        self.config['model']['max_images'] = 24
+        self.config['budget']['lease_seconds'] = 3600
+        read = native_fixtures.decide(tool='inspect',arguments=lambda p:{
+            'kind':'html','observation_id':p['observation']['observation_id'],
+            'offset':0,'limit_chars':10})
+        self.builds = [read]*25 + [native_fixtures.finish()]
+        with patch('webcollect.batch_core.time', wraps=time) as clock:
+            clock.time.side_effect = itertools.count(time.time(),2).__next__
+            session = self.session_with_gateway(cap=None)
+            result = await session.run()
+            details={'code':'glm_session_call_limit','attempt_id':'original-attempt','used':25,'limit':25}
+            self.assertEqual((result['stop_reason'],result['stop_details'],result['unknown']),('budget',details,False))
+            terminal=load_json(result['terminal']['path'])
+            self.assertEqual(terminal['stop_details'], details)
+            self.assertEqual(terminal['used']['max_model_calls'],25)
+            self.assertEqual(len(self.payloads),25)
+            sent=self.payloads[-1]['messages']
+            count_images=lambda messages: sum(p['type']=='image_url' for m in messages if isinstance(m['content'],list) for p in m['content'])
+            self.assertEqual(count_images(sent),1)
+            self.assertEqual(count_images(session.history),25)
+            self.assertEqual(sent[-1]['content'][1]['type'],'image_url')
+            self.assertEqual([m for m in sent if m['role'] in ('assistant','tool')],
+                             [m for m in session.history[:-2] if m['role'] in ('assistant','tool')][-4:])
+            resumed = BatchLedger(self.ledger.path,self.config)
+            chooser = react_chooser(resumed,self.task,'original-attempt')
+            self.assertEqual((await ReactSession(self.task,self.root/'resume/raw',chooser,self.page).run())['stop_details'],details)
+            fresh = react_chooser(resumed,self.task,'next-attempt')
+            next_result=await ReactSession(self.task,self.root/'next/raw',fresh,self.page).run()
+            self.assertEqual((next_result['stop_reason'],fresh.requests_used(),chooser.requests_used()),('ready',1,25))
+
+    async def test_twenty_fifth_glm_response_can_finish_or_exhaust_an_internal_retry(self):
+        for last in ('ready','invalid','unknown','budget'):
+            with self.subTest(last=last), patch('webcollect.batch_core.time',wraps=time) as clock:
+                clock.time.side_effect=itertools.count(time.time(),2).__next__
+                self.config['budget']['lease_seconds']=3600
+                ledger=BatchLedger(self.root/(last+'.sqlite3'),self.config,initialize=True)
+                aid='original-'+last
+                task=deepcopy(self.task)
+                kind='react-decision'
+                original_request={'provider':'glm'}
+                if last == 'invalid':
+                    # Previous native tasks froze a null wire cap. Retain their original
+                    # identity and receipts when applying today's dispatch ceiling.
+                    from webcollect.planning import object_sha256
+                    for part in (task['fragment'],task['workflow_proposal']['spec']):
+                        part.pop('glm_http_call_limit')
+                        part['budgets']['max_no_progress']=5
+                    task['task_id']='react-'+object_sha256({'url':task['initial_url'],'spec':task['workflow_proposal']['spec']})[:24]
+                    kind='react-native-decision'
+                    original_request.update(protocol='native-tool-1',dispatch_attempt_id=aid,dispatch_max_requests=None,http_dispatch=True)
+                job=ledger.claim(kind,job_id=ledger.enqueue(kind,{'attempt_id':aid,'historical':True}))
+                for i in range(24):
+                    request=ledger.reserve_request(job,'prior-decision-'+str(i),0,request_json=original_request)
+                    ledger.settle_request(request['id'],state='succeeded',usage={'input_tokens':10,'output_tokens':1,'cached_input_tokens':0})
+                ledger.finish(job)
+                self.builds=[native_fixtures.finish('budget' if last=='budget' else 'ready')]
+                before=len(self.payloads)
+                original=self.provider.opener.open
+                def transport(req,timeout):
+                    response=original(req,timeout)
+                    if last in ('ready','budget'): return response
+                    if last=='unknown': raise TimeoutError('dispatched final request has no known outcome')
+                    body=json.loads(response.read())
+                    body['choices'][0]['message']['tool_calls'][0]['function']['name']='undeclared'
+                    return io.BytesIO(json.dumps(body).encode())
+                with patch.object(self.provider.opener,'open',side_effect=transport):
+                    chooser=react_chooser(ledger,task,aid)
+                    result=await ReactSession(task,self.root/last/'raw',chooser,self.page).run()
+                self.assertEqual((len(self.payloads)-before,chooser.requests_used()),(1,25))
+                self.assertEqual(load_json(result['terminal']['path'])['glm_http_requests'],25)
+                self.assertEqual(result['stop_reason'],{'ready':'ready','unknown':'blocked','invalid':'budget','budget':'budget'}[last],result)
+                if last=='unknown':
+                    self.assertTrue(result['unknown'])
+                    restarted=react_chooser(BatchLedger(ledger.path,self.config),task,aid)
+                    again=await ReactSession(task,self.root/'unknown-resumed/raw',restarted,self.page).run()
+                    self.assertTrue(again['unknown'])
+                    self.assertEqual(len(self.payloads)-before,1)
+                if last=='invalid':
+                    self.assertEqual(result['stop_details'],{'code':SessionGLMCallLimit.code,'attempt_id':aid,'used':25,'limit':25})
+                    with ledger.connect() as con:
+                        rows=con.execute("SELECT r.state,j.error FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE j.kind='react-native-decision' AND json_extract(j.payload,'$.historical') IS NULL").fetchall()
+                    self.assertEqual([tuple(row) for row in rows],[('invalid_response','budget:glm_session_call_limit')])
+                elif last=='budget':
+                    self.assertEqual(result['stop_details']['code'],SessionGLMCallLimit.code)
+                else:
+                    self.assertNotIn('stop_details',result)
+
     async def test_real_gateway_history_roundtrip_cache_and_http_budget(self):
         session = self.session_with_gateway()
         result = await session.run()
@@ -56,12 +146,12 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.used['max_model_calls'],2)
         self.assertEqual(len(self.payloads),2)
         self.assertEqual([m['role'] for m in self.payloads[1]['messages']],
-                         ['system','user','assistant','tool','user'])
-        self.assertEqual(self.payloads[1]['messages'][2], self.raw_responses[0]['choices'][0]['message'])
-        self.assertEqual(self.payloads[1]['messages'][3]['tool_call_id'],'http-call-1')
-        tool_result = json.loads(self.payloads[1]['messages'][3]['content'])
+                         ['system','assistant','tool','user'])
+        self.assertEqual(self.payloads[1]['messages'][1], self.raw_responses[0]['choices'][0]['message'])
+        self.assertEqual(self.payloads[1]['messages'][2]['tool_call_id'],'http-call-1')
+        tool_result = json.loads(self.payloads[1]['messages'][2]['content'])
         self.assertEqual(tool_result['data']['effective_steps_delta'],1)
-        self.assertIn('reasoning_content', self.payloads[1]['messages'][2])
+        self.assertIn('reasoning_content', self.payloads[1]['messages'][1])
         self.assertNotEqual(self.payloads[0]['messages'][-1]['content'][1], self.payloads[1]['messages'][-1]['content'][1])
         for path in (self.root/'session/raw').glob('*.json'):
             self.assertNotIn('opaque-protocol-private',path.read_text())
@@ -117,10 +207,10 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.surface.executed,[])
 
     async def test_zero_dispatch_replay_does_not_invent_unknown_or_resend(self):
-        self.config['model']['reserve_input_tokens']=200
         session = self.session_with_gateway()
         await session._open_entry()
         prompt = session._prompt()
+        prompt['observation']['image_ref']=str(self.root/'missing-original.png')
         for _ in range(2):
             with self.assertRaises(DecisionRequestError):
                 await self.choose(prompt)
@@ -133,8 +223,10 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.provider.opener.error = TimeoutError('controlled post-dispatch timeout')
         await session._open_entry()
         prompt = session._prompt()
-        with self.assertRaises(OutcomeUnknown):
-            await self.choose(prompt)
+        with patch('webcollect.model_gateway.time.sleep'), patch('webcollect.batch_core.time', wraps=time) as clock:
+            clock.time.side_effect=itertools.count(time.time(),2).__next__
+            with self.assertRaises(OutcomeUnknown):
+                await self.choose(prompt)
         with self.ledger.connect() as con:
             original = dict(con.execute('SELECT * FROM model_requests').fetchone())
         restarted = react_chooser(self.ledger,self.task,'original-attempt')
@@ -144,8 +236,8 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         for candidate in (prompt,changed):
             with self.assertRaises(OutcomeUnknown):
                 await restarted(candidate)
-        self.assertEqual(len(self.payloads),1)
-        self.assertEqual(restarted.requests_used(),1)
+        self.assertEqual(len(self.payloads),4)
+        self.assertEqual(restarted.requests_used(),4)
         with self.ledger.connect() as con:
             self.assertEqual(dict(con.execute('SELECT * FROM model_requests').fetchone()),original)
         self.assertEqual(self.surface.executed,[])
@@ -207,8 +299,8 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['unknown'],result)
         self.assertEqual(len(self.payloads),2)
         messages=self.payloads[1]['messages']
-        self.assertEqual(messages[2]['tool_calls'][0]['id'],messages[3]['tool_call_id'])
-        feedback=json.loads(messages[3]['content'])
+        self.assertEqual(messages[1]['tool_calls'][0]['id'],messages[2]['tool_call_id'])
+        feedback=json.loads(messages[2]['content'])
         self.assertIn(feedback['status'],('rejected','need_observation'))
         self.assertEqual(self.surface.executed,[])
         self.assertEqual(self.choose.requests_used(),2)
@@ -225,14 +317,37 @@ class GatewayReactCompatibility(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.provider.opener.error=TimeoutError('controlled new request UNKNOWN')
         changed=deepcopy(prompt)
         changed['progress']['decisions_used']+=1
-        with self.assertRaises(OutcomeUnknown):
-            await self.choose(changed)
+        with patch('webcollect.model_gateway.time.sleep'), patch('webcollect.batch_core.time', wraps=time) as clock:
+            clock.time.side_effect=itertools.count(time.time(),2).__next__
+            with self.assertRaises(OutcomeUnknown):
+                await self.choose(changed)
         changed['progress']['decisions_used']+=1
         with patch('webcollect.model_gateway.ModelGateway',side_effect=AssertionError('UNKNOWN cannot select another account')):
             restarted=react_chooser(self.ledger,self.task,'original-attempt')
             with self.assertRaises(OutcomeUnknown):
                 await restarted(changed)
-        self.assertEqual(len(self.payloads),2)
+        self.assertEqual(len(self.payloads),5)
+
+    async def test_timeout_retry_answer_runs_action_once_and_continues_original_session(self):
+        session=self.session_with_gateway()
+        original=self.provider.opener.open
+        attempts=[]
+        def once(req,timeout):
+            attempts.append(req)
+            if len(attempts)==1:
+                raise TimeoutError('controlled timeout before receiving the decision')
+            return original(req,timeout)
+        with patch.object(self.provider.opener,'open',side_effect=once), \
+                patch('webcollect.model_gateway.time.sleep'), patch('webcollect.batch_core.time', wraps=time) as clock:
+            clock.time.side_effect=itertools.count(time.time(),2).__next__
+            result=await session.run()
+        self.assertFalse(result['unknown'],result)
+        self.assertEqual((result['stop_reason'],len(self.surface.executed)),('ready',1))
+        self.assertEqual((len(attempts),self.choose.requests_used()),(3,3))
+        self.assertEqual(load_json(result['terminal']['path'])['glm_http_requests'],3)
+        with self.ledger.connect() as con:
+            states=[r[0] for r in con.execute('SELECT state FROM model_requests ORDER BY started')]
+        self.assertEqual(states,['unknown','succeeded','succeeded'])
 
     async def test_cancelled_http_with_late_success_keeps_original_attempt_on_hold(self):
         import asyncio

@@ -691,7 +691,7 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             validate_task(swapped)
         with self.assertRaises(ValueError):
             build_url_task(url='https://example.com/x', task_version='v', budgets={
-                **GOAL_BUDGETS, 'max_actions': 5000})
+                **GOAL_BUDGETS, 'max_actions': -1})
 
 
 def script_first_observation(prompt):

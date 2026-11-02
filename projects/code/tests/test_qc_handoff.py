@@ -75,6 +75,23 @@ class QCHandoffTests(unittest.TestCase):
         arguments.update(updates)
         return prepare_qc_inputs(**arguments)
 
+    def test_raw_comparison_resolves_only_through_original_export_receipt(self):
+        from webcollect.qc_handoff import _customer_root
+        from webcollect.current_chain import read_chain_scope
+        root=self.results/'export-case';raw=root/'capture';client=root/'candidate'
+        shutil.copytree(self.source,raw);shutil.copytree(self.candidate,client)
+        annotation=raw/'samples'/self.sample_id/'annotation.json'
+        receipt=root/'candidate-receipt.json'
+        receipt.write_text(json.dumps({'files_sha256':package_files(client)}))
+        provenance=root/'candidate.evidence.json'
+        provenance.write_text(json.dumps({'source_root':str(raw),'client_root':str(client),
+            'source_samples':[{'sample_id':self.sample_id,'annotation_sha256':file_sha(annotation)}]}))
+        scope=read_chain_scope(self.history)
+        self.assertEqual(_customer_root(scope,annotation),client)
+        (client/'README.md').write_text('changed package')
+        with self.assertRaisesRegex(ValueError,'binding changed'):
+            _customer_root(scope,annotation)
+
     def test_first_current_candidate_with_explicit_ratios(self):
         original = package_files(self.candidate)
         registry_sha = file_sha(self.registry); history_sha = file_sha(self.history)

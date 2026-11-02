@@ -15,6 +15,71 @@ from .batch_core import file_sha, save_json
 from .current_chain import assert_current_result_path, assert_current_evidence, read_chain_history
 
 
+def qc_layers(sample_report, package_report=None, cross_report=None):
+    """Read independent evidence layers without promoting any production state."""
+    from quality_inspector.engine import SEMANTIC
+    def read(path):
+        path = Path(path).resolve()
+        return json.loads(path.read_text()), {'path': str(path), 'sha256': file_sha(path)}
+    report, ref = read(sample_report)
+    rows = []
+    for sample in report['samples']:
+        checks = {c['rule_id']: c for c in sample['checks'] if c['rule_id'].startswith('REVIEW_')}
+        complete = (set(checks) == {'REVIEW_' + k.upper() for k in SEMANTIC}
+                    and all(c['status'] in ('PASS', 'FAIL') and
+                            (c.get('reviewer') or {}).get('kind') == 'ai' for c in checks.values()))
+        rows.append({'sample_id': sample['sample_id'], 'actual_ai_reviewed': complete,
+                     'status': sample['status'] if complete else 'NOT_REVIEWED',
+                     'checks': checks})
+    result = {'sample_ai': {'report': ref, 'denominator': len(rows),
+                           'actually_reviewed': sum(r['actual_ai_reviewed'] for r in rows),
+                           'pass': sum(r['status'] == 'PASS' for r in rows), 'samples': rows},
+              'package_document_ai': {'status': 'NOT_RUN'},
+              'distribution': {'status': 'NOT_RUN'}, 'cumulative': {'status': 'NOT_RUN'},
+              'human_review': 'NOT_CLAIMED', 'published': 'NOT_CLAIMED'}
+    if package_report:
+        package, source = read(package_report)
+        if package.get('payload_sha256') != report.get('payload_sha256'):
+            raise ValueError('QC layers refer to different delivered payloads')
+        result['package_document_ai'] = {'report': source, **package.get('delivery_document_review', {'status':'NOT_RUN'})}
+        checks = [c for c in package['dataset_checks'] if c['rule_id'] in
+                  ('DELIVERY_EXPECTED_SAMPLES', 'DELIVERY_SHORT_FLOW_SHARE', 'DELIVERY_CATEGORY_SHARE', 'DELIVERY_NEAR_DUPLICATE_SAMPLE_RATE')]
+        result['distribution'] = {'report': source, 'denominator': package['sample_count'], 'checks': checks,
+                                  'status': 'FAIL' if any(c['status'] == 'FAIL' for c in checks) else
+                                            'PASS' if checks and all(c['status'] == 'PASS' for c in checks) else 'NOT_EVALUATED'}
+    if cross_report:
+        cross, source = read(cross_report)
+        result['cumulative'] = {'report': source, 'status': cross.get('status'),
+                                'denominator': cross.get('sample_count'), 'errors': cross.get('errors', [])}
+    return result
+
+
+def _customer_root(scope, annotation):
+    """Resolve raw capture through the original export receipt, never by role guess."""
+    from quality_inspector.profiles import package_files
+    root = annotation.parent.parent.parent
+    if root.name != 'capture':
+        return root
+    export = root.parent / 'candidate'
+    receipt_path = root.parent / 'candidate-receipt.json'
+    provenance_path = root.parent / 'candidate.evidence.json'
+    for path in (export, receipt_path, provenance_path):
+        assert_current_result_path(scope, path)
+    if not receipt_path.is_file() or not provenance_path.is_file():
+        raise ValueError('Raw comparison has no original customer export receipt')
+    receipt = json.loads(receipt_path.read_text())
+    provenance = json.loads(provenance_path.read_text())
+    if (receipt.get('files_sha256') != package_files(export)
+            or Path(provenance.get('source_root','')).resolve() != root.resolve()
+            or Path(provenance.get('client_root','')).resolve() != export.resolve()):
+        raise ValueError('Original customer export binding changed')
+    sid = annotation.parent.name
+    rows = [row for row in provenance.get('source_samples',[]) if row.get('sample_id') == sid]
+    if len(rows) != 1 or rows[0].get('source_annotation_sha256',rows[0].get('annotation_sha256')) != file_sha(annotation):
+        raise ValueError('Customer export source sample binding differs')
+    return export
+
+
 def _attempts(scope, dataset, sample_ids):
     from quality_inspector.profiles import package_files
     from .collect_runtime import verify_committed_samples
@@ -40,8 +105,17 @@ def _attempts(scope, dataset, sample_ids):
             package_files(receipt_path.parent)  # Reject symlinks in original evidence too.
             verify_committed_samples(source, [attempt])
             receipt = json.loads(receipt_path.read_text())
-            if package_files(dataset / 'samples' / sample_id) != receipt['sample_files_sha256']:
-                raise ValueError('Candidate bytes differ from the original saved sample: ' + sample_id)
+            actual_sample = package_files(dataset / 'samples' / sample_id)
+            if actual_sample != receipt['sample_files_sha256']:
+                source_annotation = source/'samples'/sample_id/'annotation.json'
+                if _customer_root(scope, source_annotation) != dataset:
+                    raise ValueError('Candidate bytes differ from the original saved sample: ' + sample_id)
+                expected = dict(receipt['sample_files_sha256'])
+                provenance = json.loads(dataset.with_name(dataset.name+'.evidence.json').read_text())
+                row = next(row for row in provenance['source_samples'] if row['sample_id'] == sample_id)
+                expected['annotation.json'] = row['export_annotation_sha256']
+                if actual_sample != expected:
+                    raise ValueError('Customer export sample files changed: ' + sample_id)
             rows.append({**attempt, 'saved_sample': saved[0]})
     return rows
 
@@ -91,9 +165,9 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
         path = assert_current_result_path(scope, record['annotation_path'])
         if path.parent.parent.name != 'samples':
             raise ValueError('Current result must belong to a complete samples package')
-        root = path.parent.parent.parent
+        root = _customer_root(scope, path)
         if record['sample_id'] in sample_ids:
-            if file_sha(dataset/'samples'/record['sample_id']/'annotation.json')!=record['annotation_sha256']:
+            if package_files(dataset/'samples'/record['sample_id']) != package_files(root/'samples'/record['sample_id']):
                 raise ValueError('Indexed current candidate annotation changed')
             continue  # Same committed original, not another comparison sample.
         if root == dataset:

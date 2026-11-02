@@ -36,7 +36,7 @@ def installed_contract():
         'implementation_sha256': {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
                                   for name in ('contract.py', 'format_checks.py', 'engine.py',
                                                'reviews.py', 'profiles.py', 'duplicates.py',
-                                               'cumulative.py', 'checksums.py', 'layout.py',
+                                               'cumulative.py', 'application_capacity.py', 'checksums.py', 'layout.py',
                                                'delivery_sampling.py','production_sampling.py')},
         'customer_actual_program_executed': False,
         'customer_actual_acceptance': 'UNKNOWN',

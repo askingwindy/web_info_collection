@@ -26,6 +26,37 @@ class CumulativeTests(unittest.TestCase):
         self.assertEqual(manifest,before)
         self.assertEqual(result['duplicates']['search']['exhaustive_verification']['status'],'PASS')
 
+    def test_effective_application_registry_and_producer_projection_are_bound(self):
+        import sqlite3
+        from site_planner.site_pool import SitePool
+        from site_planner.candidate_pool import CandidatePool
+        from site_planner.application_discovery import Discovery
+        from site_planner.discovery_tools import reference
+        from application_discovery_fixtures import seed
+        from webcollect.batch_core import save_json
+        pool_path=self.root/'application-pool.db';SitePool(pool_path,initialize=True)
+        pool=CandidatePool(pool_path,install=True)
+        site=json.loads((self.client/'site-list.json').read_text())['sites'][0]
+        uri=site['uri']
+        aid,_=seed(pool,self.root,uri,site['site_category'])
+        snapshot=self.root/'application-snapshot.db'
+        with sqlite3.connect(pool_path) as source,sqlite3.connect(snapshot) as target:source.backup(target)
+        manifest=build_set_manifest([self.client],application_registry=snapshot)
+        report=inspect_set(manifest,self.profile)
+        self.assertEqual(report['mechanical_status'],'PASS',report['errors'])
+        self.assertEqual(report['statistics']['applications']['counts'],{aid:1})
+        proof=self.root/'application-report.json';save_json(proof,report)
+        self.assertEqual(Discovery(pool).bind_delivery(reference(proof)),{aid:1})
+        self.assertFalse(Discovery(pool).at_capacity(aid))
+        other_snapshot=self.root/'wrong-category-snapshot.db';shutil.copy2(snapshot,other_snapshot)
+        with sqlite3.connect(other_snapshot) as con:
+            con.execute('UPDATE applications SET category=?',('学习教育' if site['site_category']!='学习教育' else '在线工具',))
+        wrong=inspect_set(build_set_manifest([self.client],application_registry=other_snapshot),self.profile)
+        self.assertEqual(wrong['mechanical_status'],'FAIL')
+        self.assertTrue(any('Table1 parent' in r['reason'] for r in wrong['errors']))
+        (self.client/'README.md').write_text('changed after effective-set report')
+        with self.assertRaisesRegex(ValueError,'changed'):Discovery(pool).bind_delivery(reference(proof))
+
     def test_formal_batch_membership_is_bound_and_a_small_trial_cannot_pass_as_5000(self):
         sample = next((self.client / 'samples').iterdir()).name
         manifest = build_set_manifest([self.client], quality_batch_ids=[sample])

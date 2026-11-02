@@ -306,6 +306,7 @@ class DeliveryPipelineTests(unittest.TestCase):
         class NoNetwork:
             def open(self,*args,**kwargs):raise urllib.error.URLError('CONTROLLED UNKNOWN OUTCOME; NO NETWORK')
         with patch.dict(os.environ,{'CONTROLLED_PIPELINE_KEY':'CONTROLLED-NONCREDENTIAL'}),\
+                patch('webcollect.model_gateway.socket.getaddrinfo',return_value=[('fixture',)]), \
                 patch('urllib.request.build_opener',return_value=NoNetwork()):
             state=pipeline.run(prepared['receipt'],self.root/'failed-run',max_jobs=10)
         self.assertEqual(state['human_pending_count'],1)

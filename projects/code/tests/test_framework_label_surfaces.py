@@ -36,6 +36,97 @@ class FrameworkLabelSurfaces(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.browser.close();await self.p.stop()
 
+    async def test_grouped_low_contrast_button_with_three_identical_captions(self):
+        from webcollect.agent_observation import action_availability
+        from webcollect.browser import execute
+        groups = ''.join(f'<section><h3>{title}</h3><div><button>读</button>'
+                         f'<button id="{key}"><b>写</b><small>写</small></button></div></section>'
+                         for key,title in [('owner','所有者'),('group','组'),('others','其他用户')])
+        await self.page.set_content('''<meta charset=utf-8><style>
+            body{font:16px sans-serif;background:white}section{display:inline-block;padding:10px}
+            button{width:70px;height:76px;color:#9ca3af;background:#f3f4f6}
+            b,small{display:block}b{font-size:18px;font-weight:700}small{opacity:.8}
+            </style>''' + groups + '<output>755</output><script>group.onclick=()=>document.querySelector("output").value="775"</script>')
+        before = (await capture(self.page,'#group'))['state']
+        target = before['target']
+        label, = target['visible_label_evidence']
+        self.assertEqual((label['kind'],label['group'],label['text']),('rendered_grouped_button','组','写'))
+        element = next(e for e in before['elements'] if e['element_id']==target['element_id'])
+        self.assertEqual(action_availability(before,element,{'tag':'button'},{},target,'click')['status'],'PROVEN')
+        args,_ = prepare_action(before,{'action_type':'click','evidence':{'target_label':'写'}})
+        await execute(self.page,'click',args,{})
+        after = (await capture(self.page))['state']
+        self.assertIn('755',before['visible_text'])
+        self.assertIn('775',after['visible_text'])
+        for mutation in ('group.disabled=true','group.style.color="#f3f4f6"',
+                         'group.parentNode.append(group.cloneNode(true))',
+                         'group.innerHTML=\'<b style="visibility:hidden">写</b>\'',
+                         'group.parentNode.style.position="relative";group.insertAdjacentHTML("afterend",\'<i style="position:absolute;inset:0;background:white;pointer-events:none"></i>\')'):
+            with self.subTest(mutation=mutation):
+                original = await self.page.content()
+                await self.page.evaluate(mutation)
+                state = await self.page.evaluate(SNAPSHOT_JS,{'selector':'#group'})
+                self.assertFalse((state.get('target') or {}).get('visible_label_evidence'))
+                await self.page.set_content(original)
+        self.assertEqual(self.requests,[])
+
+    async def test_number_select_all_proves_selection_only_in_the_focused_field(self):
+        from webcollect.react_protocol import atomic_effect
+        from webcollect.browser import execute
+        await self.page.set_content('<p>200</p><label>数量<input type=number value=200></label>')
+        await self.page.locator('input').click()
+        before = (await capture(self.page,'input'))['state']
+        cid = before['target']['element_id']
+        args = {'keys':['meta','a']}
+        await execute(self.page,'hotkey',args,{})
+        selected = (await capture(self.page,'input'))['state']
+        self.assertEqual(atomic_effect(before,selected,'hotkey',args,cid)['fields'],['target.all_text_selected'])
+        self.assertFalse(atomic_effect(selected,selected,'hotkey',args,cid)['verified'])
+        await self.page.evaluate('''()=>{const s=getSelection(),r=document.createRange();
+          r.selectNodeContents(document.querySelector('p'));s.removeAllRanges();s.addRange(r)}''')
+        other = (await capture(self.page,'input'))['state']
+        self.assertFalse(atomic_effect(before,other,'hotkey',args,cid)['verified'])
+        self.assertFalse(next(v for v in other['values'] if v['element_id']==cid)['all_text_selected'])
+        from types import SimpleNamespace
+        from webcollect.agent_controller import compile_step
+        from webcollect.react_session import ReactSession
+        from webcollect.react_protocol import VERSION as native_protocol
+        task = {'fragment':{'allowed_actions':['set_value'],'decision_protocol':native_protocol}}
+        value = next(v for v in before['values'] if v['element_id']==cid)
+        control = {'probe':before['target'],'value':value,'actions':{'set_value':{'status':'PROVEN'}}}
+        rows = compile_step(task,[],{'action':'set_value','control_id':cid,'value':'350','goal':'修改数量','expected':'350'},
+                            {'controls':{cid:control}})
+        self.assertEqual([r['action'] for r in rows],['hotkey','type'])
+        host = SimpleNamespace(task=task,current={'observation_id':'local'},used={'max_actions':1})
+        with self.assertRaisesRegex(ValueError,'CURRENT_FULL_SELECTION'):
+            ReactSession._build_operation(host,rows[-1],other,{})
+        await self.page.locator('input').click()
+        await execute(self.page,'hotkey',args,{})
+        now = (await capture(self.page,'input'))['state']
+        op = ReactSession._build_operation(host,rows[-1],now,{})
+        native_args,_ = prepare_action(now,op)
+        await execute(self.page,'type',native_args,{})
+        self.assertEqual(await self.page.locator('input').input_value(),'350')
+
+    async def test_unassociated_horizontal_form_labels_are_bound_within_one_visible_row(self):
+        style = '<style>.row{display:flex;gap:12px}label,input{box-sizing:border-box;height:38px}label{width:150px}</style>'
+        def row(n):
+            return f'<div class="row"><label class="control-label">L{n}</label><div><input class="form-control" id="r{n}"></div></div>'
+        html = style+'<form class="form-horizontal">'+row(1)+row(2)+'</form>'
+        for selector, expected in [('#r1','L1'),('#r2','L2')]:
+            await self.page.set_content(html)
+            result = await capture(self.page,selector)
+            target = result['state']['target']
+            self.assertEqual(target['visible_label_evidence'],[{'kind':'rendered_adjacent_input_group_label','text':expected}])
+            prepare_action(result['state'],{'action_type':'click','evidence':{'target_label':expected}})
+        for change in ('document.querySelector("label").htmlFor="r2"',
+                       'r1.after(document.createElement("input"))',
+                       'document.querySelector("label").style.opacity="0"'):
+            await self.page.set_content(html)
+            await self.page.evaluate(change)
+            state = await self.page.evaluate(SNAPSHOT_JS,{'selector':'#r1'})
+            self.assertEqual(state['target']['visible_label_evidence'],[])
+
     async def check(self,html,accepted,case):
         await self.page.set_content(html);before=await self.page.content()
         await self.page.evaluate(SNAPSHOT_JS,{'selector':'#field'})

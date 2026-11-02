@@ -16,6 +16,8 @@ from .planning import object_sha256
 
 MANIFEST_SCHEMA = 'webcollect-current-chain-manifest-1'
 SCOPE_SCHEMA = 'webcollect-current-chain-1'
+PROJECT_RULES = 'candidate-project-2'
+POOL_CHECKPOINT = ('webcollect/candidate-project', 'manifest')
 
 
 def _require(condition, message):
@@ -36,10 +38,17 @@ def _ref(path):
     return {'path': str(path), 'sha256': file_sha(path)}
 
 
+def _validate_project(project, registry, manifest):
+    _require(isinstance(project, dict) and set(project) == {'rules', 'pool', 'site_ledger'}
+             and project['rules'] == PROJECT_RULES, 'unsupported candidate project rules')
+    _require(len({_path(project['pool']), _path(project['site_ledger']), registry, manifest}) == 4,
+             'candidate project stores must be distinct')
+
+
 def _manifest(path):
     path = _path(path)
     data = load_json(path)
-    _require(set(data) == {'schema_version', 'chain_id', 'registry', 'current_result_roots',
+    _require(set(data) - {'candidate_project'} == {'schema_version', 'chain_id', 'registry', 'current_result_roots',
                            'created_at', 'history_policy'}
              and data['schema_version'] == MANIFEST_SCHEMA
              and isinstance(data['chain_id'], str) and data['chain_id'].strip()
@@ -51,6 +60,8 @@ def _manifest(path):
     _require(all(not a.is_relative_to(b) and not b.is_relative_to(a)
                  for i, a in enumerate(actual) for b in actual[i+1:]), 'overlapping result roots')
     _require(registry != path, 'manifest cannot be the registry')
+    if 'candidate_project' in data:
+        _validate_project(data['candidate_project'], registry, path)
     return data, _ref(path)
 
 
@@ -74,9 +85,12 @@ def assert_registry_scope(scope, registry):
              and scope.get('registry') == data['registry'] and scope.get('chain_id') == data['chain_id']
              and scope.get('current_result_roots') == data['current_result_roots'],
              'manifest, chain, result roots, or exact registry changed')
-    _require(_meta(registry) == {'chain_id': data['chain_id'], 'manifest': reference,
-                                'registry': data['registry'], 'current_result_roots': data['current_result_roots']},
-             'registry belongs to another or historical chain')
+    _require(scope.get('candidate_project') == data.get('candidate_project'), 'candidate project binding changed')
+    binding = {'chain_id': data['chain_id'], 'manifest': reference, 'registry': data['registry'],
+               'current_result_roots': data['current_result_roots']}
+    if 'candidate_project' in data:
+        binding['candidate_project'] = data['candidate_project']
+    _require(_meta(registry) == binding, 'registry belongs to another or historical chain')
 
 
 def assert_current_result_path(scope, path):
@@ -86,18 +100,21 @@ def assert_current_result_path(scope, path):
     return path
 
 
-def initialize_chain(manifest_path, registry, *, chain_id, current_result_roots, now=None):
+def initialize_chain(manifest_path, registry, *, chain_id, current_result_roots, now=None, candidate_project=None):
     """Create an explicitly new empty population; reuse only its exact binding.
 
     Existing unmarked registries and populated result directories are rejected,
     rather than copied, reset, deleted, or silently treated as empty.
     """
     manifest_path, registry = _path(manifest_path), _path(registry)
+    if candidate_project is not None:
+        _validate_project(candidate_project, registry, manifest_path)
     roots = [str(_path(root)) for root in current_result_roots]
     if manifest_path.exists():
         data, _ = _manifest(manifest_path)
         _require(data['chain_id'] == chain_id and data['registry'] == str(registry)
-                 and data['current_result_roots'] == roots, 'cannot rebind an existing chain')
+                 and data['current_result_roots'] == roots and data.get('candidate_project') == candidate_project,
+                 'cannot rebind an existing chain')
         return read_chain_history(manifest_path)[1]
     _require(not registry.exists(), 'existing registry cannot initialize an empty chain')
     for root in roots:
@@ -107,11 +124,13 @@ def initialize_chain(manifest_path, registry, *, chain_id, current_result_roots,
     data = {'schema_version': MANIFEST_SCHEMA, 'chain_id': chain_id, 'registry': str(registry),
             'current_result_roots': roots, 'created_at': time.time() if now is None else now,
             'history_policy': 'current-chain-only'}
+    project_fields = {'candidate_project': candidate_project} if candidate_project is not None else {}
+    data.update(project_fields)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(manifest_path, data)
     reference = _ref(manifest_path)
     binding = {'chain_id': chain_id, 'manifest': reference, 'registry': str(registry),
-               'current_result_roots': roots}
+               'current_result_roots': roots, **project_fields}
     registry.parent.mkdir(parents=True, exist_ok=True)
     from .runtime import SCHEMA
     from .storage import ensure_registry_schema
@@ -130,6 +149,8 @@ def read_chain_scope(manifest_path):
     data, reference = _manifest(manifest_path)
     scope = {'schema_version': SCOPE_SCHEMA, 'manifest': reference, 'chain_id': data['chain_id'],
              'registry': data['registry'], 'current_result_roots': data['current_result_roots']}
+    if 'candidate_project' in data:
+        scope['candidate_project'] = data['candidate_project']
     assert_registry_scope(scope, data['registry'])
     return scope
 
@@ -201,14 +222,45 @@ def registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):
 
 def same_chain(left, right):
     """Stable chain ownership; result membership is checked separately live."""
-    keys = ('schema_version', 'manifest', 'chain_id', 'registry', 'current_result_roots')
+    keys = ('schema_version', 'manifest', 'chain_id', 'registry', 'current_result_roots', 'candidate_project')
     return (isinstance(left, dict) and isinstance(right, dict)
             and left.get('schema_version') == right.get('schema_version') == SCOPE_SCHEMA
             and all(left.get(key) == right.get(key) for key in keys))
 
 
+def registry_project(con):
+    """Return the frozen owner only for a new-generation registry, including inside a transaction."""
+    if con.execute("SELECT 1 FROM sqlite_master WHERE name='current_chain_meta'").fetchone():
+        binding = json.loads(con.execute('SELECT binding_json FROM current_chain_meta WHERE id=1').fetchone()[0])
+        if 'candidate_project' in binding:
+            return binding
+    return None
+
+
+def check_project_pool(scope, pool):
+    project = (scope or {}).get('candidate_project')
+    marker = pool.checkpoint(*POOL_CHECKPOINT)
+    _require(marker == (scope['manifest'] if project else None)
+             and (not project or str(pool.path) == project['pool']), 'candidate pool belongs to another project')
+    return bool(project)
+
+
+def check_project_guard(scope, guard, job_ledger=None, *, role=None):
+    project = (scope or {}).get('candidate_project')
+    guard = guard or {}
+    if project or 'dispatch_rules' in guard:
+        _require(project and guard.get('dispatch_rules') == project['rules']
+                 and guard.get('campaign_id') == scope['chain_id'] and guard.get('ledger') == project['site_ledger'],
+                 'site execution ledger and rules must match the candidate project')
+        if job_ledger is not None:
+            path = _path(Path(job_ledger).absolute())
+            _require(role in ('producer','consumer') and
+                     path == _path(scope['registry']).with_name(role + '-jobs.sqlite3'),
+                     'use the original role job ledger of this candidate project')
+
+
 def require_plan(plan, registry, policy):
-    """Marked current registries cannot opt out of page ownership or site stop.
+    """Marked registries require evidence identity and their original dispatch rules.
 
     Legacy unmarked registries retain their original contract. Validate before
     preflight/dispatch, without creating or resetting any ledger.
@@ -220,6 +272,11 @@ def require_plan(plan, registry, policy):
     _require(isinstance(supplied, dict) and same_chain(scope, supplied), 'new task must bind the exact current chain')
     _require(policy.get('pilot_identity_required') is True and bool(policy.get('site_failure_guard')),
              'current chain requires page identity and original whole-site failure guard')
+    check_project_guard(scope, policy['site_failure_guard'])
+    if 'candidate_project' in scope:
+        _require(policy['campaign_id'] == scope['chain_id'], 'runtime campaign belongs to another project')
+        for root in plan.get('dedup_roots', []):
+            assert_current_result_path(scope, root)
     from .production_identity import validate_plan
     validate_plan(plan, required=True)
     assert_current_evidence(scope, plan)

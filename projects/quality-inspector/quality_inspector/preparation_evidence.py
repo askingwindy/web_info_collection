@@ -351,9 +351,11 @@ def _audit_preparation(evidence_dir, sample_dir=None, expected_policy=None,
     if limits and (metrics['prepared_actions'] > min(x['max_actions'] for x in limits) or
                    metrics['scroll_actions'] > min(x['max_scrolls'] for x in limits)):
         fail('ACTION_BUDGET_EXCEEDED', ledger_path, 'Recorded preparation exceeded its declared bounds')
-    language_ok = initial_ratio >= .70 and all(ratio >= .70 for ratio in ratios)
-    metrics['delivery_eligible_by_language'] = language_ok
-    if steps and not language_ok: fail('FULL_VIEWPORT_LANGUAGE', evidence, 'Initial/advertising frames below 70% cannot be removed or replaced by body-only language scores')
+    # Keep the full-frame diagnostic; language eligibility needs an actual
+    # page/control comparison, not a Han/letter threshold or a body-only score.
+    metrics['language_policy'] = 'page-control-language-consistency-1'
+    metrics['chinese_ratio_diagnostic_only'] = True
+    metrics['language_review'] = 'REVIEW_REQUIRED'
     return {'applicable': True, 'status': 'FAIL' if issues else 'PASS', 'issues': issues,
             'policy': POLICY, 'metrics': metrics, 'is_recorded_delivery': bool(steps),
             'attempt_outcome': 'recorded_delivery' if steps else 'rejected_or_incomplete',

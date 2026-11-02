@@ -13,7 +13,7 @@ POINTER = {'click', 'double_click', 'right_click', 'scroll', 'drag', 'select'}
 CONTROL = {'click', 'double_click', 'right_click', 'type', 'drag', 'select'}
 NONCONTROL = {'scroll', 'wait', 'back', 'open_url', 'complete'}
 NARRATIVE = ['page_name', 'user_goal', 'next_step_rationale', 'step_result']
-PENDING = ['截图真实性、视口范围及截图与界面树同步证据', '中文占比及导航控件中文',
+PENDING = ['截图真实性、视口范围及截图与界面树同步证据', '控件与页面语言一致、叙述为简体中文',
            '标注简体中文、完整性及可见证据一致性', '动作连续性、无凑步及最终任务完成',
            '账号来源与业务操作合规', '四路及跨批去重', '人工看图核对']
 

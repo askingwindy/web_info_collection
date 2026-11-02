@@ -628,6 +628,35 @@ def visible_body_for_label(lines, label, metadata=False, elements=()):
     return max(candidates,key=lambda row:row[0])[1] if candidates else None
 
 
+def visible_result_description(state, before=None):
+    """Quote an exposed dialog and its rendered rows, never a finish claim.
+
+    Row boundaries come from the synchronous tree reading order. Only strings
+    also present in the clipped visible-text inventory may be narrated.
+    """
+    elements = state.get('elements', [])
+    visible = state.get('visible_text', '')
+    old = {e['element_id'] for e in (before or {}).get('elements', [])}
+    for dialog in elements:
+        if dialog.get('native_role') not in ('dialog', 'alertdialog') or dialog['element_id'] in old:
+            continue
+        children = {dialog['element_id']}
+        for _ in elements:
+            added = {e['element_id'] for e in elements if e.get('parent_id') in children}
+            if added <= children: break
+            children |= added
+        rows = [e for e in elements if e['element_id'] in children
+                and e.get('text') and e['text'] in visible]
+        titles = [e['text'] for e in rows if e.get('native_role') in ('h1', 'h2', 'h3')]
+        title = next(iter(titles), dialog.get('text', ''))
+        if not title or title not in visible: continue
+        cells = [e['text'] for e in rows if e.get('native_role') in ('th', 'td')]
+        # Keep every column and reading order, including direction/time pairs.
+        detail = '；表格按原顺序可见' + '；'.join('「' + cell + '」' for cell in cells)[:1200] if cells else ''
+        return title + '已展开' + detail
+    return None
+
+
 def describe_change(before, after, op, element):
     """Describe observed changes; accessible names are not visible text/value evidence."""
     import re
@@ -684,6 +713,10 @@ def describe_change(before, after, op, element):
         return observed_frame_description(after,op.get('goal',''),before)
     if before['title']!=after['title'] or before['url']!=after['url']:
         return '页面已切换，'+observed_frame_description(after,op.get('goal',''),before)
+
+    result = visible_result_description(after, before)
+    if result and action in ('click', 'double_click', 'hotkey'):
+        return result
 
     # snapshot elements include accessible labels/title fallbacks. Only the
     # separately captured, clipped visible text may be called visible prose.
@@ -798,6 +831,13 @@ def describe_change(before, after, op, element):
         prose=[text for text in visible_added if text not in controls and text not in values and not text.endswith((':','：'))]
         suffix=('；页面可见'+ '和'.join(visible_reference(text) for text in prose[:2])) if prose and action=='click' and element and element['element_type']=='button' else ''
         return '，'.join(dict.fromkeys(changed))+suffix
+    if action in ('click', 'double_click') and element:
+        from .react_protocol import control_state_transition
+        transition = control_state_transition(before, after, element['element_id'])
+        if transition:
+            state_text = {'selected':'已选中','checked':'已勾选','unchecked':'已取消勾选',
+                          'expanded':'已展开','collapsed':'已收起','focused':'获得焦点'}[transition['state']]
+            return '「' + transition['target_text'] + '」所在控件' + state_text
     if action=='hotkey':
         if focused and focused.get('value') and focused.get('selection_start')==0 and focused.get('selection_end')==len(focused['value']):
             return '输入框中的原有内容已全部选中'
@@ -1083,16 +1123,6 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             from .production_quality import require_public_task_state
             require_public_task_state(state)
             ratios.append(chinese_ratio(state['visible_text']))
-            if ratios[-1]<0.70:
-                write_json(evidence/'eligibility_failure.json',{'rule':'visible_chinese_ratio',
-                    'threshold':0.70,'actual':ratios[-1],'step_id':i,
-                    'screenshot_sha256':observation['capture']['screenshot_sha256'],
-                    'preparation_does_not_waive_language':True})
-                write_json(evidence/'preparation_failure.json',{'policy':'content-preparation-v1',
-                    'reason':'当前完整视口中文比例不足70%，不以正文替换广告首屏','step_id':i,
-                    'decision_id':decision_id,'action_executed':False,'state':state,
-                    'capture':observation['capture']})
-                raise ValueError(f'当前视口中文字符比例初筛不足 70%：{ratios[-1]:.3f}')
             if preparation_error:
                 entry['blocked_reason']=preparation_error
                 checkpoint_json(evidence/'preparation_decisions.json',preparation)
@@ -1275,7 +1305,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             checkpoint_json(evidence/'task_contract.json',contract_result)
         write_json(evidence/'ground_truth.json',ground_truth)
         write_json(evidence/'capture_summary.json',{'snapshot_source':'browser_dom','capture_count':len(steps),
-              'minimum_chinese_character_ratio':min(ratios),'language_check_version':'visible_dom_letters_v2',
+              'minimum_chinese_character_ratio':min(ratios),'language_check_version':'page-control-language-consistency-1',
+              'chinese_ratio_diagnostic_only':True,'language_review':'pending',
               'chinese_ratio_method':'Han / Unicode letters, deduplicated visible DOM text plus form values; image text needs human review',
               'human_review':'pending','agent_visual_review':'pending','task_id':task['task_id'],
               'preparation_policy':'content-preparation-v1','preparation_actions':preparation_actions,

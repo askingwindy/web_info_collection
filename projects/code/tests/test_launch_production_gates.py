@@ -19,13 +19,13 @@ class ResourceGateTests(unittest.TestCase):
         self.output.mkdir(parents=True)
         self.store = RuntimeStore(self.registry, 'scope-1')
 
-    def test_storage_stop_pauses_without_allocating_or_deleting(self):
+    def test_storage_usage_is_metered_without_allocating_or_deleting(self):
         self.store.initialize({'resource_root': str(self.output.parent), 'max_output_bytes': 2})
         evidence = self.output / 'evidence.txt'; evidence.write_bytes(b'123')
         result = self.store.resource_checkpoint(self.output)
-        self.assertEqual(result['status'], 'STOP')
-        self.assertIn('campaign_storage_limit', result['reasons'])
-        self.assertEqual(self.store.snapshot()['scope']['state'], 'paused')
+        self.assertEqual(result['status'], 'PASS')
+        self.assertGreaterEqual(result['stored_bytes'],3)
+        self.assertEqual(self.store.snapshot()['scope']['state'], 'active')
         self.assertEqual(self.store.snapshot()['attempts'], [])
         self.assertEqual(evidence.read_bytes(), b'123')
         with self.assertRaisesRegex(ValueError, '不能更换'):
@@ -35,7 +35,9 @@ class ResourceGateTests(unittest.TestCase):
         from types import SimpleNamespace
         self.store.initialize({'resource_root': str(self.output.parent), 'min_free_disk_bytes': 10})
         with patch('shutil.disk_usage', return_value=SimpleNamespace(free=9)):
-            self.assertEqual(self.store.resource_checkpoint(self.output)['status'], 'STOP')
+            self.assertEqual(self.store.resource_checkpoint(self.output)['status'], 'PASS')
+        with patch('shutil.disk_usage', return_value=SimpleNamespace(free=0)):
+            self.assertEqual(self.store.resource_checkpoint(self.output)['reasons'], ['disk_full'])
         with self.assertRaisesRegex(ValueError, 'resource_root'):
             self.store.resource_checkpoint(self.root / 'bypass')
 
@@ -50,18 +52,19 @@ class ResourceGateTests(unittest.TestCase):
         result = other.resource_checkpoint(second, now=106)
         self.assertEqual(result['campaign_worker_seconds'], 6)
         self.assertEqual(result['open_sessions'], ['worker-second'])
-        self.assertEqual(result['status'], 'STOP')
+        self.assertEqual(result['status'], 'PASS')
         with self.assertRaisesRegex(ValueError, 'unique and ordered'):
             other.worker_session('worker-second', second, now=107)
         # Raising a budget is explicit; counters and previous events remain.
         other.update_policy({'max_worker_seconds': 20}, 'Synthetic operator budget adjustment', now=107)
         self.assertEqual(other.resource_checkpoint(second, now=108)['campaign_worker_seconds'], 8)
-        self.assertEqual(other.snapshot()['scope']['state'], 'paused')
+        self.assertEqual(other.snapshot()['scope']['state'], 'active')
 
-    def test_limits_reject_boolean_negative_and_unbound_storage(self):
-        for value in [True, 0, -1, 1.5]:
+    def test_historical_limits_accept_zero_and_reject_invalid_types(self):
+        for value in [True, -1, 1.5]:
             with self.assertRaises(ValueError): validate_policy({'max_worker_seconds': value})
-        with self.assertRaises(ValueError): validate_policy({'max_output_bytes': 100})
+        self.assertEqual(validate_policy({'max_worker_seconds': 0})['max_worker_seconds'],0)
+        self.assertIsNone(validate_policy({'max_output_bytes': 100})['resource_root'])
         with self.assertRaises(ValueError): validate_policy({'resource_root': 'relative'})
 
 

@@ -230,6 +230,8 @@ def _evidence(request):
               'system_sha256': _sha(parsed['system'].encode()) if isinstance(parsed.get('system'), str) else UNKNOWN,
               'schema_sha256': _obj_sha(parsed['schema']) if 'schema' in parsed else UNKNOWN,
               'images': [], 'image_files_verified': False}
+    if parsed.get('cost_control') == 'observe_only':
+        result['dispatch_cost_control'] = 'observe_only'
     for image in images:
         if not isinstance(image, dict):
             raise ValueError('Invalid original-image reference')
@@ -371,15 +373,18 @@ def build_audit(snapshot, manifest):
         _required_int(row['attempt'], 'zero-based request attempt')
     views = _attribution_views(rows)
     totals, retained, conserved = views['totals'], views['retained'], views['conservation']
-    cost_control = config.get('budget', {}).get('cost_control', 'capped')
+    metered = sum(r['evidence'].get('dispatch_cost_control') == 'observe_only' for r in rows)
+    # A retained request without a marker predates the metering-only dispatch policy.
+    config_budget = config.get('budget', {})
+    raw_budget = config_budget.get('max_model_cost_micros', UNKNOWN)
+    cost_control = ('observe_only' if metered or not rows or raw_budget in (None, UNKNOWN)
+                    else config_budget.get('cost_control', 'capped'))
     if cost_control not in ('capped', 'observe_only'):
         raise ValueError('Unsupported accounting cost-control mode')
-    raw_budget = config.get('budget', {}).get('max_model_cost_micros', UNKNOWN)
-    if cost_control == 'observe_only' and raw_budget is not None:
-        raise ValueError('observe_only accounting requires an explicit null monetary limit')
     budget = 'NOT_APPLICABLE' if cost_control == 'observe_only' else raw_budget if _int(raw_budget) else UNKNOWN
     summary = {'ledger_totals': totals, 'request_states': dict(Counter(r['request_state'] for r in rows)),
                'execution_mode': config.get('mode') if config.get('mode') in ('real', 'synthetic') else UNKNOWN,
+               'metered_dispatches': metered, 'unmarked_historical_requests': len(rows) - metered,
                'cost_control': cost_control, 'monetary_limit_applied': bool(model) and cost_control == 'capped',
                'retry_request_count': sum(r['attempt'] > 0 for r in rows),
                'retry_request_count_basis': 'Zero-based attempt > 0 only; changed job/prompt identities are not inferred retries',
@@ -722,9 +727,38 @@ def _compact_query(value):
             'states': {'requests': value['request_states'], 'jobs': value['job_states']}, 'samples': samples}
 
 
+def token_audit(ledger):
+    """Read token usage from original requests, independently of historical rates."""
+    from .stage_metering import stage_for
+    with closing(sqlite3.connect(Path(ledger).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+        con.row_factory = sqlite3.Row
+        requests = list(con.execute('SELECT r.id,r.state,r.usage,r.job_id,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id ORDER BY r.started,r.id'))
+    rows=[]
+    for request in requests:
+        usage=json.loads(request['usage']) if request['usage'] else None
+        payload=json.loads(request['payload'])
+        rows.append({'request_id':request['id'],'state':request['state'],'job_id':request['job_id'],
+            'stage':stage_for(request['kind']),'attempt_id':payload.get('attempt_id'),
+            'usage':usage,'usage_known':usage is not None})
+    def total(selected):
+        known=[row['usage'] for row in selected if row['usage'] is not None]
+        return {'requests':len(selected),'usage_covered_requests':len(known),
+                'usage_unknown_requests':len(selected)-len(known),
+                'input_tokens':sum(row['input_tokens'] for row in known),
+                'output_tokens':sum(row['output_tokens'] for row in known),
+                'cached_input_tokens':sum(row.get('cached_input_tokens',0) for row in known),
+                'reasoning_tokens_known':sum(row.get('reasoning_tokens') or 0 for row in known),
+                'reasoning_usage_unknown_requests':sum(row.get('reasoning_tokens') is None for row in known)}
+    return {'schema_version':'webcollect-token-audit-1','requests':rows,'totals':total(rows),
+            'stages':{stage:total([row for row in rows if row['stage']==stage]) for stage in sorted({row['stage'] for row in rows})},
+            'subsets':'cache is included in input; reasoning is included in output; do not add twice'}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    tokens = sub.add_parser('tokens', help='Read original request token usage without rates or credentials')
+    tokens.add_argument('--ledger', required=True, type=Path)
     for name in ('fingerprint', 'export'):
         child = sub.add_parser(name); child.add_argument('--ledger', required=True, type=Path)
         if name == 'export':
@@ -736,7 +770,7 @@ def main(argv=None):
     query.add_argument('--compact', action='store_true', help='Show core costs/tokens after full audit validation')
     args = parser.parse_args(argv)
     try:
-        value = (query_audit(args.audit, args.sample_id) if args.command == 'query' else
+        value = token_audit(args.ledger) if args.command == 'tokens' else (query_audit(args.audit, args.sample_id) if args.command == 'query' else
                  fingerprint(args.ledger) if args.command == 'fingerprint' else export_audit(args.ledger, args.attribution, args.output)['summary'])
         if args.command == 'query' and args.compact:
             value = _compact_query(value)

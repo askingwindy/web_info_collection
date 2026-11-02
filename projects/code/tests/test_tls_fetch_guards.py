@@ -60,6 +60,20 @@ class TLSFetchGuards(unittest.TestCase):
         with patch('site_planner.pipeline.build_opener',side_effect=opener):
             with self.assertRaises(RedirectBlocked): fetch_status('https://example.org/',10,{},'real',None)
 
+    def test_entry_redirect_does_not_follow_a_quarantined_uri_on_its_own_host(self):
+        from webcollect.site_failure_stop import SiteStopped
+        target='https://example.org/already-dispatched'
+        guard=Mock()
+        guard.guard.side_effect=SiteStopped('entry_uri_hold')
+        def opener(redirect):
+            def follow(request,timeout):
+                redirect.redirect_request(request,None,302,'redirect',{},target)
+                self.fail('blocked redirect reached dispatch')
+            return Mock(open=follow)
+        with patch('site_planner.pipeline.build_opener',side_effect=opener):
+            with self.assertRaises(RedirectBlocked): fetch_status('https://example.org/other',10,{},'real',None,guard)
+        guard.guard.assert_called_once_with(target)
+
     def test_initial_private_url_rejected_before_dispatch(self):
         with patch('site_planner.pipeline.build_opener') as opener:
             with self.assertRaises(ValueError):fetch_public('https://127.0.0.1/')

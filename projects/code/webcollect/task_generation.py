@@ -52,7 +52,7 @@ def generation_source_identity():
     if (base / 'pbkdf2_strategy.py').is_file():
         names += ('pbkdf2_strategy.py',)
     if (base / 'react_protocol.py').is_file():
-        names += ('react_protocol.py',)
+        names += ('react_protocol.py', 'react_context.py', 'model_credentials.py', 'model_gateway.py')
     return {name: file_sha(base / name) for name in names}
 
 # These are deliberately narrow business strategies, not generic guesses about
@@ -789,7 +789,7 @@ def compile_form(capability, spec, *, _observer_sha256=None):
 
 
 def _generate_react_url(ledger, output, *, history_registry=None, history_set=None, url=None,
-                        goal=None, site_category='综合', app_name=None, catalog_path=None,
+                        goal=None, site_category='UNKNOWN', app_name=None, catalog_path=None,
                         site_filter=None, page_identities=None, react_task_version='1',
                         react_candidate=None):
     """One react session task per URL: host identity now, working goal in-loop.
@@ -844,6 +844,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     else:
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
                               app_name=app_name, registration=react_task_version,
+                              skip_wechat_articles=(react_candidate or {}).get('skip_wechat_articles',False),
                               pilot_identity=identities['pages'].get(url))
         if supplied is not None:
             task['capability_id'] = supplied['capability_id']
@@ -938,7 +939,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     return result
 
 
-def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None, fragment_context=None, site_filter=None, react_url=None, react_goal=None, react_site_category='综合', react_app_name=None, react_task_version='1', react_candidate=None):
+def generate(ledger, catalog_path, output, *, history_registry=None, history_set=None, synthetic_specs=None, generator=None, replan_closures=None, admission_reviews=None, workflow_specs=None, page_identities=None, max_tasks=None, workflow_feedback=None, fragment_context=None, site_filter=None, react_url=None, react_goal=None, react_site_category='UNKNOWN', react_app_name=None, react_task_version='1', react_candidate=None):
     if max_tasks is not None and (type(max_tasks) is not int or max_tasks < 1):
         raise ValueError('max_tasks must be an explicit positive integer')
     from .task_contract import validate_m4_plan
@@ -1361,6 +1362,9 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         raise ValueError('Real execution requires explicit frozen customer history coverage; regenerate legacy M4-only plans')
     if history_scope['schema_version'] == SCOPE_SCHEMA:
         assert_registry_scope(history_scope, registry)
+        if history_scope.get('candidate_project'):
+            from .current_chain import assert_current_result_path
+            assert_current_result_path(history_scope, Path(output).absolute())
     history_manifest = history_scope.get('manifest', {})
     if file_sha(history_manifest['path']) != history_manifest.get('sha256'):
         raise ValueError('Historical set changed since task generation')
@@ -1400,11 +1404,6 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         campaign=con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',
                              (supplied_policy.get('campaign_id'),)).fetchone()
         if not campaign:raise ValueError('Use an existing authorized production campaign; this wrapper never creates one')
-        active_policy=json.loads(campaign[0])
-        attempts=con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=?',(supplied_policy['campaign_id'],)).fetchone()[0]
-        pending=con.execute("SELECT COUNT(*) FROM m4_tasks WHERE campaign_id=? AND status='collected_pending_review'",(supplied_policy['campaign_id'],)).fetchone()[0]
-        if attempts>=active_policy['attempt_cap'] or pending>=active_policy['pending_review_cap']:
-            raise BudgetStop('Existing campaign attempt/pending-review limit reached; no preflight or collection started')
     output = Path(output).resolve(); output.mkdir(parents=True,exist_ok=True)
     quality_review_path = output / 'pending-quality-checks.json'
     quality_review = {'schema_version': 'webcollect-pending-quality-checks-1',
@@ -1533,7 +1532,7 @@ def main(argv=None):
                            help='Registered no-model strategies by default; model is an explicit budgeted option')
             p.add_argument('--react-url',help='Entry URL for the react-url generator; working goal is established in-loop')
             p.add_argument('--react-goal',help='Optional structured business goal JSON for the react entry (read-only requested_goal)')
-            p.add_argument('--react-site-category',default='综合')
+            p.add_argument('--react-site-category',default='UNKNOWN')
             p.add_argument('--react-app-name')
             p.add_argument('--react-task-version', default='1', help='Explicit react task re-registration version (sanctioned replan identity)')
         else:
@@ -1550,7 +1549,7 @@ def main(argv=None):
             if (react_goal is not None and not isinstance(react_goal, dict)) or (args.generator=='react-url') != bool(react_url):
                 raise ValueError('--react-url is required exactly for the react-url generator; --react-goal must be a JSON object')
         result=generate(ledger,args.catalog,args.output,history_registry=args.history_registry,history_set=args.history_set,generator=args.generator,replan_closures=args.replan_closure,admission_reviews=args.admission_reviews,workflow_specs=args.workflow_specs,page_identities=args.page_identities,max_tasks=args.max_tasks,
-            react_url=react_url,react_goal=react_goal,react_site_category=getattr(args,'react_site_category','综合'),react_app_name=getattr(args,'react_app_name',None),react_task_version=getattr(args,'react_task_version','1')) if args.command=='generate' else asyncio.run(
+            react_url=react_url,react_goal=react_goal,react_site_category=getattr(args,'react_site_category','UNKNOWN'),react_app_name=getattr(args,'react_app_name',None),react_task_version=getattr(args,'react_task_version','1')) if args.command=='generate' else asyncio.run(
             execute(ledger,args.plan,args.catalog,args.output,args.registry,args.policy,resume=args.resume,qc_policy=args.qc_policy,
                     site_pool=args.site_pool))
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0

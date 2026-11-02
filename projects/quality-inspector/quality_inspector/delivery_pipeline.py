@@ -593,7 +593,7 @@ def expand_sampling(receipt_path, status_path, output):
         return {'changed':True,**prepared,'original_population_retained':True,'model_requests_dispatched':0}
 
 
-def run_sampled(receipt_path, output, *, max_jobs_per_round=100, max_rounds=3):
+def run_sampled(receipt_path, output, *, max_jobs_per_round=None, max_rounds=3):
     """Bounded 10/30/100 loop using the same ledger/budgets and immutable receipts."""
     if type(max_rounds)is not int or not 1<=max_rounds<=3:
         raise ValueError('At most the three explicit sampling stages may run')
@@ -611,8 +611,8 @@ def run_sampled(receipt_path, output, *, max_jobs_per_round=100, max_rounds=3):
             'production_quality':summaries[-1].get('production_quality'),'release_ready':False}
 
 
-def run(receipt_path,output,*,max_jobs=100,human_reviews=(),progress=None,request_id=None):
-    if type(max_jobs)is not int or max_jobs<1:raise ValueError('max_jobs must be positive')
+def run(receipt_path,output,*,max_jobs=None,human_reviews=(),progress=None,request_id=None):
+    if max_jobs is not None and (type(max_jobs)is not int or max_jobs<1):raise ValueError('max_jobs must be positive')
     with _lock(receipt_path):
         receipt=verify(receipt_path);ledger=_ledger(receipt)
         _external(output,_roots(receipt),[receipt_path,*human_reviews])
@@ -699,10 +699,10 @@ def main(argv=None):
     for name in ('run','status','import-human'):
         p=sub.add_parser(name);p.add_argument('--receipt',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
         p.add_argument('--human-reviews',type=Path,action='append',default=[])
-        if name=='run':p.add_argument('--max-jobs',type=int,default=100)
+        if name=='run':p.add_argument('--max-jobs',type=int)
         p.add_argument('--progress-state',type=Path);p.add_argument('--production-registry',type=Path);p.add_argument('--request-id')
     p=sub.add_parser('run-sampled');p.add_argument('--receipt',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--max-jobs-per-round',type=int,default=100);p.add_argument('--max-rounds',type=int,default=3)
+    p.add_argument('--max-jobs-per-round',type=int);p.add_argument('--max-rounds',type=int,default=3)
     p=sub.add_parser('expand-sampling');p.add_argument('--receipt',type=Path,required=True);p.add_argument('--status',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     p=sub.add_parser('finalize');p.add_argument('--receipt',type=Path,required=True);p.add_argument('--status',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--archive',type=Path)

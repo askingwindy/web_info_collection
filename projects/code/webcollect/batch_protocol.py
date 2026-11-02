@@ -79,15 +79,19 @@ def _capacity(record, base, registry=None, *, strict=False):
 def facts_state(refs, run_id, registry=None, *, strict=False):
     """Recompute exclusions from immutable facts, ignoring claimed summaries."""
     executions = {}; execution_keys = {}; successes = {}; sources = []; formal_since = None
+    failure_limit = 3
     for ref in refs:
         value, _ = _read_ref(ref)
         keys = ('schema_version', 'campaign_id', 'formal_since', 'failure_limit', 'executions', 'successes')
         core = {key: value.get(key) for key in keys}
-        if (core['schema_version'] != 'webcollect-site-execution-facts-1' or core['campaign_id'] != run_id
-                or core['failure_limit'] != 3 or object_sha256(core) != value.get('facts_sha256')):
+        rules = (core['schema_version'], core['failure_limit'])
+        if (rules not in (('webcollect-site-execution-facts-1',3), ('webcollect-site-execution-facts-2',None))
+                or 'failure_limit' not in value or core['campaign_id'] != run_id
+                or object_sha256(core) != value.get('facts_sha256')):
             raise ValueError('Batch facts must bind this run, original limit and exact portable facts')
-        if formal_since is not None and formal_since != core['formal_since']:
-            raise ValueError('A batch cannot mix facts from different formal cutoffs')
+        if sources and (formal_since != core['formal_since'] or failure_limit != core['failure_limit']):
+            raise ValueError('A batch cannot mix facts from different formal cutoffs or dispatch rules')
+        failure_limit = core['failure_limit']
         formal_since = core['formal_since']; sources.append(deepcopy(ref))
         for fact in core['executions']:
             identity = fact.get('fact_id')
@@ -110,7 +114,8 @@ def facts_state(refs, run_id, registry=None, *, strict=False):
     counts = defaultdict(lambda: {'failed': 0, 'unknown': 0})
     for fact in executions.values():
         counts[site_key(fact['application_key'], registry, strict=strict)][fact['state']] += 1
-    excluded = sorted(key for key, states in counts.items() if states['failed'] >= 3 or states['unknown'])
+    excluded = sorted(key for key, states in counts.items() if states['unknown'] or
+                      (failure_limit is not None and states['failed'] >= failure_limit))
     used = sorted(set(counts) | {site_key(row['application_key'], registry, strict=strict) for row in successes.values()})
     return {'sources': sources, 'excluded_sites': excluded, 'used_sites': used,
             'formal_since': formal_since, 'execution_counts': dict(counts),

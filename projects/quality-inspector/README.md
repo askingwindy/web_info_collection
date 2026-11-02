@@ -1,5 +1,7 @@
 # WebCollect 独立质检器
 
+独立 QC 的模型账持续记录请求、token、费用和未决结果。默认处理完收据绑定的可执行作业。[额度限制清单](../../docs/额度限制清单与取消说明-20261101.md)
+
 V2 消费者通过启动范围中的 `qc_policy` 冻结本次 `execution/qc-inputs/` 下的收据、采样计划、有效集合和收集检查。独立 QC 可以据此将同一样本送入逐帧视觉与差异检查队列。入队时仍为 `QC_NOT_RUN`，实际 AI、人工审核与发布各自计数。[启动与交接说明](../../docs/工程说明.md#本机有界批次启动) · [离线同一样本交接记录](../../verify_results/producer-consumer-react-qc-offline-20261101-094824-1251/联测报告.md)
 
 `delivery_pipeline prepare --production-handoff /absolute/qc-inputs/receipt.json` 可绑定原当前链采集交接；run/status生成独立报告后核对原件与样本集合，自动登记待审/审核通过/失败并同步已绑定共享池。`single_record.qc` 自动传递该收据，已保存结果恢复只回写、不重审。受控模式不能绑定生产回写；真人、发布和客户验收仍独立记录。见[状态回写与防重](../../docs/共享站点池与自主发现.md#状态回写与防重)。
@@ -133,7 +135,7 @@ delivery模式的`--baseline`和`--evidence`仅启用`engineering_audit`，诊�
 |---|---|
 | `visual_alignment` | 图、控件和动作是否对应？ |
 | `terminal_semantics` | 最后真的完成任务了吗？ |
-| `language` | 页面和说明是否符合中文要求？ |
+| `language` | 控件语言是否与页面一致，叙述是否为简体中文、控件引用是否保留原文？技术名词可保留英文，不按中文字符比例拒收。 |
 | `privacy` | 是否符合来源和隐私要求？ |
 | `substantive_difference` | 与其他任务有实质区别吗？ |
 
@@ -322,3 +324,8 @@ AI FAIL、未决、无效或缺失回复全部转人工；有效人工PASS可以
 
 
 尚未调用/尚无完整AI记录的选中样本输出 `AI_REQUIRED`，单列 `ai_pending_count`，不虚增人工积压，人工PASS也不能冒充未执行的AI检查。实际模型调用的网络未知/非法回复可通过只读 `delivery_sampling export-ai-failures --plan <计划> --ledger <原模型SQLite> --output <新失败收据>` 导出。收据逐条绑定原real模型账的job、request ID、已结算失败状态、请求行SHA、合同及样本哈希，`check --ai-failures <收据>`/`status --ai-failures <收据>`会回查原账再转人工；手写布尔或不绑定原账的错误声明不能替代。未知费用保持原预留，不由转人工触发自动重发。原账终结请求、合同、计划或样本改变会使该收据失效。
+
+
+有效交付集合现按应用累计检查 500 条上限，并另报去重应用的类目分布。`set-manifest --application-registry <冻结站点库>` 绑定同工程的应用／别名身份；旧 manifest 无此字段时仍按规范主机统计。每批和累计的类目、重复、短流程检查与审核状态保持独立。[接口与边界](../../docs/工程说明.md#生产者站点表与有效交付容量)
+
+2026-11-02 需求方确认页面／控件语言一致性口径后，仅升级 language 语义规则。旧审核语言项局部失效，其他四项按原证据继续复用；不覆盖原收据或自动重做 AI 审核。准备证据中的字符比例保留为诊断，不能代替独立原图语言审核。

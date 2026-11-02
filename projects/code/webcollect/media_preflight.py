@@ -6,11 +6,11 @@ from importlib.resources import files
 import math
 from urllib.parse import urldefrag
 
-from .browser import _native_animation_window
+from .browser import STABILITY_RULES, _native_animation_window
 
 MEDIA_JS=files('webcollect').joinpath('media_preflight.js').read_text(encoding='utf-8')
 OBSERVER_SHA256=hashlib.sha256(MEDIA_JS.encode()).hexdigest()
-ALGORITHM_VERSION='media-preflight-2-related-images'
+ALGORITHM_VERSION='media-preflight-3-related-images'
 ROUTES={'NORMAL_M1','PREPARE_RECHECK','DYNAMIC_CONTENT_TRACK','REVIEW_REQUIRED'}
 
 
@@ -60,17 +60,21 @@ def _overlap(first,second):
     return bool(first and second and min(first[2],second[2])>max(first[0],second[0]) and min(first[3],second[3])>max(first[1],second[1]))
 
 
-def _accepted_related_proof(proof):
-    return (isinstance(proof,dict) and proof.get('schema_version')=='webcollect-related-stability-1'
+def _accepted_image_only_proof(proof):
+    # Later capture rules can also accept border or repaint differences. Those
+    # pixels cannot be attributed to a background image by this preflight.
+    return (isinstance(proof,dict) and proof.get('schema_version') in STABILITY_RULES
             and proof.get('accepted') is True and proof.get('related_dom_stable') is True
-            and proof.get('loading_complete') is True)
+            and proof.get('loading_complete') is True
+            and not proof.get('border_proof') and not proof.get('paint_noise_proof'))
 
 
 def _bounded_image_change(change,regions,probes):
     """Do not weaken routing from a flag alone or from aggregate bbox overlap."""
     proof=change.get('related_stability');pairs=change.get('diagnostic_pair_stability')
-    if (not _accepted_related_proof(proof) or not isinstance(pairs,list) or len(pairs)!=2
-            or not all(_accepted_related_proof(pair) for pair in pairs)):
+    if (not _accepted_image_only_proof(proof) or not isinstance(pairs,list) or len(pairs)!=2
+            or not all(_accepted_image_only_proof(pair) and pair['schema_version']==proof['schema_version']
+                       for pair in pairs)):
         return False
     pixels=proof.get('pixel_change',{});allowed=proof.get('allowed_image_regions')
     if (type(pixels.get('changed_pixels')) is not int or pixels['changed_pixels']<=0

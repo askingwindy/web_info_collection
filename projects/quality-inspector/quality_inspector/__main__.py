@@ -23,6 +23,7 @@ def main(argv=None):
     manifest.add_argument('--input',type=Path,action='append',required=True);manifest.add_argument('--output',type=Path,required=True)
     manifest.add_argument('--version-policy',type=Path,help='Explicit qc-sample-versions-1 supersedes relations; no automatic newest selection')
     manifest.add_argument('--quality-batch-ids',type=Path,help='JSON array of current formal batch sample IDs; check-set verifies these 5000 and the cumulative set')
+    manifest.add_argument('--application-registry',type=Path,help='Frozen site-pool snapshot resolving application aliases for the 500-sample limit')
     migration=sub.add_parser('migration-plan',help='Create pending legacy-review impact assessments only')
     migration.add_argument('--input',type=Path,required=True);migration.add_argument('--source-reviews',type=Path,required=True)
     migration.add_argument('--output',type=Path,required=True)
@@ -59,7 +60,7 @@ def main(argv=None):
                 members = json.loads(args.quality_batch_ids.read_text()) if args.quality_batch_ids else None
                 if args.quality_batch_ids and members is None:
                     raise ValueError('Quality batch file must contain an array of sample IDs')
-                value = build_set_manifest(roots, supersedes=supersedes, quality_batch_ids=members)
+                value = build_set_manifest(roots, supersedes=supersedes, quality_batch_ids=members,application_registry=args.application_registry)
             else:
                 value = migration_template(args.source_reviews,run(None,args.input)['samples'],fingerprint()[1])
             args.output.parent.mkdir(parents=True,exist_ok=True)

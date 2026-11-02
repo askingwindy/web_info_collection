@@ -24,8 +24,8 @@ def main(argv=None):
     p.add_argument('--category', action='append', required=True, dest='categories')
     p.add_argument('--target', type=int, default=10)
     p.add_argument('--per-category', type=int, default=2)
-    p.add_argument('--max-rounds', type=int, default=3)
-    p.add_argument('--max-searches', type=int, default=20)
+    p.add_argument('--max-rounds', type=int)
+    p.add_argument('--max-searches', type=int)
     p.add_argument('--interaction-policy', type=Path, help='Versioned batch policy; old frozen runs cannot change protocol')
     p.add_argument('--search-engine', choices=['search_std', 'search_pro'], default='search_std')
     for command in ('discover', 'probe'):

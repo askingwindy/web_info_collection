@@ -1,5 +1,6 @@
 """Frozen cumulative input sets; mechanical checks never grant release readiness."""
 import csv
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -23,7 +24,7 @@ def _quality_batch_ids(value):
     return sorted(value)
 
 
-def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None):
+def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None, application_registry=None):
     """Return facts, not approval. Caller persists this versioned manifest explicitly."""
     paths = [Path(path).resolve() for path in package_paths]
     if not paths or len(paths) != len(set(paths)):
@@ -38,6 +39,9 @@ def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None):
         result['version_policy'] = {'schema_version': POLICY, 'supersedes': list(supersedes)}
     if quality_batch_ids is not None:
         result['quality_batch_ids'] = _quality_batch_ids(quality_batch_ids)
+    if application_registry is not None:
+        path=Path(application_registry).resolve()
+        result['application_registry']={'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
     return result
 
 
@@ -183,6 +187,28 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append({'sample': str(path), 'reason': str(error)})
     count = len(samples); share = max(categories.values(), default=0) / count if count else 0
+    application_counts = Counter(); application_categories = {}; application_errors=[]
+    try:
+        from .application_capacity import application_key, LIMIT
+        registry=None
+        if raw.get('application_registry'):
+            from site_planner.site_pool import SitePool
+            ref=raw['application_registry']; registry_path=Path(ref['path'])
+            if hashlib.sha256(registry_path.read_bytes()).hexdigest()!=ref['sha256']: raise ValueError('Application registry binding changed')
+            registry=SitePool(registry_path,readonly=True)
+        for row in rows:
+            aid=application_key(sites[row['site_id']][0],registry)
+            if registry and registry.application(sites[row['site_id']][0])['category']!=row['site_category']:
+                raise ValueError('Effective sample category differs from the bound Table1 parent category')
+            application_counts[aid]+=1
+            category=row['site_category']
+            if aid in application_categories and application_categories[aid]!=category:
+                raise ValueError('Effective application has conflicting categories')
+            application_categories[aid]=category
+        if max(application_counts.values(),default=0)>LIMIT:
+            raise ValueError('Application exceeds 500 effective trajectories across all packages')
+    except (ValueError,KeyError,TypeError,OSError) as error:
+        application_errors.append(str(error)); errors.append({'reason':'application capacity: '+str(error)})
     from .profiles import release_errors
     errors.extend(release_errors(selected['configuration'], packages, versions, count))
     if len(rows) != count: errors.append({'reason': 'cumulative metadata count differs from sample population'})
@@ -236,6 +262,10 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             'manifest': raw, 'manifest_sha256': digest(raw), 'contract_sha256': contract_hash,
             'local_profile': selected, 'sample_count': count, 'site_count': len(active_sites),
             'statistics': {'categories': dict(categories), 'maximum_category_share': share,
+                           'applications':{'limit':500,'counts':dict(application_counts),
+                                           'category_counts':dict(Counter(application_categories.values())),
+                                           'identity_basis':'bound_registry' if raw.get('application_registry') else 'canonical_hostname',
+                                           'status':'FAIL' if application_errors else 'PASS','errors':application_errors},
                            'viewport_specs': sorted(map(list, resolutions)), 'short_flow_count': short,
                            **batch_statistics},
             'packages': packages, 'duplicates': duplicate, 'errors': errors,

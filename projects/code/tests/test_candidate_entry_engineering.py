@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import test_candidate_consumption as legacy
 from test_react_session import ReactSurface, FakePage, decide, act_step
-from webcollect.batch_core import BatchLedger, save_json, load_json, OutcomeUnknown
+from webcollect.batch_core import BatchLedger, save_json, load_json, OutcomeUnknown, file_sha
 from webcollect.candidate_consumer import consume, finish_or_reconcile, statistics, main, retry
 from webcollect.agent_controller import exclusive
 from site_planner.candidate_pool import CandidatePool
@@ -20,6 +20,38 @@ from site_planner.discovery_tools import reference
 
 
 class EntryEngineering(legacy.Consumption):
+    async def test_sealed_known_failure_reconciliation_preserves_raw_and_blocks_unknown(self):
+        from webcollect.runtime import RuntimeStore
+        from webcollect.collect_runtime import runtime_scope, quarantine_interrupted
+        def fail_derivation(evidence,sample,ids,manifest,**kwargs):
+            Path(sample).mkdir(parents=True,exist_ok=True)
+            raise ValueError('controlled original derivation failure')
+        def fail_close(output,attempts):
+            if attempts:raise ValueError('controlled quarantine crash')
+            return quarantine_interrupted(output,attempts)
+        with patch('webcollect.postprocess.process',side_effect=fail_derivation),patch('webcollect.collect_runtime.quarantine_interrupted',side_effect=fail_close):
+            with self.assertRaisesRegex(ValueError,'quarantine crash'):await self.invoke_cli()
+        claim=self.pool.get_claim(self.claim['claim_id']);binding=claim['binding']
+        output=Path(binding['output'])/'execution/capture';store=RuntimeStore(self.registry,runtime_scope(output))
+        attempt=next(a for a in store.attempt_ledger()['attempts'] if a['attempt_id']==binding['attempt_id'])
+        raw=next(output.glob('evidence/*/raw'));before={str(p):file_sha(p) for p in raw.rglob('*') if p.is_file()}
+        exit_file=self.root/'exit.json';save_json(exit_file,{'returncode':0})  # CLI can catch a failed sample and exit normally.
+        kwargs=dict(raw_receipt=reference(raw/'raw-receipt.json'),failure=reference(raw.parent/'failure.json'),
+                    process_exit=reference(exit_file),model_ledger=self.ledger)
+        with self.assertRaisesRegex(ValueError,'expired'):store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']-1,**kwargs)
+        with self.ledger.transaction() as con:
+            rid=con.execute('SELECT id FROM model_requests LIMIT 1').fetchone()[0]
+            con.execute("UPDATE model_requests SET state='unknown' WHERE id=?",(rid,))
+        with self.assertRaisesRegex(ValueError,'unresolved'):store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']+1,**kwargs)
+        self.assertEqual(store.attempt_ledger()['attempts'][0]['status'],'running')
+        with self.ledger.transaction() as con:con.execute("UPDATE model_requests SET state='succeeded' WHERE id=?",(rid,))
+        count=len(self.prompts)
+        closed=store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']+1,**kwargs)
+        self.assertEqual(closed['status'],'rejected')
+        self.assertEqual(closed['root_cause'],'controlled original derivation failure')
+        self.assertEqual(before,{str(p):file_sha(p) for p in raw.rglob('*') if p.is_file()})
+        self.assertEqual(len(self.prompts),count)
+
     def setUp(self):
         super().setUp()
         self.surface = ReactSurface(self.surface.state)
@@ -63,11 +95,11 @@ class EntryEngineering(legacy.Consumption):
         stack = ExitStack()
         def gateway_init(gateway,ledger):
             gateway.ledger=ledger;gateway.config=ledger.config
-        def reserve(gateway,job,purpose):
+        def reserve(gateway,job,purpose,request_payload=None):
             from webcollect.batch_core import ModelRateWait
             while True:
                 try:
-                    return gateway.ledger.reserve_request(job,purpose,len(self.prompts),{})
+                    return gateway.ledger.reserve_request(job,purpose,len(self.prompts),request_payload or {})
                 except ModelRateWait as wait:
                     time.sleep(wait.seconds)
         def call(gateway,job,purpose,prompt,schema,**kwargs):
@@ -93,7 +125,7 @@ class EntryEngineering(legacy.Consumption):
                 'function':{'name':name,'arguments':json.dumps(args,ensure_ascii=False)}}]}
             response={'name':name,'arguments':args,'tool_call_id':cid,'assistant_message':assistant,
                       'user_message':{'role':'user','content':prompt}}
-            request=reserve(gateway,job,purpose)
+            request=reserve(gateway,job,purpose,{'dispatch_attempt_id':kwargs.get('attempt_id')})
             gateway.ledger.settle_request(request['id'],state='succeeded',response=response,
                 usage={'input_tokens':1,'output_tokens':1,'cached_input_tokens':0})
             return response
@@ -200,13 +232,16 @@ class EntryEngineering(legacy.Consumption):
 
     async def test_entry_local_capture_error_keeps_site_failure_margin(self):
         from webcollect.site_failure_stop import SiteFailureStore
-        self.capture = AsyncMock(side_effect=OSError('controlled local capture failure'))
+        error = OSError('controlled local capture failure')
+        error.capture = {'accepted_as_formal_frame':False, 'attempts':[{'original_png_base64':'diagnostic-only'}]}
+        self.capture = AsyncMock(side_effect=error)
         with self.assertRaisesRegex(OSError, 'local capture failure'):
             await self.invoke_cli()
         store = SiteFailureStore(self.ledger.config['site_failure_guard'])
         self.assertEqual(store.status(self.uri)['failure_count'], 0)
         self.assertEqual(statistics(self.pool)['formal_attempts'], 0)
         self.assertTrue(list(self.output.rglob('first-observation-failure.json')))
+        self.assertEqual(load_json(next(self.output.rglob('first-observation-failure.json')))['capture'],error.capture)
 
     async def test_entry_public_access_rejection_counts_once(self):
         from webcollect.site_failure_stop import SiteFailureStore
@@ -305,7 +340,12 @@ class EntryEngineering(legacy.Consumption):
         self.assertEqual(self.prompts,[])
         self.assertEqual(self.contexts[0].close.await_count,1)
 
-    async def test_entry_unknown_category_stays_out_of_formal_quota(self):
+    async def test_entry_unknown_category_saves_pending_without_classification_request(self):
+        from webcollect.storage import allocate
+        from urllib.parse import urlsplit,urlunsplit
+        parsed=urlsplit(self.uri)
+        host_uri=urlunsplit((parsed.scheme,parsed.netloc,'/','',''))
+        allocate(self.registry,host_uri,'在线工具','real')
         self.v2['entry_url']=self.uri+'unknown-category'
         self.surface.state['url']=self.v2['entry_url']
         source={**self.source,'category_hint':'UNKNOWN'}
@@ -313,10 +353,18 @@ class EntryEngineering(legacy.Consumption):
         self.claim=self.pool.claim_next('entry-worker','unknown-category/0',candidate_id=cid,
             protocols=('webcollect-data-candidate-2',))
         result=(await self.invoke_cli(self.cli_args('unknown-category')))[0]
-        self.assertEqual(result['state'],'failed')
-        self.assertIn('category UNKNOWN',result['reason'])
-        self.assertEqual(statistics(self.pool)['formal_attempts'],0)
-        self.assertEqual(self.prompts,[])
+        self.assertEqual(result['state'],'succeeded', result)
+        self.assertEqual(statistics(self.pool)['formal_attempts'],1)
+        self.assertEqual(len(self.prompts),5)
+        catalog=load_json(next(self.output.rglob('catalog.json')))
+        self.assertEqual(catalog['records'][0]['site_category'],'UNKNOWN')
+        self.assertEqual(result['QC'],'pending_review')
+        from webcollect.storage import verify_existing_registry
+        capture=next(self.output.glob('*/execution/capture'))
+        verify_existing_registry(self.registry,capture.parent)
+        import sqlite3
+        with sqlite3.connect(self.registry) as con:
+            self.assertEqual(con.execute('SELECT category FROM sites WHERE uri=?',(host_uri,)).fetchone()[0],'在线工具')
 
     async def test_entry_distinct_candidates_get_distinct_contexts(self):
         first=(await self.invoke_cli())[0]

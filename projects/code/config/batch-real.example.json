@@ -3,13 +3,7 @@
   "run_id": "REPLACE_WITH_AUTHORIZED_RUN_ID",
   "mode": "real",
   "budget": {
-    "max_model_requests": null,
-    "max_reserved_tokens": null,
-    "max_model_cost_micros": null,
     "currency": "REPLACE_WITH_BILLING_CURRENCY",
-    "max_discovery_candidates": null,
-    "max_probe_pages": null,
-    "max_run_seconds": null,
     "max_concurrent_jobs": 1,
     "min_domain_interval_seconds": 2,
     "min_model_interval_seconds": 1,

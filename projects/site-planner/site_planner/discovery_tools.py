@@ -1,5 +1,6 @@
 """Audited GLM search and fresh-profile read-only browser tools."""
 import asyncio
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 import time
 from urllib.parse import urljoin, urlsplit
@@ -10,22 +11,44 @@ import re
 
 from webcollect.batch_core import OutcomeUnknown, file_sha, save_json
 from webcollect.collect import verify_public_url
-from webcollect.planning import verify_evidence
+from webcollect.planning import object_sha256, verify_evidence
 from .site_pool import host_identity, page_uri
 
 SEARCH_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/web_search'
+
+
+def search_channel_hold(pool, run_id):
+    """A channel receipt is separate from unresolved request settlement."""
+    with pool.connect() as con:
+        rows = con.execute("SELECT id,run_id,state,result FROM tool_requests WHERE kind='search' ORDER BY started,id")
+        for row in rows:
+            result = json.loads(row['result'] or '{}')
+            if str(result.get('provider_code')) == '1113' or (row['run_id']==run_id and row['state']=='unknown' and result.get('http_status') in (401,403)):
+                return {'request_id':row['id'],'state':row['state'],
+                        'reason':'search_channel_unavailable' if str(result.get('provider_code'))=='1113' else 'search_authorization_hold',
+                        'http_status':result.get('http_status'),'provider_code':result.get('provider_code'),
+                        'error_response':result.get('error_response')}
+    return None
 
 
 def reference(path):
     return {'path': str(Path(path).resolve()), 'sha256': file_sha(path)}
 
 
-def glm_search(pool, run_id, model, query, output, *, engine='search_std', maximum=20):
+def glm_search(pool, run_id, model, query, output, *, engine='search_std', maximum=None, count=10, batch_scope=None):
     if not isinstance(query, str) or not 1 <= len(query) <= 70:
         raise ValueError('Search query must contain 1–70 characters')
+    if type(count) is not int or not 1 <= count <= 50:
+        raise ValueError('Search result count must be 1–50')
+    # A previously issued query retains its original result size and receipt.
+    identity = object_sha256([run_id, 'search', query])
+    with pool.connect() as con:
+        first = con.execute('SELECT payload FROM tool_requests WHERE id=?',(identity,)).fetchone()
+    if not first and search_channel_hold(pool, run_id):
+        raise OutcomeUnknown('Original search channel unavailable; no new dispatch')
     payload = {'search_engine': engine, 'search_query': query, 'search_intent': False,
-               'count': 10, 'content_size': 'medium'}
-    rid, old = pool.reserve_tool(run_id, 'search', query, payload, maximum=maximum)
+               'count': json.loads(first[0])['count'] if first else count, 'content_size': 'medium'}
+    rid, old = pool.reserve_tool(run_id, 'search', query, payload, maximum=maximum, batch_scope=batch_scope)
     if old is not None:
         verify_evidence([old['reference']])
         return old
@@ -52,6 +75,11 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
             raise ValueError('Search response exceeds bounded size; saved prefix only')
         raw = json.loads(body)
         if not isinstance(raw.get('search_result'), list):
+            detail = raw.get('error', {})
+            if isinstance(detail, dict) and str(detail.get('code')) == '1113':
+                pool.settle_tool(rid, 'unknown', {'http_status':200,'provider_code':'1113',
+                    'error_response':reference(path),'outcome_and_charge':'UNKNOWN'})
+                raise OutcomeUnknown('Search channel 1113; original receipt retained')
             raise ValueError('Search response has no structured result list')
         results = []; rejected = []
         for index, row in enumerate(raw['search_result']):
@@ -69,8 +97,35 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
         pool.settle_tool(rid, 'succeeded', result)
         return result
     except Exception as error:
+        # A structured 200 error has already been saved and settled above.
+        if isinstance(error, OutcomeUnknown):
+            raise
         result = {'error_type': type(error).__name__, 'http_status': getattr(error, 'code', None),
                   'outcome_and_charge': 'UNKNOWN'}
+        if isinstance(error, urllib.error.HTTPError):
+            # Keep the original provider response before closing it. A 429 can
+            # mean account balance or rate limiting; neither authorizes a retry.
+            try:
+                body=error.read(65537)
+                if body:
+                    failure_path=Path(output)/('search-error-'+rid+'.json')
+                    failure_path.parent.mkdir(parents=True,exist_ok=True)
+                    with failure_path.open('xb') as handle:handle.write(body)
+                    result['error_response']=reference(failure_path)
+                    if len(body)<=65536:
+                        raw_error=json.loads(body)
+                        detail=raw_error.get('error',{}) if isinstance(raw_error,dict) else {}
+                        if isinstance(detail,dict) and detail.get('code') is not None:
+                            result['provider_code']=str(detail['code'])
+            except (OSError,ValueError,TypeError):
+                pass  # The original HTTP outcome and request identity still win.
+        if result['http_status']==429:
+            value=error.headers.get('Retry-After','') if error.headers else ''
+            try:
+                result['retry_after_seconds']=max(0,int(value) if value.isdigit() else
+                                                   int(parsedate_to_datetime(value).timestamp()-time.time())+1)
+            except (ValueError,TypeError,OverflowError):
+                result['retry_after_seconds']=60
         pool.settle_tool(rid, 'unknown', result)
         if isinstance(error, urllib.error.HTTPError):
             error.close()
@@ -109,7 +164,7 @@ class DiscoveryBrowser:
 
     async def read(self, uri):
         # Covers new_page, JS evaluation and screenshot as well as navigation.
-        return await asyncio.wait_for(self._read(uri), timeout=min(60, self.ledger.remaining_seconds()))
+        return await asyncio.wait_for(self._read(uri), timeout=60)
 
     async def _read(self, uri):
         from .pipeline import reserve_visit_async

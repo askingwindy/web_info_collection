@@ -1,4 +1,4 @@
-"""Explicit uncapped monetary observation with all nonmonetary bounds intact."""
+"""Historical ceilings, idempotent metering, and independent dispatch guards."""
 from copy import deepcopy
 import hashlib
 from pathlib import Path
@@ -41,16 +41,18 @@ class ObserveOnlyBudgetTests(unittest.TestCase):
         ledger.settle_request(request['id'], state='succeeded', usage=USAGE, response={'result': {}})
         return request
 
-    def test_legacy_exact_representation_and_null_never_imply_uncapped_money(self):
+    def test_legacy_representation_and_absent_or_null_ceilings(self):
         legacy = load_json(CONFIG)
         self.assertEqual(validate_config(legacy), legacy)
         self.assertNotIn('cost_control', validate_config(legacy)['budget'])
-        for mode, amount in ((None, None), ('capped', None), ('observe_only', 0), ('observe_only', 140), ('unknown', None)):
+        for mode, amount in ((None, None), ('capped', None), ('observe_only', 0), ('observe_only', 140)):
             config = self.config()
             if mode is None: config['budget'].pop('cost_control')
             else: config['budget']['cost_control'] = mode
             config['budget']['max_model_cost_micros'] = amount
-            with self.subTest(mode=mode, amount=amount), self.assertRaises(ValueError): validate_config(config)
+            with self.subTest(mode=mode, amount=amount): self.assertEqual(validate_config(config), config)
+        config['budget']['cost_control']='invalid'
+        with self.assertRaises(ValueError): validate_config(config)
         example = load_json(CONFIG.parent / 'batch-real.example.json')
         with self.assertRaises(ValueError): validate_config(example)
         example['budget']['cost_control'] = 'observe_only'
@@ -70,7 +72,7 @@ class ObserveOnlyBudgetTests(unittest.TestCase):
             else: changed['model']['reserve_cost_micros'] = 0
             with self.subTest(field=field), self.assertRaises(ValueError): validate_config(changed)
 
-    def test_amount_is_observed_above_old_cap_while_request_limit_still_stops(self):
+    def test_amount_and_requests_continue_above_old_caps(self):
         ledger, job = self.ledger()
         for number in range(3): self.settle(ledger, job, f'purpose-{number}')
         summary = ledger.summary()
@@ -79,17 +81,18 @@ class ObserveOnlyBudgetTests(unittest.TestCase):
         self.assertEqual(summary['cost_control'], 'observe_only')
         self.assertEqual(summary['max_model_cost_micros'], 'NOT_APPLICABLE')
         self.assertFalse(summary['monetary_limit_applied'])
-        with self.assertRaisesRegex(BudgetStop, 'max_model_requests'):
-            ledger.reserve_request(job, 'fourth', 0)
+        self.settle(ledger, job, 'fourth')
+        self.assertEqual(ledger.summary()['known_model_cost_micros'], 280)
 
-    def test_default_capped_and_explicit_capped_keep_original_monetary_guard(self):
+    def test_default_and_explicit_historical_capped_configs_meter_actual_cost(self):
         for explicit in (False, True):
             config = self.config(False)
             if explicit: config['budget']['cost_control'] = 'capped'
             ledger, job = self.ledger(config); self.settle(ledger, job, 'one')
-            with self.subTest(explicit=explicit), self.assertRaisesRegex(BudgetStop, 'max_model_cost_micros'):
-                ledger.reserve_request(job, 'two', 0)
-            self.assertTrue(ledger.summary()['monetary_limit_applied'])
+            with self.subTest(explicit=explicit):
+                for n in ('two','three'): self.settle(ledger,job,n)
+                self.assertEqual(ledger.summary()['known_model_cost_micros'],210)
+                self.assertFalse(ledger.summary()['monetary_limit_applied'])
 
     def test_unknown_reservation_is_retained_and_same_identity_is_never_resent(self):
         ledger, job = self.ledger(); request = ledger.reserve_request(job, 'ambiguous', 0)
@@ -101,18 +104,16 @@ class ObserveOnlyBudgetTests(unittest.TestCase):
         ledger.reserve_request(job, 'different-independent-request', 0)
         self.assertEqual(ledger.summary()['uncertain_reserved_cost_micros'], 280)
 
-    def test_token_and_time_limits_remain_finite_and_enforced(self):
+    def test_old_token_and_time_limits_do_not_stop_jobs(self):
         config = self.config(); config['budget']['max_reserved_tokens'] = 120
         ledger, job = self.ledger(config); self.settle(ledger, job, 'one')
-        with self.assertRaisesRegex(BudgetStop, 'max_reserved_tokens'):
-            ledger.reserve_request(job, 'two', 0)
+        self.assertEqual(ledger.reserve_request(job, 'two', 0)['state'], 'new')
         config = self.config(); config['budget']['max_run_seconds'] = 1
         ledger, job = self.ledger(config)
-        with self.assertRaisesRegex(BudgetStop, 'remaining run time'):
-            ledger.reserve_request(job, 'too-late', 0)
+        self.assertEqual(ledger.reserve_request(job, 'after-window', 0)['state'], 'new')
         for field in ('max_model_requests', 'max_reserved_tokens', 'max_run_seconds'):
             config = self.config(); config['budget'][field] = None
-            with self.subTest(field=field), self.assertRaises(ValueError): validate_config(config)
+            with self.subTest(field=field): self.assertEqual(validate_config(config),config)
 
     def test_only_monetary_overreservation_is_not_a_token_stop_in_observe_mode(self):
         for observe in (True, False):
@@ -125,18 +126,16 @@ class ObserveOnlyBudgetTests(unittest.TestCase):
                 con.execute('UPDATE model_requests SET cost=500 WHERE id=?', (request['id'],)); con.commit()
             self.assertEqual(ledger.summary()['cost_reservation_exceeded_requests'], 1)
             self.assertEqual(ledger.summary()['known_model_cost_micros'], 500)
-            if observe:
-                self.assertEqual(ledger.reserve_request(job, 'two', 0)['state'], 'new')
-            else:
-                with self.assertRaisesRegex(BudgetStop, 'conservative reservation'):
-                    ledger.reserve_request(job, 'two', 0)
+            self.assertEqual(ledger.reserve_request(job, 'two', 0)['state'], 'new')
 
-    def test_token_overreservation_still_stops_observe_mode(self):
+    def test_token_overreservation_is_reported_and_next_request_can_dispatch(self):
         ledger, job = self.ledger(); request = ledger.reserve_request(job, 'one', 0)
-        ledger.settle_request(request['id'], state='succeeded', usage={**USAGE, 'input_tokens': 101})
+        ledger.settle_request(request['id'], state='invalid_response', usage={**USAGE, 'input_tokens': 101}, error='SchemaMismatch')
+        with ledger.connect() as con:
+            actual = con.execute('SELECT state,error FROM model_requests WHERE id=?',(request['id'],)).fetchone()
+        self.assertEqual(tuple(actual),('invalid_response','SchemaMismatch'))
         self.assertEqual(ledger.summary()['token_reservation_exceeded_requests'], 1)
-        with self.assertRaisesRegex(BudgetStop, 'conservative reservation'):
-            ledger.reserve_request(job, 'two', 0)
+        self.assertEqual(ledger.reserve_request(job, 'two', 0)['state'], 'new')
 
     def test_image_job_limits_and_old_ledger_configuration_remain_frozen(self):
         ledger, job = self.ledger()

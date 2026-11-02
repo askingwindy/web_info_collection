@@ -313,14 +313,15 @@ class PlanningRuntimeTests(unittest.TestCase):
         self.assertEqual((task['status'], task['quota_reserved']), ('needs_replan', 0))
         self.assertEqual(self.claim('next', now=NOW+3)['task_id'], 'task-1')
 
-    def test_pending_review_budget_blocks_additional_capture(self):
+    def test_pending_review_backlog_allows_additional_capture(self):
         self.store.update_policy({'pending_review_cap': 1}, 'controlled pending budget', now=NOW)
         self.enqueue(); row = self.claim(); self.start(row)
         self.finish(row, outcome='collected_pending_review')
-        self.assertIsNone(self.claim('next', now=NOW+3))
+        next_task=self.claim('next', now=NOW+3)
+        self.assertIsNotNone(next_task)
         proof = self.qc_evidence([row['sample_id']])
         self.store.record_review(row['sample_id'], 'pass', proof, 'controlled review fixture', now=NOW+4)
-        self.assertIsNotNone(self.claim('next', now=NOW+5))
+        self.assertEqual(self.claim('next', now=NOW+5)['attempt_id'],next_task['attempt_id'])
 
     def test_campaign_attempt_budget_shared_across_output_scopes(self):
         self.store.update_policy({'attempt_cap': 1}, 'controlled attempt cap', now=NOW)
@@ -331,7 +332,7 @@ class PlanningRuntimeTests(unittest.TestCase):
         other.initialize(policy, now=NOW+2)
         plan, receipt = make_plan(self.root / 'second', 1, task_prefix='other', uri='https://another.net/')
         other.enqueue_plan(plan, receipt, now=NOW+2)
-        self.assertIsNone(other.claim_next('worker-2', request_id='other', now=NOW+3))
+        self.assertIsNotNone(other.claim_next('worker-2', request_id='other', now=NOW+3))
         self.assertEqual(other.snapshot()['campaign_actual_attempt_count'], 1)
         with self.assertRaisesRegex(ValueError, '预算不同'):
             RuntimeStore(self.registry, 'batch-C').initialize(now=NOW+2)
@@ -356,8 +357,8 @@ class PlanningRuntimeTests(unittest.TestCase):
                 return str(error)
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(enqueue, [(self.store, self.plan, self.publication), (other, plan, receipt)]))
-        self.assertEqual(sum(isinstance(r, dict) for r in results), 1)
-        self.assertEqual(len(self.store.snapshot()['tasks']) + len(other.snapshot()['tasks']), 3)
+        self.assertEqual(sum(isinstance(r, dict) for r in results), 2, results)
+        self.assertEqual(len(self.store.snapshot()['tasks']) + len(other.snapshot()['tasks']), 6)
         self.assertEqual(self.counts()['allocations'], 0)
 
     def test_publication_is_idempotent_and_never_customer_acceptance(self):

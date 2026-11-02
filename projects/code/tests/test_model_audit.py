@@ -482,6 +482,16 @@ class ModelAuditTests(unittest.TestCase):
         self.assertEqual(result['cost_control'], 'capped')
         self.assertEqual(result['budget_max_model_cost_micros'], 100)
 
+    def test_mixed_ledger_counts_legacy_and_new_requests_with_original_costs(self):
+        with self.connection() as con:
+            con.execute("UPDATE model_requests SET request_json=json_set(request_json,'$.cost_control','observe_only') WHERE id='r-a'")
+        audit = export_audit(self.db, self.write_manifest(self.manifest()), self.root/'both')
+        summary = audit['summary']
+        self.assertEqual((summary['metered_dispatches'],summary['unmarked_historical_requests']),(1,4))
+        self.assertFalse(summary['monetary_limit_applied'])
+        self.assertEqual(summary['ledger_totals']['known_estimated_cost_micros'],41)
+        self.assertEqual(query_audit(self.root/'both/audit.json')['budget_max_model_cost_micros'],'NOT_APPLICABLE')
+
     def test_query_rejects_legacy_reinterpretation_and_inconsistent_cost_control_flags(self):
         path = self.exported_query_fixture(); original = json.loads(path.read_text())
         legacy = deepcopy(original); legacy['source'].pop('cost_control'); legacy['summary'].pop('cost_control')

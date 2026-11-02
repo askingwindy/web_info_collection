@@ -1,4 +1,5 @@
 """Bound discovery batches. Legacy frozen runs retain their exact interaction."""
+from itertools import count
 import asyncio
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -99,11 +100,11 @@ def recover_assessments(pool,run_id):
             for item in value['items']:verify_evidence([item['observation']['observation'],item['image']])
             commit_assessments(pool,run_id,key,value['items'],value['result'],value['insertions'])
 
-async def discover(config,*,pool_path,ledger_path,output,categories,target=10,per_category=2,max_rounds=3,
-                   max_searches=20,search_engine='search_std',unresolved_selection_decision=None,interaction_policy=None):
+async def discover(config,*,pool_path,ledger_path,output,categories,target=10,per_category=2,max_rounds=None,
+                   max_searches=None,search_engine='search_std',unresolved_selection_decision=None,interaction_policy=None):
     from .discovery_agent import run_stats,complete,model_decision,PLAN_SCHEMA,CANONICAL_CATEGORIES
     p=policy(interaction_policy or DEFAULT)
-    if not categories or len(set(categories))!=len(categories) or any(c not in CANONICAL_CATEGORIES for c in categories) or target!=len(categories)*per_category or any(type(n)is not int or n<1 for n in (target,per_category,max_rounds,max_searches)):raise ValueError('Invalid discovery scope')
+    if not categories or len(set(categories))!=len(categories) or any(c not in CANONICAL_CATEGORIES for c in categories) or target!=len(categories)*per_category or any(type(n)is not int or n<1 for n in (target,per_category)) or any(type(n)is not int or n<1 for n in (max_rounds,max_searches) if n is not None):raise ValueError('Invalid discovery scope')
     if unresolved_selection_decision is not None:raise ValueError('Legacy UNKNOWN continuation must use its frozen legacy interaction')
     if any(v>config['model']['max_completion_tokens'] for v in p['output_limits'].values()):raise ValueError('Output limits cannot enlarge original model maximum')
     root=Path(output).resolve();root.mkdir(parents=True,exist_ok=True);pool=SitePool(pool_path);run_id=config['run_id']
@@ -116,7 +117,8 @@ async def discover(config,*,pool_path,ledger_path,output,categories,target=10,pe
     ledger=BatchLedger(ledger_path,config,initialize=not Path(ledger_path).exists());gateway=ModelGateway(ledger);stopped=None
     try:
         async with DiscoveryBrowser(pool,ledger,run_id,root) as browser:
-            for rnd in range(max_rounds):
+            for rnd in count() if max_rounds is None else range(max_rounds):
+                previous = run_stats(pool,run_id,baseline)['confirmed_categories']
                 for category in categories:
                     if run_stats(pool,run_id,baseline)['confirmed_categories'].get(category,0)>=per_category:continue
                     key=f'{category}/{rnd}'
@@ -161,7 +163,9 @@ async def discover(config,*,pool_path,ledger_path,output,categories,target=10,pe
                         pending={'items':items,'result':result,'insertions':insertions}
                         pool.checkpoint(run_id,ready_key,pending)
                         commit_assessments(pool,run_id,ready_key,items,result,insertions)
-                if complete(run_stats(pool,run_id,baseline),categories,per_category):break
+                stats = run_stats(pool,run_id,baseline)
+                if complete(stats,categories,per_category) or (max_rounds is None and stats['confirmed_categories'] == previous):
+                    break
     except Exception as error:stopped={'error_type':type(error).__name__,'reason':str(error)}
     stats=run_stats(pool,run_id,baseline)
     report={'version':VERSION,'status':'TARGET_REACHED' if complete(stats,categories,per_category) and stopped is None else 'PARTIAL',

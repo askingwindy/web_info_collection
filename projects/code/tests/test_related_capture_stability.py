@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from PIL import Image
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Error as BrowserError
 from webcollect import browser
 from webcollect.evidence import audit_capture
 from webcollect.task_admission import _frame,reference
@@ -113,6 +113,26 @@ class RelatedProofTests(unittest.TestCase):
 
 
 class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
+    async def test_peripheral_playing_video_keeps_full_frame_and_protects_target(self):
+        await self.page.set_content('<style>body{margin:0}video{position:absolute;left:300px;top:70px;width:40px;height:30px}</style>'
+            '<main><button id="go">核对结果</button><p>计算结果42</p></main><aside><video autoplay muted></video></aside>')
+        await self.page.evaluate('''async () => {
+            const canvas=document.createElement('canvas');canvas.width=40;canvas.height=30;
+            const ctx=canvas.getContext('2d');ctx.fillStyle='red';ctx.fillRect(0,0,40,30);
+            const v=document.querySelector('video');v.srcObject=canvas.captureStream(30);await v.play();
+            window.fixtureCanvas=canvas;
+        }''')
+        first=await browser.observe(self.page,'#go');a=await self.page.screenshot()
+        await self.page.evaluate("() => {const c=fixtureCanvas.getContext('2d');c.fillStyle='blue';c.fillRect(0,0,40,30)}")
+        await self.page.wait_for_timeout(100)
+        last=await browser.observe(self.page,'#go');b=await self.page.screenshot()
+        self.assertNotEqual(a,b)
+        self.assertTrue(first['capture_media'][0]['eligible'])
+        self.assertTrue(browser.stability_pair(first,last,a,b)['accepted'])
+        await self.page.locator('video').evaluate("v=>{v.style.left='0px';v.style.top='0px'}")
+        blocked=await browser.observe(self.page,'#go')
+        self.assertFalse(blocked['capture_media'][0]['eligible'])
+
     async def asyncSetUp(self):
         for target in ('webcollect.model_gateway.ModelGateway.call',
                        'webcollect.runtime.RuntimeStore.claim_next','webcollect.collect_runtime.collect_m4'):
@@ -148,6 +168,124 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
             return result
         with patch('webcollect.browser.viewport_png',side_effect=actual_pixels):
             return await browser.capture(self.page,'#go',retries=1,**options)
+
+    async def test_rotated_explicit_decoration_keeps_pixels_and_rejects_related_target(self):
+        await self.prepare()
+        await self.page.locator('img').evaluate("n=>n.style.transform='rotate(12deg)'")
+        frame=await browser.capture(self.page,'#go',retries=1)
+        self.assertEqual(len(frame['state']['unrelated_transform_proofs']),1)
+        image=frame['state']['capture_images'][0]
+        self.assertFalse(image['eligible'])
+        self.assertFalse(image['geometry_proof']['actions_supported'])
+        self.assertTrue(browser.validate_capture_receipt(frame['state'],frame['capture'],frame['png']))
+        with self.assertRaisesRegex(BrowserError,'UNSUPPORTED_GEOMETRY'):
+            await browser.capture(self.page,'#decoration',retries=1)
+        await self.page.locator('img').evaluate("n=>{n.style.left='15px';n.style.top='140px'}")
+        with self.assertRaisesRegex(BrowserError,'UNSUPPORTED_GEOMETRY'):
+            await browser.capture(self.page,'#go',retries=1)
+
+    async def test_native_same_tab_navigation_branches_and_external_identity(self):
+        from urllib.parse import urlsplit
+        from webcollect.react_session import ReactSession,build_url_task
+        from webcollect.postprocess import process
+        from test_react_native import native,finish
+        from test_react_session import decide,act_step
+        home='https://navigation.invalid/'
+        branch='https://branch.invalid/details'
+        documents={home:'<h1>读者服务目录</h1><a href="/details">查看借阅规则</a><br><a href="'+branch+'">查看另一服务说明</a>',
+            home+'details':'<h1>借阅规则详情</h1><p>读者可以查看借阅时间和归还规则，核对实际页面内容。</p>',
+            branch:'<h1>服务说明详情</h1><p>读者可以查看开放时间和服务地点，核对实际页面内容。</p>'}
+        blocked=[]
+        async def route(request):
+            url=request.request.url
+            if url not in documents:
+                blocked.append(url);await request.abort();return
+            await request.fulfill(content_type='text/html; charset=utf-8',body='<!doctype html><meta charset="utf-8">'+documents[url])
+        await self.context.route('**/*',route)
+        targets=[home+'details',None,branch,None]
+        index=0
+        def choose(prompt):
+            nonlocal index
+            if index==4:
+                build=finish(summary='已查看两个服务详情并返回目录；未执行借阅业务')
+            else:
+                url=targets[index]
+                if url:
+                    page=next(p for p in prompt['boundary']['observed_pages'] if p['url']==url)
+                    build=decide(goal='查看两个服务详情并返回目录' if index==0 else None,tool='act',
+                        arguments=lambda p:{'observation_id':p['observation']['observation_id'],
+                            'step':act_step('open_url',page_id=page['page_id'],goal='查看服务详情',expected='显示所选详情')})
+                else:
+                    build=decide(tool='act',arguments=lambda p:{'observation_id':p['observation']['observation_id'],
+                        'step':act_step('back',goal='返回服务目录',expected='显示原目录')})
+            response=native(build,'local-'+str(index))(prompt);index+=1;return response
+        async def async_choose(prompt):return choose(prompt)
+        with tempfile.TemporaryDirectory() as temp, patch('webcollect.collect.verify_public_url',side_effect=lambda url,*args,**kwargs:urlsplit(url).hostname):
+            root=Path(temp);sid='S000111_sample_000001';evidence=root/'evidence'/sid
+            task=build_url_task(url=home,task_version='offline-navigation',app_name='受控导航目录')
+            session=ReactSession(task,evidence/'raw',async_choose,self.page,steps_directory=evidence)
+            result=await session.run()
+            self.assertEqual(result['effective_steps'],4,result)
+            self.assertEqual(self.page.url,home)
+            terminal=json.loads(Path(result['terminal']['path']).read_text())
+            self.assertEqual(set(terminal['page_hosts'].values()),{'navigation.invalid','branch.invalid'})
+            ids={'sample_id':sid,'site_id':'S000111','batch_id':'B20261102_001','attempt_id':'offline-navigation'}
+            manifest={'batch_id':ids['batch_id'],'sample_kind':'real','program_version':'offline','rule_version':'1.0.0',
+                'sites':[{'site_id':ids['site_id'],'uri':home,'site_category':task['site_category']}],'samples':[sid]}
+            derived=process(evidence,root/'delivery'/sid,ids,manifest)
+            self.assertEqual(derived['status'],'derived_saved',derived)
+            annotation=json.loads((root/'delivery'/sid/'annotation.json').read_text())
+            self.assertEqual({step['tool_call']['context'] for step in annotation['steps']},
+                {'Web / navigation.invalid','Web / branch.invalid'})
+            self.assertEqual(blocked,[])
+
+    async def test_click_feedback_in_source_tab_and_article_in_popup_have_separate_evidence(self):
+        from webcollect.react_protocol import atomic_effect
+
+        article_url = 'https://article.invalid/borrowing'
+        visits = []
+
+        async def serve_article(route):
+            visits.append(route.request.url)
+            await route.fulfill(content_type='text/html; charset=utf-8', body='<h1>图书借还操作说明</h1>')
+
+        await self.context.route(article_url, serve_article)
+        await self.page.set_content(
+            '<!doctype html><meta charset="utf-8"><style>'
+            'a,p{display:block;width:180px;padding:8px;color:black}p,a:focus{background:lightblue}'
+            'a:focus+p{background:white}</style>'
+            f'<a id="entry" href="{article_url}" target="_blank">图书自助借还流程</a><p>电子读者证领取流程</p>'
+        )
+        before = await browser.capture(self.page, '#entry', retries=1)
+        target = before['state']['target']
+        x, y = target['coordinate']
+        arguments = {'x': x, 'y': y}
+        async with self.page.expect_popup() as popup_event:
+            await browser.execute(self.page, 'click', arguments, {})
+        popup = await popup_event.value
+        await popup.wait_for_load_state('domcontentloaded')
+        source_after = await browser.capture(self.page, '#entry', retries=1)
+        landing = await browser.capture(popup, retries=1)
+
+        for frame in (before, source_after, landing):
+            self.assertTrue(browser.validate_capture_receipt(frame['state'], frame['capture'], frame['png']))
+        self.assertNotEqual(before['png'], source_after['png'])
+        self.assertEqual(before['state']['url'], source_after['state']['url'])
+        effect = atomic_effect(before['state'], source_after['state'], 'click', arguments, target['element_id'])
+        self.assertTrue(effect['verified'])
+        self.assertIn('target.focused', effect['fields'])
+        self.assertNotIn('图书借还操作说明', source_after['state']['visible_text'])
+        self.assertEqual(landing['state']['url'], article_url)
+        self.assertIn('图书借还操作说明', landing['state']['visible_text'])
+        self.assertEqual(visits, [article_url])
+
+    async def test_absent_body_reobserves_without_navigation_or_action(self):
+        await self.prepare()
+        await self.page.evaluate("()=>{const body=document.body;body.remove();setTimeout(()=>document.documentElement.append(body),40)}")
+        with patch.object(self.page,'goto',side_effect=AssertionError('no navigation replay')), \
+             patch('webcollect.browser.execute',side_effect=AssertionError('no action replay')):
+            state=await browser.observe(self.page,'#go')
+        self.assertIn('核对结果',state['visible_text'])
 
     async def test_default_capture_dispatch_and_recomputed_receipt_accept_bounded_image(self):
         await self.prepare();result=await self.changing_capture(assertions=[{'selector':'#result','contains':'42'}])
@@ -337,7 +475,7 @@ class CompactRepaintNoiseTests(unittest.TestCase):
         # The default rule version stamps its own noise-rule label; v4 receipts
         # carry compact-repaint-noise-v2 (tag/window-aware paint guard).
         self.assertEqual({entry['rule'] for entry in noise},
-                         {'compact-repaint-noise-v2' if browser.STABILITY_VERSION == 'webcollect-related-stability-4'
+                         {'compact-repaint-noise-v2' if browser.STABILITY_VERSION in ('webcollect-related-stability-4','webcollect-related-stability-5')
                           else 'compact-repaint-noise-v1'})
         for kwargs, label in ((dict(allow_border=False), 'v3-first-attempt'),
                               (dict(allow_border=True, rule_version=browser.STABILITY_V2), 'v2-receipt')):

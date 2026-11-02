@@ -11,7 +11,7 @@ VERSION = 'webcollect-trusted-observation-1'
 PROVEN, UNAVAILABLE, INSUFFICIENT = 'PROVEN', 'UNAVAILABLE', 'INSUFFICIENT'
 CONTROL_ACTIONS = {'click', 'double_click', 'right_click', 'type', 'select', 'set_value'}
 ACTIONS = CONTROL_ACTIONS | {'scroll', 'open_url', 'back', 'hotkey'}
-LABEL_KINDS = {'rendered_target_text', 'rendered_associated_label', 'rendered_labelledby_text',
+LABEL_KINDS = {'rendered_target_text', 'rendered_associated_label', 'rendered_labelledby_text', 'rendered_grouped_button',
                'rendered_adjacent_input_group_label', 'visible_selected_option',
                'visible_native_value', 'visible_placeholder'}
 
@@ -130,3 +130,8 @@ def require_action(state, operation):
             raise ValueError(status['status'] + ': ' + status['reason'])
         if evidence.get('target_label') not in [r['text'] for r in readable_labels(target)]:
             raise ValueError('MISSING_CURRENT_READABLE_LABEL')
+        if 'replace_selected_number' in evidence:
+            if (operation['action_type'] != 'type' or value.get('input_type') != 'number'
+                    or value.get('focused') is not True or value.get('all_text_selected') is not True
+                    or not value.get('value') or value['value'] != evidence['replace_selected_number']):
+                raise ValueError('NUMERIC_REPLACEMENT_REQUIRES_CURRENT_FULL_SELECTION')

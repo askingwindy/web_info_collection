@@ -631,18 +631,24 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         rows = []
         if c['probe'].get('focused') is not True:
             rows.append({**primitive, 'action': 'click'})
-        if c['value']['value']:
+        if c['value']['value'] and not (c['value'].get('input_type') == 'number'
+                and c['probe'].get('focused') is True and c['value'].get('all_text_selected') is True):
             rows.append({**primitive, 'action': 'hotkey', 'keys': ['meta', 'a'], 'select_all': True})
-        # Native number inputs do not expose selectionStart/End. Clear
-        # after the explicit select-all, then require the observed empty
-        # value before typing; never assume an unobservable selection.
-        numeric_clear = bool(c['value']['value']) and c['value'].get('input_type') == 'number'
+        # On a native session the browser can bind a full numeric selection
+        # even without offsets. Validate it again immediately before typing.
+        from .react_protocol import VERSION as native_protocol
+        number = bool(c['value']['value']) and c['value'].get('input_type') == 'number'
+        selected_replacement = (number and bool(step['value']) and 'all_text_selected' in c['value']
+                                and task['fragment'].get('decision_protocol') == native_protocol)
+        numeric_clear = number and not selected_replacement
         if numeric_clear:
             rows.append({**primitive, 'action':'hotkey', 'keys':['backspace']})
         rows.append({**primitive, 'action': 'type', 'value': step['value'], 'replacement': True} if step['value'] else
                     {**primitive, 'action': 'hotkey', 'keys': ['backspace'], 'replacement': True, 'value': ''})
         for row in rows:
             row['initial_value'] = c['value']['value']
+        if selected_replacement:
+            rows[-1]['replace_selected_number'] = c['value']['value']
         if numeric_clear:
             if step['value']:
                 rows[-1]['initial_value']=''

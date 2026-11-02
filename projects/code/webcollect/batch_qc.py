@@ -27,8 +27,16 @@ def prepare(dataset, history_set, output, *, max_batch_size, ai_percent, human_p
     roots={dataset}|{Path(row['annotation_path']).parents[2] for row in records if row['sample_id'] not in ids}
     if any(output.is_relative_to(root) or root.is_relative_to(output) for root in roots):
         raise ValueError('Batch output must be outside all original evidence')
-    manifest=build_set_manifest(sorted(roots))
     output.mkdir(parents=True,exist_ok=False)
+    application_registry=None
+    if scope.get('candidate_project'):
+        import sqlite3
+        from contextlib import closing
+        application_registry=output/'application-registry.sqlite3'
+        with closing(sqlite3.connect(Path(scope['candidate_project']['pool']).as_uri()+'?mode=ro',uri=True)) as source, \
+             closing(sqlite3.connect(application_registry)) as destination:
+            source.backup(destination)
+    manifest=build_set_manifest(sorted(roots),application_registry=application_registry)
     from .telemetry import phase
     with phase(output/'phases.jsonl','mechanical_qc'):
         report=inspect_set(manifest,profile=profile)

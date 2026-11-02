@@ -55,7 +55,7 @@ def capability(claim, anchor, claim_reference, mode, *, category=None, name=None
     state=load_json(anchor['state']['path']); now=datetime.now(timezone.utc)
     candidate=claim['snapshot']
     result={'schema_version':'webcollect-site-capability-1','capability_id':'candidate-observation-'+claim['claim_id'],
-        'version':VERSION,'site_uri':state['url'],'site_category':candidate.get('parent_category', category),'mode':mode,
+        'version':VERSION,'site_uri':state['url'],'site_category':candidate.get('parent_category') or category or 'UNKNOWN','mode':mode,
         'status':'review_required','reason':'Consumer first observation; qualification NOT_RUN',
         'observed_at':now.isoformat(),'expires_at':(now+timedelta(hours=4)).isoformat(),
         'supported_actions':['click','double_click','right_click','type','select','hotkey','scroll','open_url','back'],
@@ -66,6 +66,9 @@ def capability(claim, anchor, claim_reference, mode, *, category=None, name=None
             'application_registry':claim.get('application_registry')}}
     if candidate.get('schema_version') == 'webcollect-data-candidate-2':
         result['candidate_observation']['sources'] = deepcopy(claim.get('sources', []))
+    result['classification'] = {'status': 'pending' if result['site_category'] == 'UNKNOWN' else 'source_provided',
+                                'value': None if result['site_category'] == 'UNKNOWN' else result['site_category'],
+                                'sources': deepcopy(claim.get('sources', []))}
     validate_observation(result)
     return result
 

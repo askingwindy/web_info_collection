@@ -22,6 +22,15 @@ class BudgetStop(ValueError):
     pass
 
 
+class SessionGLMCallLimit(BudgetStop):
+    code = 'glm_session_call_limit'
+    limit = 25
+
+    def __init__(self, attempt_id, used):
+        self.details = {'code': self.code, 'attempt_id': attempt_id, 'used': used, 'limit': self.limit}
+        super().__init__(f'本次会话已派发 {used} 次真实 GLM 请求，达到 {self.limit} 次上限，停止后续调用。')
+
+
 class OutcomeUnknown(ValueError):
     responsibility='model'
 
@@ -97,30 +106,25 @@ def validate_config(value, *, credentials=False, require_model=False):
     if not isinstance(value['run_id'], str) or not value['run_id'].strip():
         raise ValueError('run_id required')
     budget = value['budget']
-    runtime_fields = {'max_discovery_candidates', 'max_probe_pages', 'max_run_seconds',
-                      'max_concurrent_jobs', 'min_domain_interval_seconds', 'lease_seconds'}
-    model_fields = {'max_model_requests', 'max_reserved_tokens', 'max_model_cost_micros',
-                    'currency', 'min_model_interval_seconds'}
+    runtime_fields = {'max_concurrent_jobs', 'min_domain_interval_seconds', 'lease_seconds'}
     model_enabled = value['model'] is not None
-    fields = runtime_fields | (model_fields if model_enabled else {'max_job_attempts'})
-    if not isinstance(budget, dict) or not fields <= set(budget) or set(budget) - fields - {'max_job_attempts', 'max_top_level_visits', 'cost_control'}:
-        raise ValueError('Explicit independent budget fields required: ' + ', '.join(sorted(fields)))
-    cost_control = budget.get('cost_control', 'capped')
-    if cost_control not in ('capped', 'observe_only'):
-        raise ValueError('cost_control must be capped or observe_only')
-    if 'cost_control' in budget and not model_enabled:
-        raise ValueError('cost_control requires the explicit model branch')
-    if cost_control == 'observe_only' and budget['max_model_cost_micros'] is not None:
-        raise ValueError('observe_only requires explicit max_model_cost_micros:null')
+    token_only = model_enabled and isinstance(value['model'], dict) and value['model'].get('accounting_mode') == 'tokens-1'
+    fields = runtime_fields | (({'min_model_interval_seconds'} | (set() if token_only else {'currency'})) if model_enabled else {'max_job_attempts'})
+    # Old serialized ceilings remain part of the frozen configuration hash.
+    historical_limits = ({'currency'} if token_only else set()) | {'max_discovery_candidates', 'max_probe_pages', 'max_run_seconds', 'max_top_level_visits'}
+    if model_enabled:
+        historical_limits.update(('max_model_requests','max_reserved_tokens','max_model_cost_micros'))
+    if not isinstance(budget, dict) or not fields <= set(budget) or set(budget) - fields - historical_limits - {'max_job_attempts','cost_control'}:
+        raise ValueError('Invalid scheduler or metering configuration; required: ' + ', '.join(sorted(fields)))
+    if 'cost_control' in budget and (not model_enabled or budget['cost_control'] not in ('capped','observe_only')):
+        raise ValueError('Invalid historical cost-control mode')
+    for key in (historical_limits - {'currency'}).intersection(budget):
+        if budget[key] is not None:
+            _integer(budget[key], key)
     for key in fields - {'currency'}:
-        if key == 'max_model_cost_micros' and cost_control == 'observe_only':
-            continue
-        _integer(budget[key], key, 0 if key=='min_model_interval_seconds' or key.startswith('max_') and key not in
-                 ('max_run_seconds', 'max_concurrent_jobs') else 1)
+        _integer(budget[key], key, 0 if key == 'min_model_interval_seconds' else 1)
     if 'max_job_attempts' in budget:
         _integer(budget['max_job_attempts'], 'max_job_attempts', 1)
-    if 'max_top_level_visits' in budget:
-        _integer(budget['max_top_level_visits'], 'max_top_level_visits')
     if model_enabled and budget['min_model_interval_seconds']>30:
         raise ValueError('Model interval must be <=30 seconds; use a smaller worker concurrency for lower throughput')
     if budget['lease_seconds'] < 5:
@@ -129,13 +133,13 @@ def validate_config(value, *, credentials=False, require_model=False):
         if require_model:
             raise ValueError('Model branch disabled (model:null); this operation requires an explicit model configuration')
         return deepcopy(value)
-    if not isinstance(budget['currency'], str) or not budget['currency'].strip():
+    if not token_only and (not isinstance(budget['currency'], str) or not budget['currency'].strip()):
         raise ValueError('Explicit model billing currency required')
     model = value['model']
     fields = {'provider', 'model', 'endpoint', 'api_key_env', 'timeout_seconds', 'reserve_input_tokens',
-              'max_completion_tokens', 'max_images', 'reserve_cost_micros', 'rates'}
+              'max_completion_tokens', 'max_images'} | (set() if token_only else {'reserve_cost_micros', 'rates'})
     capability_fields = {'supports_vision', 'image_tokens_per_image', 'request_overhead_tokens'}
-    optional_fields = capability_fields | {'image_encoding', 'reasoning_effort', 'api_key_file', 'structured_output'}
+    optional_fields = capability_fields | {'accounting_mode', 'reserve_cost_micros', 'rates', 'image_encoding', 'reasoning_effort', 'api_key_file', 'structured_output'}
     if not isinstance(model, dict) or not fields <= set(model) or set(model) - fields - optional_fields:
         raise ValueError('Explicit model adapter fields required: ' + ', '.join(sorted(fields)))
     if model['provider'] not in ('synthetic', 'chat-completions', 'deepseek', 'glm', 'ark'):
@@ -171,8 +175,11 @@ def validate_config(value, *, credentials=False, require_model=False):
         _integer(model[key], key, 1)
     if model['timeout_seconds'] + 5 >= budget['lease_seconds']:
         raise ValueError('Lease must exceed model timeout by more than 5 seconds')
-    _integer(model['reserve_cost_micros'], 'reserve_cost_micros')
-    rates = model['rates']
+    if model.get('accounting_mode') not in (None, 'tokens-1'):
+        raise ValueError('Unknown accounting mode')
+    if not token_only:
+        _integer(model['reserve_cost_micros'], 'reserve_cost_micros')
+    rates = model.get('rates', {'version':'tokens-1','source':'token usage only','input':0,'cached_input':0,'output':0})
     if not isinstance(rates, dict) or set(rates) != {'version', 'source', 'input', 'cached_input', 'output'}:
         raise ValueError('Versioned rates in micros per million tokens required')
     for key in ('input', 'cached_input', 'output'):
@@ -197,9 +204,9 @@ def validate_config(value, *, credentials=False, require_model=False):
                 or endpoint.query or endpoint.fragment):
             raise ValueError('Real model endpoint must be an explicit credential-free HTTPS URL')
         if (not isinstance(model['api_key_env'], str) or not model['api_key_env'].isidentifier()
-                or (cost_control == 'capped' and not budget['max_model_cost_micros']) or not model['reserve_cost_micros']):
-            raise ValueError('Real calls need credential environment name, nonzero reservation and an explicit cost-control mode')
-        if not rates['input'] or not rates['output']:
+                or (not token_only and not model['reserve_cost_micros'])):
+            raise ValueError('Real calls need credential environment name, a nonzero accounting reservation')
+        if not token_only and (not rates['input'] or not rates['output']):
             raise ValueError('Real calls need nonzero verified input/output rates')
         if budget['min_model_interval_seconds']<1:
             raise ValueError('Real model dispatch requires an explicit nonzero rate interval')
@@ -208,7 +215,7 @@ def validate_config(value, *, credentials=False, require_model=False):
             credential(model)
     minimum = (model['reserve_input_tokens'] * max(rates['input'], rates['cached_input']) +
                model['max_completion_tokens'] * rates['output'] + 999999) // 1_000_000
-    if model['reserve_cost_micros'] < minimum:
+    if not token_only and model['reserve_cost_micros'] < minimum:
         raise ValueError('Monetary reservation below configured conservative token ceiling')
     return deepcopy(value)
 
@@ -250,7 +257,13 @@ class BatchLedger:
         with self.connect() as con:
             row = con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()
             if not row or json.loads(row[0]) != self.config:
-                raise ValueError('Run configuration is frozen; resume cannot reset or enlarge its budget')
+                raise ValueError('Run configuration is frozen; resume with the original binding')
+            policy = con.execute("SELECT detail FROM batch_events WHERE event='producer_budget_unlimited' ORDER BY seq DESC LIMIT 1").fetchone()
+            self.producer_policy = json.loads(policy[0]) if policy else None
+            if self.producer_policy and (self.producer_policy['ledger'] != str(self.path)
+                    or self.producer_policy['run_id'] != self.config['run_id']
+                    or self.producer_policy['config_sha256'] != object_sha256(self.config)):
+                raise ValueError('Producer budget decision does not match its original ledger')
 
     def connect(self, create=False):
         con = sqlite3.connect(str(self.path) if create else self.path.as_uri() + '?mode=rw',
@@ -275,23 +288,8 @@ class BatchLedger:
         con.execute('INSERT INTO batch_events(at,event,detail) VALUES(?,?,?)',
                     (time.time(), event, canonical(detail)))
 
-    def _runtime_deadline(self, con):
-        start = con.execute('SELECT started FROM batch_meta').fetchone()[0]
-        deadline=start+self.config['budget']['max_run_seconds']
-        if con.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_windows'").fetchone():
-            from .planning import verify_evidence
-            for row in con.execute('SELECT reference,deadline FROM runtime_windows'):
-                ref=json.loads(row[0]);verify_evidence([ref]);body=load_json(ref['path'])
-                if body['deadline']!=row[1]:raise ValueError('Authorized runtime window changed')
-                deadline=max(deadline,row[1])
-        return deadline
-
-    def _time_limit(self, con):
-        if time.time() >= self._runtime_deadline(con):
-            raise BudgetStop('max_run_seconds reached (resume retains original start)')
-
     def authorize_runtime_window(self, reference):
-        """Append an explicit continuation window; all counters/config stay frozen."""
+        """Validate and append a legacy continuation receipt for its original scope."""
         from .planning import verify_evidence
         verify_evidence([reference]);value=load_json(reference['path'])
         with self.transaction() as con:
@@ -339,7 +337,6 @@ class BatchLedger:
     def claim(self, kind, *, job_id=None, domain=None, parent_job=None):
         self.recover()
         with self.transaction() as con:
-            self._time_limit(con)
             query = "SELECT * FROM jobs WHERE kind=? AND state='queued'"
             params = [kind]
             if job_id:
@@ -387,11 +384,11 @@ class BatchLedger:
             parent=con.execute('SELECT j.state,j.owner,j.lease,p.parent_owner FROM job_parents p JOIN jobs j ON j.id=p.parent_id WHERE p.job_id=?',(job['id'],)).fetchone()
             if parent and (parent[0]!='running' or parent[1]!=parent[3] or parent[2]<time.time()):
                 raise ValueError('Lost/expired parent collection lease')
+        return row
 
     def heartbeat(self, job):
         with self.transaction() as con:
             self._owned(con, job)
-            self._time_limit(con)
             con.execute('UPDATE jobs SET lease=? WHERE id=?',
                         (time.time() + self.config['budget']['lease_seconds'], job['id']))
 
@@ -415,20 +412,15 @@ class BatchLedger:
         return result
 
     def consume(self, kind, key, amount=1):
-        limits = {'discovery_candidates': 'max_discovery_candidates', 'probe_pages': 'max_probe_pages'}
-        if kind not in limits:
+        if kind not in ('discovery_candidates', 'probe_pages'):
             raise ValueError('Unknown resource kind')
         _integer(amount, 'resource amount', 1)
         with self.transaction() as con:
-            self._time_limit(con)
             old = con.execute('SELECT kind,amount FROM resources WHERE key=?', (key,)).fetchone()
             if old:
                 if tuple(old) != (kind, amount):
                     raise ValueError('Resource identity collision')
                 return
-            used = con.execute('SELECT COALESCE(SUM(amount),0) FROM resources WHERE kind=?', (kind,)).fetchone()[0]
-            if used + amount > self.config['budget'][limits[kind]]:
-                raise BudgetStop(limits[kind] + ' reached')
             con.execute('INSERT INTO resources VALUES(?,?,?,?)', (key, kind, amount, time.time()))
 
     @staticmethod
@@ -446,9 +438,8 @@ class BatchLedger:
             (time.time(),int(complete or prior==0),prior))
 
     def remaining_seconds(self):
-        with self.connect() as con:
-            self._time_limit(con)
-            return self._runtime_deadline(con)-time.time()
+        """Compatibility with callers combining a run window with their I/O timeout."""
+        return math.inf
 
     def reserve_visit(self, job, target_uri, purpose, domain, *, timeout_seconds=20):
         """Count each dispatch, including failed/repeated visits; never cache-dedup.
@@ -464,21 +455,15 @@ class BatchLedger:
             from .site_failure_stop import SiteFailureStore
             SiteFailureStore(self.config['site_failure_guard']).guard(target_uri)
         with self.transaction() as con:
-            self._owned(con, job); self._time_limit(con)
+            self._owned(con, job)
             self._ensure_visit_schema(con)
             if not con.execute('SELECT history_complete FROM visit_accounting_meta WHERE id=1').fetchone()[0]:
-                raise BudgetStop('Legacy top-level visit history UNKNOWN; cannot enable a bounded dispatch from this ledger')
-            used = con.execute('SELECT COUNT(*) FROM top_level_visits').fetchone()[0]
-            maximum = self.config['budget'].get('max_top_level_visits', self.config['budget']['max_probe_pages'])
-            if used >= maximum: raise BudgetStop('max_top_level_visits reached (failed/unknown attempts retained)')
+                raise BudgetStop('Legacy top-level visit history UNKNOWN; reconcile original visits before dispatch')
             now = time.time()
             last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
             delay = last[0] + self.config['budget']['min_domain_interval_seconds'] - now if last else 0
-            remaining = self._runtime_deadline(con)-now
             if delay > 0:
-                if delay >= remaining: raise BudgetStop('max_run_seconds: insufficient time for domain interval')
                 raise VisitRateWait(delay)
-            if remaining <= 0.05: raise BudgetStop('max_run_seconds: no dispatch time remaining')
             index = con.execute('SELECT COUNT(*)+1 FROM top_level_visits WHERE job_id=? AND purpose=?', (job['id'],purpose)).fetchone()[0]
             rid = uuid.uuid4().hex
             con.execute('INSERT INTO top_level_visits VALUES(?,?,?,?,?,?,?,NULL,?,NULL,NULL,NULL,NULL,NULL)',
@@ -486,7 +471,7 @@ class BatchLedger:
             con.execute('INSERT OR REPLACE INTO domain_dispatch VALUES(?,?)', (domain,now))
             self.event(con, 'top_level_visit_dispatched', {'id':rid,'job_id':job['id'],'purpose':purpose,
                 'attempt_index':index,'target_uri':target_uri,'domain':domain,'dispatched_at':now})
-            return {'id':rid,'attempt_index':index,'dispatched_at':now,'timeout_seconds':min(timeout_seconds,remaining)}
+            return {'id':rid,'attempt_index':index,'dispatched_at':now,'timeout_seconds':timeout_seconds}
 
     def settle_visit(self, visit, *, state, response_status=None, landed_uri=None, error=None, metrics=None):
         if state not in ('succeeded','failed','unknown'): raise ValueError('Invalid top-level visit state')
@@ -532,7 +517,7 @@ class BatchLedger:
             store.record(row['target_uri'], execution_id('probe', self.path, row['id']),
                 stage='probe', state=state, reason=row['error_type'] or 'Unresolved visit dispatch',
                 real_execution=True, evidence=[{'visit_fact': fact}],
-                usage_refs=[{'ledger': str(self.path), 'visit_id': row['id']}])
+                usage_refs=[{'ledger': str(self.path), 'visit_id': row['id']}], return_status=False)
 
     def record_probe_outcome(self, job, application, record, reference):
         """Retain a rendered probe failure even when navigation itself succeeded."""
@@ -601,14 +586,95 @@ class BatchLedger:
         with self.connect() as con:
             return self._unavailable_model_accounts(con)
 
+    @property
+    def real_glm(self):
+        model = self.config['model'] or {}
+        return self.config['mode'] == 'real' and (model.get('provider') == 'glm'
+            or model.get('model', '').lower().split('/')[-1].startswith('glm-'))
+
+    @staticmethod
+    def _answered_timeout_sql():
+        # A later answer closes the decision hold, not the original usage/accounting.
+        return """EXISTS (SELECT 1 FROM model_requests answered
+            WHERE answered.job_id=r.job_id AND answered.purpose=r.purpose
+              AND answered.state IN ('succeeded','invalid_response')
+              AND json_extract(answered.request_json,'$.timeout_retry_root')=
+                  COALESCE(json_extract(r.request_json,'$.timeout_retry_root'),r.id))"""
+
+    def timeout_retry_answered(self, con, request_id):
+        return bool(con.execute('SELECT 1 FROM model_requests r WHERE r.id=? AND r.state=\'unknown\' AND '
+            + self._answered_timeout_sql(), (request_id,)).fetchone())
+
+    def _timeout_retry_root(self, con, job, purpose, attempt, material):
+        fields = ('timeout_retry_of', 'timeout_retry_root', 'timeout_retry_number')
+        if not any(k in material for k in fields):
+            return None
+        if not all(k in material for k in fields):
+            raise ValueError('Incomplete timeout retry binding')
+        previous = con.execute('SELECT * FROM model_requests WHERE id=?',
+                               (material['timeout_retry_of'],)).fetchone()
+        if (not previous or previous['job_id'] != job['id'] or previous['purpose'] != purpose
+                or previous['attempt'] != attempt-1 or previous['state'] != 'unknown'):
+            raise OutcomeUnknown('Timeout retry must follow its original unresolved request')
+        detail = json.loads(previous['response'] or '{}').get('transport_error', {})
+        if detail.get('reason_type') != 'TimeoutError':
+            raise OutcomeUnknown('Only transport timeouts permit bounded retries')
+        old = json.loads(previous['request_json'])
+        root = old.get('timeout_retry_root') or previous['id']
+        count = con.execute("""SELECT COUNT(*) FROM model_requests WHERE job_id=? AND purpose=?
+            AND json_extract(request_json,'$.timeout_retry_of') IS NOT NULL""", (job['id'],purpose)).fetchone()[0]
+        if (count >= 3 or material['timeout_retry_root'] != root
+                or type(material['timeout_retry_number']) is not int or material['timeout_retry_number'] != count+1):
+            raise OutcomeUnknown('At most three timeout retries on the original request identity')
+        ignored = {*fields, 'cost_control'}
+        if {k:v for k,v in material.items() if k not in ignored} != {k:v for k,v in old.items() if k not in ignored}:
+            raise ValueError('Timeout retry must preserve payload, account and session')
+        return root
+
+    def session_http_usage(self, con, attempt_id, *, timeout_retry_root=None):
+        # Native calls carry their session on the request. Legacy ReAct uses
+        # its original decision job. Each row represents one dispatch, including retries.
+        answered = self._answered_timeout_sql()
+        pending = f"""(NOT ({answered}) AND (? IS NULL OR
+            COALESCE(json_extract(r.request_json,'$.timeout_retry_root'),r.id)<>?))"""
+        return con.execute(f"""SELECT COUNT(*) AS used, COUNT(json_extract(r.request_json,'$.dispatch_attempt_id')) AS native_calls,
+            MIN(json_extract(r.request_json,'$.dispatch_max_requests')) AS min_cap,
+            MAX(json_extract(r.request_json,'$.dispatch_max_requests')) AS max_cap,
+            MAX(j.kind IN ('react-decision','react-native-decision')) AS has_react,
+            MIN(CASE WHEN (r.state='unknown' AND {pending}) OR j.state='review_required' THEN r.id END) AS held,
+            MIN(CASE WHEN r.state='reserved' OR (r.state='unknown' AND {pending}) OR j.state='review_required' THEN r.id END) AS unresolved
+            FROM model_requests r JOIN jobs j ON j.id=r.job_id
+            WHERE (json_extract(r.request_json,'$.dispatch_attempt_id')=?
+                   AND json_extract(r.request_json,'$.http_dispatch')=1)
+               OR (j.kind IN ('react-decision','react-native-decision') AND json_extract(j.payload,'$.attempt_id')=?
+                   AND ? AND COALESCE(json_extract(r.request_json,'$.http_dispatch'),1)=1)""",
+            (timeout_retry_root, timeout_retry_root, timeout_retry_root, timeout_retry_root,
+             attempt_id, attempt_id, self.config['mode']=='real')).fetchone()
+
+    def bind_model_session(self, session_id):
+        """Select/recover once under the existing short SQLite write lock."""
+        from .model_credentials import credential, account_id
+        with self.transaction() as con:
+            con.execute('CREATE TABLE IF NOT EXISTS model_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL)')
+            old = con.execute('SELECT account_id FROM model_sessions WHERE session_id=?', (session_id,)).fetchone()
+            if old is None:
+                accounts = {row[0] for row in con.execute("SELECT DISTINCT json_extract(request_json,'$.account_id') FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=? OR job_id=?", (session_id,session_id)) if row[0]}
+                if len(accounts) > 1:
+                    raise OutcomeUnknown('Original session has conflicting accounts')
+                original = next(iter(accounts), None)
+            else:
+                original = old[0]
+            secret = credential(self.config['model'], excluded_accounts=self._unavailable_model_accounts(con), required_account=original)
+            con.execute('INSERT OR IGNORE INTO model_sessions VALUES(?,?)', (session_id, account_id(secret)))
+            return secret
+
     def reserve_request(self, job, purpose, attempt, request_json=None):
         if self.config['model'] is None:
             raise ValueError('Model branch disabled (model:null); no model reservation or dispatch allowed')
         model, budget = self.config['model'], self.config['budget']
         tokens = model['reserve_input_tokens'] + model['max_completion_tokens']
         with self.transaction() as con:
-            self._owned(con, job)
-            self._time_limit(con)
+            owned = self._owned(con, job)
             old = con.execute('SELECT * FROM model_requests WHERE job_id=? AND purpose=? AND attempt=?',
                               (job['id'], purpose, attempt)).fetchone()
             if old:
@@ -617,29 +683,40 @@ class BatchLedger:
                 if old['state'] in ('reserved', 'unknown'):
                     raise OutcomeUnknown('Prior request may have been billed; no automatic resend')
                 return dict(old)
+            timeout_root = self._timeout_retry_root(con, job, purpose, attempt, request_json or {})
             from .provider_recovery import holds, permits_probe
             if holds(con) and not permits_probe(con,job['id'],request_json,attempt):
                 raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
-            if request_json and request_json.get('protocol') == 'native-tool-1' and request_json.get('http_dispatch'):
-                aid = request_json.get('dispatch_attempt_id')
+            native_http = request_json and request_json.get('protocol') == 'native-tool-1' and request_json.get('http_dispatch')
+            aid = request_json.get('dispatch_attempt_id') if native_http else None
+            react = owned['kind'] in ('react-decision','react-native-decision')
+            if react and self.real_glm:
+                session_id = json.loads(owned['payload']).get('attempt_id')
+                if not session_id or (native_http and aid != session_id):
+                    raise ValueError('GLM dispatch must bind the original ReAct session')
+            else:
+                session_id = aid
+            if session_id is not None:
+                if not isinstance(session_id, str) or not session_id.strip():
+                    raise ValueError('Invalid attempt identity')
+                prior = self.session_http_usage(con, session_id, timeout_retry_root=timeout_root)
+                if prior['held']:
+                    raise OutcomeUnknown('Original attempt request/decision unresolved; no replacement dispatch')
+                if self.real_glm and (react or prior['has_react']) and prior['used'] >= SessionGLMCallLimit.limit:
+                    unresolved = self.session_http_usage(con, session_id)['unresolved']
+                    if unresolved:
+                        raise OutcomeUnknown('Original session dispatch unresolved at the GLM call limit: ' + unresolved)
+                    raise SessionGLMCallLimit(session_id, prior['used'])
+            if native_http:
                 cap = request_json.get('dispatch_max_requests')
                 if aid is not None:
-                    if not isinstance(aid, str) or not aid.strip() or type(cap) is not int or cap < 1:
+                    if cap is not None and (type(cap) is not int or cap < 1):
                         raise ValueError('Invalid attempt request budget')
-                    # A cancelled caller may leave its job on review hold even
-                    # when the HTTP thread later settles a known provider reply.
-                    # That late reply never authorizes a replacement decision.
-                    if con.execute("SELECT 1 FROM model_requests r JOIN jobs j ON j.id=r.job_id "
-                        "WHERE json_extract(r.request_json,'$.dispatch_attempt_id')=? "
-                        "AND (r.state='unknown' OR j.state='review_required')", (aid,)).fetchone():
-                        raise OutcomeUnknown('Original attempt request/decision unresolved; no replacement dispatch')
-                    prior = con.execute("SELECT COUNT(*),MIN(json_extract(request_json,'$.dispatch_max_requests')),"
-                        "MAX(json_extract(request_json,'$.dispatch_max_requests')) FROM model_requests "
-                        "WHERE json_extract(request_json,'$.dispatch_attempt_id')=? "
-                        "AND json_extract(request_json,'$.http_dispatch')=1", (aid,)).fetchone()
-                    if prior[0] and (prior[1] != cap or prior[2] != cap):
+                    if prior['native_calls'] and (prior['min_cap'] != cap or prior['max_cap'] != cap):
                         raise ValueError('Frozen attempt request cap differs')
-                    if prior[0] >= cap:
+                    if cap is not None and prior['used'] >= cap:
+                        if self.session_http_usage(con, session_id)['unresolved']:
+                            raise OutcomeUnknown('Original timeout unresolved at the attempt request limit')
                         raise BudgetStop('max_requests reached for original attempt')
                 account = request_json.get('account_id')
                 if account in self._unavailable_model_accounts(con):
@@ -654,23 +731,6 @@ class BatchLedger:
                     "WHERE json_extract(request_json,'$.dispatch_attempt_id')=? "
                     "AND json_extract(request_json,'$.account_id')<>?", (aid, account)).fetchone():
                     raise OutcomeUnknown('Original attempt account differs; no account rotation')
-            used = con.execute('''SELECT COUNT(*),COALESCE(SUM(COALESCE(cost,reserved_cost)),0),
-                COALESCE(SUM(CASE WHEN usage IS NULL THEN reserved_tokens ELSE
-                json_extract(usage,'$.input_tokens')+json_extract(usage,'$.output_tokens') END),0)
-                FROM model_requests''').fetchone()
-            if used[0] + 1 > budget['max_model_requests']:
-                raise BudgetStop('max_model_requests reached')
-            if budget.get('cost_control', 'capped') == 'capped' and used[1] + model['reserve_cost_micros'] > budget['max_model_cost_micros']:
-                raise BudgetStop('max_model_cost_micros reached (including uncertain reservations)')
-            if used[2] + tokens > budget['max_reserved_tokens']:
-                raise BudgetStop('max_reserved_tokens reached')
-            started=con.execute('SELECT started FROM batch_meta').fetchone()[0]
-            if self._runtime_deadline(con)-time.time()<model['timeout_seconds']:
-                raise BudgetStop('Insufficient remaining run time for the next bounded model request')
-            exceeded = ("error='reservation_exceeded'" if budget.get('cost_control', 'capped') == 'observe_only'
-                        else "cost>reserved_cost OR error='reservation_exceeded'")
-            if con.execute('SELECT 1 FROM model_requests WHERE ' + exceeded).fetchone():
-                raise BudgetStop('Provider usage exceeded conservative reservation; reconcile before further dispatch')
             last=con.execute('SELECT MAX(started) FROM model_requests').fetchone()[0]
             if last is not None:
                 delay=last+budget['min_model_interval_seconds']-time.time()
@@ -678,14 +738,18 @@ class BatchLedger:
             rid = uuid.uuid4().hex
             con.execute('''INSERT INTO model_requests(id,job_id,purpose,attempt,state,reserved_tokens,reserved_cost,started,request_json)
                 VALUES(?,?,?,?,?,?,?,?,?)''', (rid, job['id'], purpose, attempt, 'reserved', tokens,
-                                           model['reserve_cost_micros'], time.time(),canonical(request_json)))
+                                           model.get('reserve_cost_micros', 0), time.time(),
+                                           canonical({**(request_json or {}), 'cost_control':'observe_only'})))
             self.event(con, 'model_reserved', {'request_id': rid, 'job_id': job['id'], 'purpose': purpose,
-                                             'model': model['model'], 'rate_version': model['rates']['version']})
+                                             'model': model['model'], **({} if (request_json or {}).get('accounting_mode') == 'tokens-1' else {'rate_version':model.get('rates', {}).get('version')})})
             return {'id': rid, 'state': 'new'}
 
     def settle_request(self, request_id, *, state, usage=None, response=None, error=None):
         cost = None
-        if usage is not None:
+        with self.connect() as con:
+            original = con.execute('SELECT request_json FROM model_requests WHERE id=?', (request_id,)).fetchone()
+        token_only = self.config['model'].get('accounting_mode') == 'tokens-1' or (original and json.loads(original[0] or '{}').get('accounting_mode') == 'tokens-1')
+        if usage is not None and not token_only:
             rates = self.config['model']['rates']
             cached = usage.get('cached_input_tokens', 0)
             cost = ((usage['input_tokens'] - cached) * rates['input'] +
@@ -694,15 +758,12 @@ class BatchLedger:
             row = con.execute('SELECT * FROM model_requests WHERE id=?', (request_id,)).fetchone()
             if not row or row['state'] != 'reserved':
                 raise ValueError('Request already settled or missing')
-            if usage and (usage['input_tokens']>self.config['model']['reserve_input_tokens'] or
-                          usage['output_tokens']>self.config['model']['max_completion_tokens']):
-                error = 'reservation_exceeded'
             con.execute('''UPDATE model_requests SET state=?,finished=?,usage=?,cost=?,response=?,error=? WHERE id=?''',
                         (state, time.time(), canonical(usage) if usage else None, cost,
                          canonical(response) if response is not None else None, error, request_id))
             self.event(con, 'model_settled', {'request_id': request_id, 'state': state,
                 'usage_source': 'synthetic' if self.config['mode']=='synthetic' else 'provider_response',
-                'rate_version': self.config['model']['rates']['version'], 'cost_micros': cost})
+                **({} if token_only else {'rate_version': self.config['model'].get('rates', {}).get('version'), 'cost_micros': cost})})
 
     def summary(self, *, final_qualified=0):
         _integer(final_qualified, 'final_qualified')
@@ -713,7 +774,7 @@ class BatchLedger:
             metadata={r['id']:dict(r) for r in con.execute('SELECT id,kind,created FROM jobs')}
             events=[dict(row) for row in con.execute("SELECT at,event,detail FROM batch_events WHERE event IN ('job_claimed','job_finished') ORDER BY seq")]
             start = con.execute('SELECT started FROM batch_meta').fetchone()[0]
-        covered = sum(row['cost'] is not None for row in requests)
+        covered = sum(row['usage'] is not None for row in requests)
         known = sum(row['cost'] or 0 for row in requests)
         reserved = sum(row['reserved_cost'] for row in requests if row['cost'] is None)
         elapsed = time.time() - start
@@ -731,30 +792,33 @@ class BatchLedger:
                     stages[kind]['queue_wait_seconds']+=event['at']-metadata[jid]['created'];first_claim.add(jid)
             elif jid in active:
                 stages[kind]['worker_seconds']+=event['at']-active.pop(jid)
+        token_overruns = 0
         for row in requests:
             stage=stages[metadata[row['job_id']]['kind']];stage['model_requests']+=1
             stage['request_states'][row['state']]+=1
-            reasoning=json.loads(row['usage']).get('reasoning_tokens') if row['usage'] else None
+            usage = json.loads(row['usage']) if row['usage'] else {}
+            model = self.config['model']
+            if row['error'] == 'reservation_exceeded' or (usage and model and
+                    (usage['input_tokens'] > model['reserve_input_tokens'] or usage['output_tokens'] > model['max_completion_tokens'])):
+                token_overruns += 1
+            reasoning = usage.get('reasoning_tokens')
             if type(reasoning)is int and reasoning>=0:stage['reasoning_tokens_known']+=reasoning
             else:stage['reasoning_usage_unknown_requests']+=1
             stage['known_model_cost_micros']+=row['cost'] or 0
             stage['uncertain_reserved_cost_micros']+=row['reserved_cost'] if row['cost']is None else 0
-            if row['usage']:
-                usage=json.loads(row['usage'])
+            if usage:
                 for name in ('input_tokens','output_tokens','cached_input_tokens'):stage[name]+=usage[name]
-        return {'schema_version': 'webcollect-batch-summary-1', 'run_id': self.config['run_id'],
+        result = {'schema_version': 'webcollect-batch-summary-1', 'run_id': self.config['run_id'],
                 'mode': self.config['mode'], 'jobs': jobs, 'resources': resources,
-                'cost_control': self.config['budget'].get('cost_control', 'capped'),
-                'max_model_cost_micros': ('NOT_APPLICABLE' if self.config['budget'].get('cost_control', 'capped') == 'observe_only'
-                                          else self.config['budget'].get('max_model_cost_micros', 'UNKNOWN')),
-                'monetary_limit_applied': self.config['model'] is not None and self.config['budget'].get('cost_control', 'capped') == 'capped',
+                'cost_control': 'observe_only', 'max_model_cost_micros': 'NOT_APPLICABLE',
+                'monetary_limit_applied': False,
                 'cost_reservation_exceeded_requests': sum(r['cost'] is not None and r['cost'] > r['reserved_cost'] for r in requests),
-                'token_reservation_exceeded_requests': sum(r['error'] == 'reservation_exceeded' for r in requests),
+                'token_reservation_exceeded_requests': token_overruns,
                 'top_level_visits_attempted':len(visits) if visit_history['history_complete'] else 'UNKNOWN',
                 'top_level_visits_recorded_since_accounting_start':len(visits),
                 'top_level_visit_history':visit_history,
                 'top_level_visit_states':dict(Counter(row['state'] for row in visits)),
-                'max_top_level_visits':self.config['budget'].get('max_top_level_visits',self.config['budget']['max_probe_pages']),
+                'max_top_level_visits':None,
                 'redirect_requests_observed':sum(row['metrics'].get('redirect_request_events',0) for row in visits),
                 'subresources_observed':sum(row['metrics'].get('subresource_or_child_frame_request_events',0) for row in visits),
                 'visit_accounting_scope':'Each program-dispatched top-level source fetch/page.goto attempt; cached evidence excluded; redirects and subresources separately observed, not all HTTP requests',
@@ -768,7 +832,7 @@ class BatchLedger:
                 'model_cost_micros': known if covered == len(requests) else 'UNKNOWN',
                 'model_enabled': self.config['model'] is not None,
                 'currency': self.config['budget'].get('currency'),
-                'rate_version': self.config['model']['rates']['version'] if self.config['model'] else None,
+                'rate_version': self.config['model'].get('rates', {}).get('version') if self.config['model'] else None,
                 'wall_seconds': elapsed,
                 'model_worker_seconds': sum((r['finished']-r['started']) for r in requests if r['finished']),
                 'final_qualified': final_qualified,
@@ -776,6 +840,8 @@ class BatchLedger:
                 'end_to_end_cost': 'UNKNOWN: infrastructure, discovery and human costs not supplied',
                 'unit_cost': None if not final_qualified else 'UNKNOWN',
                 'synthetic_results_are_acceptance': False, 'customer_acceptance': 'UNKNOWN'}
+
+        return token_report(result)
 
     def export(self, directory):
         """One summary plus traceable request details; no keys, headers or pixels."""
@@ -787,11 +853,22 @@ class BatchLedger:
             row.pop('response')
             row.pop('request_json')
             row.update(model=self.config['model']['model'],provider=self.config['model']['provider'],
-                       rate_version=self.config['model']['rates']['version'],currency=self.config['budget']['currency'])
+                       rate_version=self.config['model'].get('rates', {}).get('version'),currency=self.config['budget'].get('currency'))
         # Snapshots are versioned by content; prior cost reports are retained.
+        rows = token_report(rows)
         summary = self.summary()
         save_json(directory / ('summary-' + object_sha256(summary)[:16] + '.json'), summary)
         save_json(directory / ('requests-' + object_sha256(rows)[:16] + '.json'), rows)
         visits = self.visits()
         save_json(directory / ('visits-' + object_sha256(visits)[:16] + '.json'), visits)
         return summary
+
+
+def token_report(value):
+    """New reports omit money; stored historical evidence remains untouched."""
+    if isinstance(value, list):
+        return [token_report(row) for row in value]
+    if isinstance(value, dict):
+        return {key:token_report(row) for key,row in value.items() if not any(
+            term in key for term in ('cost', 'currency', 'rate_version', 'monetary'))}
+    return value

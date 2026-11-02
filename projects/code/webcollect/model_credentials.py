@@ -18,7 +18,7 @@ def account_id(value):
     return 'glm-' + hashlib.sha256(value.encode()).hexdigest()
 
 
-def _glm_session_key(account_keys, excluded_accounts=()):
+def _glm_session_key(account_keys, excluded_accounts=(), required_account=None):
     """One uniform random pick per session; kept for the whole session.
 
     2026-10-30 user authorization: the glm account list holds several equally
@@ -27,19 +27,28 @@ def _glm_session_key(account_keys, excluded_accounts=()):
     the failure is recorded in the original ledger like any other.
     """
     available = []
+    seen = set()
     for entry in account_keys:
         key = entry.get('api_key') if isinstance(entry, dict) else entry
-        if not isinstance(key, str):
+        if not isinstance(key, str) or not key.strip() or len(key.strip()) > 4096 or any(not 33 <= ord(c) <= 126 for c in key.strip()):
             raise ValueError('String account key required')
-        if account_id(key.strip()) not in excluded_accounts:
-            available.append(entry)
+        key = key.strip()
+        identity = account_id(key)
+        if identity not in excluded_accounts and key not in seen:
+            available.append(key)
+            seen.add(key)
     account_keys = available
     if not account_keys:
         raise ValueError('No authorized credential account available; reconcile original account hold')
+    if required_account is not None:
+        for key in account_keys:
+            if account_id(key) == required_account:
+                return key
+        raise ValueError('Original credential account unavailable; no replacement selection')
     return random.SystemRandom().choice(account_keys)
 
 
-def _yaml_account(path, account, excluded_accounts=()):
+def _yaml_account(path, account, excluded_accounts=(), required_account=None):
     import yaml
     class UniqueLoader(yaml.SafeLoader):
         pass
@@ -68,7 +77,7 @@ def _yaml_account(path, account, excluded_accounts=()):
         else:
             value=accounts[account]
             if account=='glm' and isinstance(value,list):
-                value=_glm_session_key(value, excluded_accounts)
+                value=_glm_session_key(value, excluded_accounts, required_account)
             if isinstance(value,dict):value=value['api_key']
         if not isinstance(value,str):raise ValueError('String account key required')
         return value.strip()
@@ -88,8 +97,9 @@ def _ark_value(value):
     return value  # A dedicated ark1 file or environment variable is one token.
 
 
-def credential(model, *, excluded_accounts=()):
-    value = os.environ.get(model['api_key_env'])
+def credential(model, *, excluded_accounts=(), required_account=None):
+    explicit_yaml = model.get('api_key_file') and Path(model['api_key_file']).suffix.lower() in ('.yaml', '.yml')
+    value = None if explicit_yaml and model['provider'] == 'glm' else os.environ.get(model['api_key_env'])
     if not value:
         source = model.get('api_key_file')
         if source is None and model['provider'] == 'glm':
@@ -103,7 +113,7 @@ def credential(model, *, excluded_accounts=()):
                 source = Path(source) / 'ark1'
             if Path(source).suffix.lower() in ('.yaml','.yml'):
                 account = 'ark1' if model['provider'] == 'ark' else PROJECT_GLM_ACCOUNT
-                value=_yaml_account(source,account,excluded_accounts)
+                value=_yaml_account(source,account,excluded_accounts,required_account)
             else:
                 with Path(source).open('r', encoding='utf-8') as stream:
                     value = stream.read(4097).strip()
@@ -125,4 +135,6 @@ def credential(model, *, excluded_accounts=()):
         raise ValueError('Model credential must be a single bounded token; secret content suppressed')
     if model['provider'] == 'glm' and account_id(value) in excluded_accounts:
         raise ValueError('Selected authorized account is held in original ledger')
+    if required_account is not None and account_id(value) != required_account:
+        raise ValueError('Original credential account unavailable; secret content suppressed')
     return value

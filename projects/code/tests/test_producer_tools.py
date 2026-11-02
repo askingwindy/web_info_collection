@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import test_candidate_inventory as inventory
 import test_model_provider_protocols as providers
-from site_planner.candidate_discovery import produce_entries, ENTRY_TOOL_PROTOCOL
+from site_planner.candidate_discovery import ENTRY_TOOL_PROTOCOL
+from producer_legacy_fixture import produce_entries
 from site_planner.candidate_pool import VERSION2
 from site_planner.discovery_tools import reference
 from webcollect.batch_core import BatchLedger, load_json

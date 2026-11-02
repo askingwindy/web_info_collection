@@ -39,8 +39,8 @@ def validate_schedule(value):
     maximum = config.get('max_parallel_sites')
     if type(maximum) is not int or maximum < 1:
         raise ValueError('max_parallel_sites must be a positive integer')
-    seconds = config.setdefault('max_schedule_seconds', 3600)
-    if type(seconds) is not int or seconds < 1:
+    seconds = config.setdefault('max_schedule_seconds', None)
+    if seconds is not None and (type(seconds) is not int or seconds < 1):
         raise ValueError('max_schedule_seconds must be a positive integer')
     config['registry'] = _absolute(config.get('registry'), 'registry')
     if not Path(config['registry']).is_file():
@@ -101,26 +101,6 @@ def validate_schedule(value):
             if first != second and Path(first).is_relative_to(Path(second)):
                 raise ValueError('Scheduled batch outputs must not contain one another')
     return config, policy, bindings
-
-
-def _backpressure(registry, policy):
-    con = sqlite3.connect(Path(registry).as_uri() + '?mode=ro', uri=True)
-    try:
-        exists = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_tasks'").fetchone()
-        if not exists:
-            return None
-        pending = con.execute("SELECT COUNT(*) FROM m4_tasks WHERE campaign_id=? AND status IN ('reserved','running','collected_pending_review')",
-                              (policy['campaign_id'],)).fetchone()[0]
-        if pending >= policy['pending_review_cap']:
-            return {'reason': 'pending_review_cap', 'pending_or_active': pending,
-                    'limit': policy['pending_review_cap']}
-        attempts = con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=? AND started_at IS NOT NULL',
-                               (policy['campaign_id'],)).fetchone()[0]
-        if attempts >= policy['attempt_cap']:
-            return {'reason': 'attempt_cap', 'attempts': attempts, 'limit': policy['attempt_cap']}
-    finally:
-        con.close()
-    return None
 
 
 @contextmanager
@@ -207,11 +187,6 @@ async def run_schedule(value, output, *, resume=False, collector=None):
                     for batch in site['batches']:
                         if stopped.is_set():
                             results.append({'site_key': site['site_key'], 'output': batch['output'], 'status': 'NOT_STARTED_AFTER_ERROR'})
-                            break
-                        pressure = _backpressure(config['registry'], policy)
-                        if pressure:
-                            results.append({'site_key': site['site_key'], 'output': batch['output'], 'status': 'PAUSED_BACKPRESSURE', **pressure})
-                            event('backpressure', site_key=site['site_key'], **pressure)
                             break
                         if (any(sha(path) != digest for path, digest in bindings.items())
                                 or source_identity() != frozen['source_files_sha256']):

@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from webcollect.batch_core import OutcomeUnknown, load_json, save_json
 from webcollect.candidate_contract import application_matches
 from webcollect.planning import object_sha256, verify_evidence
-from webcollect.site_failure_stop import SiteFailureStore
+from webcollect.site_failure_stop import SiteFailureStore, SiteStopped
 from .discovery_tools import reference
 from .pipeline import open_public_get, reserve_visit
 from .site_pool import page_uri
@@ -19,7 +19,7 @@ class RedirectBlocked(ValueError):
     responsibility = 'collector'
 
 
-def fetch_status(uri, timeout, metrics, mode, aliases):
+def fetch_status(uri, timeout, metrics, mode, aliases, guard=None):
     if mode != 'real':
         raise ValueError('Synthetic entry HTTP needs a controlled response')
     def check_url(url):
@@ -29,6 +29,11 @@ def fetch_status(uri, timeout, metrics, mode, aliases):
             raise RedirectBlocked(str(error)) from error
         if not allowed:
             raise RedirectBlocked('Entry redirect leaves the source application')
+        if guard and url != uri:
+            try:
+                guard.guard(url)
+            except SiteStopped as error:
+                raise RedirectBlocked(str(error)) from error
     try:
         with open_public_get(uri, time.monotonic() + timeout, metrics, check_url) as response:
             return response.status, response.geturl()
@@ -79,7 +84,8 @@ def check_entry(ledger, batch, url, output, *, cached_only=False):
     state = 'unknown'
     try:
         aliases = (ledger.config.get('site_failure_guard') or {}).get('application_registry')
-        status, landed = fetch_status(uri,visit['timeout_seconds'],metrics,ledger.config['mode'],aliases)
+        guard = SiteFailureStore(ledger.config['site_failure_guard']) if ledger.config.get('site_failure_guard') else None
+        status, landed = fetch_status(uri,visit['timeout_seconds'],metrics,ledger.config['mode'],aliases,guard)
         state = 'succeeded' if 200 <= status < 300 else 'failed'
         if state == 'failed':
             error = ValueError('Entry HTTP ' + str(status))
@@ -95,7 +101,8 @@ def check_entry(ledger, batch, url, output, *, cached_only=False):
     result = 'PASS' if state=='succeeded' else 'REJECTED' if status is not None else 'HELD'
     record = {'policy':POLICY,'job_id':jid,'visit_id':visit['id'],'method':'GET','entry_uri':uri,
               'landed_uri':landed,'http_status':status,'result':result,'checked_at':time.time(),
-              'reason':str(error) if error is not None else None,'redirects':metrics.get('redirects',[])}
+              'reason':str(error) if error is not None else None,'redirects':metrics.get('redirects',[]),
+              'request_uri':metrics.get('request_uri',uri)}
     path = Path(output) / ('entry-http-' + jid + '.json')
     save_json(path, record)
     ref = reference(path)

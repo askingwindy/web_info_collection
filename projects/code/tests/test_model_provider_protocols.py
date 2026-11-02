@@ -1,9 +1,11 @@
 """Offline provider dialect contracts; no provider/model/billing validation."""
 from copy import deepcopy
 import io
+import itertools
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -108,7 +110,7 @@ class ProviderProtocolTests(unittest.TestCase):
                 self.assertNotIn('store', payload)
                 system = payload['messages'][0]['content']
                 self.assertEqual(json.loads(system.split('JSON Schema exactly:\n', 1)[1]), SCHEMA)
-                self.assertEqual(ledger.summary()['model_cost_micros'], 300)
+                self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
 
     def test_glm_native_tool_calls_are_forwarded_and_parsed(self):
         """Official GLM function calling: forced react_decision arguments are
@@ -202,7 +204,7 @@ class ProviderProtocolTests(unittest.TestCase):
                     stored = json.loads(con.execute('SELECT response FROM model_requests').fetchone()[0])
                 self.assertEqual(stored['provider_response']['choices'][0]['message']['content'], content)
                 self.assertEqual(stored['content_envelope_normalized'], content.strip().startswith('```json'))
-                self.assertEqual(ledger.summary()['model_cost_micros'], 300)
+                self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
                 payload = json.loads(self.opener.calls[-1].data)
                 self.assertIn('without Markdown, code fences', payload['messages'][0]['content'])
 
@@ -222,7 +224,7 @@ class ProviderProtocolTests(unittest.TestCase):
                 state, response = con.execute('SELECT state,response FROM model_requests').fetchone()
             self.assertEqual(state, 'invalid_response')
             self.assertEqual(json.loads(response)['provider_response']['choices'][0]['message']['content'], content)
-            self.assertEqual(ledger.summary()['model_cost_micros'], 300)
+            self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
 
     def test_glm_fenced_json_still_requires_schema_and_complete_usage(self):
         self.opener.raw['choices'][0]['message']['content'] = '```json\n{"answer":"wrong"}\n```'
@@ -239,7 +241,7 @@ class ProviderProtocolTests(unittest.TestCase):
             with self.assertRaises(OutcomeUnknown):
                 gateway.call(job, 'text', 'JSON', SCHEMA)
         self.assertEqual(len(self.opener.calls), before + 1)
-        self.assertEqual(ledger.summary()['model_cost_micros'], 'UNKNOWN')
+        self.assertEqual(ledger.summary()['usage_covered_requests'], 0)
 
     def test_other_providers_reject_json_fences(self):
         self.opener.raw['choices'][0]['message']['content'] = '```json\n{"answer":42}\n```'
@@ -284,7 +286,7 @@ class ProviderProtocolTests(unittest.TestCase):
             self.assertEqual(ledger.summary()['model_requests'], 0)
         self.assertEqual(self.opener.calls, [])
 
-    def test_system_schema_overhead_and_image_allowances_block_before_dispatch(self):
+    def test_system_schema_and_images_reach_transport_above_reservation_estimates(self):
         cases = ({'reserve_input_tokens': 200}, {'request_overhead_tokens': 60_000},
                  {'image_tokens_per_image': 50_000})
         for provider in ('deepseek', 'glm'):
@@ -292,10 +294,11 @@ class ProviderProtocolTests(unittest.TestCase):
                 config = self.config(provider, vision=True)
                 config['model'].update(updates)
                 ledger, job, gateway = self.gateway(config)
-                with self.subTest(provider=provider, updates=updates), self.assertRaisesRegex(ValueError, 'reservation'):
-                    gateway.call(job, 'budget', 'JSON', SCHEMA, images=[self.image])
-                self.assertEqual(ledger.summary()['model_requests'], 0)
-        self.assertEqual(self.opener.calls, [])
+                with self.subTest(provider=provider, updates=updates):
+                    result=gateway.call(job,'above-estimate','JSON',SCHEMA,images=[self.image])
+                    self.assertEqual(result,{'answer':42})
+                    self.assertEqual(ledger.summary()['model_requests'],1)
+        self.assertEqual(len(self.opener.calls),6)
 
     def test_non_png_bytes_are_rejected_before_dispatch(self):
         disguised = self.root / 'jpeg-disguised.png'
@@ -306,14 +309,13 @@ class ProviderProtocolTests(unittest.TestCase):
         self.assertEqual(ledger.summary()['model_requests'], 0)
         self.assertEqual(self.opener.calls, [])
 
-    def test_legacy_provider_explicit_allowances_are_enforced(self):
+    def test_legacy_provider_keeps_actual_usage_above_image_estimate(self):
         config = self.config('chat-completions', vision=True)
         config['model']['image_tokens_per_image'] = 50_000
         ledger, job, gateway = self.gateway(config)
-        with self.assertRaisesRegex(ValueError, 'reservation'):
-            gateway.call(job, 'pixels', 'JSON', SCHEMA, images=[self.image])
-        self.assertEqual(ledger.summary()['model_requests'], 0)
-        self.assertEqual(self.opener.calls, [])
+        self.assertEqual(gateway.call(job, 'pixels', 'JSON', SCHEMA, images=[self.image]),{'answer':42})
+        self.assertEqual(ledger.summary()['model_requests'], 1)
+        self.assertEqual(len(self.opener.calls), 1)
 
     def test_deepseek_cache_hit_usage_and_identical_request_reuse(self):
         self.opener.raw['usage'] = {'prompt_tokens': 250, 'completion_tokens': 50, 'prompt_cache_hit_tokens': 100}
@@ -329,7 +331,7 @@ class ProviderProtocolTests(unittest.TestCase):
         self.assertEqual(recorded['provider'], 'deepseek')
         self.assertEqual(usage['cached_input_tokens'], 100)
         self.assertEqual(usage['provider_request_id'], 'offline-provider-response')
-        self.assertEqual(ledger.summary()['model_cost_micros'], 300)
+        self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
         ledger.export(self.root / 'metering')
         self.assertNotIn('offline-secret-never-export', ''.join(p.read_text() for p in (self.root / 'metering').glob('*.json')))
 
@@ -353,8 +355,8 @@ class ProviderProtocolTests(unittest.TestCase):
                         with self.assertRaises(OutcomeUnknown):
                             gateway.call(job, 'text', 'JSON', SCHEMA)
                     self.assertEqual(len(self.opener.calls), before + 1)
-                    self.assertEqual(ledger.summary()['model_cost_micros'], 'UNKNOWN')
-                    self.assertEqual(ledger.summary()['uncertain_reserved_cost_micros'], 100_000)
+                    self.assertEqual(ledger.summary()['usage_covered_requests'], 0)
+                    self.assertEqual(ledger.summary()['model_request_states'].get('unknown'), 1)
 
     def test_local_schema_failure_is_charged_invalid_response(self):
         self.opener.raw['choices'][0]['message']['content'] = '{"answer":"wrong"}'
@@ -364,7 +366,7 @@ class ProviderProtocolTests(unittest.TestCase):
                 gateway.call(job, 'text', 'JSON', SCHEMA, attempts=1)
             with ledger.connect() as con:
                 self.assertEqual(con.execute('SELECT state FROM model_requests').fetchone()[0], 'invalid_response')
-            self.assertEqual(ledger.summary()['model_cost_micros'], 300)
+            self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
 
     def test_http_failure_keeps_unknown_reservation_without_fallback(self):
         self.opener.error = urllib.error.HTTPError('https://provider.invalid/', 400, 'controlled rejection', {}, None)
@@ -373,7 +375,7 @@ class ProviderProtocolTests(unittest.TestCase):
             with self.assertRaises(OutcomeUnknown):
                 gateway.call(job, 'text', 'JSON', SCHEMA)
         self.assertEqual(len(self.opener.calls), 1)
-        self.assertEqual(ledger.summary()['uncertain_reserved_cost_micros'], 100_000)
+        self.assertEqual(ledger.summary()['model_request_states'].get('unknown'), 1)
 
     def test_provider_examples_require_real_configuration_before_ledger_creation(self):
         for provider in ('deepseek', 'glm'):
@@ -456,7 +458,7 @@ class NativeToolProtocolTests(unittest.TestCase):
                 self.assertEqual(len(self.fixture.opener.calls), before + 1)
                 with ledger.connect() as con:
                     row = con.execute('SELECT state,cost FROM model_requests').fetchone()
-                self.assertEqual(tuple(row), ('invalid_response', 300))
+                self.assertEqual(tuple(row), ('invalid_response', None))
 
     def test_history_and_schema_validation_are_zero_send(self):
         f = self.fixture
@@ -469,36 +471,34 @@ class NativeToolProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gateway.call_tool(job, 't', 'x', self.tools*2, system='s')
         with self.assertRaises(ValueError):
-            self.call(gateway, job, attempt_id='x')
+            self.call(gateway, job, max_requests=2)
         self.assertEqual(f.opener.calls, [])
         self.assertEqual(ledger.summary()['model_requests'], 0)
 
-    def test_history_images_and_reasoning_are_in_input_reservation(self):
+    def test_history_images_and_reasoning_above_estimate_reach_transport_intact(self):
         f = self.fixture
         cfg = f.config('glm', vision=True)
         cfg['model']['reserve_input_tokens'] = 2500
         ledger, job, gateway = f.gateway(cfg)
+        self.response(self.message('tc2'))
         history = [{'role':'user','content':[{'type':'image_url','image_url':{'url':'data:image/png;base64,controlled'}}]},
                    self.message(), {'role':'tool','tool_call_id':'tc1','content':'x'}]
-        with self.assertRaisesRegex(ValueError, 'reservation'):
-            self.call(gateway, job, history=history, images=[f.image])
-        self.assertEqual(f.opener.calls, [])
-        self.assertEqual(ledger.summary()['model_requests'], 0)
-        ledger, job, gateway = f.gateway(f.config('glm'))
         history[1]['reasoning_content'] = 'x'*60000
-        with self.assertRaisesRegex(ValueError, 'reservation'):
-            self.call(gateway, job, history=history)
-        self.assertEqual(f.opener.calls, [])
+        self.call(gateway, job, history=history, images=[f.image], attempt_id='original')
+        self.assertEqual(json.loads(f.opener.calls[0].data)['messages'][1:-1],history)
+        self.assertEqual(ledger.summary()['model_requests'],1)
 
     def test_http_unknown_is_not_reissued_under_another_purpose_or_job_in_attempt(self):
         f = self.fixture
         ledger, job, gateway = f.gateway(f.config('glm'))
         f.opener.error = TimeoutError('controlled')
-        for purpose in ('original', 'different-purpose'):
-            with self.assertRaises(OutcomeUnknown):
-                gateway.call_tool(job, purpose, 'x', self.tools, system='s', attempt_id='a', max_requests=2)
-        self.assertEqual(len(f.opener.calls), 1)
-        self.assertEqual(ledger.summary()['model_cost_micros'], 'UNKNOWN')
+        with patch('webcollect.model_gateway.time.sleep'), patch('webcollect.batch_core.time', wraps=time) as clock:
+            clock.time.side_effect=itertools.count(time.time(),2).__next__
+            for purpose in ('original', 'different-purpose'):
+                with self.assertRaises(OutcomeUnknown):
+                    gateway.call_tool(job, purpose, 'x', self.tools, system='s', attempt_id='a', max_requests=2)
+        self.assertEqual(len(f.opener.calls), 2)  # frozen cap tightens the three-retry policy
+        self.assertEqual(ledger.summary()['usage_covered_requests'], 0)
 
     def test_actual_http_retry_and_frozen_attempt_cap(self):
         from webcollect.batch_core import BudgetStop
@@ -524,6 +524,62 @@ class NativeToolProtocolTests(unittest.TestCase):
             material = json.loads(con.execute('SELECT request_json FROM model_requests').fetchone()[0])
         self.assertFalse(material['http_dispatch'])
         self.assertEqual(f.opener.calls, [])
+
+    def test_glm_session_25_is_atomic_across_workers_and_bound_to_original_attempt(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from webcollect.batch_core import SessionGLMCallLimit
+        import itertools
+        import time
+        f = self.fixture
+        cfg=f.config('glm')
+        cfg['budget']['lease_seconds']=3600
+        self.response(self.message())
+        with patch('webcollect.batch_core.time',wraps=time) as clock:
+            clock.time.side_effect=itertools.count(time.time(),2).__next__
+            ledger, unused, gateway = f.gateway(cfg)
+            ledger.finish(unused)
+            def job(kind, aid):
+                return ledger.claim(kind, job_id=ledger.enqueue(kind,{'attempt_id':aid}))
+            aid='formal-session'
+            original=job('react-native-decision',aid)
+            for n in range(24):
+                gateway.call_tool(original,'before-'+str(n),'x',self.tools,system='s',attempt_id=aid)
+            other=job('shared-tool',aid)
+            def send(item):
+                try:
+                    gateway.call_tool(item,'potential-last-'+item['kind'],'x',self.tools,system='s',attempt_id=aid)
+                    return 'sent'
+                except (SessionGLMCallLimit,OutcomeUnknown):
+                    return 'stopped'
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                self.assertCountEqual(list(pool.map(send,[original,other])),['sent','stopped'])
+            with self.assertRaises(SessionGLMCallLimit) as stop:
+                gateway.call_tool(other,'after-restart','x',self.tools,system='s',attempt_id=aid)
+            self.assertEqual(stop.exception.details['used'],25)
+            self.assertEqual(len(f.opener.calls),25)
+            with self.assertRaisesRegex(ValueError,'original ReAct session'):
+                gateway.call_tool(original,'wrong binding','x',self.tools,system='s',attempt_id='independent')
+            # A generic native purpose outside the original session still has its own accounting.
+            gateway.call_tool(other,'unrelated','x',self.tools,system='s',attempt_id='independent')
+            self.assertEqual(len(f.opener.calls),26)
+
+    def test_non_glm_transport_does_not_consume_a_glm_session_limit(self):
+        import itertools
+        import time
+        f=self.fixture
+        cfg=f.config('deepseek')
+        cfg['budget']['lease_seconds']=3600
+        self.response(self.message())
+        with patch('webcollect.batch_core.time',wraps=time) as clock:
+            clock.time.side_effect=itertools.count(time.time(),2).__next__
+            ledger,unused,gateway=f.gateway(cfg)
+            ledger.finish(unused)
+            aid='other-provider'
+            job=ledger.claim('react-native-decision',job_id=ledger.enqueue('react-native-decision',{'attempt_id':aid}))
+            for i in range(26):
+                gateway.call_tool(job,str(i),'x',self.tools,system='s',attempt_id=aid)
+        self.assertEqual(len(f.opener.calls),26)
+        self.assertFalse(ledger.real_glm)
 
     def test_twenty_fifth_concurrent_dispatch_is_denied_in_original_transaction(self):
         from concurrent.futures import ThreadPoolExecutor

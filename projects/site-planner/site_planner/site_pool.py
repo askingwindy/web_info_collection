@@ -89,17 +89,24 @@ class SitePool:
         return closing(con)
 
     def application(self, uri):
-        self.verify_identity_evidence()
         host = host_identity(uri)
         with self.connect() as con:
-            row = con.execute('SELECT a.* FROM applications a LEFT JOIN aliases x ON x.application_id=a.id '
-                              'WHERE a.host=? OR x.host=?', (host, host)).fetchone()
-            if row:
-                while True:
-                    merged = con.execute('SELECT target FROM merges WHERE source=?', (row['id'],)).fetchone()
-                    if not merged:
-                        return dict(row)
-                    row = con.execute('SELECT * FROM applications WHERE id=?', (merged[0],)).fetchone()
+            alias = con.execute('SELECT application_id,proof FROM aliases WHERE host=?', (host,)).fetchone()
+            if alias:
+                verify_evidence(json.loads(alias['proof']))
+                row = con.execute('SELECT * FROM applications WHERE id=?', (alias['application_id'],)).fetchone()
+            else:
+                row = con.execute('SELECT * FROM applications WHERE host=?', (host,)).fetchone()
+            seen = set()
+            while row:
+                if row['id'] in seen:
+                    raise ValueError('Application merge cycle')
+                seen.add(row['id'])
+                merged = con.execute('SELECT target,proof FROM merges WHERE source=?', (row['id'],)).fetchone()
+                if not merged:
+                    return dict(row)
+                verify_evidence(json.loads(merged['proof']))
+                row = con.execute('SELECT * FROM applications WHERE id=?', (merged['target'],)).fetchone()
             return None
 
     def verify_identity_evidence(self):
@@ -163,8 +170,7 @@ class SitePool:
                 p = con.execute('SELECT * FROM pages WHERE id=?', (prior['page_id'],)).fetchone()
                 return {'application_id': p['application_id'], 'page_id': p['id'],
                         'discovery_id': event, 'new_application': False, 'new_page': False, 'replayed': True}
-            a = con.execute('SELECT a.* FROM applications a LEFT JOIN aliases x ON x.application_id=a.id '
-                            'WHERE a.host=? OR x.host=?', (host, host)).fetchone()
+            a = self.application(uri)
             new_application = a is None
             aid = a['id'] if a else 'app-' + object_sha256(host)[:24]
             if a:
@@ -214,8 +220,9 @@ class SitePool:
             con.commit()
         return identity
 
-    def freeze_run(self, run_id, config):
-        self.verify_identity_evidence()
+    def freeze_run(self, run_id, config, *, inventory=True):
+        if inventory:
+            self.verify_identity_evidence()
         with self.connect(write=True) as con:
             con.execute('BEGIN IMMEDIATE')
             old = con.execute('SELECT * FROM runs WHERE id=?', (run_id,)).fetchone()
@@ -223,16 +230,17 @@ class SitePool:
                 if old['config'] != canonical(config):
                     raise ValueError('Run configuration cannot change on resume')
                 return json.loads(old['baseline'])
-            baseline = [dict(r) for r in con.execute('SELECT id,host,name FROM applications ORDER BY id')]
+            baseline = [dict(r) for r in con.execute('SELECT id,host,name FROM applications ORDER BY id')] if inventory else []
             # Freeze alias and merge identities too; no later import can redefine novelty.
-            baseline += [{'id': r['application_id'], 'host': r['host'], 'alias': True}
-                         for r in con.execute('SELECT host,application_id FROM aliases ORDER BY host')]
+            if inventory:
+                baseline += [{'id': r['application_id'], 'host': r['host'], 'alias': True}
+                             for r in con.execute('SELECT host,application_id FROM aliases ORDER BY host')]
             con.execute('INSERT INTO runs VALUES(?,?,?,?)',
                         (run_id, canonical(config), canonical(baseline), time.time()))
             con.commit()
             return baseline
 
-    def reserve_tool(self, run_id, kind, key, payload, *, maximum=None):
+    def reserve_tool(self, run_id, kind, key, payload, *, maximum=None, batch_scope=None):
         identity = object_sha256([run_id, kind, key])
         with self.connect(write=True) as con:
             con.execute('BEGIN IMMEDIATE')
@@ -243,9 +251,22 @@ class SitePool:
                 if old['state'] != 'succeeded':
                     raise ValueError('Tool outcome UNKNOWN/failed; reconcile original, do not resend')
                 return identity, json.loads(old['result'])
-            if maximum is not None and con.execute('SELECT COUNT(*) FROM tool_requests WHERE run_id=? AND kind=?', (run_id,kind)).fetchone()[0] >= maximum:
-                from webcollect.batch_core import BudgetStop
-                raise BudgetStop('Discovery tool request limit reached: ' + kind)
+            if maximum is not None:
+                if batch_scope is None:
+                    used = con.execute('SELECT COUNT(*) FROM tool_requests WHERE run_id=? AND kind=?', (run_id,kind)).fetchone()[0]
+                else:
+                    # Frozen pre-change inputs and new dispatch receipts may describe the same search.
+                    used = con.execute("""SELECT count(*) FROM (
+                        SELECT json_extract(value,'$.search_request_id') FROM checkpoints WHERE run_id=?
+                        AND key LIKE 'entry-batch/%/input' AND json_extract(value,'$.kind')='search'
+                        UNION SELECT json_extract(value,'$.request_id') FROM checkpoints WHERE run_id=?
+                        AND key LIKE 'search-dispatch/%')""",(batch_scope,batch_scope)).fetchone()[0]
+                if used >= maximum:
+                    from webcollect.batch_core import BudgetStop
+                    raise BudgetStop('Explicit search scope reached: ' + kind)
+                if batch_scope is not None:
+                    con.execute('INSERT INTO checkpoints VALUES(?,?,?,?)',
+                                (batch_scope,'search-dispatch/'+identity,canonical({'request_id':identity}),time.time()))
             con.execute('INSERT INTO tool_requests VALUES(?,?,?,?,?,?,?,?)',
                         (identity, run_id, kind, canonical(payload), 'reserved', None, time.time(), None))
             con.commit()

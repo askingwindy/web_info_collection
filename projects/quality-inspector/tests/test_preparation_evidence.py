@@ -83,11 +83,16 @@ class PreparationEvidence(unittest.TestCase):
         (self.sample/'images/step_001.png').write_bytes(self.pngs[1])
         self.assertFails('INITIAL_NOT_STEP_1')
 
-    def test_body_only_chinese_score_cannot_hide_english_initial_frame(self):
+    def test_letter_ratio_is_diagnostic_and_cannot_claim_language_approval(self):
         text='Advertising promotion subscription login purchase sale.'
         self.initial['state']['visible_text']=text;self.records[0]['state']['visible_text']=text
         self.ledger['decisions'][0]['assessment']['body']={'visible':True,'text':'中文正文中文正文'}
-        self.flush();self.assertFails('FULL_VIEWPORT_LANGUAGE')
+        self.flush();result=self.audit()
+        self.assertEqual(result['status'],'PASS',result)
+        self.assertEqual(result['metrics']['initial_full_visible_chinese_ratio'],0)
+        self.assertIsNone(result['metrics']['delivery_eligible_by_language'])
+        self.assertTrue(result['metrics']['chinese_ratio_diagnostic_only'])
+        self.assertEqual(result['metrics']['language_review'],'REVIEW_REQUIRED')
 
     def test_inserted_step_without_after_capture_cannot_pass(self):
         del self.ledger['decisions'][0]['after_image_sha256']

@@ -3,13 +3,7 @@
   "run_id": "ark-deepseek-protocol-CHANGE-ME",
   "mode": "real",
   "budget": {
-    "max_model_requests": 1,
-    "max_reserved_tokens": 20480,
-    "max_model_cost_micros": 100000,
     "currency": "CNY",
-    "max_discovery_candidates": 0,
-    "max_probe_pages": 0,
-    "max_run_seconds": 300,
     "max_concurrent_jobs": 1,
     "min_domain_interval_seconds": 2,
     "min_model_interval_seconds": 1,

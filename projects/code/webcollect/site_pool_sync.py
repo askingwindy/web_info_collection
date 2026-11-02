@@ -103,9 +103,20 @@ def _snapshot(registry, scope):
     return {'registry': str(registry), 'scope_id': scope, 'revision': revision, 'tasks': rows}
 
 
+def check_pool_binding(pool, registry):
+    from .current_chain import check_project_pool, registry_project
+    path = Path(registry).resolve()
+    project = None
+    if path.is_file():
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+            project = registry_project(con)
+    return check_project_pool(project, pool)
+
+
 def sync(pool_path, registry, scope):
     from site_planner.site_pool import SitePool
     pool = SitePool(pool_path)
+    per_task = check_pool_binding(pool, registry)
     value = _snapshot(registry, scope)
     digest = object_sha256(value)
     mapped = [(row, *_page(pool, row['uri'])) for row in value['tasks']]
@@ -123,10 +134,10 @@ def sync(pool_path, registry, scope):
         for row, page_id, page_key in mapped:
             # Same-page fragment windows may coexist with other occupied pages;
             # the exact-duplicate task_id guard below still applies to them.
-            if row['blocking'] and not row.get('fragment'):
-                other = con.execute('SELECT registry,task_key FROM collection_tasks WHERE (page_key=? OR task_id=?) AND blocking=1 '
-                                    'AND NOT(registry=? AND task_key=?)',
-                                    (page_key, row['task_id'], value['registry'], row['task_key'])).fetchone()
+            if row['blocking'] and (per_task or not row.get('fragment')):
+                other = con.execute('SELECT registry,task_key FROM collection_tasks WHERE ((?=0 AND page_key=?) OR task_id=?) '
+                                    'AND blocking=1 AND NOT(registry=? AND task_key=?)',
+                                    (int(per_task), page_key, row['task_id'], value['registry'], row['task_key'])).fetchone()
                 if other:
                     raise ValueError('Shared pool page already has an active or completed task')
             con.execute('INSERT INTO collection_tasks VALUES(?,?,?,?,?,?,?,?,?,?) '
@@ -168,14 +179,17 @@ def page_state(pool, uri):
     states = {t['status'] for t in tasks}
     status = next((s for s in ('published', 'batch_accepted', 'reviewed_pass', 'quality_revoked', 'qc_failed', 'collected_pending_review',
                                'running', 'reserved', 'queued', 'failed') if s in states), 'not_started')
+    from .current_chain import POOL_CHECKPOINT
+    per_task = bool(tasks) and pool.checkpoint(*POOL_CHECKPOINT) is not None
     return {'status': status, 'sync_pending': pending,
-            'dispatch_allowed': not pending and not any(t['blocking'] for t in tasks),
+            'dispatch_allowed': not pending and (per_task or not any(t['blocking'] for t in tasks)),
             'tasks': [{**json.loads(t['record']), 'registry': t['registry'], 'scope_id': t['scope_id']} for t in tasks]}
 
 
 def guard_plan(pool_path, registry, scope, plan):
     from site_planner.site_pool import SitePool
     pool = SitePool(pool_path, readonly=True)
+    per_task = check_pool_binding(pool, registry)
     path = Path(registry).resolve()
     if path.is_file():
         from .runtime import RuntimeStore
@@ -189,7 +203,7 @@ def guard_plan(pool_path, registry, scope, plan):
         uri = task.get('pilot_identity', {}).get('task_page', {}).get('canonical_uri', task['site_uri'])
         state = page_state(pool, uri)
         from .fragment_workflow import is_fragment
-        foreign = [t for t in state['tasks'] if t['blocking'] and not is_fragment(task) and not (
+        foreign = [t for t in state['tasks'] if t['blocking'] and not per_task and not is_fragment(task) and not (
             t['registry'] == str(Path(registry).resolve()) and t['scope_id'] == scope
             and t['task_id'] == task['task_id'] and t['task_version'] == task['task_version'])]
         if state.get('sync_pending') or foreign:

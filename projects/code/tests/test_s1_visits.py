@@ -16,7 +16,8 @@ from urllib.parse import urlsplit
 REPO=Path(__file__).resolve().parents[3]
 sys.path[:0]=[str(REPO/'projects/site-planner')]
 from webcollect.batch_core import BatchLedger, BudgetStop, VisitRateWait, load_json, save_json, file_sha
-from site_planner.pipeline import discover, probe, fetch_public, bounded
+from site_planner.pipeline import discover, probe, fetch_public
+from webcollect.site_failure_stop import SiteStopped
 
 HTML='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>测试工具</title>
 <style>body{font:24px sans-serif;margin:28px;line-height:1.7}input,button{font:24px sans-serif}</style>
@@ -69,14 +70,14 @@ class VisitAccountingTests(unittest.IsolatedAsyncioTestCase):
 
     def test_retries_count_every_dispatch_and_resource_is_not_reset(self):
         job=self.job();self.ledger.consume('probe_pages','same-page')
-        for i in range(8):
-            with self.ledger.transaction() as con:con.execute('DELETE FROM domain_dispatch')
-            visit=self.ledger.reserve_visit(job,'https://example.org/repeated','same','example.org')
+        for i in range(100):
+            domain=f'fixture-{i}.example'
+            visit=self.ledger.reserve_visit(job,f'https://{domain}/repeated','same',domain)
             self.ledger.settle_visit(visit,state='failed',error=TimeoutError('controlled failure'))
         resumed=BatchLedger(self.ledger.path,self.cfg);resumed.consume('probe_pages','same-page')
-        with self.assertRaisesRegex(BudgetStop,'max_top_level_visits'):
-            resumed.reserve_visit(job,'https://example.org/repeated','same','example.org')
-        self.assertEqual(resumed.summary()['top_level_visits_attempted'],8)
+        visit = resumed.reserve_visit(job,'https://example.org/repeated','same','example.org')
+        resumed.settle_visit(visit,state='succeeded',response_status=200)
+        self.assertEqual(resumed.summary()['top_level_visits_attempted'],101)
         self.assertEqual(resumed.summary()['resources'],[{'kind':'probe_pages','used':1}])
         self.ledger.finish(job)
 
@@ -88,18 +89,13 @@ class VisitAccountingTests(unittest.IsolatedAsyncioTestCase):
             con.execute('DELETE FROM domain_dispatch')
             con.execute('UPDATE batch_meta SET started=?',(time.time()-self.cfg['budget']['max_run_seconds']+0.3,))
         visit=self.ledger.reserve_visit(job,'https://example.org/b','b','example.org')
-        self.assertLessEqual(visit['timeout_seconds'],0.3)
+        self.assertEqual(visit['timeout_seconds'],20)
         self.ledger.settle_visit(visit,state='failed',error=TimeoutError())
         with self.ledger.transaction() as con:con.execute('UPDATE batch_meta SET started=?',(time.time()-self.cfg['budget']['max_run_seconds']-1,))
-        with self.assertRaisesRegex(BudgetStop,'max_run_seconds'):
-            self.ledger.reserve_visit(job,'https://other.example/a','a','other.example')
+        visit=self.ledger.reserve_visit(job,'https://other.example/a','a','other.example',timeout_seconds=7)
+        self.assertEqual(visit['timeout_seconds'],7)
+        self.ledger.settle_visit(visit,state='succeeded',response_status=200)
         self.ledger.finish(job)
-
-    async def test_browser_operation_obeys_whole_run_deadline(self):
-        with self.ledger.transaction() as con:con.execute('UPDATE batch_meta SET started=?',(time.time()-self.cfg['budget']['max_run_seconds']+0.05,))
-        started=time.monotonic()
-        with self.assertRaises(BudgetStop):await bounded(self.ledger,asyncio.sleep(0.3))
-        self.assertLess(time.monotonic()-started,0.2)
 
     def test_legacy_unknown_history_never_reports_zero_or_resets_resources(self):
         self.ledger.consume('probe_pages','old-page')
@@ -128,7 +124,7 @@ class VisitAccountingTests(unittest.IsolatedAsyncioTestCase):
         resumed=discover(BatchLedger(self.ledger.path,self.cfg),self.root/'sources.json',self.root/'supply')
         self.assertEqual(resumed,result);self.assertEqual(len(self.ledger.visits()),2)
 
-    def test_source_crash_resume_counts_actual_fetch_twice_with_one_page_reservation(self):
+    def test_source_crash_resume_holds_unknown_visit_without_repeating_fetch(self):
         save_json(self.root/'sources.json',{'schema_version':'webcollect-site-sources-1','sources':[
             {'kind':'directory','uri':self.base+'/directory','category':'测试','max_candidates':1}]})
         def crash_after_fetch(*args,**kwargs):
@@ -138,11 +134,10 @@ class VisitAccountingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(SystemExit):discover(self.ledger,self.root/'sources.json',self.root/'supply')
         with self.ledger.transaction() as con:con.execute("UPDATE jobs SET lease=? WHERE state='running'",(time.time()-1,))
         resumed=BatchLedger(self.ledger.path,self.cfg)
-        result=discover(resumed,self.root/'sources.json',self.root/'supply')
-        self.assertEqual(result['fixed_candidate_count'],1)
-        self.assertEqual(len(self.requests),2)
-        self.assertEqual([v['state'] for v in resumed.visits()],['unknown','succeeded'])
-        self.assertEqual(resumed.summary()['resources'],[{'kind':'discovery_candidates','used':1},{'kind':'probe_pages','used':1}])
+        with self.assertRaises(SiteStopped): discover(resumed,self.root/'sources.json',self.root/'supply')
+        self.assertEqual(len(self.requests),1)
+        self.assertEqual([v['state'] for v in resumed.visits()],['unknown'])
+        self.assertEqual(resumed.summary()['resources'],[{'kind':'probe_pages','used':1}])
 
     async def test_explicit_second_candidate_failure_preserves_first_and_cached_retry_no_extra_first_visit(self):
         save_json(self.root/'candidates.json',{'schema_version':'webcollect-site-candidates-1','mode':'real','records':[
@@ -173,18 +168,18 @@ class VisitAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(again['records'][1]['status'],'review_required')
         visits=self.ledger.visits();self.assertTrue(all(b['dispatched_at']-a['dispatched_at']>=0.99 for a,b in zip(visits,visits[1:])))
 
-    async def test_visit_cap_retains_first_candidate_and_stops_before_next_candidate_goto(self):
+    async def test_old_visit_cap_allows_all_listed_candidates(self):
         self.cfg=deepcopy(self.cfg);self.cfg['budget']['max_top_level_visits']=1
         self.ledger=BatchLedger(self.root/'limited-ops.sqlite3',self.cfg,initialize=True)
         save_json(self.root/'candidates.json',{'schema_version':'webcollect-site-candidates-1','mode':'real','records':[
             {'site_uri':self.base+path,'site_category':'测试','source':[{'kind':'controlled-local-http'}]}
             for path in ('/home','/broken')]})
         result=await probe(self.ledger,self.root/'candidates.json',self.root/'probe')
-        self.assertIn('max_top_level_visits',result['stopped'])
+        self.assertIsNone(result['stopped'])
         self.assertEqual(len(result['records'][0]['representative_pages']),1)
         self.assertTrue(result['records'][0]['rendered'])
-        self.assertEqual(self.ledger.summary()['top_level_visits_attempted'],1)
-        self.assertFalse(any(r['path']=='/broken' for r in self.requests))
+        self.assertEqual(self.ledger.summary()['top_level_visits_attempted'],2)
+        self.assertTrue(any(r['path']=='/broken' for r in self.requests))
 
     async def test_unlisted_same_host_link_does_not_expand_candidate_scope(self):
         save_json(self.root/'candidates.json',{'schema_version':'webcollect-site-candidates-1','mode':'real','records':[

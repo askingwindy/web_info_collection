@@ -26,7 +26,7 @@ def ensure_registry_schema(con):
     ''')
 
 
-def allocate_in_transaction(con, uri, category, sample_kind='integration', day=None, batch_id=None):
+def allocate_in_transaction(con, uri, category, sample_kind='integration', day=None, batch_id=None, *, category_metadata=False):
     """Reserve an ID inside an existing write transaction, without committing.
 
     Runtime callers persist the task/attempt mapping in this same transaction.
@@ -42,23 +42,34 @@ def allocate_in_transaction(con, uri, category, sample_kind='integration', day=N
         raise ValueError('未知样本性质')
     day = day or datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
     if not re.fullmatch(r'\d{8}',day): raise ValueError('日期编号须为 YYYYMMDD')
+    if batch_id is not None and not re.fullmatch(r'B\d{8}_\d{3,}',batch_id):
+        raise ValueError('批次编号格式不正确')
+    batch_prefix = batch_id.split('_')[0] if batch_id else 'B' + day
+    floors = {}
+    has_floors = con.execute("SELECT 1 FROM sqlite_master WHERE name='allocation_floors'").fetchone()
+    if has_floors:
+        floors = dict(con.execute('SELECT name,last_number FROM allocation_floors WHERE name IN (?,?)',('site',batch_prefix)))
+    if batch_id and batch_prefix in floors and int(batch_id.split('_')[1]) <= floors[batch_prefix]:
+        raise ValueError('批次编号已在上一代预留')
     row=con.execute('SELECT id,category,kind,next_sample FROM sites WHERE uri=?',(uri,)).fetchone()
     if row:
         site_number,old_category,kind,seq=row
-        if kind != sample_kind or old_category != category:
+        if kind != sample_kind or (old_category != category and not category_metadata):
             raise ValueError('已有 URI 的类目或样本性质不同，不允许静默变更')
     else:
-        site_number=con.execute('SELECT COALESCE(MAX(id),0)+1 FROM sites').fetchone()[0]
+        site_number=max(con.execute('SELECT COALESCE(MAX(id),0) FROM sites').fetchone()[0],floors.get('site',0))+1
         if site_number > 999999: raise ValueError('站点编号已超出六位范围')
         seq=1
         con.execute('INSERT INTO sites VALUES(?,?,?,?,?)',(site_number,uri,category,sample_kind,seq))
     site_id=f'S{site_number:06}'
     if batch_id is None:
         prefix=f'B{day}_'
-        batch_seq=con.execute('SELECT COUNT(*)+1 FROM batches WHERE id LIKE ?',(prefix+'%',)).fetchone()[0]
+        if has_floors:
+            last=con.execute('SELECT COALESCE(MAX(CAST(substr(id,11) AS INTEGER)),0) FROM batches WHERE id LIKE ?',(prefix+'%',)).fetchone()[0]
+            batch_seq=max(last,floors.get(batch_prefix,0))+1
+        else:
+            batch_seq=con.execute('SELECT COUNT(*)+1 FROM batches WHERE id LIKE ?',(prefix+'%',)).fetchone()[0]
         batch_id=f'{prefix}{batch_seq:03}'
-    elif not re.fullmatch(r'B\d{8}_\d{3,}',batch_id):
-        raise ValueError('批次编号格式不正确')
     sample_id=f'{site_id}_sample_{seq:06}'
     existing=con.execute('SELECT kind FROM batches WHERE id=?',(batch_id,)).fetchone()
     if existing and existing[0]!=sample_kind:raise ValueError('批次样本性质不同')
@@ -102,7 +113,18 @@ def verify_existing_registry(registry, output_parent):
                 if manifest.get('sample_kind')!='real':continue
                 for site in manifest['sites']:
                     row=con.execute('SELECT uri,category,kind FROM sites WHERE id=?',(int(site['site_id'][1:]),)).fetchone()
-                    if row!=(site['uri'],site['site_category'],'real'):
+                    metadata_mapping = False
+                    if row and manifest.get('classification_metadata_version') == 'source-category-1':
+                        from .react_protocol import VERSION
+                        for (material,) in con.execute('SELECT t.task_json FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key WHERE a.site_id=? AND a.batch_id=?', (site['site_id'],manifest['batch_id'])):
+                            task=json.loads(material)
+                            uri=(task.get('pilot_identity') or {}).get('application',{}).get('canonical_uri') or task['site_uri']
+                            if (task.get('fragment',{}).get('decision_protocol') == VERSION
+                                    and task['site_category'] == site['site_category'] and uri == site['uri']):
+                                metadata_mapping=True
+                                break
+                    if (not row or row[0]!=site['uri'] or row[2]!='real' or
+                            row[1]!=site['site_category'] and not metadata_mapping):
                         raise ValueError('账本与既有站点映射不一致：'+site['site_id'])
                 for sample_id in manifest['samples']:
                     row=con.execute('SELECT batch_id FROM allocations WHERE sample_id=?',(sample_id,)).fetchone()

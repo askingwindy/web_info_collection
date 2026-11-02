@@ -1,4 +1,16 @@
+本轮生产者 P0/P1 已接入正式 `produce-entries`，仅完成离线工程验证。新 GLM-5.3-Flash 会话默认 `entry-tools-3`：`submit_site_classification` 使用与首页绑定的原文编号，核定站点后从原始 HTML 提取链接，按站点轮转。页面默认规则选择，可用 `--entry-selection model` 调用只接收本次链接 ID 与证据 ID 的 `submit_entry_links`。旧协议及冻结批次继续恢复原调用链。
+
+来源记录分别保存 `site_origin`、`page_origin`、`selection_method`、`page_evidence` 和排序依据；Table2 正文仍是原四字段，入口 `requested_goal=null`，显式调用方目标和原领取参数不变。English/登录切换单列，通用文案不足以建立页面类型时保留 UNKNOWN。页面语言与可操作性仍需消费者首帧验证。
+
+公共 GET 只在传输层编码 Unicode，保留原 URI 与已转义字节；`candidate_landings` 用唯一键在原发布短事务中拦截已结算的重复落地，不合并原入口或不同目标。搜索厂商码 1113 在同一池暂停该通道，保留原 UNKNOWN；未耗尽的已授权种子仍可扩页。新模型、真实网页和首帧效果没有在本轮补测。详细命令与验收见[工程说明](../../docs/工程说明.md#正式第一方扩页与两阶段选择2026-11-02)。
+
 # 站点规划程序
+
+新批次使用生产者站点扩展保存中文首页、整体主营类目与冻结挖掘进度。新入口必须同时满足 Table1 有据分类和最终 GET 2xx；原版消费者继续读取原 Table2 和来源字段。旧冻结批次保持原协议。详见[工程接口](../../docs/工程说明.md#生产者站点表与有效交付容量)。
+
+可显式用 `classify_homepage` 对已核验的第一方中文首页单独判类：模型选原文编号，程序绑定精确引文，已确认决定直接复用。首页保留原 HTML 和实际解码方式；搜索 HTTP 错误保存原响应及厂商错误码，未决原账不自动重发。调用方 URI 清单的零选源 token 与真实站点分类 token 分开核算。
+
+新发现批次默认按候选目标、输入范围和有无进展收尾。共享搜索和模型原账持续计量。[额度限制清单](../../docs/额度限制清单与取消说明-20261101.md)
 
 使用[本机启动说明](../../docs/工程说明.md#本机有界批次启动)中的 `start_candidates.py --scope <范围文件> producer` 并传入搜索方向与数量上限。脚本将同一批次键与 manifest 传给 `produce-entries`，由生产者选择链内证据根。批次报告按实际 `NEW` 计数。
 
@@ -83,3 +95,10 @@ S0 增加 `projects/code/config/batch-no-model.json`：`mode=real`、`model=null
 S0 受影响验证：`PYTHONPATH=projects/code:projects/code/tests projects/code/.venv/bin/python -m unittest -v test_s0_runtime`。实际无 API 环境 CLI 记录及受控 Chrome 探测证据在 `verify_results/three-program-s0-20261026/runtime-r01/`；离线种子 URL 登记不算真实供给探测。
 
 S1新增可选`budget.max_top_level_visits`：每次主动来源fetch/page.goto及失败重试都持久计数，缓存不计新访问；原`max_probe_pages`仍是job/page预留键数。实际派发逐次检查域间隔及剩余墙钟，redirect/子资源另列观察量。缺实际访问历史的旧账保持UNKNOWN，不能清零后启新限额。旧S1两页模式的部分成功与失败证据保留；当前精确页模式不再自动派发第二代表页。原S1冻结上限220、实用43，原身份完成后重入仍43；最新独立包为8/60访问，两者分账，不通过换run/目录补数量。
+
+
+2026-11-02 后继限定批次使用 `entry-tools-4`：同站最多继续读取四份目录，优先复用冻结的第一方文档；逐行校验并隔离错误行。模型选择合法页面类型与本行原文编号，宿主绑定 URI 和精确引文，操作证据允许空数组。可在来源中指定 `settled_selection_job_id`，只读取有 usage 的原响应，保留有效行并对错误行使用独立编号纠错请求；UNKNOWN 不进入此路径。新批次沿用原生产者会话和工程账本，旧协议冻结不变。`excluded_entry_identities` 随来源输入冻结，用于排除历史已入池及其落地身份；Table2 四字段和 Table1 主类入池门禁保持。实测证据与逐候选分账见 `verify_results/producer-continuation-20261102-real-r01/`，离线记录见 `verify_results/producer-continuation-20261102-r06/`；最终实际数量以本轮报告为准。
+
+2026-11-02 本轮后继修正：编号工具的 `ops` 是可选证据，缺失安全解释为空数组，原 provider arguments 保留。已结算的整包协议错误可读取原响应逐行隔离，绝不重派 UNKNOWN。只读首帧在领取前检查原请求保护；成功后 `release_observation` 核验原观察作业、唯一已结算访问和同步图树收据，将 claim 追加为 observed、候选恢复 pending，正式消费者可新建独占 claim。未决观察仍按原规则隔离。历史未决主机/URI 仅作为负向派发约束，包含未入池入口，不能作为本轮页面或分类证据。
+
+本轮限定实测及边界见 [结果报告](../../verify_results/producer-continuation-20261102-real-r01/结果报告.md)：200 条净新增、16 站；31 条固定首帧样本，29 条可判定、21 条可信可用。37 项定向检查见 `../../verify_results/producer-continuation-20261102-r12/summary.json`。保留 7 笔生产 GET UNKNOWN、1 笔 GLM UNKNOWN；早期回放误发 GET 的独立异常账也在报告中，不计离线 PASS 或生产 NEW。

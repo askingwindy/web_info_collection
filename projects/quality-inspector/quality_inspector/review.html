@@ -34,7 +34,7 @@ function canonical(v){if(Array.isArray(v))return v.map(canonical);if(v&&typeof v
 const file=p=>/^https?:\/\//.test(p)?p:(String(p).startsWith('/')?'file://':'')+String(p).split('/').map(encodeURIComponent).join('/');
 const sampleData=D.samples||[], identity=D.reviewer||{kind:'human',name:'hemiao'}, key=(BLIND?'webcollect-human-blind:':'webcollect-human-review:')+D.data_id;
 const ruleNames={visual_alignment:'图、控件和动作是否对应？',terminal_semantics:'最后真的完成任务了吗？',language:'页面和说明是否符合中文要求？',privacy:'是否符合来源和隐私要求？',substantive_difference:'与其他任务有实质区别吗？'};
-const ruleHelp={visual_alignment:'看控件原文、红框、触点和前后状态，确认没有漏记操作。',terminal_semantics:'对照任务和最后一张图，核对结果、单位、选项或章节；也要留意凑步。',language:'说明是完整的简体中文，控件引用符合原文；页面可见中文至少70%。',privacy:'对照来源说明，查看有无未说明的个人或账户信息；测试输入是否符合声明。',substantive_difference:'比较本批其他任务的目标和操作路径，不能只是换一个关键词、数值或网址。'};
+const ruleHelp={visual_alignment:'看控件原文、红框、触点和前后状态，确认没有漏记操作。',terminal_semantics:'对照任务和最后一张图，核对结果、单位、选项或章节；也要留意凑步。',language:'说明是完整的简体中文，控件引用符合原文；控件语言与页面语言一致，技术名词可保留英文，不按中文字符比例判退。',privacy:'对照来源说明，查看有无未说明的个人或账户信息；测试输入是否符合声明。',substantive_difference:'比较本批其他任务的目标和操作路径，不能只是换一个关键词、数值或网址。'};
 const packageNames={delivery_documentation:'交付资料是否完整、与实际内容一致？',site_category_attribution:'站点与类目归属是否真实、一致？'};
 const packageHelp={delivery_documentation:'阅读项目说明、字段、来源与各批质检资料，核对数量、去重、拒收和实际人工/AI覆盖。',site_category_attribution:'对照实际来源核对站点URI和类目。不能靠重复站点编号或人为拆分类目满足分布。'};
 const documentKey=D.template.delivery_document_review?'delivery_document_review':'package_review',documentTemplate=D.template[documentKey]||{};

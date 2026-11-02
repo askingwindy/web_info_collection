@@ -213,6 +213,23 @@ class RelatedImageInspectionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['summary']['routing'],'REVIEW_REQUIRED')
                 self.assertTrue(result['summary']['related_stability_failures'])
 
+    def test_accepted_repaint_outside_image_is_not_attributed_to_that_image(self):
+        from webcollect.browser import stability_pair
+
+        snapshot = self.state('same-animated-image')
+        first = self.png('red')
+        with Image.open(BytesIO(self.png('blue'))) as last:
+            last.putpixel((1, 1), (252, 252, 252))
+            buf = BytesIO()
+            last.save(buf, 'PNG')
+        temporal = stability_pair(snapshot, snapshot, first, buf.getvalue())
+        self.assertTrue(temporal['accepted'])
+        self.assertTrue(temporal['paint_noise_proof'])
+        pair = stability_pair(snapshot, snapshot, first, first)
+        comparison = {**change(), 'related_stability': temporal, 'diagnostic_pair_stability': [pair, pair]}
+        summary = summarize_preflight([probe(100), probe(500)], [assessment()], [comparison])
+        self.assertFalse(summary['pixel_change_clues'][0]['bounded_irrelevant_image_change'])
+
 
 class RelatedImageBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

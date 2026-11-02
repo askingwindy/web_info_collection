@@ -9,10 +9,10 @@ VERSION = 'site-rolling-fragments-1'
 
 
 def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, history_set=None,
-               page_identities=None, feedback=(), synthetic_specs=None, max_tasks=5, controlled=False):
+               page_identities=None, feedback=(), synthetic_specs=None, max_tasks=None, controlled=False):
     from .task_generation import generate
-    if type(max_tasks) is not int or not 1 <= max_tasks <= 5:
-        raise ValueError('One rolling round refines at most five observed routes')
+    if max_tasks is not None and (type(max_tasks) is not int or max_tasks < 1):
+        raise ValueError('An explicit route count must be positive')
     records = [r for r in load_json(catalog)['records'] if r.get('site_uri') == site_uri]
     if not records:
         raise ValueError('Site must exist in the actual observed capability catalog')
@@ -39,6 +39,8 @@ def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, hist
         own = next((r for r in rows if r[1] == str(output)), None)
         if own:
             saved_context=json.loads(own[3])
+            if max_tasks is None:
+                max_tasks = saved_context['max_routes']
             if (saved_context['catalog_sha256'] != file_sha(catalog) or saved_context['site_uri'] != site_uri
                     or saved_context['max_routes'] != max_tasks or saved_context.get('controlled',False) != controlled):
                 raise ValueError('Existing rolling round input changed; do not reuse a different scope')

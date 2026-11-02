@@ -62,6 +62,21 @@ class Links(HTMLParser):
                 self.hrefs.append(value)
 
 
+def request_uri(uri):
+    """Encode only transport-unsafe characters, without decoding escaped bytes.
+
+    Inventory identity and the caller's route stay untouched. In particular a
+    literal %2F, repeated business query parameter or hash route is not rewritten.
+    """
+    p = urlsplit(uri)
+    host = p.hostname.encode('idna').decode('ascii')
+    if ':' in host:
+        host = '[' + host + ']'
+    netloc = host + (':' + str(p.port) if p.port is not None else '')
+    return urlunsplit((p.scheme, netloc, quote(p.path, safe="/%:@!$&'()*+,;=-._~"),
+                       quote(p.query, safe="%/?@:!$&'()*+,;=-._~"), quote(p.fragment, safe="%/?@:!$&'()*+,;=-._~")))
+
+
 def open_public_get(uri, deadline, metrics, check_url=verify_public_url):
     check_url(uri)
     class Redirects(HTTPRedirectHandler):
@@ -71,17 +86,19 @@ def open_public_get(uri, deadline, metrics, check_url=verify_public_url):
             metrics.setdefault('redirects',[]).append({'from':req.full_url,'to':newurl,'status':code})
             req.timeout = max(0.01, deadline-time.monotonic())
             if time.monotonic() >= deadline: raise TimeoutError('Source fetch total deadline reached during redirect')
-            return super().redirect_request(req,fp,code,msg,headers,newurl)
+            return super().redirect_request(req,fp,code,msg,headers,request_uri(newurl))
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError('Source fetch total deadline reached before dispatch')
-    return build_opener(Redirects()).open(Request(uri, headers={'User-Agent': 'WebCollectSitePlanner/0.1'}), timeout=remaining)
+    transport_uri = request_uri(uri)
+    metrics['request_uri'] = transport_uri
+    return build_opener(Redirects()).open(Request(transport_uri, headers={'User-Agent': 'WebCollectSitePlanner/0.1'}), timeout=remaining)
 
 
 def fetch_public(uri, *, timeout=20, metrics=None):
     metrics = metrics if metrics is not None else {}
     deadline = time.monotonic() + timeout
-    with open_public_get(uri, deadline, metrics) as response:
+    with open_public_get(uri, deadline, metrics, verify_public_url) as response:
         metrics.update(response_status=response.status,landed_uri=response.url)
         verify_public_url(response.url)
         if response.status != 200 or 'html' not in response.headers.get('Content-Type', ''):
@@ -116,16 +133,6 @@ async def reserve_visit_async(ledger, job, uri, purpose):
         except VisitRateWait as wait: await asyncio.sleep(wait.seconds)
 
 
-async def bounded(ledger, coroutine):
-    try: timeout = ledger.remaining_seconds()
-    except BaseException:
-        coroutine.close();raise
-    try: return await asyncio.wait_for(coroutine, timeout=timeout)
-    except asyncio.TimeoutError as error:
-        if ledger.remaining_seconds() <= 0.05: raise BudgetStop('max_run_seconds reached during browser operation') from error
-        raise
-
-
 def discover(ledger, sources_path, output):
     sources = load_json(sources_path)
     if sources.get('schema_version') != 'webcollect-site-sources-1' or not sources.get('sources'):
@@ -145,14 +152,8 @@ def discover(ledger, sources_path, output):
         return {'job_id': jid, 'stopped': prior['state']}
     candidates, rejects, source_errors, occurrences = {}, [], [], 0
     deferred, source_summaries, unprocessed_sources = [], [], []
-    selection_stopped = False
     try:
         for number, source in enumerate(sources['sources']):
-            if selection_stopped or len(candidates) >= ledger.config['budget']['max_discovery_candidates']:
-                unprocessed_sources.append({'index':number, 'source':source,
-                    'reason':'global candidate selection limit reached; source not fetched',
-                    'link_occurrences':len(source.get('uris',[])) if source.get('kind')=='seed' else 'UNKNOWN'})
-                continue
             if source.get('kind') not in ('seed', 'directory', 'search-template', 'synthetic-directory') or not source.get('category'):
                 raise ValueError('Discovery source kind/category required')
             ledger.heartbeat(job)
@@ -205,18 +206,10 @@ def discover(ledger, sources_path, output):
                 if source.get('allowed_domains') and urlsplit(uri).hostname not in source['allowed_domains']:
                     rejects.append({'uri': uri, 'source': source_ref, 'reason': 'outside configured source domain scope'}); continue
                 if uri not in candidates:
-                    if source_selected >= source.get('max_candidates', len(uris)) or selection_stopped:
-                        deferred.append({'uri':uri,'source':source_ref,'reason':
-                            'global candidate selection limit reached' if selection_stopped else 'source max_candidates reached'})
+                    if source_selected >= source.get('max_candidates', len(uris)):
+                        deferred.append({'uri':uri,'source':source_ref,'reason':'source max_candidates reached'})
                         continue
-                    try:
-                        ledger.consume('discovery_candidates', jid + ':candidate:' + object_sha256(uri))
-                    except BudgetStop as error:
-                        if 'max_discovery_candidates' not in str(error):
-                            raise
-                        selection_stopped = True
-                        deferred.append({'uri':uri,'source':source_ref,'reason':'global candidate selection limit reached'})
-                        continue
+                    ledger.consume('discovery_candidates', jid + ':candidate:' + object_sha256(uri))
                     save_json(output/'discovered-links'/(str(occurrences).zfill(6)+'.json'),
                               {'uri':uri,'source':source_ref,'category':source['category']})
                     candidates[uri] = {'site_uri': uri, 'site_category': source['category'], 'source': [],
@@ -582,9 +575,9 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                             error = None
                             try:
                                 if fixture_pages is not None:
-                                    await bounded(ledger,page.set_content(fixture_pages[target]))
+                                    await page.set_content(fixture_pages[target])
                                 else:
-                                    response = await bounded(ledger,page.goto(target,wait_until='domcontentloaded',timeout=visit['timeout_seconds']*1000))
+                                    response = await page.goto(target,wait_until='domcontentloaded',timeout=visit['timeout_seconds']*1000)
                                     response_status = response.status if response else None;landed_uri=page.url
                                     verify_public_url(page.url)
                                     if not response or response_status>=400: raise ValueError('Page inaccessible: HTTP '+str(response_status))
@@ -595,12 +588,12 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                                     # Record the real necessary view change; the
                                     # generated trajectory must repeat it itself.
                                     prefix=directory/('view-preparation-'+str(index)+'-'+str(attempt))
-                                    prefix.with_suffix('.png').write_bytes(await bounded(ledger,page.screenshot()))
-                                    before=await bounded(ledger,observe(page))
+                                    prefix.with_suffix('.png').write_bytes(await page.screenshot())
+                                    before=await observe(page)
                                     initial_visible_text = before['visible_text']
-                                    await bounded(ledger,page.mouse.wheel(0,80))
-                                    await bounded(ledger,page.wait_for_timeout(150))
-                                    after=await bounded(ledger,observe(page))
+                                    await page.mouse.wheel(0,80)
+                                    await page.wait_for_timeout(150)
+                                    after=await observe(page)
                                     save_json(prefix.with_suffix('.json'),{'purpose':'Expose observed ASCII-art input and submit controls',
                                         'action_type':'scroll','arguments':{'direction':'down'},'distance':80,
                                         'before':before,'after':after,'production_action':False})
@@ -610,9 +603,9 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                                 # frame. A premature loading observation must not
                                 # become a permanent route after readiness earns
                                 # a synchronized proof later in the same visit.
-                                anchor = await bounded(ledger, capture(page))
-                                result = await bounded(ledger,inspect_page(page,task,evidence_dir,samples=2,interval_ms=100,
-                                    url_check=verify_public_url if fixture_pages is None else None))
+                                anchor = await capture(page)
+                                result = await inspect_page(page,task,evidence_dir,samples=2,interval_ms=100,
+                                    url_check=verify_public_url if fixture_pages is None else None)
                                 state = anchor['state']
                                 anchor_image = evidence_dir/'page-anchor.png'; anchor_image.write_bytes(anchor['png'])
                                 anchor_state = evidence_dir/'page-anchor.state.json'; save_json(anchor_state, state)
@@ -623,7 +616,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                                     'requested_uri':target,'landed_uri':landed_uri,'visible_text':state['visible_text'],
                                     'elements':state['elements'], 'page_anchor': page_anchor,
                                     'capture_controls':state['capture_controls'], 'values':state['values'],
-                                    **await bounded(ledger,page.evaluate(INVENTORY_JS))}
+                                    **await page.evaluate(INVENTORY_JS)}
                                 if initial_visible_text is not None:
                                     inventory['initial_visible_text'] = initial_visible_text
                                 inventory_file=evidence_dir/'inventory.json';save_json(inventory_file,inventory)

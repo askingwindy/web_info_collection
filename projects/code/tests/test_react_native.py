@@ -43,6 +43,80 @@ def scroll(goal=None):
 
 
 class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
+    async def test_unrelated_uninspected_iframe_defers_review_but_overlap_and_errors_block(self):
+        from unittest.mock import AsyncMock
+        from webcollect.react_session import ReactStop
+        record={'completed_probe_count':2,'error':None,'summary':{'routing':'REVIEW_REQUIRED',
+            'reasons':['Visible iframe internals are uninspected; never infer editorial/ad content or stability: iframe'],
+            'critical_regions':[{'kind':'body','bbox':[0,100,1000,700],'readable':True}],
+            'media_evidence':[{'kind':'iframe','bbox':[0,0,1000,72],
+                'task_or_body_geometry_related':False,'critical_geometry_overlaps':[]}],
+            'other_dynamic_reasons':[],'page_capture_risks':[]}}
+        session,_,_=self.recorded([]);session.preflight=AsyncMock(return_value=record)
+        await session._run_preflight()
+        self.assertEqual(self.surface.executed,[])
+        self.assertTrue(list(session.root.glob('*preflight-unrelated-opaque-deferred.json')))
+        for kind in ('overlap','error','dynamic'):
+            altered=deepcopy(record)
+            if kind=='overlap':altered['summary']['media_evidence'][0]['bbox']=[0,90,1000,200]
+            if kind=='error':altered['error']='missing evidence'
+            if kind=='dynamic':altered['summary']['other_dynamic_reasons']=['target movement']
+            session.preflight=AsyncMock(return_value=altered)
+            with self.assertRaises(ReactStop):await session._run_preflight()
+
+    async def test_predispatch_drift_publishes_fresh_evidence_without_dispatch_or_overwriting(self):
+        session, evidence, _ = self.recorded([])
+        await session._observe()
+        await session._observe('control-0')
+        old_id=session.current['observation_id'];old_ref=deepcopy(session.current['evidence']['state'])
+        session.working_goal='在当前控件上操作'
+        self.surface.state['visible_text']+='\n页面通知已更新'
+        result=await session._tool_act({'observation_id':old_id,'step':act_step('click',control_id='control-0')})
+        self.assertEqual(result['status'],'need_observation')
+        self.assertEqual(self.surface.executed,[])
+        self.assertNotEqual(session.current['observation_id'],old_id)
+        self.assertEqual(result['data']['refreshed_observation_id'],session.current['observation_id'])
+        self.assertEqual(file_sha(old_ref['path']),old_ref['sha256'])
+        self.assertIn('页面通知已更新',load_json(session.current['evidence']['state']['path'])['visible_text'])
+        result=await session._tool_act({'observation_id':session.current['observation_id'],
+                                       'step':act_step('click',control_id='control-0')})
+        self.assertEqual(result['status'],'ok')
+        self.assertEqual(len(self.surface.executed),1)
+
+    async def test_observe_literal_null_returns_exact_json_null_correction(self):
+        session, _, _ = self.recorded([])
+        await session._observe()
+        result=await session._observe('null')
+        expected={'name':'observe','arguments':{'focus_control_id':None}}
+        self.assertEqual(result['status'],'rejected')
+        self.assertEqual(result['data']['next_tool'],expected)
+        self.assertEqual(result['error']['next_tool'],expected)
+        self.assertEqual(self.surface.executed,[])
+
+    async def test_html_inspection_does_not_upgrade_missing_readable_label(self):
+        self.surface.readable = False
+        session, _, _ = self.recorded([])
+        await session._observe()
+        before = deepcopy(session.current['controls'])
+        result = await session._tool_inspect({'kind':'html', 'observation_id':session.current['observation_id']})
+        self.assertEqual(result['status'],'ok')
+        self.assertTrue(result['data']['does_not_upgrade_actions'])
+        self.assertIn('INSUFFICIENT 仍不能 act',result['summary'])
+        self.assertEqual(session.current['controls'],before)
+
+    async def test_bad_finish_references_return_one_bound_correction_without_finishing(self):
+        session, _, _ = self.recorded([])
+        session.current = {'observation_id':'current'}
+        session.observations = ['current']
+        for refs in (['observation:current'], ['current','control:e_82']):
+            args={'observation_id':'current','evidence_refs':refs,'stop_reason':'ready','summary':'结果已显示'}
+            rejected = await session._native_finish(args)
+            self.assertEqual(rejected['status'],'rejected')
+            expected = {'name':'finish','arguments':{**args,'evidence_refs':['current']}}
+            self.assertEqual(rejected['data']['next_tool'],expected)
+            self.assertEqual(rejected['error']['next_tool'],expected)
+            self.assertFalse(session.stop_reason)
+
     def setUp(self):
         super().setUp()
         self.task = build_url_task(url=self.page.url, task_version='native-fixture')
@@ -69,10 +143,10 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         prompt = script.prompts[1]
         self.assertEqual(prompt['system'], SYSTEM)
         self.assertEqual(prompt['observation']['page_actions'], ['scroll'])
-        self.assertEqual([m['role'] for m in prompt['_history']], ['user', 'assistant', 'tool'])
-        self.assertEqual(prompt['_history'][1]['reasoning_content'], 'opaque-protocol-private')
-        self.assertEqual(prompt['_history'][2]['tool_call_id'], 'tc0')
-        feedback = json.loads(prompt['_history'][2]['content'])
+        self.assertEqual([m['role'] for m in prompt['_history']], ['assistant', 'tool'])
+        self.assertEqual(prompt['_history'][0]['reasoning_content'], 'opaque-protocol-private')
+        self.assertEqual(prompt['_history'][1]['tool_call_id'], 'tc0')
+        feedback = json.loads(prompt['_history'][1]['content'])
         self.assertEqual(feedback['data']['effective_steps_delta'], 1)
         self.assertIn('actual_change', prompt['trajectory'][-1])
         # Opaque protocol fields are confined to transport history, not ordinary journals.
@@ -122,6 +196,29 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.surface.executed, [], kind)
             self.assertFalse(result['unknown'], kind)
 
+    async def test_post_dispatch_capture_rejection_is_unknown_and_diagnostics_are_sealed(self):
+        from webcollect.browser import EvidenceStale
+        session,evidence,_=self.recorded([scroll('查看下方内容')],name='capture-rejected')
+        original=self.surface.capture
+        async def capturing(*args,**kwargs):
+            if self.surface.executed:
+                error=EvidenceStale('controlled loading/structure mismatch')
+                error.capture={'attempts':[{'mismatch_fields':['capture_readiness'],'pixel_change':{'changed_pixels':0}}]}
+                raise error
+            return await original(*args,**kwargs)
+        with patch('webcollect.browser.capture',side_effect=capturing):
+            result=await session.run()
+        self.assertTrue(result['unknown'],result)
+        self.assertEqual(result['failure_class'],'interrupted')
+        self.assertEqual((result['actual_actions'],result['effective_steps']),(1,0))
+        diagnostic=load_json(next((evidence/'raw').glob('capture-rejection-*.json')))
+        self.assertTrue(diagnostic['after_dispatch'])
+        self.assertEqual(diagnostic['diagnostic']['attempts'][0]['mismatch_fields'],['capture_readiness'])
+        receipt=load_json(result['raw_receipt']['path'])
+        self.assertTrue(any(name.startswith('capture-rejection-') for name in receipt['files_sha256']))
+        from webcollect.candidate_consumer import unverified_original_actions
+        self.assertEqual(len(list(unverified_original_actions({'evidence_json':json.dumps([result['raw_receipt']])}))),1)
+
     async def test_cancellation_seals_dispatched_unknown_and_propagates(self):
         session, evidence, _ = self.recorded([scroll('查看页面下方内容')])
         async def cancel(*args, **kwargs):
@@ -162,6 +259,18 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertIn('ctrl+a', [step['action']['input_text'] for step in annotation['steps']])
         with self.assertRaises(FileExistsError):
             derive(self.task, record, delivery, self.ids, self.manifest)
+
+    async def test_technical_terms_below_old_ratio_derive_without_language_approval(self):
+        self.surface.state['visible_text']='中文技术说明 搜索 文档 关于\n'+('Vue TypeScript JavaScript API '*20)
+        session,evidence,_=self.recorded([scroll('查看当前技术文档下方内容')]+[scroll() for _ in range(4)]+[finish()],
+                                         name='technical-language')
+        result=await session.run()
+        self.assertEqual(result['effective_steps'],5,result)
+        derived=process(evidence,self.root/'technical-derived'/self.ids['sample_id'],self.ids,self.manifest)
+        self.assertEqual(derived['status'],'derived_saved',derived)
+        self.assertLess(derived['minimum_chinese_character_ratio'],.7)
+        self.assertTrue(derived['chinese_ratio_diagnostic_only'])
+        self.assertEqual(derived['language_review'],'REVIEW_REQUIRED')
 
     async def test_five_actions_regular_and_zero_actions_raw_only(self):
         for count in (0, 4, 5, 11):
@@ -266,6 +375,49 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual([message['tool_call_id'] for message in session.history if message['role'] == 'tool'],
                          ['same-id', 'finish-id'])
 
+    async def test_new_tab_capability_failure_preserves_known_dispatch(self):
+        from test_react_session import FakePage
+        opening=decide(goal='查看可见入口',tool='act',arguments=lambda p:{
+            'observation_id':p['observation']['observation_id'],
+            'step':act_step('open_url',page_id='p1',goal='查看详情',expected='显示详情')})
+        session,evidence,_=self.recorded([opening],name='new-tab')
+        session.page_urls.append(self.page.url.rstrip('/')+'/detail')
+        original=self._fake_execute
+        async def popup(page,action_type,arguments,execution):
+            await original(page,action_type,arguments,execution)
+            page.context.pages.append(FakePage(self.surface))
+        with patch('webcollect.browser.execute',side_effect=popup):
+            result=await session.run()
+        self.assertFalse(result['unknown'],result)
+        self.assertEqual((result['actual_actions'],result['effective_steps']),(1,0))
+        self.assertIn('TOOL_CAPABILITY_UNAVAILABLE',result['stop_summary'])
+        raw=load_json(evidence/'step_001.json')
+        self.assertTrue(raw['dispatched'])
+        self.assertTrue(raw['action_executed'])
+        self.assertEqual(len(raw['opened_pages']),1)
+
+    async def test_navigation_back_then_another_branch_keeps_whole_trajectory(self):
+        def action(name, **arguments):
+            return decide(goal='查看两个分支并返回目录' if name=='open_url' else None,tool='act',
+                arguments=lambda p:{'observation_id':p['observation']['observation_id'],
+                    'step':act_step(name,**arguments)})
+        session,evidence,_=self.recorded([action('open_url',page_id='p1'),action('back'),
+            action('open_url',page_id='p2'),action('back'),finish()],name='branches')
+        home=self.page.url
+        for suffix in ('A','B'):
+            cid='link-'+suffix
+            self.surface.state['elements'].append({**self.surface.state['elements'][-1],
+                'element_id':cid,'element_type':'link','native_role':'a','text':'目录分支'+suffix,'clickable':True})
+            self.surface.state['capture_controls'].append({'element_id':cid,'selector':'#'+cid,'index':0,
+                'tag':'a','href':home.rstrip('/')+'/'+suffix})
+        result=await session.run()
+        self.assertEqual(result['effective_steps'],4,result)
+        record=session_record(evidence/'raw')
+        self.assertEqual([row['action'] for row in effective_trajectory(record)],['open_url','back','open_url','back'])
+        processed=process(evidence,self.root/'branch-delivery'/self.ids['sample_id'],self.ids,self.manifest)
+        self.assertEqual(processed['status'],'derived_saved',processed)
+        self.assertEqual(self.page.url,home)
+
     async def test_observed_navigation_enables_back_without_padding_policy(self):
         session, _, _ = self.recorded([finish()], name='navigate')
         await session._open_entry()
@@ -283,8 +435,44 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         session.stop_reason, session.stop_summary = 'ready', '返回后结束'
         session._close()
 
+    def test_observed_same_application_links_beyond_64_keep_their_identity(self):
+        from webcollect.candidate_navigation import extend
+        from webcollect.react_protocol import LEGACY_VERSION
+        task = build_url_task(url=self.task['initial_url'], task_version='old-native', decision_protocol=LEGACY_VERSION)
+        uri = task['initial_url']
+        task['candidate_binding'] = {'candidate':{'entry_url':uri}}
+        links=[uri+'?page='+str(n) for n in range(90)]
+        state={'url':uri,'capture_controls':[{'href':u} for u in links+['https://outside.example/']]}
+        self.assertEqual(extend(task,[uri],state),[uri,*links])
+        with self.assertRaisesRegex(ValueError,'left evidence-backed application'):
+            extend(task,[uri],{'url':'https://outside.example/'},{'action_type':'click'})
+        old = build_url_task(url=uri, task_version='archived', decision_protocol=REACT_VERSION)
+        old['candidate_binding']=task['candidate_binding']
+        self.assertEqual(len(extend(old,[uri],state)),64)
+
+    async def test_new_native_task_continues_past_former_12_and_24_rounds(self):
+        def inspect(offset):
+            return decide(tool='inspect',arguments=lambda p:{
+                'kind':'html','observation_id':p['observation']['observation_id'],
+                'offset':offset,'limit_chars':1})
+        session, _, script = self.recorded([inspect(i) for i in range(25)]+[finish('no_path')])
+        result = await session.run()
+        self.assertEqual(result['stop_reason'],'no_path',result)
+        self.assertEqual((len(script.prompts),session.used['max_queries']),(26,25))
+        self.assertIsNone(script.prompts[-1]['boundary']['remaining_budgets']['max_decisions'])
+        self.assertEqual(session.used['max_model_calls'],0)
+        repeated, _, history = self.recorded([inspect(0) for _ in range(8)]+[finish('no_path')],'repeat')
+        result = await repeated.run()
+        self.assertEqual(result['stop_reason'],'no_path',result)
+        self.assertEqual(len(history.prompts),9)
+        self.task = build_url_task(url=self.page.url, task_version='frozen', budgets={'max_no_progress':5})
+        frozen, _, _ = self.recorded([inspect(0) for _ in range(7)],'frozen-repeat')
+        self.assertIn('无进展',(await frozen.run())['stop_summary'])
+
     async def test_lower_frozen_decision_budget_and_legacy_budget(self):
-        self.assertEqual((GOAL_BUDGETS['max_decisions'], GOAL_BUDGETS['max_model_calls']), (12, 24))
+        self.assertEqual(self.task['fragment']['glm_http_call_limit'],25)
+        self.assertEqual(self.task['workflow_proposal']['spec']['glm_http_call_limit'],25)
+        self.assertTrue(all(limit is None for limit in GOAL_BUDGETS.values()))
         self.task = build_url_task(url=self.page.url, task_version='low', budgets={'max_decisions': 1})
         session, evidence, script = self.recorded([scroll('查看页面下方内容'), finish()])
         result = await session.run()
@@ -309,7 +497,7 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         def controlled(gateway, job, purpose, text, tools, **kwargs):
             self.assertEqual(kwargs['system'], SYSTEM)
             self.assertEqual(kwargs['reasoning_effort'], 'max')
-            self.assertEqual(kwargs['max_requests'], 24)
+            self.assertIsNone(kwargs['max_requests'])
             self.assertEqual({tool['function']['name'] for tool in tools}, {'observe', 'inspect', 'act', 'finish'})
             payload = json.loads(text)
             self.assertNotIn('system', payload)
@@ -326,9 +514,9 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             result = await session.run()
         self.assertEqual(result['effective_steps'], 1, result)
         self.assertEqual(len(calls), 2)
-        self.assertEqual([m['role'] for m in calls[1]['history']], ['user', 'assistant', 'tool'])
-        self.assertEqual(calls[1]['history'][1]['reasoning_content'], 'opaque-protocol-private')
-        self.assertTrue(calls[1]['history'][0]['content'][1]['image_url']['url'].startswith('data:image/png;base64,'))
+        self.assertEqual([m['role'] for m in calls[1]['history']], ['assistant', 'tool'])
+        self.assertEqual(calls[1]['history'][0]['reasoning_content'], 'opaque-protocol-private')
+        self.assertEqual(len(calls[1]['images']), 1)
         self.assertEqual(choose.requests_used(), 0)  # synthetic responses are not HTTP
         with ledger.connect() as con:
             self.assertEqual(con.execute('SELECT count(*) FROM model_requests').fetchone()[0], 2)

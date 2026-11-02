@@ -190,6 +190,7 @@ class PoolTests(unittest.TestCase):
     def test_program2_revalidates_qualified_capability_expiry_and_original_bytes(self):
         # Reuse the established provider-protocol fixture, never a real model/site.
         from test_site_qualification_provenance import QualificationProvenance
+        self.enterContext(patch('webcollect.model_gateway.socket.getaddrinfo',return_value=[('CONTROLLED-offline-DNS',)]))
         case = QualificationProvenance(); case.setUp(); self.addCleanup(case.doCleanups)
         self.record(case.record['site_uri'])
         catalog = self.root / 'qualified-fixture.json'
@@ -226,6 +227,19 @@ class PoolTests(unittest.TestCase):
                 glm_search(self.pool, 'run', {}, '图书', self.root)
         self.assertEqual(opener.open.call_count, 1)
 
+    def test_search_HTTP_error_preserves_provider_code_and_original_body(self):
+        from urllib.error import HTTPError
+        body=json.dumps({'error':{'code':'1113','message':'CONTROLLED account balance unavailable'}}).encode()
+        opener=MagicMock();opener.open.side_effect=HTTPError('https://provider.invalid',429,'controlled',{},io.BytesIO(body))
+        with patch('webcollect.model_credentials.credential',return_value='offline-secret'),patch('urllib.request.build_opener',return_value=opener):
+            with self.assertRaises(OutcomeUnknown):glm_search(self.pool,'run',{},'受控余额',self.root)
+            with self.assertRaises(ValueError):glm_search(self.pool,'run',{},'受控余额',self.root)
+        with self.pool.connect() as con:row=con.execute('SELECT state,result FROM tool_requests').fetchone()
+        result=json.loads(row['result'])
+        self.assertEqual((row['state'],result['provider_code']),('unknown','1113'))
+        self.assertEqual(Path(result['error_response']['path']).read_bytes(),body)
+        self.assertEqual(opener.open.call_count,1)
+
     def test_browser_timeout_reads_same_page_and_blocks_writes(self):
         config = load_json(REPO / 'projects/code/config/batch-synthetic.json')
         ledger = BatchLedger(self.root / 'ops.sqlite3', config, initialize=True)
@@ -253,7 +267,7 @@ class PoolTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): asyncio.run(browser.__aenter__())
         pw.stop.assert_awaited_once()
 
-    def test_browser_total_deadline_settles_hung_evaluation_and_closes_page(self):
+    def test_browser_io_timeout_settles_hung_evaluation_and_closes_page(self):
         config = load_json(REPO / 'projects/code/config/batch-synthetic.json')
         ledger = BatchLedger(self.root / 'ops.sqlite3', config, initialize=True)
         browser = DiscoveryBrowser(self.pool, ledger, 'run', self.root)
@@ -263,7 +277,10 @@ class PoolTests(unittest.TestCase):
         async def hang(*args): await asyncio.Event().wait()
         page.evaluate = hang; page.close = AsyncMock()
         browser.context = MagicMock(); browser.context.new_page = AsyncMock(return_value=page)
-        with patch.object(ledger, 'remaining_seconds', return_value=.03):
+        wait_for = asyncio.wait_for
+        def short_io_timeout(coroutine, timeout):
+            return wait_for(coroutine,.03 if timeout==60 else timeout)
+        with patch('site_planner.discovery_tools.asyncio.wait_for',new=short_io_timeout):
             with self.assertRaises(TimeoutError): asyncio.run(browser.read('https://example.org/'))
         page.close.assert_awaited_once()
         self.assertEqual(ledger.visits()[0]['state'], 'failed')

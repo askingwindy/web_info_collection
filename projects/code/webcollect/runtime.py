@@ -1,7 +1,7 @@
 """SQLite M4 queue: one transaction owns numbering, attempt identity and events.
 
-Scopes bind an output batch. Campaigns share budgets and quota reservations, so
-changing a directory cannot reset a production budget. This module never opens a
+Scopes bind an output batch. Campaigns share attempt, resource and outcome accounting
+across output directories. This module never opens a
 browser, modifies evidence, or declares a customer/QC acceptance decision.
 """
 from contextlib import closing, contextmanager
@@ -22,7 +22,7 @@ from .storage import allocate_in_transaction, ensure_registry_schema
 
 
 DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_workers': 1,
-                  'attempt_cap': 40, 'pending_review_cap': 20, 'max_retries': 2,
+                  'attempt_cap': None, 'pending_review_cap': None, 'max_retries': 2,
                   'lease_seconds': 120, 'task_interval_seconds': 1,
                   'retry_backoff_seconds': 1, 'target_total': 1000,
                   'max_category_share': 0.2, 'baseline_category_counts': {}, 'category_limits': {},
@@ -94,7 +94,7 @@ def validate_policy(value):
         policy['site_failure_guard'] = validate_binding(value['site_failure_guard'])
     if not isinstance(policy['campaign_id'], str) or not policy['campaign_id'].strip():
         raise ValueError('campaign_id必须非空')
-    for key in ('max_workers', 'max_domain_workers', 'attempt_cap', 'pending_review_cap', 'lease_seconds', 'target_total'):
+    for key in ('max_workers', 'max_domain_workers', 'lease_seconds', 'target_total'):
         if type(policy[key]) is not int or policy[key] <= 0:
             raise ValueError(key + '必须为正整数')
     if type(policy['max_retries']) is not int or policy['max_retries'] < 0:
@@ -108,20 +108,13 @@ def validate_policy(value):
     for key in ('baseline_category_counts', 'category_limits'):
         if not isinstance(policy[key], dict) or any(not isinstance(k, str) or not k.strip() or type(v) is not int or v < 0 for k, v in policy[key].items()):
             raise ValueError(key + '必须为类目到非负整数的映射')
-    maximum = math.floor(policy['target_total'] * share)
-    if any(limit > maximum for limit in policy['category_limits'].values()):
-        raise ValueError('类目预算不得放宽合同占比')
-    if sum(policy['baseline_category_counts'].values()) > policy['target_total']:
-        raise ValueError('基线计数超过累计目标')
-    for key in ('min_free_disk_bytes', 'max_output_bytes', 'max_worker_seconds'):
+    for key in ('min_free_disk_bytes', 'max_output_bytes', 'max_worker_seconds', 'attempt_cap', 'pending_review_cap'):
         value = policy[key]
-        if value is not None and (type(value) is not int or value <= 0):
-            raise ValueError(key + '必须为空或正整数')
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(key + '必须为空或非负整数')
     if policy['resource_root'] is not None and (not isinstance(policy['resource_root'], str)
             or not Path(policy['resource_root']).is_absolute()):
         raise ValueError('resource_root必须为空或绝对路径')
-    if policy['max_output_bytes'] is not None and policy['resource_root'] is None:
-        raise ValueError('存储上限需要固定campaign resource_root，不能按批次重置')
     if policy['resource_root'] is not None:
         policy['resource_root'] = str(Path(policy['resource_root']).resolve())
     return policy
@@ -211,8 +204,10 @@ class RuntimeStore:
 
     def bind_site_pool(self, pool_path):
         from site_planner.site_pool import SitePool
-        from .site_pool_sync import guard_plan
-        path = str(SitePool(pool_path, readonly=True).path)
+        from .site_pool_sync import guard_plan, check_pool_binding
+        pool = SitePool(pool_path, readonly=True)
+        check_pool_binding(pool, self.registry)
+        path = str(pool.path)
         with closing(self._connect()) as con:
             con.execute('CREATE TABLE IF NOT EXISTS m4_site_pool (scope_id TEXT PRIMARY KEY, pool_path TEXT NOT NULL, '
                         'pending INTEGER NOT NULL, synced_revision INTEGER NOT NULL DEFAULT 0, last_error TEXT)')
@@ -311,6 +306,11 @@ class RuntimeStore:
         current = timestamp(now)
         con = self._connect()
         try:
+            from .current_chain import registry_project, check_project_guard
+            project = registry_project(con)
+            check_project_guard(project, policy.get('site_failure_guard'))
+            if project and policy['campaign_id'] != project['chain_id']:
+                raise ValueError('Runtime campaign belongs to another candidate project')
             # Schema additions leave all legacy rows and counters intact.
             ensure_registry_schema(con)
             con.executescript(SCHEMA)
@@ -348,22 +348,9 @@ class RuntimeStore:
                     prior = Path(json.loads(row[0])['output']).resolve()
                     if not prior.is_relative_to(Path(new['resource_root'])):
                         raise ValueError('新resource_root必须包含本campaign已记录的全部输出')
-            self._check_quota(con, new)
             con.execute('UPDATE m4_campaigns SET policy_json=? WHERE campaign_id=?', (canonical(new), old['campaign_id']))
             self._event(con, 'policy_updated', timestamp(now), {'before': old, 'after': new, 'reason': reason})
         return new
-
-    def _check_quota(self, con, policy):
-        counts = dict(policy['baseline_category_counts'])
-        for row in con.execute('SELECT category,COUNT(*) n FROM m4_tasks WHERE campaign_id=? AND quota_reserved=1 GROUP BY category', (policy['campaign_id'],)):
-            counts[row['category']] = counts.get(row['category'], 0) + row['n']
-        if sum(counts.values()) > policy['target_total']:
-            raise ValueError('累计已接纳/在途预留超过目标')
-        for category, count in counts.items():
-            limit = policy['category_limits'].get(category, math.floor(policy['target_total'] * policy['max_category_share']))
-            if count > limit:
-                raise ValueError('类目配额不足：' + category)
-        return counts
 
     def enqueue_plan(self, plan, publication, *, now=None):
         current = timestamp(now)
@@ -411,7 +398,6 @@ class RuntimeStore:
                              canonical(task), task['site_category'], domain_key(task['site_uri']), 'queued', 1,
                              binding['capability_expires_at'], current, current))
                 con.execute('INSERT INTO m4_plan_tasks VALUES(?,?,?,?)', (self.scope_id, plan_sha, key, ordinal))
-            self._check_quota(con, policy)
             self._event(con, 'plan_enqueued', current, {'plan_sha256': plan_sha, 'publication_sha256': publication['publication_sha256'], 'task_count': len(plan['tasks'])})
         return {'plan_sha256': plan_sha, 'task_count': len(plan['tasks']), 'already_enqueued': False}
 
@@ -457,13 +443,6 @@ class RuntimeStore:
             live = list(con.execute("SELECT a.*,t.domain_key FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.status IN ('reserved','running') AND a.lease_expires_at>?", (current,)))
             if sum(r['campaign_id'] == campaign for r in live) >= policy['max_workers'] or any(r['worker_id'] == worker_id for r in live):
                 return None
-            started = con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=? AND started_at IS NOT NULL', (campaign,)).fetchone()[0]
-            reserved = con.execute("SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=? AND status='reserved'", (campaign,)).fetchone()[0]
-            if started + reserved >= policy['attempt_cap']:
-                return None
-            backlog = con.execute("SELECT COUNT(*) FROM m4_tasks WHERE campaign_id=? AND status IN ('reserved','running','collected_pending_review')", (campaign,)).fetchone()[0]
-            if backlog >= policy['pending_review_cap']:
-                return None
             rows = list(con.execute("SELECT t.*,p.plan_sha256 FROM m4_tasks t JOIN m4_plan_tasks p ON p.task_key=t.task_key AND p.scope_id=t.scope_id WHERE t.scope_id=? AND t.status='queued' AND t.next_eligible_at<=? ORDER BY p.ordinal", (self.scope_id, current)))
             for row in rows:
                 if plan_sha256 is not None and row['plan_sha256'] != plan_sha256:
@@ -486,7 +465,9 @@ class RuntimeStore:
                 from .production_identity import allocation_uri, guard as page_guard
                 page_guard(con, row['task_key'], task, required=policy.get('pilot_identity_required', False))
                 day = datetime.fromtimestamp(current, ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
-                ids = allocate_in_transaction(con, allocation_uri(task), task['site_category'], 'real', day, batch_id)
+                from .react_protocol import VERSION as native_protocol
+                ids = allocate_in_transaction(con, allocation_uri(task), task['site_category'], 'real', day, batch_id,
+                    category_metadata=task.get('fragment',{}).get('decision_protocol') == native_protocol)
                 if _fault:
                     _fault('after_allocation_before_attempt')
                 attempt_id, token = str(uuid.uuid4()), str(uuid.uuid4())
@@ -530,10 +511,6 @@ class RuntimeStore:
             if row['capability_expires_at'] <= current:
                 raise ValueError('能力已过期，不能开始真实执行')
             if row['started_at'] is None:
-                policy = self._policy(con)
-                used = con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=? AND started_at IS NOT NULL', (row['campaign_id'],)).fetchone()[0]
-                if used >= policy['attempt_cap']:
-                    raise ValueError('campaign真实尝试预算已耗尽')
                 con.execute("UPDATE m4_attempts SET status='running',started_at=? WHERE attempt_id=?", (current, attempt_id))
                 con.execute("UPDATE m4_tasks SET status='running' WHERE task_key=?", (row['task_key'],))
                 self._event(con, 'attempt_started', current, task_key=row['task_key'], attempt_id=attempt_id)
@@ -622,6 +599,75 @@ class RuntimeStore:
                 register_capture(con, row)
             self._domain_finished(con, row, current, policy)
             self._event(con, 'attempt_finished', current, {'outcome': outcome, 'failure_class': failure_class, 'root_cause': root_cause, 'evidence': evidence, **transition}, row['task_key'], attempt_id)
+            return self._view(saved)
+
+    def reconcile_sealed_rejection(self, attempt_id, *, raw_receipt, failure, process_exit, model_ledger, now=None):
+        """Close an expired orphan only from its known, sealed failed execution.
+
+        Never saves a sample, resumes a trajectory, clears UNKNOWN or replaces
+        a terminal outcome. The original rejection and raw files stay intact.
+        """
+        from .batch_core import load_json
+        from .postprocess import session_record, effective_trajectory
+        from .candidate_contract import validate_task_binding
+        from site_planner.candidate_pool import CandidatePool
+        verify_evidence([raw_receipt, failure, process_exit])
+        raw = Path(raw_receipt['path']).resolve().parent
+        if (Path(raw_receipt['path']).name != 'raw-receipt.json'
+                or Path(failure['path']).resolve() != raw.parent/'failure.json'):
+            raise ValueError('Original raw-receipt and primary failure paths required')
+        record = session_record(raw)  # UNKNOWN and changed raw bytes reject.
+        primary = load_json(failure['path'])
+        exit_code = load_json(process_exit['path']).get('returncode')
+        if (type(exit_code) is not int
+                or primary.get('attempt_id') != attempt_id
+                or primary.get('failure_class') in ('interrupted','unknown')
+                or primary.get('failure_class') not in FAILURES
+                or not primary.get('error')):
+            raise ValueError('Definite original closed-process and rejection evidence required')
+        if len(effective_trajectory(record)) != record['terminal'].get('actual_actions'):
+            raise ValueError('Original dispatched effects are not fully accounted')
+        binding = validate_task_binding(record['task'])
+        original_claim = load_json(binding['claim_reference']['path'])
+        claim = CandidatePool(original_claim['pool']).get_claim(binding['claim_id'])
+        cb = claim.get('binding') or {}
+        if (cb.get('attempt_id') != attempt_id or Path(cb.get('registry','')).resolve() != self.registry
+                or Path(cb.get('ledger','')).resolve() != model_ledger.path.resolve()
+                or raw != Path(cb['output'])/'execution/capture/evidence'/raw.parent.name/'raw'):
+            raise ValueError('Original claim, attempt, registry, raw and model ledger must match')
+        with model_ledger.connect() as con:
+            requests = list(con.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (attempt_id,)))
+        if not requests or any(r['state'] != 'succeeded' for r in requests):
+            raise ValueError('Original model requests are unresolved; no rejection reconciliation')
+        current = timestamp(now)
+        refs = [raw_receipt, failure, process_exit]
+        with self._transaction() as con:
+            row = self._attempt(con, attempt_id)
+            if row['status'] not in ACTIVE or row['started_at'] is None or row['lease_expires_at'] > current:
+                raise ValueError('Only an expired, started orphan can be reconciled')
+            original_task = json.loads(row['task_json'])
+            executed_task = deepcopy(record['task'])
+            # These two public-origin runner flags are added at dispatch from
+            # the same frozen plan, rather than stored in m4_tasks.task_json.
+            for name, expected in (('_plan_schema_version', load_json(raw.parents[2]/'plan.json')['schema_version']),
+                                   ('require_public_origin', True)):
+                if name not in original_task:
+                    if executed_task.pop(name, None) != expected:
+                        raise ValueError('Original runner flags differ from the frozen plan')
+            if original_task != executed_task or row['sample_id'] != raw.parent.name:
+                raise ValueError('Original runtime task/sample differs from sealed raw')
+            existing = json.loads(row['evidence_json'] or '[]')
+            refs = existing + [ref for ref in refs if ref not in existing]
+            con.execute("UPDATE m4_attempts SET status='rejected',finished_at=?,failure_class=?,root_cause=?,evidence_json=? WHERE attempt_id=?",
+                (current, primary['failure_class'], primary['error'], canonical(refs), attempt_id))
+            saved = self._attempt(con, attempt_id)
+            policy = self._policy(con)
+            transition = self._failure_transition(con, saved, current, policy)
+            self._domain_finished(con, saved, current, policy)
+            self._event(con, 'sealed_rejection_reconciled', current,
+                {'prior_status':row['status'], 'original_failure':failure, 'raw_receipt':raw_receipt,
+                 'process_exit':process_exit, 'settled_request_ids':[r['id'] for r in requests], **transition},
+                row['task_key'], attempt_id)
             return self._view(saved)
 
     def recover_expired(self, *, now=None, reason='lease expired; prior process must not resume its trajectory',
@@ -936,6 +982,18 @@ class RuntimeStore:
             self._event(con, 'worker_finished' if finished else 'worker_started', current,
                         {'worker_id': worker_id, 'output': str(Path(output).resolve())})
 
+    @staticmethod
+    def campaign_worker_time(con, campaign_id, now):
+        sessions = {}
+        for kind, at, payload in con.execute(
+                "SELECT event_type,at,payload_json FROM m4_events WHERE campaign_id=? "
+                "AND event_type IN ('worker_started','worker_finished') ORDER BY event_id", (campaign_id,)):
+            session = sessions.setdefault(json.loads(payload)['worker_id'], {})
+            session['start' if kind == 'worker_started' else 'finish'] = at
+        seconds = sum(max(0, session.get('finish', now) - session['start']) for session in sessions.values())
+        return {'campaign_worker_seconds': seconds, 'open_sessions': [k for k,s in sessions.items() if 'finish' not in s],
+                'unfinished_duration_is_upper_bound': True}
+
     def resource_checkpoint(self, output, *, now=None):
         """Fail closed before claiming another ID; preserve all evidence on stop."""
         import shutil
@@ -948,7 +1006,7 @@ class RuntimeStore:
             policy = self._policy(con)
             root = Path(policy.get('resource_root') or output).resolve()
             if not output.is_relative_to(root):
-                raise ValueError('本输出不属于冻结resource_root，拒绝规避存储预算')
+                raise ValueError('本输出不属于冻结resource_root')
             disk_path = root
             while not disk_path.exists():
                 disk_path = disk_path.parent
@@ -957,24 +1015,13 @@ class RuntimeStore:
             if any(path.is_symlink() for path in files):
                 raise ValueError('resource_root含符号链接，无法完整核算存储')
             stored = sum(path.stat().st_size for path in files if path.is_file())
-            sessions = {}
-            for row in con.execute("SELECT event_type,at,payload_json FROM m4_events WHERE campaign_id=? AND event_type IN ('worker_started','worker_finished') ORDER BY event_id", (scope['campaign_id'],)):
-                value = json.loads(row['payload_json'])
-                session = sessions.setdefault(value['worker_id'], {})
-                session['start' if row['event_type'] == 'worker_started' else 'finish'] = row['at']
-            seconds = sum(max(0, session.get('finish', current) - session['start']) for session in sessions.values())
+            usage = self.campaign_worker_time(con, scope['campaign_id'], current)
             reasons = []
-            if policy.get('min_free_disk_bytes') is not None and free < policy['min_free_disk_bytes']:
-                reasons.append('free_disk_below_minimum')
-            if policy.get('max_output_bytes') is not None and stored >= policy['max_output_bytes']:
-                reasons.append('campaign_storage_limit')
-            if policy.get('max_worker_seconds') is not None and seconds >= policy['max_worker_seconds']:
-                reasons.append('campaign_worker_time_limit')
+            if free == 0:
+                reasons.append('disk_full')
             value = {'status': 'STOP' if reasons else 'PASS', 'reasons': reasons,
                 'resource_root': str(root), 'free_disk_bytes': free, 'stored_bytes': stored,
-                'campaign_worker_seconds': seconds,
-                'open_sessions': [key for key, session in sessions.items() if 'finish' not in session],
-                'unfinished_duration_is_upper_bound': True,
+                **usage,
                 'checkpoint': 'before_claim_next', 'sample_id_allocated_by_check': False}
             self._event(con, 'resource_checkpoint', current, value)
             if reasons:
@@ -1184,7 +1231,6 @@ class RuntimeStore:
                     key=con.execute('SELECT task_key FROM m4_attempts WHERE sample_id=?',(old['sample_id'],)).fetchone()[0]
                     con.execute("UPDATE m4_tasks SET status='quality_revoked',quota_reserved=0 WHERE task_key=?",(key,))
                     self._event(con,'batch_quality_revoked',timestamp(None),{'sample_id':old['sample_id'],'trigger':reference,'group_id':group},key)
-            self._check_quota(con,policy)
         return self.quality_progress()
 
     def quality_progress(self, *, baseline_ids=(), target=1000):

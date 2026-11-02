@@ -11,14 +11,15 @@ import hashlib
 import json
 from pathlib import Path
 import platform
+from urllib.parse import urlsplit
 
 from .batch_core import file_sha, load_json
 from .planning import object_sha256, verify_evidence
 from .agent_controller import exclusive
 from .react_session import REACT_VERSION, is_react_task, struct_goal, describe_goal, validate_task
-from .react_protocol import VERSION as NATIVE_VERSION, atomic_effect
+from .react_protocol import VERSION as NATIVE_VERSION, NATIVE_VERSIONS, atomic_effect, RULE_VERSION
 
-VERSION = 'webcollect-postprocess-2'
+VERSION = 'webcollect-postprocess-3'
 
 
 def _observation_state(record, observation_id):
@@ -90,14 +91,29 @@ def session_record(raw_root):
 
 
 def natural_instruction(task, record, effective):
-    """Delivery instruction from the structured goal and the real trajectory."""
+    """Describe executed stages; retain requested/working intent in evidence."""
     app = task['app_name']
-    goal = describe_goal(struct_goal(task))
-    working = (record['goal_updates'] or [{}])[-1].get('description')
-    focus = goal or working
+    actual = list(dict.fromkeys(row.get('semantic_goal') or row.get('goal') or '' for row in record['trajectory']))
+    focus = '、'.join(g for g in actual if g)
     if focus:
-        return f'在「{app}」上围绕{focus}，连续完成{effective}步真实网页操作并查看实际状态'
+        return f'在「{app}」上{focus}，查看实际输入与页面结果'
     return f'在「{app}」上连续完成{effective}步真实网页操作并查看实际状态'
+
+
+def completion_evidence(record):
+    terminal = record['terminal']
+    final_id = terminal.get('final_observation_id') or record['trajectory'][-1]['after_observation_id']
+    state = _observation_state(record, final_id)
+    return {'requested_goal': struct_goal(record['task']), 'working_goal': terminal.get('working_goal'),
+            'goal_updates': record['goal_updates'],
+            'executed_stages': list(dict.fromkeys(r.get('semantic_goal') or r.get('goal') for r in record['trajectory'])),
+            'final_observation_id': final_id, 'final_evidence': record['observations'][final_id]['evidence'],
+            'visible_text': state.get('visible_text', ''),
+            'host_stop_reason': terminal.get('stop_reason'), 'agent_summary': terminal.get('stop_summary'),
+            'business_completion': 'NOT_CLAIMED',
+            'page_hosts': {key: urlsplit(_observation_state(record,key)['url']).hostname
+                           for key in record['observations']},
+            'source_metadata': deepcopy((record['task'].get('candidate_binding') or {}).get('sources', []))}
 
 
 def _same_view(before, after):
@@ -111,7 +127,7 @@ def effective_trajectory(record):
     A gap, unknown dispatch or ineffective operation rejects the whole chain;
     it cannot be dropped to join otherwise disconnected pieces.
     """
-    if record['task']['fragment'].get('decision_protocol') != NATIVE_VERSION:
+    if record['task']['fragment'].get('decision_protocol') not in NATIVE_VERSIONS:
         return record['trajectory']
     rows, seen = [], {}
     for row in record['trajectory']:
@@ -147,14 +163,31 @@ def effective_trajectory(record):
             raise ValueError('非有效操作不能进入连续动作轨迹')
         effect = atomic_effect(before, after, row['action'], row['arguments'],
                                operation.get('evidence', {}).get('anchor_element_id') or
-                               operation.get('evidence', {}).get('focused_element_id'))
+                               operation.get('evidence', {}).get('focused_element_id'),
+                               rule_version=record['task']['fragment'].get('effective_action_rule', RULE_VERSION))
         if not effect['verified']:
             raise ValueError('动作对应效果不可核验：' + row['operation_id'])
         if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before):
             raise ValueError('连续轨迹存在未解释的状态缺口')
         if rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
-            raise ValueError('存在两步后回到原样的无效往返')
+            navigation_return = (record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2'
+                and row['action'] == 'back' and rows[-1]['action'] in ('click','double_click','open_url','hotkey','type','select')
+                and before['url'] != after['url'])
+            if not navigation_return:
+                raise ValueError('存在两步后回到原样的无效往返')
         rows.append(row)
+    if rows and record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2':
+        from .candidate_navigation import verify_path
+        states,operations = [],[]
+        for row in rows:
+            before = _observation_state(record,row['before_observation_id'])
+            if states:
+                states.append(before);operations.append(None)
+            else:
+                states.append(before)
+            states.append(_observation_state(record,row['after_observation_id']))
+            operations.append(load_json(row['raw_step']['path'])['operation'])
+        verify_path(record['task'],states,operations)
     if rows and record['terminal'].get('actual_actions') != len(rows):
         raise ValueError('实际派发数与有证据的原子操作数不一致，不能跳过未记录的动作')
     return rows
@@ -162,8 +195,14 @@ def effective_trajectory(record):
 
 def terminal_outcome(task, record, final_state):
     """Describe the delivered frame; host stop and business success stay separate."""
-    from .collect import observed_frame_description
-    description = observed_frame_description(final_state, task['instruction'])
+    from .collect import observed_frame_description, visible_result_description
+    description = (visible_result_description(final_state)
+                   or observed_frame_description(final_state, task['instruction']))
+    # Quote only observed rendered content, never a planned second stage or a
+    # model finish claim. Full text/intent/stop remain in completion evidence.
+    lines = list(dict.fromkeys(s.strip() for s in (final_state.get('visible_text') or '').splitlines() if s.strip()))
+    if lines:
+        description += '；末帧可见文字「' + '；'.join(lines)[:1200] + '」'
     title = (final_state.get('title') or '').strip().casefold()
     visible = (final_state.get('visible_text') or '').strip().casefold()
     denial = ('您的访问被阻止', '访问被拒绝', '访问受限', 'access denied', 'verify you are human',
@@ -195,7 +234,7 @@ def derive(task, record, delivery, ids, manifest):
     from .browser import POINTER
     from .validate import CONTROL
     delivery = Path(delivery)
-    native = task['fragment'].get('decision_protocol') == NATIVE_VERSION
+    native = task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
     try:
         trajectory = effective_trajectory(record)
     except (ValueError, KeyError, TypeError) as error:
@@ -212,7 +251,7 @@ def derive(task, record, delivery, ids, manifest):
         reason = (f'实际完成{effective}个有效操作；' +
                   {'ready': '当前连续片段结束', 'budget': '宿主预算耗尽',
                    'no_path': '当前无可行路径', 'blocked': '当前路径受阻'}.get(terminal.get('stop_reason'), '会话停止') +
-                  f'；末页为「{final_state.get("title") or "当前页面"}」。')
+                  '；' + terminal_outcome(task, record, final_state)[1])
         if not (terminal.get('stop_summary') or '').strip():
             reason = None
     length_qualified = effective >= 5 or (short and bool((reason or '').strip()))
@@ -284,7 +323,7 @@ def derive(task, record, delivery, ids, manifest):
                 'tool_call': {'tool_name': row['action'], 'call_id': f'{ids["sample_id"]}_{index:03}',
                               'arguments': deepcopy(arguments),
                               'timestamp': raw_step.get('started_at') or datetime.now().isoformat(),
-                              'context': 'Web / ' + task['app_name']},
+                              'context': 'Web / ' + (urlsplit(before['url']).hostname if task['fragment'].get('navigation_protocol') == 'observed-navigation-2' else task['app_name'])},
                 'tool_result': {'status': 'success', 'return_value': {}, 'error': ''},
                 'next_step_rationale': row.get('semantic_goal') or row['goal'],
                 'step_result': observed_result, 'exception_evidence': []}
@@ -294,10 +333,8 @@ def derive(task, record, delivery, ids, manifest):
                                'before_observation_id': row['before_observation_id'],
                                'after_observation_id': row['after_observation_id'],
                                'narrative': narrative})
-    if min(ratios) < 0.70:
-        result.update(status='processing_failed',
-                      error=f'visible_chinese_ratio={min(ratios):.3f} 低于 0.70', step_id=None)
-        return result
+    result.update(minimum_chinese_character_ratio=min(ratios), chinese_ratio_diagnostic_only=True,
+                  language_policy='page-control-language-consistency-1', language_review='REVIEW_REQUIRED')
     # The finish tool refreshed the terminal observation inside the session.
     final_id = record['terminal'].get('final_observation_id') or trajectory[-1]['after_observation_id']
     if final_id not in record['observations']:
@@ -329,7 +366,7 @@ def derive(task, record, delivery, ids, manifest):
                   'tool_call': {'tool_name': 'complete', 'call_id': f'{ids["sample_id"]}_{effective + 1:03}',
                                 'arguments': {'status': 'success'},
                                 'timestamp': final_timestamp,
-                                'context': 'Web / ' + task['app_name']},
+                                'context': 'Web / ' + (urlsplit(final_state['url']).hostname if task['fragment'].get('navigation_protocol') == 'observed-navigation-2' else task['app_name'])},
                   'tool_result': {'status': 'success', 'return_value': {}, 'error': ''},
                   'next_step_rationale': final_description,
                   'step_result': '最终页面已确认，' + final_goal,
@@ -482,8 +519,11 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
             ground_truth.append({'step_id': index, 'element_id': target['element_id'],
                                  'text': target['text'], 'bbox': target['bbox']})
     write_json_file(evidence_root / 'ground_truth.json', ground_truth)
+    language = {key: derived[key] for key in ('minimum_chinese_character_ratio',
+        'chinese_ratio_diagnostic_only', 'language_policy', 'language_review')}
     write_json_file(evidence_root / 'capture_summary.json',
         {'snapshot_source': 'browser_dom', 'capture_count': len(record['trajectory']) + 1,
+         **language,
          'human_review': 'pending', 'agent_visual_review': 'pending',
          'task_id': task['task_id'], 'protocol': REACT_VERSION,
          'preparation_policy': 'content-preparation-v1', 'preparation_actions': 0,
@@ -502,6 +542,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                         {**actual_proof(task, raws),
                          'annotation_sha256': file_sha(delivery_root / 'annotation.json')})
     derived_record = {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
+        **language,
         'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
         'short_flow_reason': derived.get('short_flow_reason'),
         'instruction': derived['instruction'], 'final_result': derived['final_result'],
@@ -510,6 +551,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         'structural_report': {'structural_pass': derived['structural_report']['structural_pass'],
                               'rule_version': derived['structural_report']['rule_version']},
         'browser_calls': 0, 'model_calls': 0}
+    write_json_file(evidence_root / 'completion-evidence.json', completion_evidence(record))
     derived_ref = exclusive(evidence_root / 'derived.json', derived_record)
     sample_files = {p.relative_to(delivery_root).as_posix(): file_sha(p)
                     for p in sorted(delivery_root.rglob('*')) if p.is_file()}
@@ -525,6 +567,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
              'sample_files_sha256': sample_files, 'capture_files_sha256': capture_files,
              'semantic_review': 'REVIEW_REQUIRED',
              'raw_execution': {'protocol': REACT_VERSION,
+                               **({'stop_details':record['terminal']['stop_details']} if 'stop_details' in record['terminal'] else {}),
                                'receipt': record['receipt']['terminal'],
                                'stop_reason': record['terminal'].get('stop_reason'),
                                'effective_steps': derived['effective_steps'],
@@ -538,6 +581,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                          'sha256': file_sha(evidence_root / 'saved_sample.json')},
         'record_ref': derived_ref})
     return {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
+            **language,
             'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
             'stop_reason': record['terminal'].get('stop_reason'),
             'browser_calls': 0, 'model_calls': 0,
@@ -563,3 +607,45 @@ def write_json_file(path, value):
         raise ValueError('交付文件已存在且内容不同，不能覆盖：' + path.name)
     from .storage import write_json
     write_json(path, value)
+
+
+def revise(evidence_root, revision_root, ids, manifest, *, reason, fix_version):
+    """Derive a pending revision into a fresh, isolated location from sealed raw.
+
+    The original effective result and its QC remain authoritative. This receipt
+    does not activate a replacement or reuse the original review for new bytes.
+    """
+    if not reason or not fix_version:
+        raise ValueError('Revision requires reason and repair version')
+    evidence_root, revision_root = Path(evidence_root).resolve(), Path(revision_root).absolute()
+    if any(p.is_symlink() for p in (revision_root, *revision_root.parents)):
+        raise ValueError('Revision destination cannot use symlinks')
+    if revision_root.is_relative_to(evidence_root.parent.parent) or evidence_root.is_relative_to(revision_root):
+        raise ValueError('Revision must be outside the original dataset')
+    original_ref = {'path': str(evidence_root / 'saved_sample.json'), 'sha256': file_sha(evidence_root / 'saved_sample.json')}
+    original = load_json(original_ref['path'])
+    if original['sample_id'] != ids['sample_id'] or original.get('attempt_id') != ids.get('attempt_id'):
+        raise ValueError('Revision identity differs from original receipt')
+    for name, digest in original['capture_files_sha256'].items():
+        path = evidence_root / name
+        if Path(name).is_absolute() or not path.resolve().is_relative_to(evidence_root) or path.is_symlink() or file_sha(path) != digest:
+            raise ValueError('Original sealed capture changed')
+    source_sample = evidence_root.parent.parent / 'samples' / ids['sample_id']
+    for name, digest in original['sample_files_sha256'].items():
+        path = source_sample / name
+        if Path(name).is_absolute() or not path.resolve().is_relative_to(source_sample) or path.is_symlink() or file_sha(path) != digest:
+            raise ValueError('Original sealed delivery changed')
+    record = session_record(evidence_root / 'raw')
+    record = {**record, 'trajectory': effective_trajectory(record)}
+    revision_root.mkdir(parents=True, exist_ok=False)
+    delivery = revision_root / 'samples' / ids['sample_id']
+    derived = derive(record['task'], record, delivery, ids, manifest)
+    completion_ref = exclusive(revision_root / 'completion-evidence.json', completion_evidence(record))
+    receipt = {'schema_version': VERSION, 'status': 'revision_pending_review' if derived['status'] == 'derived' else derived['status'],
+               'reason': reason, 'fix_version': fix_version, 'original_save_receipt': original_ref,
+               'raw_receipt': {'path': str(evidence_root / 'raw/raw-receipt.json'), 'sha256': file_sha(evidence_root / 'raw/raw-receipt.json')},
+               'sample_id': ids['sample_id'], 'attempt_id': ids.get('attempt_id'), 'manifest': manifest,
+               'effective_result': 'original_unchanged', 'quality_review': 'REVIEW_REQUIRED',
+               'browser_calls': 0, 'model_calls': 0, 'completion_evidence': completion_ref,
+               'derived': derived, 'revision_files_sha256': {p.relative_to(revision_root).as_posix(): file_sha(p) for p in sorted(revision_root.rglob('*')) if p.is_file()}}
+    return {**receipt, 'receipt': exclusive(revision_root / 'revision.json', receipt)}

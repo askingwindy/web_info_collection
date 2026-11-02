@@ -13,6 +13,7 @@ import sys
 import time
 import unittest
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from unittest.mock import AsyncMock, patch
 
 import test_candidate_entry_engineering as engineering
@@ -31,6 +32,8 @@ class PipelineAcceptance(engineering.EntryEngineering):
         super().setUp()
         SitePool(self.root/'joint-pool.db', initialize=True)
         self.pool = CandidatePool(self.root/'joint-pool.db', install=True)
+        from application_discovery_fixtures import seed
+        seed(self.pool,self.chain.parent.parent,self.uri)
         cfg = deepcopy(self.ledger.config)
         cfg['run_id'] = 'OFFLINE-joint-consumer'
         cfg['model'].update(provider='glm',model='glm-5.3-flash',
@@ -46,7 +49,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
         self.sources_path=self.root/'explicit-sources.json'
         proof = self.chain.parent.parent / 'explicit-source.json'
         save_json(proof, {'description':'controlled search source'})
-        save_json(self.sources_path,[{'uri':self.uri,'title':'受控数量与单价工具','content':'公开的受控输入工具。',
+        save_json(self.sources_path,[{'uri':self.uri,'title':urlsplit(self.uri).hostname+' 受控数量与单价工具','content':'公开的受控输入工具。',
                                      'reference':reference(proof)}])
         self.wire=[]
         self.return_unknown=False
@@ -69,7 +72,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
     def transport(self,request,timeout):
         payload=json.loads(request.data)
         if request.full_url.endswith('/web_search'):
-            search={'search_result':[{'link':self.uri,'title':'受控工具站','content':'公开中文数量与单价工具'}]}
+            search={'search_result':[{'link':self.uri,'title':urlsplit(self.uri).hostname+' 受控工具站','content':'公开中文数量与单价工具'}]}
             return io.BytesIO(json.dumps(search,ensure_ascii=False).encode())
         self.wire.append(payload)
         tools={tool['function']['name'] for tool in payload['tools']}
@@ -77,6 +80,14 @@ class PipelineAcceptance(engineering.EntryEngineering):
             name='submit_candidates'
             arguments={'candidates':[{'source_index':index,'category_hint':'在线工具',
                 'suggested_goal':{'kind':'edit','entity':'fields','parameters':{'quantity':999}}} for index in self.selected_sources]}
+            context=json.loads(payload['messages'][-1]['content'][0]['text'])
+            if context.get('version')=='entry-tools-2':
+                for row in arguments['candidates']:
+                    index=row['source_index']
+                    if index<len(context['sources']):
+                        source=context['sources'][index]
+                        row.update(page_type='功能页',classification={'parent_category':'在线工具',
+                            'function_source_index':index,'function_quote':source['content']})
             call_id='OFFLINE-producer-call-1'
         else:
             self.assertEqual(tools,{'observe','inspect','act','finish'})
@@ -119,9 +130,11 @@ class PipelineAcceptance(engineering.EntryEngineering):
         return stack
 
     def producer_args(self, *, goals=None, search=False):
+        # These cases freeze the original mixed-selection wire protocol. The
+        # new unflagged default is covered independently below and by the v3 suite.
         args=['produce-entries','--config',str(self.producer_cfg),'--pool',str(self.pool.path),
             '--ledger',str(self.producer_ledger),'--history-set',str(self.chain),
-            '--target','1','--max-batches','1','--batch-size','1']
+            '--target','1','--max-batches','1','--batch-size','1','--model-protocol','entry-tools-2']
         args.extend(['--query','受控工具搜索'] if search else ['--sources',str(self.sources_path)])
         if goals:args.extend(['--goals',str(goals)])
         return args
@@ -181,8 +194,8 @@ class PipelineAcceptance(engineering.EntryEngineering):
             else:
                 assistants=[message for message in messages if message['role']=='assistant']
                 tool_results=[message for message in messages if message['role']=='tool']
-                self.assertEqual(len(assistants),index)
-                self.assertEqual([m['tool_call_id'] for m in tool_results],seen)
+                self.assertEqual(len(assistants),min(index,2))
+                self.assertEqual([m['tool_call_id'] for m in tool_results],seen[-2:])
                 self.assertTrue(all(m.get('reasoning_content')=='OFFLINE-opaque-protocol-only' for m in assistants))
             seen.append('OFFLINE-consumer-call-'+str(index+1))
             self.assertNotIn(claim['token'],json.dumps(payload))
@@ -190,7 +203,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
             self.assertNotIn(str(self.pool.path),json.dumps(payload))
             images=[part['image_url']['url'] for message in messages if isinstance(message.get('content'),list)
                     for part in message['content'] if part.get('type')=='image_url']
-            self.assertEqual(len(images),index+1)
+            self.assertEqual(len(images),1)
             self.assertTrue(all(image.startswith('data:image/png;base64,') for image in images))
         self.assertEqual(len(self.gotos),1)
         self.assertEqual(len(self.contexts),1)
@@ -217,7 +230,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
             row,claim,task=self.assert_complete(result)
             self.check_wire(claim)
             self.assertTrue(all(prompt['requested_goal'] is None for prompt in self.prompts))
-            self.assertEqual(task['fragment']['decision_protocol'],'webcollect-react-native-2')
+            self.assertEqual(task['fragment']['decision_protocol'],'webcollect-react-native-3')
             self.assertEqual(row['sources'][0]['tool_call_id'],'OFFLINE-producer-call-1')
             self.assertEqual(row['sources'][0]['model_request_id'],claim['sources'][0]['model_request_id'])
             with self.ledger.connect() as con:
@@ -238,18 +251,26 @@ class PipelineAcceptance(engineering.EntryEngineering):
         qc_policy = self.root / 'qc-policy.json'
         save_json(qc_policy, {'ai_percent': 10, 'human_percent': 0, 'seed': 'offline-start', 'production_sampling': True})
         batch = load_json(self.producer_cfg)['run_id'] + '/entry-batch/launcher'
-        save_json(scope_file, {'pool': str(self.pool.path), 'batch': batch, 'history_set': str(self.chain),
+        launcher_scope = {'pool': str(self.pool.path), 'batch': batch, 'history_set': str(self.chain),
             'producer_config': str(self.producer_cfg), 'producer_db': str(self.producer_ledger),
             'consumer_config': str(self.cfg_path), 'consumer_db': str(self.ledger.path),
             'consumer_worker': 'start-test', 'request_prefix': 'start-test', 'registry': str(self.registry),
             'output': str(self.output), 'policy': str(self.policy_path), 'qc_policy': str(qc_policy),
-            'started_at': time.time()})
+            'started_at': time.time()}
+        feedback_scope=self.chain.parent.parent/'previous-empty-feedback-scope.json'
+        save_json(feedback_scope,{'pool':str(self.pool.path),'batch':'OFFLINE-previous-empty',
+            'consumer_db':str(self.ledger.path),'registry':str(self.registry)})
+        launcher_scope.update(discovery_mode='expand',feedback_scope=str(feedback_scope))
+        save_json(scope_file,launcher_scope)
 
         def launch(role, module, entry, *options):
             # Keep the fixture's fake HTTP and page in this process across the exec boundary.
             outputs = []
             def dispatch(python, command, env):
                 self.assertEqual(command[:5], [python, '-B', '-u', '-m', module])
+                if role=='producer':
+                    self.assertEqual(command[command.index('--discovery-mode')+1],'expand')
+                    self.assertEqual(command[command.index('--feedback-scope')+1],str(feedback_scope))
                 outputs.append(self.invoke(entry, command[5:]))
             with patch.object(sys, 'argv', [str(script), '--scope', str(scope_file), role, *options]), \
                  patch('os.execve', side_effect=dispatch) as execute:
@@ -261,6 +282,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
             produced = await asyncio.to_thread(launch, 'producer', 'site_planner.candidate_discovery', producer_cli,
                 '--sources', str(self.sources_path), '--target', '1', '--batch-size', '1', '--max-batches', '1')
             self.assertEqual(produced['batch_scope'], batch)
+            self.assertEqual(produced['discovery_mode'],'expand')
             self.assertEqual(produced['current_chain_manifest'], reference(self.chain))
             self.assertTrue(Path(produced['evidence_output']).is_relative_to(self.chain.parent.parent))
             result, = await asyncio.to_thread(launch, 'consumer', 'webcollect.candidate_consumer', consumer_cli,
@@ -280,6 +302,8 @@ class PipelineAcceptance(engineering.EntryEngineering):
 
     async def test_joint_http_403_and_404_rejected_before_claim_only_200_reaches_react(self):
         forbidden, missing = 'https://forbidden.example.net/path','https://missing.example.edu/path'
+        from application_discovery_fixtures import seed
+        seed(self.pool,self.chain.parent.parent,forbidden);seed(self.pool,self.chain.parent.parent,missing)
         healthy = load_json(self.sources_path)[0]
         sources = self.chain.parent.parent/'mixed-sources.json'
         save_json(sources,[{**healthy,'uri':forbidden},{**healthy,'uri':missing},healthy])
@@ -496,13 +520,119 @@ class PipelineAcceptance(engineering.EntryEngineering):
         self.assertTrue(self.pool.producer_batch_drained(report['batch_scope']))
         self.assertEqual([r['candidate_id'] for r in self.pool.rows(state='pending', protocols=(VERSION2,))], [old_id])
 
-    async def test_joint_caller_target_keeps_parameters_and_category(self):
+    def fresh_project(self, *, consumer_limits=None, **limits):
+        from webcollect.candidate_project import initialize
+        root = self.root/'fresh-project'
+        consumer_config = load_json(self.cfg_path)
+        consumer_config['budget'].update(consumer_limits or {})
+        scope = load_json(initialize(root, 'OFFLINE-new-project', {**self.policy,**limits},
+                                     load_json(self.producer_cfg), consumer_config,
+                                     qc_policy={'ai_percent':10,'human_percent':0,'seed':'new-project','production_sampling':True}))
+        from application_discovery_fixtures import seed
+        seed(CandidatePool(scope['pool']),root,self.uri)
+        producer = ['produce-entries','--config',scope['producer_config'],'--pool',scope['pool'],
+                    '--ledger',scope['producer_db'],'--history-set',scope['history_set'],'--max-batches','1']
+        consumer = ['run','--config',scope['consumer_config'],'--pool',scope['pool'],
+                    '--ledger',scope['consumer_db'],'--output',scope['output'],'--registry',scope['registry'],
+                    '--policy',scope['policy'],'--history-set',scope['history_set'],'--worker-id','test-worker',
+                    '--protocol','entry','--limit','1','--qc-policy',scope['qc_policy']]
+        return root, scope, producer, consumer
+
+    async def test_joint_current_project_same_page_and_three_failures_allow_new_target(self):
+        from contextlib import closing
+        import sqlite3
+        from webcollect.site_failure_stop import SiteFailureStore
+        root, scope, producer, consumer = self.fresh_project()
+        goals = root/'goals.json'
+        targets = [{'kind':'edit','entity':'fields','parameters':{'quantity':value,'price':30}}
+                   for value in (20,21)]
+        save_json(goals,{'schema_version':'webcollect-caller-goals-1','goals':[
+            {'uri':self.uri,'requested_goal':g,'category_hint':'在线工具'} for g in targets]})
+        guard = SiteFailureStore(load_json(scope['policy'])['site_failure_guard'])
+        for n in range(3):
+            guard.record(self.uri, 'previous-attempt-'+str(n), stage='formal', state='failed',
+                         reason='fixture', real_execution=True, evidence=[reference(goals)], usage_refs=[])
+        args = producer + ['--goals',str(goals),'--target','2','--model-protocol','entry-tools-1']
+        initial = deepcopy(self.surface.state)
+        decisions = list(self.decisions)
+        with self.boundaries():
+            report = await asyncio.to_thread(self.invoke,producer_cli,args)
+            self.assertEqual(report['row_results'],{'NEW':2},report)
+            consumer += ['--producer-batch',report['batch_scope']]
+            first, = await asyncio.to_thread(self.invoke,consumer_cli,consumer+['--request-prefix','first'])
+            self.assertEqual(first['state'],'succeeded',first)
+            self.assertEqual(first['QC'],'pending_review')
+            qc = load_json(Path(scope['output'])/first['claim_id']/'execution/qc-inputs/receipt.json')
+            self.assertEqual(qc['status'],'QC_NOT_RUN')
+            self.surface = engineering.ReactSurface(initial)
+            self.decisions = decisions
+            second, = await asyncio.to_thread(self.invoke,consumer_cli,consumer+['--request-prefix','second'])
+        self.assertNotEqual(first['candidate_id'],second['candidate_id'])
+        self.assertEqual(len(self.gotos),2)
+        self.assertEqual(len(self.prompts),10,second)
+        self.assertCountEqual([self.prompts[i]['requested_goal'] for i in (0,5)],targets)
+        with closing(sqlite3.connect(scope['registry'])) as con:
+            attempts = {row[0] for row in con.execute('SELECT attempt_id FROM m4_attempts')}
+            keys = [row[0] for row in con.execute('SELECT claim_key FROM m4_pilot_page_claims')]
+        self.assertEqual(len(attempts),2)
+        self.assertEqual(len(keys),2)
+        self.assertTrue(all(key.startswith('task:') for key in keys))
+        with closing(sqlite3.connect(scope['consumer_db'])) as con:
+            dispatched = [json.loads(body)['dispatch_attempt_id'] for body, in con.execute(
+                "SELECT request_json FROM model_requests WHERE state='succeeded'")]
+        self.assertEqual(set(dispatched),attempts)
+        # Identical screenshots are still a sample-level conflict after both tasks executed.
+        self.assertEqual(second['state'],'failed',second)
+        self.assertEqual(len(list(Path(scope['output']).rglob('saved_sample.json'))),1)
+        self.assertTrue(list(Path(scope['output']).rglob('producer_dedup.json')) or
+                        list(Path(scope['output']).rglob('concurrent_image_conflict.json')))
+
+    async def test_joint_current_project_resource_pause_preserves_claim_and_pending_work(self):
+        from webcollect.runtime import RuntimeStore
+        from types import SimpleNamespace
+        root, scope, producer, consumer = self.fresh_project(max_output_bytes=1,max_worker_seconds=1,min_free_disk_bytes=100)
+        pool = CandidatePool(scope['pool'])
+        store = RuntimeStore(scope['registry'],'project-setup')
+        store.worker_session('original-worker',scope['output'],now=time.time()-601)
+        with self.boundaries(search=True):
+            report = await asyncio.to_thread(self.invoke,producer_cli,producer+['--target','1','--query','受控工具'])
+            self.assertEqual(report['row_results'],{'NEW':1},report)
+            with patch('shutil.disk_usage', return_value=SimpleNamespace(free=0)):
+                result, = await asyncio.to_thread(self.invoke,consumer_cli,
+                    consumer+['--producer-batch',report['batch_scope'],'--request-prefix','full-disk'])
+            self.assertEqual(result['resource_stop']['reasons'],['disk_full'])
+            self.assertEqual(pool.get_claim(result['claim_id'])['state'],'reconcile')
+            with patch('shutil.disk_usage', return_value=SimpleNamespace(free=10)):
+                checkpoint=store.resource_checkpoint(scope['output'])
+        self.assertEqual(checkpoint['status'],'PASS')
+        self.assertGreater(checkpoint['stored_bytes'],1)
+        self.assertGreaterEqual(checkpoint['campaign_worker_seconds'],600)
+        self.assertEqual(statistics(pool)['formal_attempts'],0)
+
+    async def test_joint_current_project_default_entry_protocol_and_qc_handoff(self):
+        _, scope, producer, consumer = self.fresh_project()
+        with self.boundaries(search=True):
+            report = await asyncio.to_thread(self.invoke,producer_cli,producer+['--query','受控工具','--target','1'])
+            result, = await asyncio.to_thread(self.invoke,consumer_cli,consumer+[
+                '--producer-batch',report['batch_scope'],'--request-prefix','default-entry'])
+        self.assertEqual(report['model_protocol'],'entry-tools-3')
+        self.assertEqual(report['row_results'],{'NEW':1})
+        self.assertEqual(result['state'],'succeeded',result)
+        self.assertEqual(result['QC'],'pending_review')
+        self.assertEqual(len(self.gotos),1)
+        self.assertEqual([body['reasoning_effort'] for body in self.wire],['max']*5)
+        qc = load_json(Path(scope['output'])/result['claim_id']/'execution/qc-inputs/receipt.json')
+        self.assertEqual((qc['status'], qc['attempts'][0]['sample_id']),
+                         ('QC_NOT_RUN', result['result']['sample_id']))
+
+    async def test_joint_legacy_caller_target_keeps_parameters_and_category(self):
         goal={'kind':'edit','entity':'fields','parameters':{'quantity':20,'price':30}}
         goals=self.chain.parent.parent/'caller-goals.json'
         save_json(goals,{'schema_version':'webcollect-caller-goals-1','goals':[
             {'uri':self.uri,'requested_goal':goal,'category_hint':'在线工具'}]})
         with self.boundaries():
-            produced=await self.produce(goals=goals)
+            produced=await asyncio.to_thread(self.invoke,producer_cli,
+                self.producer_args(goals=goals)+['--model-protocol','entry-tools-1'])
             self.assertEqual(produced['listed_unique_candidates'],1)
             result=await self.consume_cli()
             row,claim,task=self.assert_complete(result)
@@ -522,13 +652,12 @@ class PipelineAcceptance(engineering.EntryEngineering):
         with self.boundaries():
             await self.produce(goals=goals)
             result=await self.consume_cli()
-            self.assertEqual(result['state'],'failed')
-            self.assertIn('category UNKNOWN',result['reason'])
-            self.assertEqual(statistics(self.pool)['formal_attempts'],0)
-            self.assertEqual(len(self.wire),0)
+            self.assertEqual(result['state'],'succeeded',result)
+            self.assertEqual(statistics(self.pool)['formal_attempts'],1)
+            self.assertEqual(len(self.wire),5)
             self.assertEqual(len(self.gotos),1)
-            self.export_trace('unknown-category',{'formal_attempts':0,'http':0,'entry_navigations':1,
-                'category':'UNKNOWN','saved':0})
+            self.export_trace('unknown-category',{'formal_attempts':1,'http':5,'entry_navigations':1,
+                'category':'UNKNOWN','saved':1})
 
     async def test_joint_saved_crash_and_producer_resume_do_not_dispatch(self):
         with self.boundaries():

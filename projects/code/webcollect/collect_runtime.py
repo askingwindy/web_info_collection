@@ -186,6 +186,9 @@ def sync_manifest(store, output, manifest):
         for row in ledger['reserved_attempts']]
     manifest['samples'] = [row['sample_id'] for row in records if row['status'] == 'collected_pending_review']
     from .production_identity import allocation_uri
+    from .react_protocol import VERSION as native_protocol
+    if snapshot['attempts'] and all(row['task'].get('fragment',{}).get('decision_protocol') == native_protocol for row in snapshot['attempts']):
+        manifest['classification_metadata_version'] = 'source-category-1'
     manifest['sites'] = list({row['site_id']: {'site_id': row['site_id'],
         'uri': allocation_uri(row['task']), 'site_category': row['task']['site_category']}
         for row in snapshot['attempts']}.values())
@@ -360,6 +363,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         **({'entry_observation': entry_observation} if entry_observation is not None else {}))
     summary = await session.run()
     raw_receipt = summary['raw_receipt']
+    stop_data = {'stop_details': summary['stop_details']} if 'stop_details' in summary else {}
     def _event_now():
         return datetime.now(timezone.utc).isoformat()
     def finish_failure(failure_class, root_cause, extra_evidence=()):
@@ -368,7 +372,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             write_json(failure, {'error': root_cause, 'timestamp': now(),
                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
                 'failure_class': failure_class, 'raw_saved': True,
-                'stop_reason': summary['stop_reason']})
+                'stop_reason': summary['stop_reason'], **stop_data})
         feedback_ref = save_attempt_feedback(evidence, attempt, 'rejected', root_cause)
         store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
@@ -377,12 +381,16 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         return {'status': 'rejected', 'failure_class': failure_class,
-                'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt}
+                'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, **stop_data}
     if summary['unknown'] or summary['failure_class'] == 'interrupted':
         react_close_event(store, attempt, 'react_raw_unknown', _event_now(),
             {'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, 'unknown': True})
         return finish_failure('interrupted',
                               'react_unknown:' + str(summary['stop_summary'] or summary['stop_reason']))
+    if summary.get('host_failure'):
+        react_close_event(store, attempt, 'react_raw_rejected', _event_now(),
+            {'stop_reason':summary['stop_reason'],'raw_receipt':raw_receipt,'primary_failure':summary['stop_summary']})
+        return finish_failure(summary['failure_class'], 'react_' + str(summary['stop_summary'] or summary['stop_reason']))
     def audit_validator(delivery_root):
         from .evidence import audit_capture
         audited = audit_capture(output, attempt['sample_id'])
@@ -402,7 +410,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                                      validators=(audit_validator, dedup_validator))
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
-         'derivation_status': derived['status'], 'raw_receipt': raw_receipt})
+         'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})
     if derived['status'] != 'derived_saved':
         errors = derived.get('errors') or []
         if (task['fragment'].get('decision_protocol') == NATIVE_REACT and derived['status'] == 'delivery_rejected'
@@ -412,7 +420,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         if derived['status'] in ('processing_failed', 'delivery_rejected'):
             return finish_failure('program', 'derivation_' + derived['status'] + ': ' +
                                   str(derived.get('error') or derived.get('errors') or '')[:300])
-        return finish_failure('collector', 'react_' + derived['status'])
+        cause = summary['stop_details']['code'] if stop_data else 'react_' + derived['status']
+        return finish_failure('collector', cause)
     saved = evidence / 'saved_sample.json'
     feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
     derived_ref = {'path': str((evidence / 'derived.json').resolve()),
@@ -433,7 +442,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     index.add_sample(sample)
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
-            'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve())}
+            'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve()), **stop_data}
 
 
 @asynccontextmanager
@@ -461,6 +470,10 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     from .telemetry import NetworkMeter, phase, worker_measurement
 
     plan = read_json(plan_path)
+    history = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope') or {}
+    if history.get('candidate_project'):
+        from .current_chain import assert_current_result_path
+        assert_current_result_path(history, Path(output).resolve())
     validate_plan(plan)
     if entry_session is not None:
         from .candidate_contract import guard_claim
@@ -618,6 +631,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     index = ConcurrentExactImageIndex(roots, store)
     worker_id = 'serial-' + str(uuid.uuid4())
     phase_ledger = output / 'metering' / 'phases.jsonl'
+    stopping_checkpoint = None
     async with worker_measurement(store, worker_id, output), _collection_browser(channel, headless, entry_session) as browser:
         manifest.update(browser_version=browser.version, playwright_version=version('playwright'))
         idle_waited = 0
@@ -627,18 +641,16 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 checkpoint = store.resource_checkpoint(output)
                 if checkpoint['status'] == 'STOP':
                     manifest['resource_stop'] = checkpoint
+                    stopping_checkpoint = checkpoint
                     break
                 attempt = store.claim_next(worker_id, request_id=str(uuid.uuid4()),
                     plan_sha256=publication['plan_sha256'], batch_id=manifest['batch_id'])
                 if attempt is None:
                     latest = store.snapshot()
-                    pending = sum(row['status'] == 'collected_pending_review' for row in latest['tasks'])
                     active = any(row['status'] in ('running', 'reserved') for row in latest['tasks'])
                     if (idle_waited < 5 and latest['scope']['state'] == 'active' and not active
-                            and any(row['status'] == 'queued' for row in latest['tasks'])
-                            and latest['campaign_actual_attempt_count'] < latest['policy']['attempt_cap']
-                            and pending < latest['policy']['pending_review_cap']):
-                        # Briefly accommodate retry/domain backoff; never wait forever on a budget.
+                            and any(row['status'] == 'queued' for row in latest['tasks'])):
+                        # Briefly accommodate a scheduler/domain backoff.
                         await asyncio.sleep(1)
                         idle_waited += 1
                         continue
@@ -825,4 +837,5 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         'actual_attempts': manifest['actual_attempt_count'],
         'reserved_allocations': manifest['reserved_allocation_count'],
         'collection_status': manifest['collection_status'], 'qualified_samples': 0,
+        **({'resource_stop':stopping_checkpoint} if stopping_checkpoint else {}),
         'human_review': 'pending', 'customer_acceptance': 'UNKNOWN', 'output': str(output)}

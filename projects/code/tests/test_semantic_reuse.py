@@ -62,6 +62,22 @@ class SemanticReuseTests(unittest.TestCase):
         for name in ('visual_alignment','language','terminal_semantics'):
             self.assertEqual(visual['result']['semantic_check_sources'][name],first['jobs'][0]['visual_job'])
 
+    def test_language_clarification_invalidates_only_language_and_keeps_original(self):
+        with patch.dict(semantic.RULE_VERSIONS,{'language':'visible-chinese-and-narratives-1'}):
+            first=self.prepare_run('old-language')
+        old=self.ledger.get(first['jobs'][0]['visual_job'])
+        original=deepcopy(old)
+        changed=self.prepare_run('consistent-language')
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(self.calls[-1][1]['properties']['checks']['required'],['language'])
+        prompt=json.loads(self.calls[-1][2])
+        self.assertIn('same natural language',prompt['instruction'])
+        self.assertIn('Do not impose a numeric Chinese-character ratio',prompt['instruction'])
+        visual=self.ledger.get(changed['jobs'][0]['visual_job'])
+        for name in ('visual_alignment','terminal_semantics','privacy'):
+            self.assertEqual(visual['result']['semantic_check_sources'][name],old['id'])
+        self.assertEqual(self.ledger.get(old['id']),original)
+
     def test_changed_evidence_and_different_sample_cannot_borrow_review(self):
         self.prepare_run('qc1')
         from PIL import Image

@@ -159,11 +159,9 @@ class DocumentMaterialsTests(unittest.TestCase):
             with self.subTest(path=path),self.assertRaises(ValidationError):Draft202012Validator(schema).validate(bad)
         Draft202012Validator(schema).validate(self.decision())
 
-    def test_oversize_full_input_blocks_before_job_or_model_reservation(self):
+    def test_full_input_above_estimate_is_enqueued_without_model_reservation(self):
         self.ledger.config['model']['reserve_input_tokens']=1000
-        with self.assertRaisesRegex(ValueError,'Complete documentary materials exceed'):
-            self.prepare()
-        self.assertEqual(self.ledger.summary()['jobs'],[])
+        self.assertEqual(self.ledger.get(self.prepare())['state'],'queued')
         self.assertEqual(self.ledger.summary()['model_requests'],0)
 
     def test_changed_export_artifact_or_supporting_file_blocks_before_gateway(self):
@@ -213,14 +211,25 @@ class DocumentMaterialsTests(unittest.TestCase):
         with path.open('ab') as stream:stream.write(b'B')
         with self.assertRaisesRegex(ValueError,'4 MiB input-file safety limit'):load_text(path)
 
-    def test_full_accepted_file_still_blocks_model_budget_before_job_or_network(self):
+    def test_qc_worker_drains_more_than_twenty_scoped_jobs_by_default(self):
+        from quality_inspector import ai_worker
+        for n in range(25):
+            self.ledger.enqueue('ai-visual', {'policy_version':ai_worker.POLICY_VERSION,'prompt_version':ai_worker.PROMPT_VERSION,'fixture':n})
+        with patch.object(ai_worker,'_semantic_dispatch',return_value={'fixture':True}) as dispatch:
+            first=ai_worker.run(self.ledger,max_jobs=2)
+            rest=ai_worker.run(self.ledger)
+        self.assertEqual((len(first['outcomes']),len(rest['outcomes']),dispatch.call_count),(2,23,25))
+        self.assertEqual({r['state'] for r in rest['outcomes']},{'done'})
+        self.assertEqual(self.ledger.summary()['model_requests'],0)
+
+    def test_full_accepted_file_reaches_gateway_intact_above_estimate(self):
         self.write('合成方式说明.md','A'*320820)
         self.ledger.config['model']['reserve_input_tokens']=100000
         with patch('urllib.request.build_opener',side_effect=AssertionError('No external request allowed')) as network:
-            with self.assertRaisesRegex(ValueError,'Complete documentary materials exceed'):
-                self.prepare()
+            job=self.job(); gateway=self.Gateway(self.decision())
+            do_documents(self.ledger,gateway,job)
+            self.assertIn('A'*320820,str(gateway.calls[0]))
         network.assert_not_called()
-        self.assertEqual(self.ledger.summary()['jobs'],[])
         self.assertEqual(self.ledger.summary()['model_requests'],0)
 
     def test_mid_request_payload_drift_is_not_signed_as_completed_review(self):

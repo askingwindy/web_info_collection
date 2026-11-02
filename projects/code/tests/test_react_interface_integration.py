@@ -20,6 +20,7 @@ from webcollect.react_session import ReactSession, build_url_task, react_chooser
 class ReactInterfaceIntegration(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.fixture = native_tests.NativeSessionTests('test_native_tool_round_trip_filters_permissions_keeps_private_history')
+        self.fixture._callCleanup = unittest.TestCase._callCleanup.__get__(self.fixture)
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
 
@@ -123,12 +124,14 @@ class ReactInterfaceIntegration(unittest.IsolatedAsyncioTestCase):
 class EntryGatewayIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_claimed_page_to_mock_http_adapter_history_and_pending_save(self):
         f = entry_tests.EntryEngineering('test_entry_cli_to_original_save_and_same_page')
+        f._callCleanup = unittest.TestCase._callCleanup.__get__(f)
         f.setUp()
         self.addCleanup(f.doCleanups)
         actual = ModelGateway.call_tool
         histories, image_paths = [], []
         opener = provider_tests.StubOpener()
         def controlled(gateway, job, purpose, text, tools, **kwargs):
+            gateway._session_id = kwargs.get('attempt_id')
             gateway._credential = 'CONTROLLED_UNUSED'  # fake gateway key; no credential lookup
             payload = json.loads(text)
             f.prompts.append(deepcopy(payload))
@@ -160,9 +163,9 @@ class EntryGatewayIntegration(unittest.IsolatedAsyncioTestCase):
         f.contexts[0].new_page.assert_awaited_once()
         self.assertEqual(len(histories), 5)
         for index, history in enumerate(histories):
-            self.assertEqual([m['role'] for m in history], ['user', 'assistant', 'tool'] * index)
-            for offset in range(index):
-                assistant, tool = history[3 * offset + 1:3 * offset + 3]
+            self.assertEqual([m['role'] for m in history], ['assistant', 'tool'] * min(index,2))
+            for offset in range(min(index,2)):
+                assistant, tool = history[2 * offset:2 * offset + 2]
                 self.assertEqual(assistant['tool_calls'][0]['id'], tool['tool_call_id'])
                 self.assertEqual(assistant['reasoning_content'], 'opaque-protocol-private')
         entry_pngs = list(f.root.rglob('first.png'))
@@ -184,4 +187,4 @@ class EntryGatewayIntegration(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(request.data)
             self.assertEqual(payload['reasoning_effort'], 'max')
             self.assertEqual([message['role'] for message in payload['messages']],
-                             ['system'] + ['user', 'assistant', 'tool'] * index + ['user'])
+                             ['system'] + ['assistant', 'tool'] * min(index,2) + ['user'])

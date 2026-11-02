@@ -47,7 +47,7 @@ def main(argv=None):
                           'required': ['visible_observation'], 'additionalProperties': False}
                 try:
                     result = ModelGateway(ledger).call(job, 'image-smoke', 'Describe visible content in the image in JSON.', schema,
-                        images=[args.image], synthetic_response={'visible_observation': 'SYNTHETIC protocol response, not a visual judgment'})
+                        images=[args.image], attempts=1, synthetic_response={'visible_observation': 'SYNTHETIC protocol response, not a visual judgment'})
                     ledger.finish(job, result=result)
                 except BudgetStop:
                     ledger.finish(job, 'queued'); raise

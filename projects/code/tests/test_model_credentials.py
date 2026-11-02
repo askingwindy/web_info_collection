@@ -17,6 +17,8 @@ class RuntimeCredentialTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.token = self.root / 'token'
         self.token.write_text('temporary-offline-token\n')
+        dns=patch('webcollect.model_gateway.socket.getaddrinfo', return_value=[('OFFLINE',)])
+        dns.start(); self.addCleanup(dns.stop)
         for guard in (patch.dict('os.environ', {}, clear=True),
                       patch.object(model_credentials, 'PROJECT_GLM_YAML', self.root/'token.yaml'),
                       patch.object(model_credentials, 'PROJECT_GLM_ACCOUNT', 'glm1'),
@@ -59,10 +61,10 @@ class RuntimeCredentialTests(unittest.TestCase):
         for text in ('', 'first\nsecond', 'x' * 4097, '{"token":"temporary"}'):
             self.token.write_text(text)
             with self.subTest(text_length=len(text)), self.assertRaisesRegex(ValueError, 'suppressed'):
-                ModelGateway(ledger)
+                model_credentials.credential(config['model'])
         self.token.unlink()
         with self.assertRaisesRegex(ValueError, 'unavailable'):
-            ModelGateway(ledger)
+            model_credentials.credential(config['model'])
         self.assertEqual(ledger.summary()['model_requests'], 0)
 
     def test_request_reads_token_but_persistent_evidence_contains_no_secret(self):
@@ -96,7 +98,7 @@ class RuntimeCredentialTests(unittest.TestCase):
 
     def test_authorized_glm_list_accepts_indent_tabs_and_pins_first_account(self):
         path=self.root/'token.yaml';path.write_text('glm:\n\t- "offline-first"\n\t- "offline-second"\nark1: "offline-other"\n')
-        with patch.object(model_credentials,'PROJECT_GLM_ACCOUNT','glm'):
+        with patch.object(model_credentials,'PROJECT_GLM_ACCOUNT','glm'), patch('random.SystemRandom.choice', side_effect=lambda values:values[0]):
             self.assertEqual(model_credentials.credential(self.config()['model']),'offline-first')
             self.assertEqual(model_credentials.credential(self.config()['model']),'offline-first')
             path.write_text('glm:\n  - "invalid credential with spaces"\n  - "offline-second"\n')

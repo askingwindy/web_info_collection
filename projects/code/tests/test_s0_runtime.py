@@ -57,7 +57,7 @@ class NoModelRuntimeTests(unittest.TestCase):
         self.assertEqual(ledger.summary()['model_requests'], 0)
 
     def test_invalid_runtime_limits_and_fake_model_cost_fields_rejected(self):
-        for key, value in [('max_run_seconds',0), ('max_concurrent_jobs',0),
+        for key, value in [('max_run_seconds',-1), ('max_concurrent_jobs',0),
                            ('max_probe_pages',-1), ('max_job_attempts',0),
                            ('min_domain_interval_seconds',0), ('lease_seconds',4)]:
             config = deepcopy(self.config); config['budget'][key] = value
@@ -88,23 +88,21 @@ class NoModelRuntimeTests(unittest.TestCase):
         ledger.consume('probe_pages', 'original-page')
         resumed = BatchLedger(ledger.path, config)
         resumed.consume('probe_pages', 'original-page')
-        with self.assertRaises(BudgetStop):
-            resumed.consume('probe_pages', 'new-page')
+        resumed.consume('probe_pages', 'new-page')
         changed = deepcopy(config); changed['budget']['max_probe_pages'] = 2
         with self.assertRaisesRegex(ValueError, 'frozen'):
             BatchLedger(ledger.path, changed, initialize=True)
-        self.assertEqual(resumed.summary()['resources'], [{'kind':'probe_pages','used':1}])
+        self.assertEqual(resumed.summary()['resources'], [{'kind':'probe_pages','used':2}])
 
-    def test_wall_limit_survives_resume(self):
+    def test_old_wall_limit_does_not_block_resume(self):
         ledger = self.ledger()
         jid = ledger.enqueue('test', {'case':'time'})
         with ledger.transaction() as con:
             con.execute('UPDATE batch_meta SET started=? WHERE id=1',
                         (time.time()-self.config['budget']['max_run_seconds']-1,))
         resumed = BatchLedger(ledger.path, self.config)
-        with self.assertRaisesRegex(BudgetStop, 'max_run_seconds'):
-            resumed.claim('test', job_id=jid)
-        self.assertEqual(resumed.get(jid)['attempts'], 0)
+        self.assertIsNotNone(resumed.claim('test', job_id=jid))
+        self.assertEqual(resumed.get(jid)['attempts'], 1)
 
     def test_concurrency_domain_limits_and_retry_cap_survive_resume(self):
         config = deepcopy(self.config); config['budget']['min_domain_interval_seconds'] = 60
@@ -138,27 +136,26 @@ class NoModelRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(resumed.claim('test', job_id=jid))
         self.assertEqual(resumed.get(jid)['attempts'], 2)
 
-    def test_seed_discovery_is_real_mode_offline_and_capped_reproducibly(self):
+    def test_seed_discovery_exceeds_ledger_cap_and_respects_selected_sources(self):
         config = deepcopy(self.config); config['budget']['max_discovery_candidates'] = 2
         ledger = self.ledger(config)
         sources = {'schema_version':'webcollect-site-sources-1','sources':[
             {'kind':'seed','category':'工具','max_candidates':1,
              'uris':['https://example.org/a','https://example.org/b']},
             {'kind':'seed','category':'资讯','uris':['https://example.com/c','https://example.com/d']},
-            {'kind':'directory','category':'教育','uri':'https://example.net/'}]}
+            {'kind':'seed','category':'教育','uris':['https://example.net/e']}]}
         save_json(self.root/'sources.json', sources)
         with patch('site_planner.pipeline.fetch_public', side_effect=AssertionError('external fetch forbidden')):
             result = discover(ledger, self.root/'sources.json', self.root/'supply')
             resumed = discover(BatchLedger(ledger.path, config), self.root/'sources.json', self.root/'supply')
         self.assertEqual(resumed, result)
         self.assertEqual(result['mode'], 'real')
-        self.assertEqual(result['fixed_candidate_count'], 2)
-        self.assertEqual([r['site_uri'] for r in result['records']], ['https://example.org/a','https://example.com/c'])
-        self.assertEqual(result['discovery_link_occurrences'], 4)
-        self.assertEqual(len(result['deferred_links']), 2)
-        self.assertEqual(len(result['unprocessed_sources']), 1)
-        self.assertEqual(result['unprocessed_sources'][0]['link_occurrences'], 'UNKNOWN')
-        self.assertFalse(result['link_denominator_complete'])
+        self.assertEqual(result['fixed_candidate_count'], 4)
+        self.assertEqual([r['site_uri'] for r in result['records']], ['https://example.org/a','https://example.com/c','https://example.com/d','https://example.net/e'])
+        self.assertEqual(result['discovery_link_occurrences'], 5)
+        self.assertEqual(len(result['deferred_links']), 1)
+        self.assertFalse(result['unprocessed_sources'])
+        self.assertTrue(result['link_denominator_complete'])
         self.assertTrue((self.root/'supply/candidates.json').exists())
         self.assertEqual(ledger.summary()['model_requests'], 0)
         ledger.export(self.root/'metering')

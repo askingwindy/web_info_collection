@@ -23,8 +23,8 @@ def default_rules():
     """Host-independent ordered cues, frozen verbatim alongside every result."""
     return {
         'schema_version': RULE_SCHEMA,
-        'max_selected': 1000,
-        'max_selected_per_source': 1000,
+        'max_selected': None,
+        'max_selected_per_source': None,
         'rules': [
             {'id': 'fragment_navigation', 'class': 'navigation', 'field': 'href',
              'pattern': r'^\s*#', 'select': False},
@@ -118,7 +118,7 @@ def _validated_rules(value):
     if value.get('schema_version') != RULE_SCHEMA:
         raise ValueError('versioned candidate selection rules required')
     for key in ('max_selected', 'max_selected_per_source'):
-        if type(value.get(key)) is not int or value[key] < 1:
+        if value.get(key) is not None and (type(value[key]) is not int or value[key] < 1):
             raise ValueError(key + ' must be a positive integer')
     if not isinstance(value.get('rules'), list) or not value['rules']:
         raise ValueError('at least one explicit selection rule required')
@@ -228,9 +228,9 @@ def select_candidates(supply_paths, output, rules=None):
                         row.update(reason='duplicate_selected_uri', duplicate_of=records[uri]['selection_occurrence'])
                         if ref not in records[uri]['source']:
                             records[uri]['source'].append(ref)
-                    elif selected_here >= rules['max_selected_per_source']:
+                    elif rules.get('max_selected_per_source') is not None and selected_here >= rules['max_selected_per_source']:
                         row['reason'] = 'selection_per_source_limit'
-                    elif len(records) >= rules['max_selected']:
+                    elif rules.get('max_selected') is not None and len(records) >= rules['max_selected']:
                         row['reason'] = 'selection_global_limit'
                     else:
                         row.update(selected=True, reason='selected_functional_cue')

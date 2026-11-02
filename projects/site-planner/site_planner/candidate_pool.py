@@ -1,6 +1,7 @@
 """Opt-in additive candidate inventory. Production/QC facts stay in RuntimeStore."""
 from contextlib import contextmanager
 from copy import deepcopy
+import hashlib
 import json
 import time
 import unicodedata
@@ -106,6 +107,16 @@ def candidate_dedup_key(value, application_id):
     return object_sha256([VERSION2, kind, application_id, normalize(value['requested_goal'])])
 
 
+def landing_key(value, application_id, landed_uri):
+    # A GET never sends hash routes. Retain the caller's route for identity.
+    landed = urlsplit(landed_uri)
+    original = urlsplit(entry_identity(value['entry_url']))
+    if original.fragment and not landed.fragment:
+        landed_uri = urlunsplit((*landed[:4], original.fragment))
+    return object_sha256(['settled-landing-1',application_id,entry_identity(landed_uri),
+                          normalize(value['requested_goal']) if value['candidate_kind']=='target' else None])
+
+
 def validate_candidate_v2(value):
     """Body of webcollect-data-candidate-2: URL is bound by the program, the
     frozen requested_goal comes only from trusted caller parameters."""
@@ -196,6 +207,48 @@ class CandidatePool:
         con.execute('INSERT INTO candidate_events(candidate_id,claim_id,kind,record,created) VALUES(?,?,?,?,?)',
                     (cid, claim, kind, canonical(record), time.time()))
 
+    @staticmethod
+    def disposition(con, candidate_id):
+        row = con.execute("SELECT record FROM candidate_events WHERE candidate_id=? AND kind='disposition' ORDER BY id DESC LIMIT 1",
+                          (candidate_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def record_disposition(self, claim, *, disposition, reason, stage, evidence, policy_version):
+        """Append evidence-bound routing, retaining the original claim and accounts."""
+        if disposition not in ('optimize', 'reprocess', 'abandon', 'reconcile', 'paused'):
+            raise ValueError('Explicit candidate disposition required')
+        if not reason or not stage or not policy_version or not evidence:
+            raise ValueError('Disposition requires reason, stage, evidence and policy version')
+        verify_evidence(evidence)
+        with self.transaction() as con:
+            latest = con.execute('SELECT * FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC,rowid DESC LIMIT 1',
+                                 (claim['candidate_id'],)).fetchone()
+            if not latest or latest['claim_id'] != claim['claim_id']:
+                raise ValueError('Disposition must bind the latest original claim')
+            if latest['state'] == 'consuming':
+                self._fence(con, claim)
+            if latest['state'] == 'reconcile' and disposition not in ('reconcile', 'paused'):
+                raise ValueError('Unresolved original claim must be reconciled first')
+            if disposition == 'reprocess' and latest['state'] != 'succeeded':
+                raise ValueError('Reprocessing requires a saved original result')
+            if disposition in ('optimize', 'abandon') and latest['state'] == 'succeeded':
+                result = con.execute('SELECT qc_state FROM candidate_results WHERE candidate_id=? AND effective=1', (claim['candidate_id'],)).fetchone()
+                if not result or result[0] != 'failed':
+                    raise ValueError('Saved results require revision or independent QC disposition')
+            record = {'disposition': disposition, 'reason': reason, 'stage': stage,
+                      'evidence': evidence, 'policy_version': policy_version,
+                      'candidate_id': claim['candidate_id'], 'claim_id': claim['claim_id'],
+                      'binding': json.loads(latest['binding'] or '{}')}
+            if self.disposition(con, claim['candidate_id']) == record:
+                return record
+            if latest['state'] == 'consuming':
+                state = 'reconcile' if disposition in ('reconcile', 'paused') else 'failed'
+                con.execute('UPDATE candidate_claims SET state=?,stage=?,reason=?,updated=? WHERE claim_id=?',
+                            (state, stage, reason, time.time(), claim['claim_id']))
+                con.execute('UPDATE data_candidates SET state=? WHERE candidate_id=?', (state, claim['candidate_id']))
+            self.event(con, claim['candidate_id'], claim['claim_id'], 'disposition', record)
+            return record
+
     def put(self, candidate, source):
         value = deepcopy(candidate)
         if value.get('schema_version') == VERSION2:
@@ -268,13 +321,46 @@ class CandidatePool:
                         raise ValueError('Row conclusion digest conflict; verify the original response')
                     return json.loads(prior['record'])
             old = con.execute('SELECT candidate_id FROM data_candidates WHERE dedup_key=?', (key,)).fetchone()
+            if source.get('table_policy'):
+                from .application_discovery import Discovery, POLICY
+                from .entry_selection import confirmed_category
+                site = Discovery(self).get(aid, con)
+                owner=self.pool.application(value['entry_url'])
+                if (source['table_policy'] != POLICY or not site or site['classification_state'] != 'confirmed'
+                        or not owner or owner['id']!=aid or source.get('application_classification',{}).get('application')!=aid
+                        or site['decision_id'] != source.get('site_decision_id')
+                        or confirmed_category([source]) != site['category']):
+                    raise ValueError('Table1 decision changed before publication')
+                previous_sources = [json.loads(r[0]) for r in con.execute(
+                    'SELECT source FROM candidate_sources WHERE candidate_id=?', (old['candidate_id'],))] if old else []
+                if confirmed_category([*previous_sources,source]) != site['category']:
+                    raise ValueError('Original reader retains a conflicting category; preserve and quarantine original row')
+                if not old:
+                    receipt=source.get('entry_http')
+                    if not receipt: raise ValueError('New Table2 entry requires the final GET receipt')
+                    verify_evidence([receipt]); access=load_json(receipt['path'])
+                    if (access.get('result')!='PASS' or access.get('method')!='GET'
+                            or type(access.get('http_status')) is not int or not 200<=access['http_status']<300
+                            or access.get('entry_uri')!=page_uri(value['entry_url'])):
+                        raise ValueError('Entry GET receipt does not confirm this original URI')
             duplicate = old is not None
             cid = old['candidate_id'] if old else 'candidate-' + str(uuid.uuid4())
+            landed_key = None
+            if source.get('table_policy') and source.get('entry_http'):
+                access = load_json(source['entry_http']['path'])
+                if access.get('result')=='PASS':
+                    landed_key = landing_key(value,aid,access.get('landed_uri') or access['entry_uri'])
+                    landing = con.execute('SELECT candidate_id FROM candidate_landings WHERE landing_key=?',(landed_key,)).fetchone()
+                    if landing and landing['candidate_id']!=cid and not old:
+                        raise ValueError('Duplicate settled landed URI; original candidate '+landing['candidate_id'])
             if not old:
                 con.execute('INSERT INTO candidate_versions VALUES(?,?,?,?)', (cid,1,canonical(value),time.time()))
                 con.execute('INSERT INTO data_candidates VALUES(?,?,?,?,?,?,?)',
                             (cid,aid,key,1,canonical(value),time.time(),'pending'))
             con.execute('INSERT OR IGNORE INTO candidate_sources VALUES(?,?,?,?)', (cid,object_sha256(source),canonical(source),time.time()))
+            if landed_key:
+                con.execute('INSERT OR IGNORE INTO candidate_landings VALUES(?,?,?)',
+                            (landed_key,cid,canonical(source['entry_http'])))
             if not old:
                 self.event(con,cid,None,'discovered',{'version':1,'protocol':VERSION2,'source':source})
             elif row_header is not None:
@@ -338,21 +424,11 @@ class CandidatePool:
     def resolve_applications(self, uris):
         """Targeted per-batch application resolution; alias/merge evidence is
         still verified, but no full candidate/entity table is loaded."""
-        self.pool.verify_identity_evidence()
         out = {}
-        with self.pool.connect() as con:
-            for uri in dict.fromkeys(uris):
-                host = host_identity(uri)
-                row = con.execute('SELECT a.id FROM applications a LEFT JOIN aliases x ON x.application_id=a.id '
-                                  'WHERE a.host=? OR x.host=?', (host,host)).fetchone()
-                aid = row['id'] if row else None
-                while aid:
-                    merged = con.execute('SELECT target FROM merges WHERE source=?', (aid,)).fetchone()
-                    if not merged:
-                        break
-                    aid = merged[0]
-                out[uri] = aid
-            return out
+        for uri in dict.fromkeys(uris):
+            app = self.pool.application(uri)
+            out[uri] = app['id'] if app else None
+        return out
 
     def candidate_state(self, uri, *, candidate_kind='entry'):
         """Targeted dedup probe for one batch entry; returns matching candidate
@@ -399,6 +475,7 @@ class CandidatePool:
                 if row['result']:
                     row['result']['record']=json.loads(row['result']['record'])
                     row['result']['qc_report']=json.loads(row['result']['qc_report']) if row['result']['qc_report'] else None
+                row['disposition'] = self.disposition(con, row['candidate_id'])
                 out.append(row)
             return out
 
@@ -406,12 +483,13 @@ class CandidatePool:
         body = row['candidate'] if 'candidate' in row.keys() else json.loads(row['body'])
         if 'parent_category' in body:
             return body['parent_category']
-        # Entry candidates keep classification in source context; UNKNOWN stays visible.
-        for source in con.execute('SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created', (row['candidate_id'],)):
-            hint = json.loads(source[0]).get('category_hint')
-            if hint:
-                return hint
-        return 'UNKNOWN'
+        from .entry_selection import confirmed_category
+        sources = [json.loads(r[0]) for r in con.execute(
+            'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created', (row['candidate_id'],))]
+        confirmed = confirmed_category(sources)
+        if confirmed is not None:
+            return confirmed
+        return next((s['category_hint'] for s in sources if s.get('category_hint')), 'UNKNOWN')
 
     @staticmethod
     def _claim(row):
@@ -421,7 +499,7 @@ class CandidatePool:
         value['sources'] = json.loads(value['sources']) if value.get('sources') else None
         return value
 
-    def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, protocols=None, producer_batch=None):
+    def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, protocols=None, producer_batch=None, recovery_version=None, frozen_row=None):
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, unique request and bounded lease required')
         if protocols is None:
@@ -434,6 +512,18 @@ class CandidatePool:
         if VERSION2 in protocols:
             self._require_v2()
         with self.transaction() as con:
+            if frozen_row is not None:
+                if candidate_id != frozen_row['candidate_id'] or not producer_batch or recovery_version:
+                    raise ValueError('Frozen selection requires its candidate and producer batch')
+                row = con.execute('''SELECT c.version,c.application_id,c.body FROM data_candidates c
+                    JOIN candidate_batch_rows b USING(candidate_id) WHERE c.candidate_id=? AND b.run_id=?
+                    AND b.result='NEW' AND b.row_id=? AND b.response_sha256=?''',
+                    (candidate_id,producer_batch,frozen_row['producer_row_id'],frozen_row['producer_row_response_sha256'])).fetchone()
+                if (not row or row['version'] != frozen_row['version'] or row['application_id'] != frozen_row['application_id']
+                        or hashlib.sha256(row['body'].encode()).hexdigest() != frozen_row['body_sha256']):
+                    raise ValueError('Frozen candidate version, body or source changed')
+                if con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=?', (candidate_id,)).fetchone():
+                    return {'state':'ALREADY_CLAIMED'}
             now = time.time()
             for old in con.execute("SELECT * FROM candidate_claims WHERE state='consuming' AND expires<=?", (now,)).fetchall():
                 con.execute("UPDATE candidate_claims SET state='reconcile',reason='lease_expired',updated=? WHERE claim_id=?", (now,old['claim_id']))
@@ -446,6 +536,9 @@ class CandidatePool:
             prior = con.execute('SELECT * FROM candidate_claims WHERE request_id=?', (request_id,)).fetchone()
             if prior:
                 if prior['worker_id'] != worker_id: raise ValueError('Claim request owner conflict')
+                claimed = con.execute("SELECT record FROM candidate_events WHERE claim_id=? AND kind='claimed' ORDER BY id LIMIT 1", (prior['claim_id'],)).fetchone()
+                if (json.loads(claimed[0]).get('recovery_version') if claimed else None) != recovery_version:
+                    raise ValueError('Claim request recovery version conflict')
                 if candidate_id and prior['candidate_id']!=candidate_id:raise ValueError('Claim request target conflict')
                 if producer_batch and not con.execute("SELECT 1 FROM candidate_batch_rows WHERE run_id=? AND result='NEW' AND candidate_id=?", (producer_batch, prior['candidate_id'])).fetchone():
                     raise ValueError('Claim request producer batch conflict')
@@ -455,6 +548,12 @@ class CandidatePool:
                 sql += " AND candidate_id IN (SELECT candidate_id FROM candidate_batch_rows WHERE run_id=? AND result='NEW')"
             for row in con.execute(sql+' ORDER BY created,candidate_id', (producer_batch,) if producer_batch else ()):
                 if candidate_id and row['candidate_id']!=candidate_id:continue
+                disposition = self.disposition(con, row['candidate_id'])
+                if recovery_version:
+                    if not disposition or disposition.get('disposition') != 'recovery_ready' or disposition.get('fix_version') != recovery_version:
+                        continue
+                elif disposition:
+                    continue
                 body = json.loads(row['body'])
                 if body.get('schema_version') not in protocols: continue
                 if categories and self._row_category(row, con) not in categories: continue
@@ -474,17 +573,23 @@ class CandidatePool:
                     con.execute('INSERT INTO candidate_claims VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                 (claim,cid,row['version'],canonical(body),worker_id,request_id,token,now+lease_seconds,'consuming','claimed',None,None,now,now))
                 con.execute("UPDATE data_candidates SET state='consuming' WHERE candidate_id=?", (cid,))
-                self.event(con,cid,claim,'claimed',{'request_id':request_id,'version':row['version'],'protocols':list(protocols)})
+                self.event(con,cid,claim,'claimed',{'request_id':request_id,'version':row['version'],'protocols':list(protocols), 'recovery_version':recovery_version})
                 return self._claim(con.execute('SELECT * FROM candidate_claims WHERE claim_id=?', (claim,)).fetchone())
             con.execute('INSERT INTO candidate_empty_requests VALUES(?,?,?)',(request_id,worker_id,now))
             return {'state':'EMPTY'}
 
-    def producer_batch_drained(self, producer_batch):
+    def producer_batch_drained(self, producer_batch, *, recovery_version=None):
         # A producer can insert the last row between the worker's empty poll and this read.
         with self.pool.connect() as con:
-            return bool(con.execute("""SELECT EXISTS(SELECT 1 FROM checkpoints WHERE run_id=? AND key LIKE 'entry-complete/%')
-                AND NOT EXISTS(SELECT 1 FROM candidate_batch_rows b JOIN data_candidates c USING(candidate_id)
-                    WHERE b.run_id=? AND b.result='NEW' AND c.state='pending')""", (producer_batch, producer_batch)).fetchone()[0])
+            complete = con.execute("SELECT 1 FROM checkpoints WHERE run_id=? AND key LIKE 'entry-complete/%'", (producer_batch,)).fetchone()
+            if not complete and not recovery_version:
+                return False
+            for row in con.execute("""SELECT c.candidate_id FROM candidate_batch_rows b JOIN data_candidates c USING(candidate_id)
+                    WHERE b.run_id=? AND b.result='NEW' AND c.state='pending'""", (producer_batch,)):
+                d = self.disposition(con, row[0])
+                if (not recovery_version and not d) or (recovery_version and d and d.get('disposition') == 'recovery_ready' and d.get('fix_version') == recovery_version):
+                    return False
+            return True
 
     def _fence(self, con, claim):
         row = con.execute('SELECT * FROM candidate_claims WHERE claim_id=?', (claim['claim_id'],)).fetchone()

@@ -47,12 +47,12 @@ class BatchCoreTests(unittest.TestCase):
         config = deepcopy(self.config); config['budget']['max_model_requests'] = 1
         ledger = self.ledger(config); job = self.job(ledger)
         gateway = ModelGateway(ledger)
-        with self.assertRaises(BudgetStop):
+        with self.assertRaisesRegex(ValueError, 'attempts exhausted'):
             gateway.call(job, 'bad', 'JSON test', SCHEMA, synthetic_response={'answer': 'wrong'})
-        self.assertEqual(ledger.summary()['model_requests'], 1)
+        self.assertEqual(ledger.summary()['model_requests'], 2)
         resumed = BatchLedger(ledger.path, config)
-        with self.assertRaises(BudgetStop):
-            resumed.reserve_request(job, 'other', 0)
+        self.assertEqual(ModelGateway(resumed).call(job,'other','JSON',SCHEMA,synthetic_response={'answer':1}), {'answer':1})
+        self.assertEqual(resumed.summary()['model_requests'], 3)
         ledger.finish(job, 'review_required')
 
     def test_crash_after_reserve_preserves_unknown_charge(self):
@@ -65,7 +65,8 @@ class BatchCoreTests(unittest.TestCase):
         self.assertIsNone(ledger.claim('test'))
         with ledger.connect() as con:
             self.assertEqual(con.execute('SELECT state FROM model_requests WHERE id=?', (rid,)).fetchone()[0], 'unknown')
-        self.assertEqual(ledger.summary()['model_cost_micros'], 'UNKNOWN')
+        self.assertEqual(ledger.summary()['usage_covered_requests'], 0)
+        self.assertEqual(ledger.summary()['model_request_states'], {'unknown': 1})
         with self.assertRaisesRegex(ValueError, 'Lost/expired'):
             ledger.finish(job)
 
@@ -74,9 +75,8 @@ class BatchCoreTests(unittest.TestCase):
         ledger = self.ledger(config)
         ledger.consume('probe_pages', 'one')
         BatchLedger(ledger.path, config).consume('probe_pages', 'one')
-        with self.assertRaises(BudgetStop):
-            ledger.consume('probe_pages', 'two')
-        self.assertEqual(ledger.summary()['resources'][0]['used'], 1)
+        ledger.consume('probe_pages', 'two')
+        self.assertEqual(ledger.summary()['resources'][0]['used'], 2)
 
     def test_explicit_runtime_window_retains_start_counters_and_frozen_config(self):
         from webcollect.batch_core import save_json,file_sha
@@ -86,25 +86,26 @@ class BatchCoreTests(unittest.TestCase):
         with ledger.transaction() as con:
             start=time.time()-cfg['budget']['max_run_seconds']-5
             con.execute('UPDATE batch_meta SET started=?',(start,))
-        with self.assertRaises(BudgetStop):self.job(ledger)
+        original_job=self.job(ledger); ledger.finish(original_job)
         path=self.root/'window.json';save_json(path,{'schema_version':'webcollect-runtime-window-1',
             'run_id':cfg['run_id'],'ledger':str(ledger.path),'config_sha256':object_sha256(cfg),
             'original_started':start,'deadline':time.time()+60,'max_new_consumer_runs':10,
             'user_instruction':'CONTROLLED explicit continuation; no real IO'})
         ref={'path':str(path.resolve()),'sha256':file_sha(path)}
         ledger.authorize_runtime_window(ref)
-        job=self.job(ledger);self.assertIsNotNone(job)
+        job=self.job(ledger,'next');self.assertIsNotNone(job)
         self.assertGreater(ledger.remaining_seconds(),50)
         visit=ledger.reserve_visit(job,'https://example.org/','CONTROLLED','example.org',timeout_seconds=1)
         self.assertEqual(visit['timeout_seconds'],1)
         request=ledger.reserve_request(job,'CONTROLLED-window-request',0)
         self.assertEqual(request['state'],'new')
-        with self.assertRaises(BudgetStop):ledger.consume('probe_pages','extra')
+        ledger.consume('probe_pages','extra')
+        self.assertEqual(ledger.summary()['resources'][0]['used'],2)
         with ledger.connect() as con:self.assertEqual(con.execute('SELECT started FROM batch_meta').fetchone()[0],start)
         changed=deepcopy(cfg);changed['budget']['max_probe_pages']=2
         with self.assertRaises(ValueError):BatchLedger(ledger.path,changed)
         path.write_text('{}')
-        with self.assertRaises(ValueError):ledger.heartbeat(job)
+        with self.assertRaises(ValueError):ledger.authorize_runtime_window(ref)
 
     def test_provider_auth_unknown_blocks_new_jobs_but_preserves_completed_cache(self):
         ledger=self.ledger();job=self.job(ledger);gateway=ModelGateway(ledger)

@@ -104,7 +104,8 @@ class SiteProgressTests(unittest.TestCase):
         row = {'sample_id': sample_id, 'sample_path': str(sample), 'status': sample_status,
                'annotation_sha256': sha(sample / 'annotation.json'), 'evidence_sha256': evidence,
                'semantic_sampling': {'status': sampling}}
-        report = {'program': 'quality-inspector', 'dataset': str(dataset),
+        from quality_inspector.semantic import rule_ids
+        report = {'program': 'quality-inspector', 'dataset': str(dataset), 'semantic_rule_ids':rule_ids(),
                   'inspection_stage': 'final' if final else 'payload', 'release_ready': final,
                   'delivery_status': 'PASS' if final else 'REVIEW_REQUIRED',
                   'input_files_sha256': dict(sorted(files.items())), 'root_checksum': {'pass': True},
@@ -114,7 +115,7 @@ class SiteProgressTests(unittest.TestCase):
         review_path = None
         if human:
             from quality_inspector.reviews import SEMANTIC
-            record = {'sample_id': sample_id, 'annotation_sha256': row['annotation_sha256'],
+            record = {'sample_id': sample_id, 'annotation_sha256': row['annotation_sha256'], 'semantic_rule_ids':rule_ids(),
                       'evidence_sha256': evidence, 'baseline_sha256': 'controlled-contract',
                       'reviewer': {'kind': 'human', 'name': 'CONTROLLED fixture only'},
                       'provenance': {'description': 'Synthetic review fixture; no human inspection occurred',

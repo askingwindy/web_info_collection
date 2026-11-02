@@ -161,7 +161,7 @@ COMPAT_HTML=COMPAT_HTML.replace('SETTINGS',''.join(compat_setting(*x) for x in [
 # supply-r01/probe/a48f1248be70c8c3fa0bd686d340aae8cae79a561b9cbdf8539519922e30831f/
 # page-0/attempt-001/probe_000.png, SHA256 28aed5d1a23de11d3320555aa1b1e48aeffa48231e601a516d6346cc52e5254a.
 # This explicit controlled calibration covers the observed topics-present state.
-# The topics-absent state remains a separate mandatory rejection test below.
+# The topics-absent state separately checks that letter ratios are diagnostic.
 CALIBRATED_TOPIC_HTML=''.join(
     f'<span style="position:absolute;left:{x}px;top:{y}px;font:16px Arial;color:#1673ff">{text}</span>'
     for x,y,text in [(92,225,'深入探索'),(200,225,'定制平面设计'),(346,225,'学习编程课程'),
@@ -215,25 +215,25 @@ class AsciiCollectorCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(verify_ascii_result_text(await self.page.locator('#transformResult').text_content()))
         self.assertEqual(await self.page.evaluate('scrollY'),task['operations'][0]['execution']['distance']+task['operations'][-1]['execution']['distance'])
 
-    async def test_collect_one_rejects_topics_absent_initial_state_below_language_threshold(self):
+    async def test_collect_one_keeps_low_letter_ratio_as_pending_language_diagnostic(self):
         import json
         from pathlib import Path
         from webcollect.collect import collect_one
         from webcollect.task_contract import PLAN_SCHEMA
+        from webcollect.ascii_art_strategy import expected_hello
         task=await self.make_task();task.update(_plan_schema_version=PLAN_SCHEMA,initial_settle_ms=0)
+        await self.context.add_init_script("document.addEventListener('DOMContentLoaded',()=>{document.querySelector('#startGenerator').onclick=()=>{document.querySelector('#transformResult').textContent="+json.dumps(expected_hello())+"}})")
         with tempfile.TemporaryDirectory() as root:
             sample=Path(root)/'CONTROLLED-no-topics';evidence=Path(root)/'evidence'
-            with self.assertRaisesRegex(ValueError,'中文字符比例初筛不足 70%'):
-                await collect_one(self.context,task,sample,evidence,{'sample_id':'CONTROLLED-no-topics'})
-            failure=json.loads((evidence/'eligibility_failure.json').read_text())
-            self.assertEqual(failure['rule'],'visible_chinese_ratio')
-            self.assertEqual(failure['threshold'],0.70)
-            self.assertLess(failure['actual'],failure['threshold'])
-            self.assertAlmostEqual(failure['actual'],0.681,places=3)
-            self.assertEqual(failure['step_id'],1)
-            self.assertFalse((sample/'annotation.json').exists())
+            await collect_one(self.context,task,sample,evidence,{'sample_id':'CONTROLLED-no-topics'})
+            summary=json.loads((evidence/'capture_summary.json').read_text())
+            self.assertLess(summary['minimum_chinese_character_ratio'],.70)
+            self.assertTrue(summary['chinese_ratio_diagnostic_only'])
+            self.assertEqual(summary['language_review'],'pending')
+            self.assertFalse((evidence/'eligibility_failure.json').exists())
+            self.assertTrue((sample/'annotation.json').exists())
             self.assertTrue((sample/'images/step_001.png').exists())
-            self.assertEqual(json.loads((evidence/'task_contract.json').read_text())['machine_status'],'FAIL')
+            self.assertEqual(json.loads((evidence/'task_contract.json').read_text())['semantic_status'],'REVIEW_REQUIRED')
 
     async def test_full_collect_one_saves_m4_frames_and_terminal_contract(self):
         import json

@@ -271,19 +271,19 @@ class ConcurrentSitesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peak, 1)
         self.assertEqual(result['peak_active_sites'], 1)
 
-    async def test_backpressure_prevents_another_site_dispatch(self):
+    async def test_pending_work_does_not_block_another_site_dispatch(self):
         calls = 0
         self.config['max_parallel_sites'] = 1
         self.policy['max_workers'] = 1
+        self.policy['pending_review_cap'] = 1
         self.policy_path.write_text(json.dumps(self.policy))
         async def fake(*args, **kwargs):
             nonlocal calls
             calls += 1
             return {'collection_status': 'finished_pending_review', 'collected': 1}
-        with patch('webcollect.site_scheduler._backpressure', side_effect=[None, {'reason': 'pending_review_cap'}]):
-            result = await run_schedule(self.config, self.root / 'schedule', collector=fake)
-        self.assertEqual(calls, 1)
-        self.assertEqual(result['status'], 'PAUSED')
+        result = await run_schedule(self.config, self.root / 'schedule', collector=fake)
+        self.assertEqual(calls, len(self.config['sites']))
+        self.assertEqual(result['status'], 'COLLECTED_PENDING_REVIEW')
 
     async def test_cancellation_has_no_success_and_bound_resume_keeps_one_count(self):
         entered = asyncio.Event()
@@ -307,7 +307,7 @@ class ConcurrentSitesTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, 'binding changed'):
             await run_schedule(changed, self.root / 'schedule', resume=True, collector=recovered)
 
-    async def test_actual_cancel_preserves_partial_and_resume_uses_new_sample_id(self):
+    async def test_actual_cancel_preserves_partial_and_resume_holds_interruption(self):
         self.config['sites'] = self.config['sites'][:1]
         self.config['max_parallel_sites'] = 1
         self.policy['max_workers'] = 1
@@ -332,11 +332,10 @@ class ConcurrentSitesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.exact_image_claims(), [])
         with patch('webcollect.collect.collect_one', self.capture):
             resumed = await run_schedule(self.config, self.root / 'schedule', resume=True)
-        self.assertEqual(resumed['status'], 'COLLECTED_PENDING_REVIEW')
-        attempts = store.snapshot()['attempts']
-        self.assertEqual(len(attempts), 2)
-        self.assertNotEqual(attempts[0]['sample_id'], attempts[1]['sample_id'])
-        self.assertEqual(sum(row['status'] == 'collected_pending_review' for row in attempts), 1)
+        self.assertEqual(resumed['status'], 'PAUSED',resumed)
+        self.assertEqual([r['sample_id'] for r in store.snapshot()['attempts']],[original['sample_id']])
+        self.assertEqual(store.snapshot()['tasks'][0]['status'],'needs_replan')
+        self.assertTrue((output/'rejected'/original['sample_id']/'annotation.json').is_file())
 
     async def test_two_scheduler_instances_share_the_global_site_limit(self):
         for i, domain in enumerate(('example.com', 'example.edu'), start=2):

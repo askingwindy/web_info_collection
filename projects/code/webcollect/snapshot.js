@@ -1,5 +1,6 @@
 /* Read-only visible DOM evidence. No page content, attributes or styles are changed. */
 ({selector = null, index = 0, assertions = [], protected_selectors = []} = {}) => {
+  if(!document.body)throw new Error('DOCUMENT_NOT_READY: body absent during navigation');
   const width = innerWidth, height = innerHeight;
   const target = selector ? document.querySelectorAll(selector)[index] : null;
   if(target?.matches('iframe,frame'))throw new Error('UNSUPPORTED_FRAME: task targets inside embedded frames require frame-aware execution');
@@ -348,7 +349,7 @@
     // compare the closest endpoints, never the favorable quantized samples.
     return a[1]<b[0]?(b[0]+.05)/(a[1]+.05):b[1]<a[0]?(a[0]+.05)/(b[1]+.05):1;
   };
-  const frameworkLabelPaint = (label,foregroundStyle=null) => {
+  const frameworkLabelPaint = (label,foregroundStyle=null,minContrast=3) => {
     const style=foregroundStyle||getComputedStyle(label),fill=frameworkColor(style.webkitTextFillColor);
     if(!fill||fill[3]===0||style.textShadow!=='none'||style.backgroundClip==='text')return false;
     const layers=[];let background=null;
@@ -387,7 +388,7 @@
     }
     for(let i=layers.length-1;i>=0;i--)background=compositeColor(layers[i],background);
     const foreground=compositeColor(fill,background);
-    return frameworkContrast(foreground,background)>=3;
+    return frameworkContrast(foreground,background)>=minContrast;
   };
   let frameworkSurfaces=null;
   const frameworkAreaExposed = (rect,owner,compatibleOwners=[]) => {
@@ -476,6 +477,42 @@
       (interactive ? visibleText(element) : direct) || element.getAttribute('placeholder') ||
       element.getAttribute('title') || selected || (element.matches('input[type=submit],input[type=button]') ? element.value : ''));
   };
+  const unrelatedTransforms=new WeakMap(),transformProofs=[];
+  const boundedDecoration = element => {
+    const st=getComputedStyle(element),r=element.getBoundingClientRect();
+    if(element===target||!element.matches('img[alt=""][aria-hidden="true"]')||
+       !['presentation','none'].includes(element.getAttribute('role'))||st.pointerEvents!=='none'||
+       !element.complete||element.naturalWidth<=0||element.naturalHeight<=0||
+       ['title','aria-label','aria-labelledby','tabindex'].some(k=>element.hasAttribute(k))||
+       st.filter!=='none'||st.boxShadow!=='none'||st.clipPath!=='none'||st.maskImage!=='none'||
+       r.left<0||r.top<0||r.right>width||r.bottom>height)return null;
+    for(let p=element.parentElement;p;p=p.parentElement) {
+      const a=getComputedStyle(p);
+      if(p.matches('a,button,label,figure,[tabindex],[contenteditable=true],[role=img]')||
+         [...p.attributes].some(x=>/^on/i.test(x.name))||a.transform!=='none'||
+         (a.rotate&&a.rotate!=='none')||a.perspective!=='none'||
+         !['visible','clip'].includes(a.overflowX)||!['visible','clip'].includes(a.overflowY))return null;
+    }
+    const overlap=b=>Math.min(r.right,b.right)>Math.max(r.left,b.left)&&Math.min(r.bottom,b.bottom)>Math.max(r.top,b.top);
+    const protectedRegions=[];
+    const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    while(walker.nextNode()) {
+      const text=walker.currentNode;
+      if(!clean(text.textContent)||text.parentElement.closest('script,style,noscript,template'))continue;
+      const range=document.createRange();range.selectNodeContents(text);
+      for(const box of range.getClientRects()) {if(overlap(box))return null;protectedRegions.push([box.left,box.top,box.right,box.bottom]);}
+    }
+    const selectors=['a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]',
+      ...protected_selectors,...assertions.filter(x=>x.selector).map(x=>x.selector)];
+    for(const selector of selectors)for(const control of document.querySelectorAll(selector)) {
+      const box=control.getBoundingClientRect();if(overlap(box))return null;
+      protectedRegions.push([box.left,box.top,box.right,box.bottom]);
+    }
+    return {schema_version:'webcollect-unrelated-transform-1',bbox:[r.left,r.top,r.right,r.bottom],
+      transform:st.transform,rotate:st.rotate,protected_regions:protectedRegions,
+      relation:'explicit decorative image disjoint from every text/control/protected region',
+      pixel_exclusion_allowed:false,actions_supported:false};
+  };
   for (const element of document.querySelectorAll('body *')) {
     if (element.matches('script,style,noscript,template,svg,svg *')) continue;
     const style = getComputedStyle(element), rect = element.getBoundingClientRect();
@@ -491,7 +528,15 @@
        !['aria-label','aria-labelledby','title','placeholder'].some(k=>element.hasAttribute(k))&&
        !element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio]')&&
        !element.hasAttribute('onclick')&&style.cursor!=='pointer'&&!candidateScroll)continue;
-    axisScale(element);
+    try {axisScale(element);} catch(error) {
+      const proof=boundedDecoration(element);if(!proof)throw error;
+      if(!observer.ids.has(element))observer.ids.set(element,`e_${observer.next++}`);
+      proof.element_id=observer.ids.get(element);unrelatedTransforms.set(element,proof);transformProofs.push(proof);
+      nodes.push(element);records.push({element_id:proof.element_id,parent_id:'root',element_type:'image',native_role:'img',
+        text:'',bbox:[Math.floor(rect.left),Math.floor(rect.top),Math.ceil(rect.right),Math.ceil(rect.bottom)],
+        clickable:false,inputable:false,scrollable:false,visible:true,enabled:false,state:'default',geometry_proof:proof});
+      continue;
+    }
     const opaqueFrame=element.matches('iframe,frame');
     const clip=clipFor(element);
     const bbox = [Math.max(0,Math.floor(Math.max(rect.left,clip.left))),Math.max(0,Math.floor(Math.max(rect.top,clip.top))),
@@ -508,7 +553,8 @@
        element.hasAttribute('onclick') || style.cursor === 'pointer');
     const scrollable = /(auto|scroll)/.test(style.overflowY+style.overflowX) && (element.scrollHeight>element.clientHeight || element.scrollWidth>element.clientWidth);
     const image=element.tagName==='IMG';
-    if (!text && !inputable && !clickable && !scrollable && !image && !opaqueFrame && element !== target) continue;
+    const landmark=element.matches('main,article,form,section,aside,nav,footer,[role=main],[role=region],[role=dialog],[role=alertdialog],[role=complementary]');
+    if (!text && !inputable && !clickable && !scrollable && !image && !opaqueFrame && !landmark && element !== target) continue;
     if(image) {
       // A noninteractive image still carries real visible geometry. Retain a
       // viewport/ancestor-clipped box if any sampled point is exposed; a modal
@@ -546,7 +592,19 @@
     while(parent && !byNode.has(parent)) parent=parent.parentElement;
     records[i].parent_id=parent?byNode.get(parent):'root';
   }
+  // Chromium retargets the native number editor's selection to a collapsed
+  // boundary immediately before the focused input. A document selection of
+  // the same digits elsewhere must not be attributed to this field.
+  const numberTextSelected = input => {
+    if(document.activeElement!==input||!input.value)return false;
+    const selection=window.getSelection();
+    return !!selection&&selection.rangeCount===1&&selection.isCollapsed&&
+      selection.anchorNode===input.parentNode&&selection.focusNode===input.parentNode&&
+      input.parentNode.childNodes[selection.anchorOffset]===input&&selection.focusOffset===selection.anchorOffset&&
+      selection.toString()===input.value;
+  };
   const values = nodes.map((node,i)=>({element_id:records[i].element_id,
+    ...(node.matches('input[type="number"]')?{all_text_selected:numberTextSelected(node)}:{}),
     value: typeof node.value==='string'?node.value:null,
     display_value:node.tagName==='SELECT'?[...node.selectedOptions].map(option=>option.textContent.trim()).join(' '):(typeof node.value==='string'?node.value:null), value_visible:nativeValueVisible(node),focused:document.activeElement===node,
     choice:node.tagName==='SELECT'||node.getAttribute('role')==='combobox'||!!node.closest('.layui-form-select'),selection_start:typeof node.selectionStart==='number'?node.selectionStart:null,
@@ -678,6 +736,41 @@
         matrix,geometry,html:table.outerHTML,known_menu_rect:menuBox,source:'synchronized_browser_dom_geometry',full_viewport:true,occlusion_checked:true};
     };
   const targetIndex=nodes.indexOf(target);
+  // A large, bold caption on a switched-off button can be legible below
+  // the general prose threshold. Bind its ink and its unique group in the
+  // same viewport. This does not change the full-page text inventory.
+  const groupedButtonLabel = button => {
+    if(!button.matches('button:enabled')||button.closest('[aria-disabled="true"],[inert]'))return null;
+    const headings='legend,h1,h2,h3,h4,h5,h6,[role="heading"]';
+    let group=button.parentElement;
+    while(group&&group!==document.body&&!group.querySelector(headings))group=group.parentElement;
+    if(!group||group===document.body)return null;
+    const titles=group.querySelectorAll(headings),buttons=[...group.querySelectorAll('button')];
+    if(titles.length!==1||buttons.length<2)return null;
+    const heading=titles[0],groupText=clean(visibleText(heading)),headingRect=heading.getBoundingClientRect();
+    if(!groupText||groupText!==clean(heading.textContent)||headingRect.bottom>button.getBoundingClientRect().top||
+       !frameworkAreaExposed(headingRect,heading))return null;
+    const walker=document.createTreeWalker(button,NodeFilter.SHOW_TEXT),leaves=[];
+    for(let node=walker.nextNode();node;node=walker.nextNode())if(clean(node.textContent))leaves.push(node);
+    const text=clean(leaves[0]?.textContent);
+    if(!text||leaves.some(node=>clean(node.textContent)!==text))return null;
+    if(buttons.some(other=>other!==button&&[other,...other.querySelectorAll('*')].some(
+        node=>[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&clean(child.textContent)===text))))return null;
+    for(const node of leaves) {
+      const owner=node.parentElement,style=getComputedStyle(owner);
+      if(!owner.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||
+         parseFloat(style.fontSize)<18||Number(style.fontWeight)<600||style.textTransform!=='none'||
+         !frameworkLabelPaint(owner,style,2.2))continue;
+      const range=document.createRange();range.selectNodeContents(node);
+      const rects=[...range.getClientRects()];
+      if(rects.length!==1)continue;
+      const rect=rects[0];
+      if(!exposedRect(rect,owner,clipFor(owner,true))||!frameworkAreaExposed(rect,owner))continue;
+      return {kind:'rendered_grouped_button',text,group:groupText,
+        text_bbox:[rect.left,rect.top,rect.right,rect.bottom],group_bbox:[headingRect.left,headingRect.top,headingRect.right,headingRect.bottom]};
+    }
+    return null;
+  };
   let targetInfo=null;
   if (targetIndex>=0) {
     const e=records[targetIndex];
@@ -715,6 +808,13 @@
         label=labels[0];branch=label.parentElement===group?label:label.parentElement;
         if(!label.matches('span')||label.children.length||branch.parentElement!==group)return '';
         if(branch!==label&&(!branch.matches('.input-group-prepend,.input-group-append')||branch.children.length!==1))return '';
+      } else if(target.matches('.form-control')&&parent?.parentElement?.matches('form.form-horizontal .row,form.form-horizontal .form-group')) {
+        group=parent.parentElement;
+        if(group.children.length!==2||parent.children.length!==1||
+           [...parent.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent)))return '';
+        label=group.firstElementChild;branch=label;
+        if(label===parent||!label.matches('label.control-label,label.col-form-label')||label.children.length||
+           label.hasAttribute('for'))return '';
       } else if(parent?.matches('.layui-input-block,.layui-input-inline')&&parent.parentElement?.matches('.layui-form-item')) {
         group=parent.parentElement;
         if(parent.children.length!==1||parent.firstElementChild!==target)return '';
@@ -844,6 +944,9 @@
       if(target.tagName==='SELECT')addLabel('visible_selected_option',[...target.selectedOptions].map(o=>o.label||o.textContent).join(' '));
       else if(target.matches('input,textarea'))addLabel(target.value?'visible_native_value':'visible_placeholder',target.value||target.placeholder);
     }
+    if(!labelSources.length&&e.enabled&&canHit(coordinate)) {
+      const grouped=groupedButtonLabel(target);if(grouped)labelSources.push(grouped);
+    }
     targetInfo={element_id:e.element_id,coordinate,hit_valid:canHit(coordinate),bbox:e.bbox,text:e.text,enabled:e.enabled,
       focused:document.activeElement===target,value:typeof target.value==='string'?target.value:null,
       visible_label_evidence:labelSources,visual_target_evidence:htmlTableVisualTarget(target,coordinate)};
@@ -967,6 +1070,13 @@
     if(!image.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||r.width<=0||r.height<=0||
        r.right<=0||r.bottom<=0||r.left>=width||r.top>=height)continue;
     if(!observer.ids.has(image))observer.ids.set(image,`e_${observer.next++}`);
+    if(unrelatedTransforms.has(image)) {
+      captureImages.push({element_id:observer.ids.get(image),bbox:rawBox(image),
+        src:image.getAttribute('src')||'',current_src:image.currentSrc||'',complete:image.complete,
+        natural_width:image.naturalWidth,natural_height:image.naturalHeight,eligible:false,
+        exclusion_reasons:['transformed_image_pixels_must_remain_exact'],geometry_proof:unrelatedTransforms.get(image)});
+      continue;
+    }
     const b=rawBox(image),reasons=[],s=getComputedStyle(image),clip=clipFor(image);
     if(image.getAttribute('alt')!==''||image.getAttribute('aria-hidden')!=='true'||
        !['presentation','none'].includes(image.getAttribute('role'))||s.pointerEvents!=='none'||
@@ -1029,6 +1139,36 @@
         text_or_control_overlap:reasons.includes('overlaps_text_or_control')},
       eligible:reasons.length===0,exclusion_reasons:[...new Set(reasons)]});
   }
+  // Explicitly peripheral silent video may repaint inside its own box. This
+  // is a single-frame synchrony exception, never an action-effect proof.
+  const captureMedia=[];
+  for(const video of document.querySelectorAll('aside video,[role="complementary"] video,video[aria-hidden="true"]')) {
+    if(!video.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+    const b=rawBox(video),c=getComputedStyle(video),clip=clipFor(video);
+    const controls=[...document.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]')];
+    const guards=[...protectedNodes,...controls].filter(n=>n!==video&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
+    const guardBoxes=guards.map(rawBox).concat(textRects.map(r=>Array.isArray(r)?r:[r.left,r.top,r.right,r.bottom]));
+    const unknownPaint=[...document.querySelectorAll('*')].some(n=>{
+      if(n===video||n.contains(video)||!n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
+      const s=getComputedStyle(n);
+      return intersects(b,rawBox(n))||s.boxShadow!=='none'||s.filter!=='none'||!!n.shadowRoot||n instanceof SVGElement||
+        !['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(n,p).content));
+    });
+    const hits=[];
+    for(const x of [b[0]+.5,(b[0]+b[2])/2,b[2]-.5])for(const y of [b[1]+.5,(b[1]+b[3])/2,b[3]-.5])
+      hits.push(document.elementFromPoint(x,y)===video);
+    const eligible=!unknownPaint&&b.every(Number.isInteger)&&b[0]>=0&&b[1]>=0&&b[2]<=width&&b[3]<=height&&
+      b[0]>=clip.left&&b[1]>=clip.top&&b[2]<=clip.right&&b[3]<=clip.bottom&&
+      video!==target&&!video.controls&&!video.hasAttribute('tabindex')&&!video.hasAttribute('onclick')&&
+      !video.closest('a,button,label,figure,[contenteditable=true]')&&video.readyState>=2&&
+      c.transform==='none'&&c.filter==='none'&&c.boxShadow==='none'&&c.borderRadius==='0px'&&
+      !video.hasAttribute('title')&&!video.hasAttribute('aria-label')&&!video.hasAttribute('aria-labelledby')&&
+      guardBoxes.every(box=>!intersects(b,box))&&hits.every(Boolean);
+    captureMedia.push({kind:'peripheral_video',bbox:b,src:video.currentSrc,ready:video.readyState>=2,
+      eligible,proof:{schema_version:'webcollect-peripheral-video-1',peripheral:true,
+        controls:video.controls,protected_boxes:guardBoxes,hit_samples:hits,
+        geometry_and_style_clear:!!eligible},actions_supported:false});
+  }
   // Conservative paint evidence: plain integral non-task border boxes only.
   // Text, task targets, focused/selected controls and unknown paint stay exact.
   const paintBorders=[];
@@ -1072,7 +1212,7 @@
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
-    capture_images:captureImages,paint_borders:paintBorders,capture_controls:captureControls,
+    unrelated_transform_proofs:transformProofs, capture_images:captureImages,capture_media:captureMedia,paint_borders:paintBorders,capture_controls:captureControls,
     document_identity:{url_without_fragment:location.href.split('#')[0],performance_time_origin:performance.timeOrigin},
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,

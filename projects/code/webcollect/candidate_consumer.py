@@ -35,6 +35,8 @@ def guard_request_scope(ledger, uri):
         requests = con.execute("""SELECT m.id,m.state,m.error,j.payload FROM model_requests m
             LEFT JOIN jobs j ON j.id=m.job_id WHERE m.state IN ('reserved','unknown')""").fetchall()
         for row in requests:
+            if row['state'] == 'unknown' and ledger.timeout_retry_answered(con, row['id']):
+                continue  # Original UNKNOWN usage remains; its bounded retry supplied a response.
             payload = json.loads(row['payload']) if row['payload'] else {}
             site = payload.get('site_uri')
             if (row['state'] == 'reserved' or not site
@@ -125,6 +127,30 @@ def _original_attempts(claim):
         return rows
 
 
+def unverified_original_actions(attempt):
+    """Read old dispatch gaps conservatively; never reinterpret them as zero actions."""
+    references=json.loads(attempt.get('evidence_json') or '[]')
+    for ref in references:
+        if Path(ref.get('path','')).name != 'raw-receipt.json':
+            continue
+        verify_evidence([ref])
+        raw_root=Path(ref['path']).parent
+        receipt=load_json(ref['path'])
+        verify_evidence([receipt['terminal']])
+        if load_json(receipt['terminal']['path']).get('unknown'):
+            yield receipt['terminal']
+            continue
+        from .postprocess import session_record
+        record=session_record(raw_root)
+        root=raw_root.parent
+        for path in sorted(root.glob('step_*.json')):
+            raw=load_json(path)
+            if (raw.get('dispatched') is True and raw.get('action_executed') is True
+                    and raw.get('phase')=='post_dispatch' and raw.get('react')
+                    and raw['react'].get('after_observation_id') not in record['observations']):
+                yield {'path':str(path),'sha256':file_sha(path)}
+
+
 def verified_saved(claim):
     """Only RuntimeStore committed pending attempts with a complete receipt qualify."""
     found=[]
@@ -148,7 +174,9 @@ def verified_saved(claim):
                 p=base/name
                 if Path(name).is_absolute() or p.is_symlink() or not p.resolve().is_relative_to(base.resolve()) or file_sha(p)!=digest:
                     raise ValueError('Saved bytes changed')
+        stop_details = saved.get('raw_execution', {}).get('stop_details')
         found.append({'registry':claim['binding']['registry'],'attempt_id':row['attempt_id'],'task_key':row['task_key'],
+            **({'stop_details':stop_details} if stop_details else {}),
             'sample_id':row['sample_id'],'save_receipt':receipt,'result_location':str(sample), 'scope_id':row['scope_id']})
     if len(found)>1: raise ValueError('More than one saved result for candidate claim; reconciliation required')
     return found[0] if found else None
@@ -224,21 +252,26 @@ def _entry_hints(claim):
     from site_planner.site_pool import host_identity
     from site_planner.qualification import CANONICAL_CATEGORIES
     snapshot = claim['snapshot']
-    category = '综合'
+    category = 'UNKNOWN'
     category_proven = False
     name = None
     for source in claim.get('sources') or []:
         hint = source.get('category_hint')
-        if hint in CANONICAL_CATEGORIES and category == '综合':
+        if hint in CANONICAL_CATEGORIES and category == 'UNKNOWN':
             category = hint
             category_proven = True
         if name is None and source.get('application_hint'):
             name = source['application_hint']
-    return {'category': category, 'name': name or host_identity(snapshot['entry_url']),
+    from site_planner.entry_selection import confirmed_category
+    confirmed = confirmed_category(claim.get('sources') or [])
+    if confirmed is not None:
+        category_proven = confirmed in CANONICAL_CATEGORIES
+        category = confirmed if category_proven else 'UNKNOWN'
+    return {'category': category, 'name': host_identity(snapshot['entry_url']),
             'category_proven': category_proven}
 
 
-def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=None):
+def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=None, pool=None, before_claim=False):
     """Validate the original local execution scope before taking a candidate."""
     from .current_chain import read_chain_history, assert_registry_scope, current_evidence_roots
     from .runtime import validate_policy
@@ -250,7 +283,14 @@ def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=No
         paths[key] = str(path.resolve())
     _, scope = read_chain_history(paths['history_set'])
     assert_registry_scope(scope, paths['registry'])
-    if not any(Path(paths['output']).is_relative_to(p) for p in current_evidence_roots(scope)):
+    from .current_chain import check_project_guard, check_project_pool
+    check_project_guard(scope, ledger.config.get('site_failure_guard'), ledger.path, role='consumer')
+    if pool is not None:
+        check_project_pool(scope, pool.pool)
+    if scope.get('candidate_project'):
+        from .current_chain import assert_current_result_path
+        assert_current_result_path(scope, paths['output'])
+    elif not any(Path(paths['output']).is_relative_to(p) for p in current_evidence_roots(scope)):
         raise ValueError('Consumer evidence must stay inside the original current-chain roots')
     supplied = validate_policy(load_json(paths['policy']))
     if ledger.config.get('site_failure_guard') != supplied.get('site_failure_guard'):
@@ -264,11 +304,6 @@ def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=No
         row = con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?', (supplied['campaign_id'],)).fetchone()
         if not row or json.loads(row[0]) != supplied:
             raise ValueError('Consumer must use the exact original authorized campaign policy')
-        attempts = con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=?', (supplied['campaign_id'],)).fetchone()[0]
-        pending = con.execute("SELECT COUNT(*) FROM m4_tasks WHERE campaign_id=? AND status='collected_pending_review'", (supplied['campaign_id'],)).fetchone()[0]
-        if attempts >= supplied['attempt_cap'] or pending >= supplied['pending_review_cap']:
-            from .batch_core import BudgetStop
-            raise BudgetStop('Original campaign attempt/pending limit reached before claim')
     return paths
 
 
@@ -355,7 +390,8 @@ async def entry_session(ledger, pool, claim, root):
     except BaseException as error:
         if not observed:
             failure = exclusive(root/'first-observation-failure.json', {'job_id':jid, 'stage':'entry_observation',
-                'error_type':type(error).__name__, 'reason':str(error), 'accepted_as_formal_frame':False})
+                'error_type':type(error).__name__, 'reason':str(error), 'accepted_as_formal_frame':False,
+                'capture':getattr(error,'capture',None)})
             visits = [v for v in ledger.visits() if v['job_id']==jid]
             # Navigation already records its own failure or UNKNOWN in the ledger.
             # A local capture, identity or file error does not establish a site failure.
@@ -367,7 +403,36 @@ async def entry_session(ledger, pool, claim, root):
         raise
 
 
-async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None):
+def release_observation(ledger, pool, claim):
+    """Finish a settled observation-only claim while leaving the candidate pending."""
+    from .candidate_feedback import _frame
+    from .planning import object_sha256
+    current=pool.get_claim(claim['claim_id'])
+    binding=current.get('binding') or {}
+    if not binding.get('first_frame_only') or current['stage']!='observation':
+        raise ValueError('Only an explicit observation-only claim can be released')
+    if any(binding.get(k) for k in ('attempt_id','planning_jobs','sample_id')):
+        raise ValueError('Formal execution cannot be released as observation-only')
+    with ledger.connect() as con:
+        jobs=con.execute("SELECT * FROM jobs WHERE kind='candidate-observation' AND json_extract(payload,'$.claim_id')=?",(claim['claim_id'],)).fetchall()
+        if len(jobs)!=1:raise ValueError('One original observation job required')
+        job=dict(jobs[0]);visits=[dict(r) for r in con.execute('SELECT * FROM top_level_visits WHERE job_id=? ORDER BY dispatched_at,id',(job['id'],))]
+        if len(visits)!=1 or visits[0]['state']!='succeeded':
+            raise ValueError('Observation visit must be settled successfully')
+        other=con.execute("SELECT 1 FROM jobs WHERE id!=? AND (json_extract(payload,'$.claim_id')=? OR json_extract(payload,'$.candidate_binding.claim_id')=?) LIMIT 1",(job['id'],claim['claim_id'],claim['claim_id'])).fetchone()
+        if other:raise ValueError('Claim has other work; retain original state')
+    valid,availability,evidence=_frame(job,visits[0],claim['snapshot']['entry_url'],claim.get('application_registry'))
+    if not valid:raise ValueError('Verified original first frame required before release')
+    with pool.transaction() as con:
+        pool._fence(con,claim)
+        con.execute("UPDATE candidate_claims SET state='observed',stage='first_frame_only_complete',reason=?,updated=? WHERE claim_id=?",
+                    ('Settled observation-only receipt; candidate remains available for formal consumption',time.time(),claim['claim_id']))
+        con.execute("UPDATE data_candidates SET state='pending' WHERE candidate_id=?",(claim['candidate_id'],))
+        pool.event(con,claim['candidate_id'],claim['claim_id'],'observation_complete',{'ledger':str(ledger.path),'job_id':job['id'],'visit_id':visits[0]['id'],'evidence':evidence,'availability':availability})
+    return {'state':'observed','candidate_state':'pending','job_id':job['id'],'evidence':evidence}
+
+
+async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False):
     """Exactly one original claim, one goal and at most one saved result."""
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
     current=pool.get_claim(claim['claim_id'])
@@ -376,7 +441,7 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     if current['state']!='consuming': return {'state':current['state'],'dispatched':False}
     with pool.transaction() as con: pool._fence(con,claim)
     if current['stage']!='claimed': return finish_or_reconcile(pool,claim)
-    paths = startup_check(ledger, output=output, registry=registry, policy=policy, history_set=history_set, qc_policy=qc_policy)
+    paths = startup_check(ledger, output=output, registry=registry, policy=policy, history_set=history_set, qc_policy=qc_policy, pool=pool)
     output, registry, policy, history_set = (paths[k] for k in ('output','registry','policy','history_set'))
     supplied_policy = load_json(policy)
     isolated_unknown = guard_request_scope(ledger, claim['snapshot']['entry_url'])
@@ -407,13 +472,20 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
         session = None
         if snapshot.get('schema_version') == 'webcollect-data-candidate-2':
             session = await stack.enter_async_context(entry_session(ledger, pool, claim, root))
+            from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
+            route = first_frame_disposition(load_json(session['anchor']['state']['path']))
+            if route:
+                disposition, reason = route
+                pool.record_disposition(claim, disposition=disposition, reason=reason, stage='first_frame',
+                    evidence=list(session['anchor'].values()), policy_version=ROUTING_VERSION)
+                return {'state':'failed', 'disposition':disposition, 'reason':reason, 'formal_attempts':0}
             hints = _entry_hints(claim)
             record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
                 category=hints['category'], name=hints['name'])
             pool.pool.record({'schema_version':'webcollect-site-discovery-1','origin':'codex_session',
                 'run_id':ledger.config['run_id'],'event_id':'candidate-landing/'+claim['claim_id'],
                 'uri':record['site_uri'],'name':hints['name'],
-                'category_hint':hints['category'] if hints['category']!='综合' else 'UNKNOWN',
+                'category_hint':hints['category'],
                 'source_refs':[claim_ref,*session['anchor'].values()], 'stage':'consumer_observation'})
             catalog = root/'catalog.json'
             exclusive(catalog, {'schema_version':'webcollect-capability-catalog-1','mode':ledger.config['mode'],'records':[record]})
@@ -422,15 +494,11 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
             identity(catalog, identities, registry=registry, candidate_observation=True)
             pool.stage(claim, 'planning', {'catalog':str(catalog)})
             stage = 'planning'
-            if not hints['category_proven']:
-                reason = 'Entry category UNKNOWN; display fallback cannot consume a formal category quota'
-                pool.finish(claim, state='failed', stage=stage, reason=reason)
-                return {'state':'failed', 'stage':stage, 'reason':reason, 'formal_attempts':0}
             generated = await asyncio.to_thread(generate, ledger, catalog, root/'planning',
                 generator='react-url', history_registry=registry, history_set=history_set,
                 react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
                 react_site_category=hints['category'], react_app_name=hints['name'],
-                react_candidate={'claim':claim,'claim_reference':claim_ref})
+                react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles})
             catalog = root/'planning/catalog.json'
         else:
             anchor=await first_observation(ledger,claim,root)
@@ -464,17 +532,27 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
         pool.stage(claim,'save_reconciliation',{'execution_result':execution})
         result=finish_or_reconcile(pool,claim)
         if not result.get('saved'):
+            stop = execution.get('collection', {}).get('resource_stop')
+            if stop and ledger.config.get('site_failure_guard',{}).get('dispatch_rules'):
+                pool.finish(claim,state='reconcile',stage='execution',reason=canonical(stop))
+                return {'state':'reconcile','execution':execution,'resource_stop':stop}
             uncertain=any(r['status'] in ('reserved','running','interrupted') or r.get('failure_class') in ('unknown','interrupted') for r,t in _original_attempts(pool.get_claim(claim['claim_id'])))
             pool.finish(claim,state='reconcile' if uncertain else 'failed',stage='execution',reason=canonical(execution))
             result={'state':'reconcile' if uncertain else 'failed','execution':execution}
         return result
     async def work():
         async with AsyncExitStack() as stack:
-            return await work_in(stack)
+            try:
+                return await work_in(stack)
+            finally:
+                keeper.cancel()
+                await asyncio.gather(keeper, return_exceptions=True)
     keeper=asyncio.create_task(renew()); working=asyncio.create_task(work())
     try:
         done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED)
-        if keeper in done: keeper.result(); raise ValueError('Candidate heartbeat stopped')
+        if keeper in done and not keeper.cancelled():
+            keeper.result()
+            raise ValueError('Candidate heartbeat stopped')
         return await working
     except BaseException as error:
         # Cross-process failure is conservative. Original requests/attempts are never reset.
@@ -492,35 +570,101 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
         await asyncio.gather(keeper,working,return_exceptions=True)
 
 
-async def run(pool, ledger, *, worker_id, request_prefix, limit=1, categories=None, application_id=None,
-              protocols=None, poll_seconds=None, producer_batch=None, **kwargs):
-    if type(limit)is not int or limit<1: raise ValueError('Explicit positive processing limit required')
+def _cohort_rows(path, pool, registry, batch):
+    cohort = load_json(path)
+    if cohort.get('schema_version') != 'webcollect-validation-cohort-1':
+        raise ValueError('Unsupported frozen validation cohort')
+    verify_evidence([cohort['source_scope']])
+    scope = load_json(cohort['source_scope']['path'])
+    if (scope['batch'] != cohort['producer_batch'] or batch not in (None, scope['batch'])
+            or any(Path(v).resolve() != pool.path for v in (scope['pool'],cohort['pool']))
+            or any(Path(v).resolve() != Path(registry).resolve() for v in (scope['registry'],cohort['registry']))):
+        raise ValueError('Frozen cohort belongs to another project or batch')
+    rows = cohort['selected']
+    if (not rows or cohort['denominator'] != len(rows)
+            or [r['order'] for r in rows] != list(range(1, len(rows) + 1))
+            or len({r['candidate_id'] for r in rows}) != len(rows)):
+        raise ValueError('Invalid frozen candidate list')
+    return cohort['producer_batch'], rows
+
+
+async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
+              protocols=None, poll_seconds=None, producer_batch=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, **kwargs):
+    rows = None
+    if cohort is not None:
+        if any((categories, application_id, recovery_version, target is not None, poll_seconds is not None)) or protocols not in (None, ('webcollect-data-candidate-2',)):
+            raise ValueError('Frozen cohort defines its own selection and fixed denominator')
+        producer_batch, rows = _cohort_rows(cohort, pool, kwargs['registry'], producer_batch)
+        protocols = ('webcollect-data-candidate-2',)
+    skipped = []
+    if limit is not None and (type(limit) is not int or limit < 1):
+        raise ValueError('Processing limit must be a positive integer')
+    if limit is None and not producer_batch:
+        limit = 1  # The unscoped entry point claims a single candidate.
     if poll_seconds is not None and (type(poll_seconds) is not int or poll_seconds < 1):
         raise ValueError('Polling interval must be a positive number of seconds')
     results=[]
+    if target is not None and (type(target) is not int or target < 1 or not producer_batch):
+        raise ValueError('Result target requires a positive integer and explicit producer batch')
+    if target_basis not in ('saved','qualified'):
+        raise ValueError('Target basis must be saved or qualified')
+    if recovery_version and not producer_batch:
+        raise ValueError('Recovery requires an explicit producer batch')
+    from .candidate_batch import report, record_outcome
+    stop_reason = 'processing_limit'
+    stop_details = None
     poll = 0
-    while len(results) < limit:
-        kwargs.update(startup_check(ledger, **kwargs))
-        if poll_seconds is not None:
-            ledger.remaining_seconds()
-        if producer_batch:
-            # Known application-local holds are checked again for the actual candidate.
-            guard_request_scope(ledger, None)
+    while limit is None or len(results) < limit:
+        if rows is not None and poll == len(rows):
+            stop_reason = 'cohort_exhausted'
+            break
+        if target is not None and report(pool, producer_batch, target=target, basis=target_basis)['shortfall'] == 0:
+            stop_reason = 'target_reached'
+            break
+        try:
+            checked = startup_check(ledger, pool=pool, before_claim=True, **kwargs)
+            if producer_batch:
+                guard_request_scope(ledger, None)
+        except (BudgetStop, OutcomeUnknown) as error:
+            if target is None and rows is None:
+                raise
+            stop_reason = 'resource_pause' if isinstance(error, BudgetStop) else 'account_reconciliation'
+            stop_details = {'error_type':type(error).__name__, 'reason':str(error)}
+            break
+        if 'resource_stop' in checked:
+            if target is None and rows is None:
+                results.append({'state':'paused', **checked})
+            stop_reason = 'resource_pause'
+            stop_details = checked['resource_stop']
+            break
+        kwargs.update(checked)
+        selected = rows[poll] if rows is not None else None
         claim=pool.claim_next(worker_id,f'{request_prefix}/{poll}',categories=categories,application_id=application_id,
-                              protocols=protocols, **({'producer_batch': producer_batch} if producer_batch else {}))
+                              protocols=protocols, **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
+                              **({'producer_batch': producer_batch} if producer_batch else {}),
+                              **({'recovery_version':recovery_version} if recovery_version else {}))
         poll += 1
+        if selected and claim['state'] in ('EMPTY','ALREADY_CLAIMED'):
+            skipped.append({'candidate_id':selected['candidate_id'],'reason':claim['state']})
+            continue
         if claim['state']=='EMPTY':
-            if producer_batch and pool.producer_batch_drained(producer_batch):
+            if producer_batch and pool.producer_batch_drained(producer_batch, **({'recovery_version':recovery_version} if recovery_version else {})):
+                stop_reason = 'candidates_exhausted'
                 break
             if poll_seconds is None:
-                results.append(claim)
+                if target is None: results.append(claim)
+                stop_reason = 'inventory_empty_producer_open'
                 break
-            await asyncio.sleep(min(poll_seconds, ledger.remaining_seconds()))
+            await asyncio.sleep(poll_seconds)
             continue
         try:
-            result=await consume(pool,claim,ledger,**kwargs)
-        except BudgetStop:
-            raise
+            result=await consume(pool,claim,ledger,**kwargs,**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+        except BudgetStop as error:
+            if target is None and rows is None: raise
+            current = pool.get_claim(claim['claim_id'])
+            if current['state'] == 'consuming':
+                pool.finish(claim,state='reconcile',stage=current['stage'],reason=str(error))
+            result = {'state':'reconcile','resource_stop':{'reason':str(error)}}
         except Exception as error:
             if not producer_batch:
                 raise
@@ -532,14 +676,37 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=1, categories=No
             if current['state'] not in ('failed','reconcile'):
                 raise
             result = {'state':current['state'], 'stage':current['stage'], 'reason':current.get('reason') or str(error)}
+        if producer_batch:
+            record_outcome(pool, claim, result)
         results.append({**result, 'claim_id':claim['claim_id'], 'candidate_id':claim['candidate_id']} if producer_batch else result)
-        if result['state']=='reconcile' and not producer_batch: break
-    return results
+        if result.get('resource_stop') or (result['state']=='reconcile' and not producer_batch):
+            stop_reason = 'resource_pause' if result.get('resource_stop') else 'account_reconciliation'
+            break
+    if rows is not None:
+        return {'denominator':len(rows), 'processed':len(results), 'results':results, 'skipped':skipped,
+                'unexamined':len(rows)-poll, 'stop_reason':stop_reason, 'stop_details':stop_details}
+    if target is None:
+        return results
+    summary = report(pool, producer_batch, target=target, basis=target_basis)
+    if summary['shortfall'] == 0: stop_reason = 'target_reached'
+    elif target_basis == 'qualified' and summary['pending_review'] and stop_reason == 'candidates_exhausted':
+        stop_reason = 'awaiting_review'
+    elif summary['states'].get('reconcile') and stop_reason == 'candidates_exhausted':
+        stop_reason = 'account_reconciliation'
+    return {'processing_limit':limit, 'processed':len(results), 'stop_reason':stop_reason, 'stop_details':stop_details, 'results':results, 'summary':summary}
 
 
-def retry(pool, candidate_id, *, reason):
+def retry(pool, candidate_id, *, reason, recovery=None):
     """Explicit retry only after reconciling original requests, visits and saves."""
     if not reason: raise ValueError('Explicit retry reason required')
+    if recovery:
+        with pool.pool.connect() as con:
+            for r in con.execute("SELECT record FROM candidate_events WHERE candidate_id=? AND kind='disposition'", (candidate_id,)):
+                previous = json.loads(r[0])
+                if previous.get('fix_version') == recovery['fix_version']:
+                    if any(previous.get(k) != v for k, v in recovery.items()):
+                        raise ValueError('Repair version already bound to a different recovery selection')
+                    return {'candidate_id':candidate_id,'state':'already_recovered','dispatched':False}
     from .site_pool_sync import sync_candidate_qc
     with pool.pool.connect() as con:
         rows=[pool._claim(r) for r in con.execute('SELECT * FROM candidate_claims WHERE candidate_id=? ORDER BY created',(candidate_id,))]
@@ -551,6 +718,8 @@ def retry(pool, candidate_id, *, reason):
     binding=original.get('binding') or {}
     if binding.get('registry'): sync_candidate_qc(pool.path,binding['registry'])
     for row,task in _original_attempts(original):
+        if list(unverified_original_actions(row)):
+            raise OutcomeUnknown('Original dispatched action has no verified after observation; no retry or replacement attempt')
         if row['status'] in ('reserved','running','interrupted') or row.get('failure_class') in ('unknown','interrupted'):
             raise ValueError('Original runtime attempt unresolved; no retry')
     if binding.get('ledger'):
@@ -570,6 +739,19 @@ def retry(pool, candidate_id, *, reason):
             from .site_failure_stop import SiteFailureStore
             SiteFailureStore(config['site_failure_guard']).guard(original['snapshot']['entry_url'])
     with pool.transaction() as con:
+        disposition = pool.disposition(con, candidate_id)
+        if recovery:
+            prior = con.execute("SELECT record FROM candidate_events WHERE candidate_id=? AND kind='disposition'", (candidate_id,)).fetchall()
+            if any(json.loads(r[0]).get('fix_version') == recovery['fix_version'] for r in prior):
+                return {'candidate_id':candidate_id,'state':'already_recovered','dispatched':False}
+            if not disposition or disposition['disposition'] not in ('optimize','reconcile','paused') or disposition['reason'] not in recovery['reasons']:
+                raise ValueError('Candidate does not match the selected repair reason')
+            verify_evidence(disposition['evidence'])
+        elif disposition:
+            raise ValueError('Disposition requires targeted recovery or isolated reprocessing')
+        latest = con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC,rowid DESC LIMIT 1', (candidate_id,)).fetchone()
+        if latest[0] != original['claim_id']:
+            raise ValueError('Candidate gained a newer attempt during reconciliation; inspect original accounts')
         current=con.execute('SELECT state FROM data_candidates WHERE candidate_id=?',(candidate_id,)).fetchone()
         result=con.execute('SELECT qc_state FROM candidate_results WHERE candidate_id=? AND effective=1',(candidate_id,)).fetchone()
         if current['state']=='consuming': raise ValueError('Active holder cannot be retried')
@@ -579,6 +761,9 @@ def retry(pool, candidate_id, *, reason):
         con.execute('UPDATE candidate_results SET effective=0 WHERE candidate_id=?',(candidate_id,))
         con.execute("UPDATE data_candidates SET state='pending' WHERE candidate_id=?",(candidate_id,))
         pool.event(con,candidate_id,original['claim_id'],'explicit_retry',{'reason':reason,'prior_state':current['state']})
+        if recovery:
+            pool.event(con,candidate_id,original['claim_id'],'disposition',
+                {**disposition, **recovery, 'disposition':'recovery_ready','original_disposition':disposition})
     return {'candidate_id':candidate_id,'state':'pending'}
 
 
@@ -616,8 +801,13 @@ def main(argv=None):
     reconcile=sub.add_parser('reconcile'); reconcile.add_argument('--claim-id',required=True)
     runp=sub.add_parser('run')
     for name in ('config','ledger','output','registry','policy','history-set','worker-id','request-prefix'): runp.add_argument('--'+name,required=True)
-    runp.add_argument('--limit',type=int,default=1); runp.add_argument('--category',action='append'); runp.add_argument('--application-id'); runp.add_argument('--qc-policy')
-    runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims within the original runtime window; default exits on EMPTY')
+    runp.add_argument('--limit',type=int); runp.add_argument('--category',action='append'); runp.add_argument('--application-id'); runp.add_argument('--qc-policy')
+    runp.add_argument('--cohort',type=Path,help='Visit only never-claimed members of the frozen validation cohort, in order')
+    runp.add_argument('--skip-wechat-articles', action='store_true', help='Record observed WeChat article links and skip them for this entry run')
+    runp.add_argument('--target',type=int,help='Receipt-counted result target, separate from --limit')
+    runp.add_argument('--target-basis',choices=('saved','qualified'),default='saved')
+    runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
+    runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default exits on EMPTY')
     runp.add_argument('--producer-batch',help='Consume only newly published V2 rows from this producer batch; stop when its report is committed and its queue is empty')
     runp.add_argument('--protocol',choices=['legacy','entry'],help='legacy=webcollect-data-candidate-1 only (default); entry declares webcollect-data-candidate-2')
     import sys
@@ -630,16 +820,37 @@ def main(argv=None):
             argv = [value] + argv[:i] + argv[i+1:]
             break
     a=p.parse_args(argv); pool=CandidatePool(a.pool)
-    if a.command=='list': result={'records':pool.rows(protocols=('webcollect-data-candidate-2',)
-        if a.protocol=='entry' else None),'statistics':statistics(pool)}
+    if a.command=='list':
+        records=pool.rows(protocols=('webcollect-data-candidate-2',) if a.protocol=='entry' else None)
+        if a.protocol=='entry':
+            from .current_chain import POOL_CHECKPOINT
+            marker=pool.pool.checkpoint(*POOL_CHECKPOINT)
+            if marker:
+                from .candidate_accounting import build_report
+                scope=load_json(Path(marker['path']).parent.parent/'scope.json')
+                if Path(scope['pool']).resolve()!=pool.path:
+                    raise ValueError('Candidate list scope belongs to a different pool')
+                details={r['candidate_id']:r for r in build_report(scope)['candidates']}
+                for r in records:
+                    detail=details[r['candidate_id']]
+                    r.update(discovery_tokens=detail['discovery_tokens'],consumer_result=detail['consumer_result'])
+        result={'records':records,'statistics':statistics(pool)}
     elif a.command=='retry': result=retry(pool,a.candidate_id,reason=a.reason)
     elif a.command=='claim': result=pool.claim_next(a.worker_id,a.request_id,
         protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None)
     elif a.command=='reconcile': result=finish_or_reconcile(pool,pool.get_claim(a.claim_id),reconciliation=True)
     else:
-        ledger=BatchLedger(a.ledger,load_json(a.config))
-        result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,
-            categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        config = load_json(a.config)
+        guard = config.get('site_failure_guard', {})
+        new_project = 'dispatch_rules' in guard
+        if new_project:
+            from .current_chain import read_chain_scope, check_project_pool, check_project_guard
+            scope = read_chain_scope(Path(a.history_set).absolute())
+            check_project_pool(scope, pool.pool)
+            check_project_guard(scope, guard, a.ledger, role='consumer')
+        ledger=BatchLedger(a.ledger,config,initialize=new_project)
+        result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+            categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
             protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None))
     print(json.dumps(result,ensure_ascii=False))
 

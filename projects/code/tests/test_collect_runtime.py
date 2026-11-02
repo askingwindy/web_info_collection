@@ -259,7 +259,9 @@ class CollectorIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.policy_path.write_text(json.dumps({'baseline_category_counts': {},
             'resource_root': str(self.output.parent), 'max_output_bytes': 1}))
         with patch('webcollect.collect.collect_one', self.fake_collect):
-            stopped = await self.run_collector()
+            from types import SimpleNamespace
+            with patch('shutil.disk_usage',return_value=SimpleNamespace(free=0)):
+                stopped = await self.run_collector()
             self.assertEqual(stopped['actual_attempts'], 0)
             self.assertEqual(stopped['reserved_allocations'], 0)
             self.assertEqual(self.executed, [])
@@ -268,8 +270,7 @@ class CollectorIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(before['scope']['state'], 'paused')
             self.assertTrue(any(row['event_type']=='resource_checkpoint' and row['payload']['status']=='STOP'
                                 for row in before['events']))
-            store.update_policy({'max_output_bytes': 10000000}, 'Synthetic test explicit storage budget adjustment')
-            store.set_scope_paused(False, 'Synthetic operator verified storage allowance')
+            store.set_scope_paused(False, 'Synthetic disk space restored')
             result = await self.run_collector(resume=True)
         self.assertEqual(result['collected'], 1)
         self.assertEqual(result['actual_attempts'], 1)

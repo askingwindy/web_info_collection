@@ -1,4 +1,5 @@
 """Category-only GLM discovery; durable stages and evidence, no collection dispatch."""
+from itertools import count
 import asyncio
 import json
 from pathlib import Path
@@ -55,8 +56,32 @@ def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), outp
 
 
 
-def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, reasoning_effort='low'):
+class SettledSelectionRejected(ValueError):
+    def __init__(self,job_id,request_ids):
+        super().__init__('Settled provider response did not satisfy the entry tool protocol')
+        self.receipt={'job_id':job_id,'request_ids':request_ids,'result':'invalid_response'}
+
+
+def _raise_settled_selection(ledger,jid):
+    if not ledger.producer_policy:
+        return
+    with ledger.connect() as con:
+        rows=con.execute("SELECT id,state,usage FROM model_requests WHERE job_id=? ORDER BY started,id",(jid,)).fetchall()
+    if rows and all(r['state']=='invalid_response' and r['usage'] for r in rows):
+        raise SettledSelectionRejected(jid,[r['id'] for r in rows])
+
+
+def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, reasoning_effort='low', isolated_requests=()):
     """One durable selection tool call, without a follow-up completion to ack IO."""
+    if isolated_requests:
+        from .producer_authority import isolation_host
+        decisions = (ledger.producer_policy or {}).get('deferred', {})
+        if purpose != 'ai-candidate-entry-tool-1' or not set(isolated_requests) <= decisions.keys():
+            raise OutcomeUnknown('Source isolation requires a decision on this producer ledger')
+        registry = (ledger.config.get('site_failure_guard') or {}).get('application_registry')
+        excluded = {isolation_host(uri,registry) for rid in isolated_requests for uri in decisions[rid]['source_urls']}
+        if not payload.get('sources') or any(isolation_host(s['uri'],registry) in excluded for s in payload['sources']):
+            raise OutcomeUnknown('This selection includes an original unresolved source')
     frozen = {'protocol': 'native-tool-1', 'input': payload, 'tools': tools,
               'system': system, 'reasoning_effort': reasoning_effort}
     jid = ledger.enqueue(purpose, frozen)
@@ -64,9 +89,13 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
     if old['state'] == 'done':
         return jid, old['result']
     if old['state'] != 'queued' or old['attempts']:
+        if old['state']=='review_required':
+            _raise_settled_selection(ledger,jid)
         raise OutcomeUnknown('Original tool selection unresolved; no replacement: ' + jid)
     with ledger.connect() as con:
-        if con.execute("SELECT 1 FROM model_requests WHERE state IN ('reserved','unknown') LIMIT 1").fetchone():
+        if con.execute("SELECT 1 FROM model_requests WHERE state='reserved' OR "
+                       "(state='unknown' AND id NOT IN (SELECT value FROM json_each(?))) LIMIT 1",
+                       (json.dumps(list(isolated_requests)),)).fetchone():
             raise OutcomeUnknown('Original model request unresolved; no new entry tool dispatch')
     job = ledger.claim(purpose, job_id=jid)
     if not job:
@@ -79,6 +108,8 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
         return jid, result
     except BaseException as error:
         ledger.finish(job, 'review_required', error=type(error).__name__)
+        if isinstance(error,ValueError):
+            _raise_settled_selection(ledger,jid)
         raise
 
 def selection_job_id(payload):
@@ -248,9 +279,10 @@ async def assess_hit(pool, ledger, gateway, browser, run_id, hit, parent, key, o
 
 
 async def _discover_legacy(config, *, pool_path, ledger_path, output, categories, target=10,
-                      per_category=2, max_rounds=3, max_searches=20, search_engine='search_std', unresolved_selection_decision=None):
+                      per_category=2, max_rounds=None, max_searches=None, search_engine='search_std', unresolved_selection_decision=None):
     if (not categories or len(categories) != len(set(categories)) or any(c not in CANONICAL_CATEGORIES for c in categories)
-            or any(type(n) is not int or n < 1 for n in (target, per_category, max_rounds, max_searches))
+            or any(type(n) is not int or n < 1 for n in (target, per_category))
+            or any(type(n) is not int or n < 1 for n in (max_rounds, max_searches) if n is not None)
             or target != len(categories) * per_category):
         raise ValueError('Canonical unique categories and target == categories * per_category required')
     if search_engine not in ('search_std', 'search_pro'):
@@ -281,7 +313,8 @@ async def _discover_legacy(config, *, pool_path, ledger_path, output, categories
     save_json(output / 'initial-input.json', initial)
     try:
         async with DiscoveryBrowser(pool, ledger, run_id, output) as browser:
-            for round_number in range(max_rounds):
+            for round_number in count() if max_rounds is None else range(max_rounds):
+                previous = run_stats(pool, run_id, baseline)['confirmed_categories']
                 for parent in categories:
                     stats = run_stats(pool, run_id, baseline)
                     if stats['confirmed_categories'].get(parent, 0) >= per_category:
@@ -290,7 +323,7 @@ async def _discover_legacy(config, *, pool_path, ledger_path, output, categories
                     plan_input = pool.checkpoint(run_id, round_key + '/plan-input')
                     if plan_input is None:
                         with pool.connect() as con:
-                            if con.execute("SELECT COUNT(*) FROM tool_requests WHERE run_id=? AND kind='search'", (run_id,)).fetchone()[0] >= max_searches:
+                            if max_searches is not None and con.execute("SELECT COUNT(*) FROM tool_requests WHERE run_id=? AND kind='search'", (run_id,)).fetchone()[0] >= max_searches:
                                 raise BudgetStop('Discovery search budget exhausted before new planning')
                             feedback = [json.loads(r[0]) for r in con.execute(
                                 'SELECT value FROM checkpoints WHERE run_id=? AND key LIKE ? ORDER BY created',
@@ -358,6 +391,9 @@ async def _discover_legacy(config, *, pool_path, ledger_path, output, categories
                             pool.checkpoint(run_id, candidate_key + '/done', {'completed': True})
                         if run_stats(pool, run_id, baseline)['confirmed_categories'].get(parent, 0) >= per_category:
                             break
+                stats = run_stats(pool, run_id, baseline)
+                if complete(stats, categories, per_category) or (max_rounds is None and stats['confirmed_categories'] == previous):
+                    break
     except Exception as error:
         stopped = {'error_type': type(error).__name__, 'reason': str(error)}
         pool.checkpoint(run_id, 'stop/' + object_sha256(stopped), stopped)
@@ -391,6 +427,11 @@ async def _discover_legacy(config, *, pool_path, ledger_path, output, categories
 async def discover_ai(config, **kwargs):
     # Never rewrite an existing frozen run or re-query its completed three sites.
     root=Path(kwargs['output']).resolve()
+    if (root/'run-frozen.json').is_file():
+        previous = load_json(root/'run-frozen.json')
+        for name in ('max_rounds', 'max_searches'):
+            if kwargs.get(name) is None:
+                kwargs[name] = previous.get(name)
     if kwargs.get('interaction_policy') is None and not ((root/'run-frozen.json').exists() and load_json(root/'run-frozen.json').get('version')=='glm-discovery-interaction-3'):
         kwargs.pop('interaction_policy',None)
         return await _discover_legacy(config,**kwargs)
