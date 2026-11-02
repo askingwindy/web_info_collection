@@ -695,7 +695,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
                     goals_path=None, target=1000, max_searches=None, max_batches=None, batch_size=50,
                     search_engine='search_std', stall_threshold=2, per_direction_cap=None, batch_key=None,
                     excluded_applications=(), model_protocol=None, discovery_mode=None, feedback_scope=None,
-                    search_count=10, entry_selection='rule'):
+                    search_count=10, entry_selection='rule', categories=()):
     """Entry/target candidate producer on webcollect-data-candidate-2.
 
     Per-response-row publication with stable identities; interruption resumes
@@ -711,7 +711,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
         raise ValueError('Unsupported search engine')
     if type(search_count) is not int or not 1 <= search_count <= 50:
         raise ValueError('Search result count must be 1–50')
-    if not queries and not sources and not directions and goals_path is None:
+    if not queries and not sources and not directions and not categories and goals_path is None:
         raise ValueError('Explicit queries, directions, goals or evidence-backed sources required')
     pool = CandidatePool(pool_path)
     pool._require_v2()
@@ -752,7 +752,8 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             max_searches=max_searches,max_batches=max_batches,batch_size=batch_size,search_engine=search_engine,
             stall_threshold=stall_threshold,per_direction_cap=per_direction_cap,batch_key=batch_key,
             excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
-            search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol)
+            search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories)
+    if categories: raise ValueError('Category planning requires entry-tools-3 or entry-tools-4')
     optimized = bool(previous_batch.get('selection_version')) if previous_batch else (
         discovery_mode is not None or model_protocol == selection.TOOL_PROTOCOL)
     if discovery_mode is not None and discovery_mode not in ('new-sites','expand','mixed'):
@@ -1344,6 +1345,7 @@ def main(argv=None):
     for name in ('config','ledger','pool'): entry.add_argument('--'+name,required=True)
     entry.add_argument('--history-set',type=Path,help='Current-chain manifest used by the consumer; derives the evidence directory by default')
     entry.add_argument('--output',help='Explicit evidence directory (must be inside the chain when --history-set is used)')
+    entry.add_argument('--category',action='append',default=[],help='Target category; host freezes an Agent search plan when no explicit terms are given')
     entry.add_argument('--query',action='append',default=[],help='Plain seed queries (single implicit direction)')
     entry.add_argument('--sources',help='JSON list of uri/title/content/reference')
     entry.add_argument('--directions',help='JSON file: [{"direction","category","queries":[...]}]')
@@ -1374,7 +1376,7 @@ def main(argv=None):
             goals_path=Path(a.goals).absolute() if a.goals else None,target=a.target,max_searches=a.max_searches,
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,model_protocol=a.model_protocol,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
-            search_count=a.search_count, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else ()),
+            search_count=a.search_count, categories=a.category, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else ()),
             ensure_ascii=False));return
     print(json.dumps(produce(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,
         queries=a.query,sources=load_json(a.sources) if a.sources else (),target=a.target,max_searches=a.max_searches,

@@ -245,3 +245,6 @@ git diff --check
 2026-11-02 本轮后继修正：编号工具的 `ops` 是可选证据，缺失安全解释为空数组，原 provider arguments 保留。已结算的整包协议错误可读取原响应逐行隔离，绝不重派 UNKNOWN。只读首帧在领取前检查原请求保护；成功后 `release_observation` 核验原观察作业、唯一已结算访问和同步图树收据，将 claim 追加为 observed、候选恢复 pending，正式消费者可新建独占 claim。未决观察仍按原规则隔离。历史未决主机/URI 仅作为负向派发约束，包含未入池入口，不能作为本轮页面或分类证据。
 
 本轮限定实测及边界见 [结果报告](verify_results/producer-continuation-20261102-real-r01/结果报告.md)：200 条净新增、16 站；31 条固定首帧样本，29 条可判定、21 条可信可用。37 项定向检查见 `verify_results/producer-continuation-20261102-r12/summary.json`。保留 7 笔生产 GET UNKNOWN、1 笔 GLM UNKNOWN；早期回放误发 GET 的独立异常账也在报告中，不计离线 PASS 或生产 NEW。
+
+
+生产者跨批页面检查与仅类目查询已接入正式 `produce-entries`；原作业/收据复用、定向复核条件、`--category` 的冻结输入输出、三类产出统计及禁网验收见[研发记录](docs/生产者跨批检查与类目查询研发-20261102.md)。生产继续 `STOPPED_BY_USER`，原 UNKNOWN 和搜索 1113 保留；离线入池不代表真实新应用产出。

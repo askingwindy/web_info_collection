@@ -342,7 +342,11 @@ def index_settled_landings(pool):
 def produce(config, *, pool_path, ledger_path, output, history_set, queries, sources, directions,
             goals_path, target, max_searches, max_batches, batch_size, search_engine, stall_threshold,
             per_direction_cap, batch_key, excluded_applications, discovery_mode, feedback_scope, search_count,
-            entry_selection='rule', model_protocol=PROTOCOL):
+            entry_selection='rule', model_protocol=PROTOCOL, categories=()):
+    target_categories=tuple(categories)
+    from .site_pool import category
+    for value in categories: category(value)
+    if 'UNKNOWN' in categories: raise ValueError('A concrete target category is required')
     PROTOCOL = model_protocol
     VERSION = 'first-party-entries-2' if model_protocol=='entry-tools-4' else 'first-party-entries-1'
     from .candidate_discovery import _publish_entry, QueryPolicy, fold_query_state, record_query_outcome, normalize_query
@@ -387,6 +391,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         'discovery_mode':discovery_mode,'feedback_scope':feedback_ref,'feedback':feedback,'search_count':search_count,
         'goals':goals_ref,'excluded_applications':list(excluded_applications),'output':str(root),'ledger':str(Path(ledger_path).resolve()),
         **({'current_chain_manifest':chain['manifest']} if chain else {})}
+    if categories:
+        frozen['category_query_plan']={'version':'producer-category-query-1','categories':list(categories)}
     for source in sources:
         verify_evidence([source['reference']])
         if chain:assert_current_evidence(chain,[source['reference']])
@@ -503,13 +509,16 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 seeds=[dict(h) for h in seed_sources];search_request_id=query=direction=None
                 pool.pool.checkpoint(run,key+'/input',{'seeds':seeds})
             else:
-                if PROTOCOL=='entry-tools-4' and not queries and not directions:
+                if PROTOCOL=='entry-tools-4' and not queries and not directions and not target_categories:
                     exhausted=True;break
                 hold=search_channel_hold(pool.pool,session)
                 if hold:
                     stopped={'stage':'search',**hold};break
                 state=fold_query_state(pool.pool,session,policy)
-                decision=policy.next_query(state)
+                if target_categories and not queries and not directions:
+                    from .producer_query_plan import next_query
+                    decision=next_query(pool.pool,ledger,run,key,target_categories,state,failures,root)
+                else:decision=policy.next_query(state)
                 if decision is None:exhausted=True;break
                 from .candidate_discovery import _prior_search_status
                 seen,original_state,status,_=_prior_search_status(pool.pool,session,decision['query'])
@@ -536,6 +545,15 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         failures.append({'uri':h['uri'],'reason':'original_unresolved_source'});continue
                     if guard:guard.guard(h['uri'])
                     eligible.append(h)
+                baseline=pool.pool.checkpoint(run,key+'/site-baseline')
+                if baseline is None:
+                    baseline={}
+                    for h in eligible:
+                        app=pool.pool.application(h['uri'])
+                        with pool.pool.connect() as con:
+                            produced=bool(app and con.execute('SELECT 1 FROM data_candidates WHERE application_id=? LIMIT 1',(app['id'],)).fetchone())
+                        baseline[h['uri']]='known_site_expansion' if produced else 'pending_lead_first_output' if app else 'project_first_discovery_output'
+                    pool.pool.checkpoint(run,key+'/site-baseline',baseline)
                 context,errors=site_context(pool,ledger,run,eligible,root);failures.extend(errors)
                 documents={};site_origins={};categories={}
                 for h in eligible:
@@ -543,6 +561,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     if aid in site_origins:continue
                     site_origins[aid]={'kind':'search' if search_request_id else 'caller_seed','reference':h['reference'],
                                        'uri':h['uri'],'search_request_id':search_request_id,
+                                       'supply_kind':baseline[h['uri']],
                                        'site_decision_reused':bool(site and site['classification_state']=='confirmed')}
                     if not site or site['classification_state']!='confirmed':
                         homes=[d for d in context if d.get('site_evidence')=='homepage' and (pool.pool.application(d['uri']) or {}).get('id')==aid]
@@ -665,13 +684,16 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         search_states=[dict(r) for r in con.execute("SELECT state,COUNT(*) AS count FROM tool_requests WHERE run_id=? AND kind='search' GROUP BY state",(session,))]
         decisions=[json.loads(r[0]) for r in con.execute("SELECT value FROM checkpoints WHERE run_id=? AND key LIKE 'entry-query/decision/%' ORDER BY key",(session,))]
     ids=sorted({r['candidate_id'] for r in actual if r['result']=='NEW'})
-    effective_sites={s['application_classification']['application']:s['site_origin'] for s in provenance}
+    effective_sites={}
+    for source in provenance:
+        effective_sites.setdefault(source['application_classification']['application'],source['site_origin'])
     report={'schema_version':'candidate-producer-report-2','protocol':'candidate-producer-3','model_protocol':PROTOCOL,'source_pipeline':VERSION,'batch_scope':run,
         'target':target,'listed_unique_candidates':len(ids),'deficit':max(0,target-len(ids)),
         'status':'TARGET_REACHED' if len(ids)>=target else 'PARTIAL','candidate_ids':ids,
         'row_results':dict(Counter(r['result'] for r in actual)),'batches':batches,'stopped':stopped,'site_failures':failures,
         'unfinished_site_scopes':unfinished,
         'source_counts':{field:dict(Counter(s.get(field,'UNKNOWN') if field!='site_origin' else s.get(field,{}).get('kind','UNKNOWN') for s in provenance)) for field in ('site_origin','page_origin','selection_method')},
+        'supply_counts':dict(Counter(s.get('supply_kind','legacy_unknown') for s in effective_sites.values())),
         'site_counts':{'new_search_sites':sum(s['kind']=='search' and not s['site_decision_reused'] for s in effective_sites.values()),
                        'given_seed_sites':sum(s['kind']=='caller_seed' for s in effective_sites.values()),
                        'reused_confirmed_sites':sum(s['site_decision_reused'] for s in effective_sites.values())},

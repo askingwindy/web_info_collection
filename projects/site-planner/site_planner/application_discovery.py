@@ -300,7 +300,11 @@ def homepage_document(ledger, batch, uri, output):
     from .pipeline import open_public_get, reserve_visit
     from webcollect.candidate_contract import application_matches
     from webcollect.site_failure_stop import SiteFailureStore
-    uri=page_uri(uri); jid=ledger.enqueue('application-evidence-get',{'batch':batch,'uri':uri,'policy':POLICY})
+    from .entry_access import shared_job
+    uri=page_uri(uri)
+    legacy=object_sha256({'kind':'application-evidence-get','payload':{'batch':batch,'uri':uri,'policy':POLICY}})
+    with ledger.connect() as con:exists=con.execute('SELECT 1 FROM jobs WHERE id=?',(legacy,)).fetchone()
+    jid=legacy if exists else shared_job(ledger,batch,uri,purpose='application-evidence-get',policy=POLICY)
     job=ledger.get(jid)
     if job['state']=='done':
         verify_evidence([job['result']]); return load_json(job['result']['path']),job['result']
