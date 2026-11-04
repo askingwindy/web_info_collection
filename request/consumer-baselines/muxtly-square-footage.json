@@ -1,0 +1,63 @@
+{
+  "schema_version": "webcollect-session-objective-1",
+  "candidate_id": "candidate-11c23ee0-1a14-4d51-aa7f-7d414fc92fcc",
+  "version": 1,
+  "entry_url": "https://www.muxtly.com/zh-CN/square-footage-calculator/",
+  "requested_goal": null,
+  "objective": {
+    "kind": "calculation",
+    "description": "在面积计算器测一个矩形房间，将长度设为12.5、宽度设为8.5，使用页面的英尺单位，读出这一组尺寸的面积（平方英尺）。",
+    "evidence_contract": {
+      "kind": "calculation",
+      "inputs": [
+        {
+          "label": "长",
+          "value": "12.5"
+        },
+        {
+          "label": "宽",
+          "value": "8.5"
+        }
+      ],
+      "retain": [],
+      "result_label": "面积",
+      "unit": "平方英尺",
+      "version": "webcollect-goal-evidence-2"
+    },
+    "minimum_effective_steps": 5,
+    "preferred_band": "long"
+  },
+  "producer": {
+    "scope": {
+      "path": "results/candidate-project-20261101-r01/scope.json",
+      "sha256": "790571bc1e0ead2184fb1796c416ed0015515de40bad4f7ec88258663dc26c22"
+    },
+    "application_id": "app-98bb795629ae9e7d8271f984",
+    "body": {
+      "candidate_kind": "entry",
+      "entry_url": "https://www.muxtly.com/zh-CN/square-footage-calculator/",
+      "requested_goal": null,
+      "schema_version": "webcollect-data-candidate-2"
+    },
+    "body_sha256": "545f5d3ee068408768fdc5fcf786a8a4ad5870e363c77ac1667fd4acfb20db4f",
+    "category": "在线工具",
+    "page_type": "功能页",
+    "source_key": "d1eb8b1303578f07dcc404160982b605bf44dae5b1d4f2a2684d777e3b8481ff",
+    "source_evidence": {
+      "path": "results/candidate-project-20261101-r01/producer-evidence/two-sites-20261102-r01/site-home-98881f753d4fe1bdcb0657f2a4b5eba473e9c2cffd771a701508f56ba68e05d0.json",
+      "sha256": "68deadf005053de10d4d94f795bd1fac721b35084b862d159cd6ed90544e4403"
+    },
+    "publication": {
+      "run_id": "candidate-project-20261101-r01-producer/entry-batch/purpose100-20261104-r01-012-pages",
+      "row_id": "bbaadb5fc3fe914ea8fcf09bb7c3dc6dce5e9024015cae36e994b8d9cb36212f",
+      "result": "NEW",
+      "response_sha256": "23fb7679fe6d528a29d17505db224de35c4204f6e40114edf76a6fa93d49da17"
+    },
+    "entry_get": {
+      "path": "results/candidate-project-20261101-r01/producer-evidence/purpose100-20261104-r01/purpose100-20261104-r01-012-pages/entry-http-2f8d01f5a801a00cea275c763479447b54ebb271dd3357a0d81d74ea2eee64da.json",
+      "sha256": "fde78f4c35043df1a298d59dd109821cf1e03a35072e22eac9b850251aadd335",
+      "job_id": "2f8d01f5a801a00cea275c763479447b54ebb271dd3357a0d81d74ea2eee64da",
+      "http_status": 200
+    }
+  }
+}

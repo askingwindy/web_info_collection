@@ -39,13 +39,13 @@ FORMAL_LATEST_PATH = Path(__file__).resolve().parents[3] / 'results/delivery/LAT
 def generation_source_identity():
     base = Path(__file__).parent
     names = (
-        'task_generation.py', 'history_business.py', 'date_strategy.py',
+        'task_generation.py', 'history_business.py', 'date_strategy.py', 'closing_policy.py',
         'bmi_strategy.py', 'planning.py', 'task_contract.py', 'task_replanning.py',
         'snapshot.js', 'browser.py', 'ascii_art_strategy.py', 'loan_strategy.py',
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
-        'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py',
-        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py')
+        'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py', 'request_quarantine.py',
+        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py','banded_plan.py','band_budget.py','inference_image.py','session_objective.py','goal_evidence.py','plan_evidence.py','consumer_page_policy.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -802,6 +802,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     """
     from datetime import datetime, timedelta, timezone
     from .react_session import build_url_task, build_capability_task, REACT_VERSION, SYSTEM_PROMPT, GOAL_BUDGETS
+    from .banded_plan import SYSTEM as PLAN_SYSTEM
     from .planning import validate_capability
     if not isinstance(url, str) or not url.strip():
         raise ValueError('react-url generator requires the entry URL')
@@ -842,7 +843,10 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         task = build_capability_task(supplied, identities['pages'].get(url), task_version,
                                      registration=react_task_version)
     else:
+        from .closing_policy import VERSION as CLOSE_POLICY
+        from .banded_plan import VERSION as PLAN_PROTOCOL
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
+                              **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL} if react_candidate is not None else {}),
                               app_name=app_name, registration=react_task_version,
                               skip_wechat_articles=(react_candidate or {}).get('skip_wechat_articles',False),
                               pilot_identity=identities['pages'].get(url))
@@ -866,11 +870,17 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             'sources': deepcopy(bound_claim.get('sources', [])),
             'claim_reference': react_candidate['claim_reference'],
             'application_registry': bound_claim.get('application_registry')}
+        if react_candidate.get('session_objective'):
+            from .session_objective import apply
+            apply(task,react_candidate['session_objective'])
         task['fragment']['entry_mode'] = 'candidate'
         task['fragment']['candidate_attempt'] = bound_claim['claim_id']
         # The claim identity joins the frozen spec: a sanctioned retry of the
         # same entry under a new claim is a new transparent task version.
         task['workflow_proposal']['spec']['candidate_claim'] = bound_claim['claim_id']
+        task['workflow_proposal']['spec']['consumer_projection'] = (
+            'table2-entry-2' if bound_claim['snapshot'].get('schema_version') == 'webcollect-data-candidate-2'
+            else 'candidate-entry-1')
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
         from .react_session import validate_task as validate_react
@@ -914,7 +924,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             'narrative_mode': 'mixed', 'prompt_stages': {
                 'planning': {'mode': 'model',
                     'description': '单一 ReAct 循环按真实工具返回逐步决策（observe/inspect/act/finish）。',
-                    'prompt': SYSTEM_PROMPT},
+                    'prompt': PLAN_SYSTEM if task['fragment'].get('plan_protocol') else SYSTEM_PROMPT},
                 'narrative': {'mode': 'template', 'template_version': 'actual-state-describe_change',
                               'description': '沿用采集器实际可见状态及相邻截图对应的叙述生成。'}}}}
     from .task_contract import validate_m4_plan
@@ -1043,6 +1053,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             if generator in ('fragment-model','agent-model'):
                 from .agent_feedback import site_context
                 actual_context = site_context(history_registry, record['site_uri'], model_ledger=ledger,
+                    candidate_id=(record.get('candidate_observation') or {}).get('candidate_id'),
                     quality=[q['reference'] for q in (fragment_context or {}).get('quality_feedback',[])])
                 if actual_context['unresolved']:
                     raise ValueError('Original unresolved execution/request blocks planning; reconcile original ledger')
@@ -1481,19 +1492,37 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         if result['collection_status']=='paused_pending_resume':
             return {'collection':result,'candidate':None,'stopped':'existing runtime paused; budget and queued work retained'}
         facts_path=output/'facts.json'; client=output/'candidate'
+        stages={'saved_count':result.get('collected',0),'customer_export':'NOT_RUN',
+                'qc_handoff':'NOT_RUN','independent_AI_QC':'NOT_RUN','human_review':'NOT_RUN',
+                'published':'NOT_CLAIMED','customer_acceptance':'UNKNOWN'}
         if result.get('collected',0):
             save_json(facts_path,derive(output/'capture'))
             if not client.exists():
-                build_client_package(Path(__file__).resolve().parents[3],output/'capture',client,facts=facts_path)
+                try:
+                    build_client_package(Path(__file__).resolve().parents[3],output/'capture',client,facts=facts_path)
+                except ValueError as error:
+                    stages.update(customer_export='BLOCKED',error={'stage':'customer_export','type':type(error).__name__,'reason':str(error)})
+                    stage_path=output/('delivery-stages-'+object_sha256(stages)[:20]+'.json');save_json(stage_path,stages)
+                    return {'collection':result,'candidate':None,'qc_status':'export_blocked','qc_inputs':None,
+                            'delivery_stages':stages,'delivery_stage_receipt':{'path':str(stage_path),'sha256':file_sha(stage_path)},
+                            'pending_quality_checks':quality_review_ref,'QC_approval':False,'human_review':'pending'}
                 save_json(output/'candidate-receipt.json',{'files_sha256':{
                     p.relative_to(client).as_posix():file_sha(p) for p in sorted(client.rglob('*')) if p.is_file()}})
             receipt=load_json(output/'candidate-receipt.json')
             actual={p.relative_to(client).as_posix():file_sha(p) for p in sorted(client.rglob('*')) if p.is_file()}
             if actual!=receipt['files_sha256']:raise ValueError('Existing customer candidate is incomplete or changed')
+            stages['customer_export']='EXPORTED_FORMAT_VALID'
         candidate = str(client) if client.exists() else None
-        handoff = _prepare_qc_handoff(candidate, history_manifest['path'], output / 'qc-inputs',
-                                      sampling, quality_review_ref)
+        try:
+            handoff = _prepare_qc_handoff(candidate, history_manifest['path'], output / 'qc-inputs',
+                                          sampling, quality_review_ref)
+            stages['qc_handoff']='PREPARED' if handoff.get('qc_inputs') else handoff['qc_status']
+        except ValueError as error:
+            stages.update(qc_handoff='BLOCKED',error={'stage':'qc_handoff','type':type(error).__name__,'reason':str(error)})
+            handoff={'qc_status':'handoff_blocked','qc_inputs':None}
+        stage_path=output/('delivery-stages-'+object_sha256(stages)[:20]+'.json');save_json(stage_path,stages)
         return {'collection':result, 'candidate':candidate, **handoff,
+                'delivery_stages':stages,'delivery_stage_receipt':{'path':str(stage_path),'sha256':file_sha(stage_path)},
                 'pending_quality_checks': quality_review_ref, 'QC_approval':False,'human_review':'pending'}
     renewal=asyncio.create_task(renew());working=asyncio.create_task(work())
     try:

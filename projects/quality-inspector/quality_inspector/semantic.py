@@ -9,10 +9,10 @@ import json
 
 RULE_VERSIONS = {
     'visual_alignment': 'all-original-frames-actions-trees-1',
-    'terminal_semantics': 'truthful-legal-fragment-ending-2',
+    'terminal_semantics': 'truthful-fragment-five-eight-and-verified-login-download-return-4',
     'language': 'page-control-language-consistency-and-chinese-narratives-2',
     'privacy': 'all-original-frames-sensitive-content-1',
-    'substantive_difference': 'actual-trajectories-global-duplicate-metric-2',
+    'substantive_difference': 'actual-trajectories-bound-pair-coverage-and-terminal-images-3',
 }
 
 

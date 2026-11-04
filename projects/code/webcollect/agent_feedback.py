@@ -61,20 +61,34 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
         'semantic_review': 'REVIEW_REQUIRED', 'QC_approval': False})
 
 
-def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None):
-    from .application_identity import host_key
+def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None, collection_report=None,
+                 candidate_id=None):
+    from urllib.parse import urlsplit
+    from .application_identity import aliases, host_key
+    from .current_chain import PROJECT_RULES, check_project_guard, registry_project
+    from .request_quarantine import job_conflicts
+    guard = (model_ledger.config.get('site_failure_guard') or {}) if candidate_id and model_ledger else {}
+    scoped = guard.get('dispatch_rules') == PROJECT_RULES
+    known_hosts = aliases(guard.get('application_registry')) if scoped else {}
+    def context_host(uri):
+        key = host_key(uri)
+        return urlsplit(known_hosts.get(key, key)).netloc.removeprefix('www.') if scoped else key
+    host = context_host(site_uri)
     quality_groups = [[ref] for ref in quality]
     result = {'schema_version': VERSION, 'generation': list(generation), 'executions': [],
               'quality': [], 'images': [], 'avoid': [], 'unresolved': []}
     if registry is not None and Path(registry).exists():
         with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
             con.row_factory = sqlite3.Row
+            if scoped:
+                check_project_guard(registry_project(con), guard, model_ledger.path, role='consumer')
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if {'m4_attempts','m4_tasks'} <= tables:
                 rows = con.execute('SELECT a.*,t.task_json FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key ORDER BY a.created_at DESC').fetchall()
                 for row in rows:
                     task = json.loads(row['task_json'])
-                    if host_key(task['site_uri']) != host_key(site_uri):
+                    owner_id = (task.get('candidate_binding') or {}).get('candidate_id') if scoped else None
+                    if context_host(task['site_uri']) != host and not (owner_id and owner_id == candidate_id):
                         continue
                     refs = json.loads(row['evidence_json'] or '[]')
                     if refs: verify_evidence(refs)
@@ -139,17 +153,24 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                         if admitted:
                             quality_groups.append([json.loads(admitted[0])])
                     result['executions'].append(entry)
-                    if row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted'):
+                    unresolved = row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
+                    if unresolved and (not owner_id or owner_id == candidate_id):
                         result['unresolved'].append(entry)
     if model_ledger is not None:
         with model_ledger.connect() as con:
             generation_rows = con.execute("SELECT id,payload,result,created FROM jobs WHERE kind='task-generation' "
                                           "AND state='done' ORDER BY created DESC").fetchall()
-            for row in con.execute("""SELECT id,kind,state,payload FROM jobs
-                    WHERE kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')"""):
+            for row in con.execute("""SELECT j.id,j.state,j.payload,json_extract(p.payload,'$.registry') AS registry
+                    FROM jobs j LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
+                    WHERE j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')
+                    AND j.state IN ('queued','running','review_required')"""):
                 payload = json.loads(row['payload'])
-                matching = payload.get('site_uri') and host_key(payload['site_uri']) == host_key(site_uri)
-                if row['state'] in ('queued', 'running', 'review_required') and (not payload.get('site_uri') or matching):
+                if scoped:
+                    blocks = job_conflicts(model_ledger, site_uri, candidate_id, payload,
+                                          running=row['state']=='running', registry=row['registry'])
+                else:
+                    blocks = not payload.get('site_uri') or host_key(payload['site_uri']) == host
+                if blocks:
                     # Only the payload identity enters the advisory context:
                     # payloads embed the full prior prompt, and embedding them
                     # back would compound context growth every round. The
@@ -205,6 +226,8 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
     # All bound images are sent; an over-large context must stop at the gateway's
     # configured image/input budget rather than silently omit failure evidence.
     result['images'] = list({r['sha256']:r for r in result['images']}.values())
+    from .collection_context import from_registry
+    result['collection_facts'] = from_registry(registry, collection_report)
     result['context_sha256'] = object_sha256(result)
     return result
 

@@ -163,9 +163,11 @@ def contract_identity(repo):
     root = Path(repo) / 'projects/quality-inspector/quality_inspector'
     manifest = json.loads((root / 'contract-authority.json').read_text())
     rows = manifest.get('documents', [])
-    if (manifest.get('schema_version') != 'qc-installed-authority-1' or len(rows) != 4
-            or {row.get('role') for row in rows} != {'clarification', 'requirement', 'annex_a', 'annex_b'}):
-        raise ValueError('Complete installed four-document authority required')
+    roles = [row.get('role') for row in rows]
+    if (manifest.get('schema_version') != 'qc-installed-authority-1'
+            or len(roles) != len(set(roles)) or roles != manifest.get('source_precedence')
+            or not {'clarification', 'requirement', 'annex_a', 'annex_b'} <= set(roles)):
+        raise ValueError('Complete installed authority and precedence required')
     files = {}
     for row in rows:
         resource = Path(row['resource'])
@@ -175,8 +177,9 @@ def contract_identity(repo):
         if path.is_symlink() or sha(path) != row['sha256']:
             raise ValueError('Installed authority document changed')
         files[row['path']] = row['sha256']
-    return {'profile': 'customer-prose-with-clarifications', 'version': 2,
-            'authority_source': 'installed-four-document-authority', 'authority_files_sha256': files,
+    legacy = len(rows) == 4
+    return {'profile': 'customer-prose-with-clarifications', 'version': 2 if legacy else 3,
+            'authority_source': 'installed-four-document-authority' if legacy else 'installed-document-authority', 'authority_files_sha256': files,
             'producer_constants_not_customer_exclusive_enums': True, 'customer_actual_program': 'NOT_EXECUTED'}
 
 def require_public_task_state(state):

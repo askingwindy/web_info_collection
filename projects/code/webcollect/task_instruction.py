@@ -29,3 +29,18 @@ def validate_task_instruction(text):
     if unquoted_book_titles(text):
         raise ValueError('task_instruction 在「」之外使用了《…》：'
                          '请按需求用「」括起原题名；已引用「原句里的《…》」须原样保留')
+
+
+def generated_instruction(text):
+    """Format newly generated task prose; never rewrite source quotes or raw goals."""
+    characters=list(text); depth=0; starts=[]
+    for index,char in enumerate(text):
+        if char=='「':depth+=1
+        elif char=='」':depth=max(0,depth-1)
+        elif char=='《':starts.append((index,depth))
+        elif char=='》' and starts:
+            start,opening=starts.pop()
+            if opening==depth==0:characters[start],characters[index]='「','」'
+    text=''.join(characters)
+    validate_task_instruction(text)
+    return text

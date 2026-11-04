@@ -10,6 +10,7 @@ import asyncio
 from copy import deepcopy
 import json
 import time
+import secrets
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,7 +20,7 @@ from .agent_observation import project, require_action, PROVEN, ACTIONS, CONTROL
 from .agent_controller import exclusive, compile_step, DecisionRequestError, DecisionModelFault
 
 from .react_protocol import (VERSION as NATIVE_VERSION, NATIVE_VERSIONS, LEGACY_VERSION as NATIVE_LEGACY_VERSION, LEGACY_SYSTEM as NATIVE_LEGACY_SYSTEM, SYSTEM as NATIVE_SYSTEM,
-                             RULE_VERSION, EFFECT_RULES, rule_sources, native_tools, native_decision, atomic_effect)
+                             RULE_VERSION, EFFECT_RULES, REFERENCE_PROTOCOL, rule_sources, native_tools, native_decision, atomic_effect)
 
 REACT_VERSION = 'webcollect-react-session-1'
 STOP_REASONS = ('ready', 'no_path', 'budget', 'blocked')
@@ -186,13 +187,16 @@ def describe_goal(goal):
 
 def build_url_task(*, url, task_version, site_category=None, app_name=None, task_family='navigation-reading',
                    allowed_actions=None, instruction=None, site_uri=None, budgets=None, pilot_identity=None,
-                   registration='1', decision_protocol=NATIVE_VERSION, allow_controlled_exception=False, skip_wechat_articles=False):
+                   registration='1', decision_protocol=NATIVE_VERSION, allow_controlled_exception=False, skip_wechat_articles=False,
+                   reference_protocol=REFERENCE_PROTOCOL, ending_policy=None, plan_protocol=None):
     """Host-built identity for a URL-only entry; no model call, no frozen plan.
 
     `registration` is the explicit re-registration version: it enters the
     frozen spec (hence task_id/task_key/page claim) so a sanctioned replan of
     the same entry is a new transparent version, never a silent duplicate.
     """
+    if plan_protocol is not None and ending_policy is None:
+        from .closing_policy import VERSION as ending_policy
     if site_category is None:
         site_category = 'UNKNOWN' if decision_protocol == NATIVE_VERSION else '综合'
     from .collect import verify_public_url
@@ -215,6 +219,13 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         spec['decision_protocol'] = decision_protocol
         if decision_protocol == NATIVE_VERSION:
             spec['navigation_protocol'] = 'observed-navigation-2'
+            spec['delayed_navigation_protocol'] = 'webcollect-explicit-href-landing-1'
+            spec['planning_intent_protocol'] = 'webcollect-planning-intent-1'
+            from .reading_progress import VERSION as READING_PROTOCOL, END_POLICY
+            spec['reading_progress_protocol'] = READING_PROTOCOL
+            spec['ending_policy'] = ending_policy or END_POLICY
+            if reference_protocol is not None:
+                spec['reference_protocol'] = reference_protocol
             if skip_wechat_articles:
                 spec['skip_wechat_articles'] = True
         spec['glm_http_call_limit'] = SessionGLMCallLimit.limit
@@ -241,12 +252,24 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         task['fragment']['decision_protocol'] = decision_protocol
         if decision_protocol == NATIVE_VERSION:
             task['fragment']['navigation_protocol'] = spec['navigation_protocol']
+            task['fragment']['delayed_navigation_protocol'] = spec['delayed_navigation_protocol']
+            task['fragment']['planning_intent_protocol'] = spec['planning_intent_protocol']
+            for extension in ('reading_progress_protocol','ending_policy'):
+                task['fragment'][extension] = spec[extension]
+            if 'reference_protocol' in spec:
+                task['fragment']['reference_protocol'] = spec['reference_protocol']
             if skip_wechat_articles:
                 task['fragment']['skip_wechat_articles'] = True
         task['fragment']['glm_http_call_limit'] = spec['glm_http_call_limit']
         task['fragment']['effective_action_rule'] = RULE_VERSION
         task['fragment']['allow_controlled_exception'] = bool(allow_controlled_exception)
         task['fragment']['policy_version'] = 'legal-web-actions-react-native-2'
+    if plan_protocol is not None:
+        from .banded_plan import VERSIONS
+        if decision_protocol != NATIVE_VERSION or plan_protocol not in VERSIONS:
+            raise ValueError('Unknown conditional plan protocol')
+        for part in (spec, task['fragment']): part['plan_protocol'] = plan_protocol
+        task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
     if pilot_identity is not None:
         task['pilot_identity'] = deepcopy(pilot_identity)
     validate_task(task)
@@ -266,7 +289,10 @@ def build_candidate_task(capability, task_version, budgets=None):
     actions = sorted(set(capability.get('supported_actions') or []) & set(ALLOWED_TOOL_ACTIONS))
     if not actions:
         raise ValueError('Candidate capability supports none of the react actions')
-    task = build_url_task(url=capability['site_uri'], task_version=task_version,
+    from .closing_policy import VERSION as CLOSE_POLICY
+    from .banded_plan import VERSION as PLAN_PROTOCOL
+    task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
+        plan_protocol=PLAN_PROTOCOL,
         site_category=capability['site_category'],
         app_name=candidate_name,
         task_family=(capability.get('task_families') or ['navigation-reading'])[0],
@@ -332,6 +358,9 @@ def validate_task(task):
             or task.get('operations') != [] or task.get('required_actions') != []
             or task.get('final_assertions') != []):
         raise ValueError('React boundary must stay a dynamic raw-execution scope')
+    if (fragment.get('reference_protocol') not in (None, REFERENCE_PROTOCOL)
+            or (fragment.get('reference_protocol') is not None and fragment.get('decision_protocol') != NATIVE_VERSION)):
+        raise ValueError('Unknown observation reference protocol')
     budgets = fragment.get('budgets')
     native = fragment.get('decision_protocol') in NATIVE_VERSIONS
     if fragment.get('decision_protocol') not in (None, *NATIVE_VERSIONS):
@@ -344,6 +373,27 @@ def validate_task(task):
     if not isinstance(actions, list) or not actions or any(action not in ALLOWED_TOOL_ACTIONS for action in actions):
         raise ValueError('React task needs a nonempty supported action whitelist')
     spec = (task.get('workflow_proposal') or {}).get('spec') or {}
+    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective'):
+        if spec.get(extension) != fragment.get(extension):
+            raise ValueError('Mismatched frozen React extension: ' + extension)
+    if fragment.get('session_objective'):
+        from .session_objective import bind
+        binding=fragment['session_objective']
+        claim=load_json(task['candidate_binding']['claim_reference']['path'])
+        if bind(binding['reference'],claim)!=binding:raise ValueError('Frozen session objective was changed')
+    from .goal_evidence import contract_for, validate_contract
+    contract = contract_for(task)
+    if contract is not None:
+        validate_contract(contract)
+    from .banded_plan import VERSIONS
+    if fragment.get('plan_protocol') not in (None, *VERSIONS) or (fragment.get('plan_protocol') and fragment.get('decision_protocol') != NATIVE_VERSION):
+        raise ValueError('Invalid frozen plan protocol')
+    if fragment.get('plan_protocol') and fragment.get('ending_policy')!='webcollect-five-eight-attempt-ending-2':
+        raise ValueError('Conditional plans require the frozen V2 atomic ending policy')
+    from .reading_progress import END_POLICY
+    from .closing_policy import VERSION as CLOSE_POLICY
+    if fragment.get('ending_policy') not in (None,END_POLICY,CLOSE_POLICY):
+        raise ValueError('Unknown frozen ending policy')
     if 'glm_http_call_limit' in spec or 'glm_http_call_limit' in fragment:
         if not native or any(type(part.get('glm_http_call_limit')) is not int or
                              part['glm_http_call_limit'] != SessionGLMCallLimit.limit for part in (fragment, spec)):
@@ -355,7 +405,8 @@ def validate_task(task):
                    or spec.get('allowed_actions') != actions
                    or spec.get('allow_controlled_exception') != fragment.get('allow_controlled_exception')
                    or spec.get('navigation_protocol') != fragment.get('navigation_protocol')
-                   or spec.get('skip_wechat_articles') != fragment.get('skip_wechat_articles')):
+                   or spec.get('skip_wechat_articles') != fragment.get('skip_wechat_articles')
+                   or spec.get('reference_protocol') != fragment.get('reference_protocol')):
         raise ValueError('Native React policy/budgets differ from frozen spec')
     if task['task_id'] != 'react-' + object_sha256({'url': spec.get('entry_url'), 'spec': spec})[:24]:
         raise ValueError('React task identity must bind its URL and spec')
@@ -385,6 +436,12 @@ def compact_observation(observation, allowed_actions=None, *, bounded=False):
                                  else truth['status'] + '/' + truth['reason'])
                         for action, truth in control['actions'].items() if action in allowed},
         }
+        if bounded:
+            # Tree text is a search hint, never a rendered-label proof.
+            controls[cid]['text_hint'] = (control.get('element', {}).get('text') or '')[:100]
+            controls[cid]['hint_is_action_evidence'] = False
+            if any(t.get('reason') == 'MISSING_TARGET_PROBE' for a, t in control['actions'].items() if a in allowed):
+                controls[cid]['next_evidence'] = 'observe(focus_control_id=' + cid + ')'
         if control.get('probe'):
             probe = control['probe']
             controls[cid]['focused_region'] = {
@@ -411,6 +468,10 @@ def compact_observation(observation, allowed_actions=None, *, bounded=False):
         'page_actions': [action for action in observation['page_actions'] if action in allowed],
         'control_coverage': {'shown': len(controls), 'total': total_controls,
                              'remaining_via': 'inspect(kind=search, observation_id, query) or inspect(kind=control, observation_id, target_id)'},
+        **({'projection_version': 'consumer-observation-hints-1',
+            'material_boundary': {'shown': '同步原图、可见文字前600字符、最多24个控件摘要',
+                'recoverable': 'inspect(search/control/html) 分页找回原观察材料；控件文字线索及HTML不提升actions',
+                'probe_policy': '仅MISSING_TARGET_PROBE用定向observe；遮挡、歧义、旧观察仍须原规则核验'}} if bounded else {}),
         'coverage': observation.get('coverage'),
         'duplicate_hint': observation.get('duplicate_hint') or [],
     }
@@ -435,10 +496,14 @@ class ReactSession:
 
     def __init__(self, task, directory, choose, page, *, steps_directory=None, navigation=None,
                  url_check=None, preflight=None, frame_guard=None, site_context=None,
-                 entry_observation=None):
+                 entry_observation=None, attempt_id=None):
         validate_task(task)
         self.task = deepcopy(task)
         self.native = self.task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
+        from .banded_plan import enabled, Controller, SYSTEM as PLAN_SYSTEM, VERSION as PLAN_VERSION, tools as plan_tools, system_for
+        from .goal_evidence import contract_for
+        contracted = bool(contract_for(task))
+        self.plan_controller = Controller() if enabled(self.task) else None
         self.entry_observation = entry_observation
         self.history = []
         self.tool_call_ids = set()
@@ -455,6 +520,8 @@ class ReactSession:
         self.preflight = preflight
         self.frame_guard = frame_guard
         self.context = deepcopy(site_context or {})
+        self.attempt_id = attempt_id or str(self.root.resolve())
+        self.active_reference = None
         self.budgets = deepcopy(self.task['fragment']['budgets'])
         self.glm_session_id = getattr(choose, 'glm_session_id', None)
         self.glm_http_requests = None
@@ -493,10 +560,16 @@ class ReactSession:
             {'type': dialog.type, 'message': dialog.message}))
         self.binding = exclusive(self.root / 'boundary.json',
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
-             'system_prompt_sha256': object_sha256(NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
+             'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol')==PLAN_VERSION) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
              'decision_protocol': self.task['fragment']['decision_protocol'] if self.native else REACT_VERSION,
-             **({'tool_schema_sha256': object_sha256(native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'])),
-                 'effective_action_rule': RULE_VERSION, 'reasoning_effort': 'max'} if self.native else {})})
+             **({'attempt_id': self.attempt_id, 'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort','low')} if contracted else {}),
+             **({'first_plan_timeout_seconds': choose.first_plan_timeout_seconds}
+                if getattr(choose,'first_plan_timeout_seconds',None) else {}),
+             **({'tool_schema_sha256': object_sha256(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol')==PLAN_VERSION) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
+                    self.task['fragment'].get('reference_protocol'))),
+                 'effective_action_rule': RULE_VERSION, 'reasoning_effort': 'max',
+                 **({'first_plan_reasoning_effort': choose.first_plan_reasoning_effort}
+                    if getattr(choose, 'first_plan_reasoning_effort', 'max') != 'max' else {})} if self.native else {})})
         # The append-only trajectory ledger exists from the start so the raw
         # receipt can bind it even for a zero-action honest closure.
         (self.root / 'trajectory.jsonl').touch(exist_ok=False)
@@ -636,6 +709,23 @@ class ReactSession:
         if self.task['fragment'].get('navigation_protocol') == 'observed-navigation-2':
             from .candidate_navigation import extend, excluded_article, NAV_ACTIONS
             trigger = getattr(self, '_navigation_trigger', None)
+            pending = getattr(self, '_pending_navigation', None)
+            if self.current and self.current['url'] != observation['url'] and not trigger and pending:
+                from .candidate_navigation import delayed_landing
+                proof = delayed_landing(pending['operation'], pending['source'],
+                    load_json(self.current['evidence']['state']['path']), captured['state'],
+                    same_tab=self.page is pending['page'],
+                    no_other_action=self.actual_dispatches == pending['dispatches'],
+                    no_new_tab=tuple(getattr(getattr(self.page,'context',None),'pages',[self.page])) == pending['pages'])
+                if proof:
+                    proof.update(from_observation_id=self.current['observation_id'],
+                                 to_observation_id=observation['observation_id'],
+                                 source_observation_id=pending['source_observation_id'])
+                    if not hasattr(self,'delayed_navigations'):self.delayed_navigations=[]
+                    self.delayed_navigations.append(proof)
+                    self.event('delayed-navigation', proof=proof)
+                    trigger=pending['operation']
+                self._pending_navigation=None
             if self.task['fragment'].get('skip_wechat_articles'):
                 for cid, control in observation['controls'].items():
                     href = control['binding'].get('href')
@@ -734,16 +824,25 @@ class ReactSession:
             if kind == 'html':
                 material = record['html']
             elif kind == 'search':
-                query = arguments['query'].casefold()
-                matches = {cid: row for cid, row in record['controls'].items()
-                           if query in json.dumps(row, ensure_ascii=False).casefold()}
+                query = arguments['query'].strip().casefold()
+                def labels(row):
+                    return [str(x).strip().casefold() for x in
+                        [row['element'].get('text',''),*row.get('readable_labels',[])] if isinstance(x,str) and x.strip()]
+                candidates={cid:row for cid,row in record['controls'].items() if not arguments.get('role') or
+                    arguments['role'].casefold() in (str(row['element'].get('native_role','')).casefold(),
+                        str(row['element'].get('element_type','')).casefold(),str(row['binding'].get('tag','')).casefold())}
+                exact={cid:row for cid,row in candidates.items() if query in labels(row)}
+                matches=exact or ({cid:row for cid,row in candidates.items() if any(query in label for label in labels(row))}
+                                 if arguments.get('match')!='exact' else {})
                 matches = [{'control_id':cid, 'label_hint':row['element'].get('text','')[:120],
                     'readable_labels':row['readable_labels'], 'bbox':row['element'].get('bbox'),
                     'actions':row['actions']} for cid,row in matches.items()]
                 material = json.dumps(matches, ensure_ascii=False, sort_keys=True)
                 if not matches:
-                    return self._rejected('inspect', 'CONTROL_SEARCH_NO_MATCH: use another query or inspect html',
-                                          data={'source': source, 'matches': 0})
+                    return self._rejected('inspect', 'CONTROL_SEARCH_NO_MATCH: query 只填普通可见文字（如 R），不要含 text_hint、label_hint 或 JSON 标点；可去掉role或改contains。',
+                        data={'source':source,'matches':0,'does_not_upgrade_actions':True,
+                              'next_tool':{'name':'inspect','arguments':{'kind':'search','observation_id':source,
+                                  'query':query.split('"')[-2] if '"' in query else query,'match':'contains'}}})
             else:
                 control = record['controls'].get(arguments['target_id'] or '')
                 if control is None:
@@ -812,7 +911,119 @@ class ReactSession:
         if action == 'back' and self.navigation_count < 1:
             raise ValueError('当前会话尚无可返回的导航历史，不能执行 back')
 
+    def _v2(self):
+        from .closing_policy import enabled
+        return enabled(self.task)
+
+    def _action_raw_path(self, step_id):
+        if self._v2():
+            return self.steps_directory/'action-attempts'/f'business-{self._active_business_attempt:03}-primitive-{self.used["max_actions"]:03}.json'
+        return self.steps_directory/f'step_{step_id:03}.json'
+
+    def _range_close(self, kind, reason, *, unknown=False, force_pending=False):
+        """Host finish without another model request or browser action."""
+        from .closing_policy import VERSION as POLICY
+        refs=getattr(self,'business_attempt_refs',[])
+        attempts=[load_json(ref['path']) for ref in refs]
+        tail_dispatches=self.actual_dispatches-len(self.trajectory)
+        final_id=self.current['observation_id'] if self.current else None
+        final_state=load_json(self.current['evidence']['state']['path']) if self.current else {}
+        safe=bool(self.trajectory and final_state.get('visible_text') and not unknown and not self.unknown and not force_pending)
+        if safe:
+            from .reading_progress import same_view
+            prefix=load_json(self.observation_records[self.trajectory[-1]['after_observation_id']]['evidence']['state']['path'])
+            safe=same_view(prefix,final_state)
+        if safe and tail_dispatches:
+            tail=attempts[-1].get('raw_steps',[]) if attempts else []
+            raw=load_json(tail[-1]['path']) if tail else {}
+            safe=(tail_dispatches==1 and raw.get('operation',{}).get('action_type')=='scroll'
+                  and raw.get('action_executed') is True
+                  and raw.get('react',{}).get('after_observation_id')==final_id
+                  and same_view(raw['state'],final_state))
+        unknown=bool(unknown or self.unknown or (tail_dispatches and not safe))
+        flagged=kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
+        self.collection_ending={'protocol':POLICY,'kind':kind,'flagged':flagged,'reason':reason,
+            'business_attempts':len(refs),'actual_atomic_dispatches':self.actual_dispatches,
+            'verified_effective_steps':len(self.trajectory),'unverified_tail_dispatches':tail_dispatches,
+            'zero_dispatch_attempts':sum(a['actual_dispatches_delta']==0 for a in attempts),
+            'finish_count':1,'finish_origin':'host' if kind!='VISIBLE_GOAL_REPORTED' else 'agent',
+            **({'plan_protocol':self.task['fragment']['plan_protocol'],
+                'endpoint_evidence':self.plan_controller.endpoint_basis(self)} if kind=='HOST_PLAN_ENDPOINT' else {}),
+            **({'plan_protocol':self.task['fragment']['plan_protocol'],
+                'boundary_return_evidence':__import__('webcollect.consumer_page_policy',fromlist=['ending_evidence']).ending_evidence(
+                    self.task,self.trajectory,{oid:load_json(o['evidence']['state']['path']) for oid,o in self.observation_records.items()},final_id)
+               } if kind=='HOST_BOUNDARY_RETURN' else {}),
+            'finish_is_business_action':False,'wait_is_business_action':False,
+            'goal_completion':'AGENT_REPORTED_VISIBLE_GOAL' if kind=='VISIBLE_GOAL_REPORTED' else 'NOT_CLAIMED',
+            'external_effect_unknown':unknown,
+            'last_model_intent':getattr(self,'_last_model_intent',None),'last_decision':getattr(self,'_last_decision',None),
+            'safe_for_pending_sample':bool(safe),'attempt_refs':refs,
+            'final_observation_id':final_id,'final_evidence':deepcopy(self.current['evidence']) if self.current else None,
+            'last_attempt':attempts[-1] if attempts else None,
+            'raw_only_pending':not safe}
+        self.event('range-finish',collection_ending=self.collection_ending)
+        self.stop_reason='budget' if kind=='EIGHT_ATTEMPT_LIMIT' else 'ready' if kind in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN') else 'blocked'
+        self.stop_summary=reason
+        self.unknown=self.unknown or unknown
+        self.state='finished' if safe else 'closed_pending_reconciliation'
+
+    def _record_business_attempt(self, step, number, before_dispatch, before_effective, *, result=None, failure=None):
+        raw_paths=sorted((self.steps_directory/'action-attempts').glob(f'business-{number:03}-*.json')) if self.steps_directory else []
+        raw_refs=[{'path':str(p.resolve()),'sha256':file_sha(p)} for p in raw_paths]
+        unknown=bool(self.unknown or (failure and failure.unknown))
+        dispatch_delta=self.actual_dispatches-before_dispatch;effective_delta=len(self.trajectory)-before_effective
+        harmless_no_effect=False
+        if dispatch_delta>effective_delta and raw_refs and self.current:
+            from .reading_progress import same_view
+            tail=load_json(raw_refs[-1]['path'])
+            harmless_no_effect=(tail.get('operation',{}).get('action_type')=='scroll'
+                and tail.get('action_executed') is True and tail.get('react',{}).get('after_observation_id')==self.current['observation_id']
+                and same_view(tail['state'],load_json(self.current['evidence']['state']['path'])))
+        outcome=('EFFECT_UNKNOWN' if unknown else 'VERIFIED' if effective_delta==dispatch_delta and dispatch_delta>0 and not failure
+                 else 'KNOWN_NO_EFFECT' if harmless_no_effect
+                 else 'NOT_DISPATCHED' if dispatch_delta==0 else 'EFFECT_NOT_VERIFIED')
+        reason=failure.reason if failure else (result or {}).get('summary','业务动作已处理')
+        ref=self.event('business-attempt',number=number,step=deepcopy(step),
+            decision_number=self.used['max_decisions'],model_tool_call_id=self.pending_tool_call_id,
+            request_reference=deepcopy(self.active_reference),model_intent=getattr(self,'_last_model_intent',None),
+            decision=getattr(self,'_last_decision',None),raw_steps=raw_refs,
+            actual_dispatches_delta=dispatch_delta,effective_steps_delta=effective_delta,outcome=outcome,reason=reason)
+        if not hasattr(self,'business_attempt_refs'):self.business_attempt_refs=[]
+        self.business_attempt_refs.append(ref)
+        if 5<=number<=8 and outcome!='VERIFIED':
+            self._range_close(outcome,reason,unknown=unknown)
+        elif number==8 and self.plan_controller is None:
+            self._range_close('EIGHT_ATTEMPT_LIMIT','已达到8次业务动作尝试；未获得目标完成确认，保存真实末态待审')
+
     async def _tool_act(self, arguments):
+        if not self._v2():return await self._perform_act(arguments)
+        try:
+            if set(arguments)!= {'observation_id','step'} or self.working_goal is None or arguments['observation_id']!=self.current['observation_id']:
+                return await self._perform_act(arguments)
+            self._validate_step(arguments['step'])
+        except (ValueError,KeyError,TypeError):return await self._perform_act(arguments)
+        self._awaiting_primitive_attempt=False
+        self._last_primitive_failure=None
+        before_count=len(getattr(self,'business_attempt_refs',[]))
+        result=None;failure=None
+        try:result=await self._perform_act(arguments)
+        except ReactStop as error:failure=error
+        if self.state!='recording':
+            return result or self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
+        # Each compiled primitive is counted by _execute_primitive. Only a
+        # refusal before entering that function needs a zero-dispatch row here.
+        if failure is not None and self._last_primitive_failure is failure:raise failure
+        if (self._awaiting_primitive_attempt or (len(getattr(self,'business_attempt_refs',[]))==before_count
+                and (failure or (result or {}).get('status')!='ok'))):
+            number=len(getattr(self,'business_attempt_refs',[]))+1
+            self._active_business_attempt=number
+            self._record_business_attempt(arguments['step'],number,self.actual_dispatches,len(self.trajectory),result=result,failure=failure)
+        if self.state!='recording':
+            return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
+        if failure:raise failure
+        return result
+
+    async def _perform_act(self, arguments):
         from jsonschema import Draft202012Validator
         if self.working_goal is None:
             return self._rejected('act', '尚未建立工作目标；先依据观察提交 goal_update（可与本工具同轮），或继续查询/观察')
@@ -828,6 +1039,11 @@ class ReactSession:
                         '{"observation_id":"当前观察id","step":{"action":"...","control_id":"...","value":"...","goal":"...","expected":"..."}}')
             return self._rejected('act', 'act 参数不合法：' + str(error).splitlines()[0] + hint)
         step = arguments['step']
+        from .consumer_page_policy import enabled as page_policy, boundary, allowed_exit
+        if page_policy(self.task):
+            current_state=load_json(self.current['evidence']['state']['path'])
+            if boundary(current_state) and not allowed_exit(current_state,step.get('action'),step.get('control_id')):
+                return self._rejected('act','LOGIN_DOWNLOAD_BOUNDARY: 下一步仅允许真实取消或返回')
         try:
             self._validate_step(step)
         except ValueError as error:
@@ -935,6 +1151,9 @@ class ReactSession:
         executed = []
         prior_raws = []
         for row in compiled:
+            if self._v2() and self.state!='recording':
+                return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
+            self._awaiting_primitive_attempt=self._v2()
             cid = row.get('control_id')
             selector = index = None
             if cid:
@@ -945,12 +1164,20 @@ class ReactSession:
             try:
                 observation = await capture_before_action(self.page, self.root, selector, index or 0,
                                                           timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
-            except EvidenceStale:
+            except EvidenceStale as error:
+                self.event('action-evidence-failed',error_type=type(error).__name__,
+                    detail=str(error),timing=getattr(error,'action_refresh',None),
+                    observation_id=self.current['observation_id'],target=cid,action_dispatched=False)
                 self._consume('max_replans')
                 return self._need_observation('act', '派发前页面状态过期；本次该原子动作零派发',
                                               data=self._deltas(executed))
             except Exception as error:
-                raise ReactStop('blocked', '派发前取证失败：' + str(error), 'program') from error
+                self.event('action-evidence-failed',error_type=type(error).__name__,
+                    detail=str(error),timing=getattr(error,'action_refresh',None),
+                    observation_id=self.current['observation_id'],target=cid,action_dispatched=False)
+                raise ReactStop('blocked', '派发前取证失败：' + type(error).__name__ + ': ' + str(error), 'program') from error
+            self.event('action-evidence-ready',timing=observation.get('action_refresh'),
+                       observation_id=self.current['observation_id'],target=cid)
             state = observation['state']
             if self.url_check:
                 self.url_check(state['url'])
@@ -1010,11 +1237,38 @@ class ReactSession:
     def _deltas(self, executed, full=False):
         data = {'actual_actions_delta': len(executed), 'effective_steps_delta': len(executed),
                 'executed_primitives': [row['action'] for row in executed]}
+        from .react_protocol import effect_feedback
+        data['effects'] = [effect_feedback(row) for row in self.trajectory[-len(executed):]] if executed else []
+        data['business_completion'] = 'NOT_CLAIMED'
         if full:
             data['observation'] = self._compact(self.current)
         return data
 
     async def _execute_primitive(self, step, row, operation, observation, arguments, element,
+                                 dispatch, executed, prior_raws):
+        if not self._v2():
+            return await self._perform_primitive(step,row,operation,observation,arguments,element,dispatch,executed,prior_raws)
+        self._awaiting_primitive_attempt=False
+        number=len(getattr(self,'business_attempt_refs',[]))+1
+        if number>8:
+            self._range_close('EIGHT_ATTEMPT_LIMIT','已达8次业务动作尝试，不再派发第9次')
+            return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
+        self._active_business_attempt=number
+        before_dispatch=self.actual_dispatches;before_effective=len(self.trajectory)
+        result=None;failure=None
+        try:
+            result=await self._perform_primitive(step,row,operation,observation,arguments,element,dispatch,executed,prior_raws)
+        except ReactStop as error:failure=error
+        self._record_business_attempt({'action':operation['action_type'],'goal':step['goal'],'expected':step['expected']},
+            number,before_dispatch,before_effective,result=result,failure=failure)
+        if self.state!='recording':
+            return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
+        if failure:
+            self._last_primitive_failure=failure
+            raise failure
+        return result
+
+    async def _perform_primitive(self, step, row, operation, observation, arguments, element,
                                  dispatch, executed, prior_raws):
         """Dispatch exactly once. Returns a tool result, or None to continue the queue."""
         from .browser import EvidenceStale, execute, verify_execution_state
@@ -1046,7 +1300,10 @@ class ReactSession:
             new_pages = set(self.page.context.pages) - pages_before
             if len(new_pages) > 1:
                 raise ValueError('一次动作打开多个页面，需单独适配并记录')
-            if new_pages and self.task['fragment'].get('decision_protocol') == NATIVE_VERSION:
+            if new_pages and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+                from .plan_evidence import verify_popup
+                raw['popup_provenance'] = await verify_popup(self.page,next(iter(new_pages)),operation,state)
+            elif new_pages and self.task['fragment'].get('decision_protocol') == NATIVE_VERSION:
                 raw['opened_pages'] = [p.url for p in new_pages]
                 raw.update(dispatched=True, action_executed=True, phase='post_dispatch',
                            execution_error='TOOL_CAPABILITY_UNAVAILABLE: tab switching/back is not supported in this protocol')
@@ -1079,6 +1336,10 @@ class ReactSession:
             raise
         except BaseException as error:
             # After dispatch the real effect may be unknown; never auto-resend.
+            if self._v2() and not dispatch_started:
+                raw.update(execution_error=str(error),phase='pre_dispatch',dispatched=False,action_executed=False)
+                self._write_raw(step_id,raw)
+                raise ReactStop('blocked','派发前失败，零派发：'+str(error),'collector') from error
             raw['execution_error'] = str(error)
             raw['phase'] = 'dispatch'
             raw['dispatched'] = True
@@ -1109,12 +1370,37 @@ class ReactSession:
         before_state = dispatch_observation['state']
         before_id = self.current['observation_id']
         before_image = self.current['evidence']['image']
+        self._pending_navigation = None
+        if self.task['fragment'].get('delayed_navigation_protocol') == 'webcollect-explicit-href-landing-1':
+            self._pending_navigation = {'operation':deepcopy(raw['operation']), 'source':deepcopy(before_state),
+                'source_observation_id':before_id, 'page':self.page, 'pages':tuple(getattr(getattr(self.page,'context',None),'pages',[self.page])),
+                'dispatches':self.actual_dispatches}
         self._navigation_trigger = raw['operation']
         try:
             await self._observe()
         finally:
             self._navigation_trigger = None
+        controller=self.plan_controller
+        if controller is not None and controller.plan and controller.position<len(controller.plan['steps']):
+            from .banded_plan import proves
+            expected=controller.plan['steps'][controller.position]['expected']
+            anchor=operation.get('evidence',{}).get('anchor_element_id') or operation.get('evidence',{}).get('focused_element_id')
+            # Await the semantic result on this already dispatched operation.
+            # Every interim original capture remains archived; no action or
+            # model request is repeated, and the final raw after-frame is the
+            # observed result used by ordinary effect verification below.
+            for refresh in range(2):
+                if proves(expected,self.current,before_state,anchor):break
+                if self._left('max_observations')<=RESERVE['max_observations'] or self._left('max_seconds')<=.1:break
+                self.event('plan-result-wait',operation_id=operation['operation_id'],expected=expected,
+                    previous_observation_id=self.current['observation_id'],refresh=refresh+1,wait_ms=100,dispatched_again=False)
+                await asyncio.sleep(.1)
+                self._navigation_trigger=raw['operation']
+                try:await self._observe()
+                finally:self._navigation_trigger=None
         after = self.current
+        if after['url'] != before_state['url']:
+            self._pending_navigation = None
         after_state = load_json(after['evidence']['state']['path'])
         keys = ('url', 'document_identity', 'scroll', 'values', 'visible_text', 'elements')
         changed_fields = [key for key in keys if before_state.get(key) != after_state.get(key)]
@@ -1160,6 +1446,12 @@ class ReactSession:
             'target_after': ({k: (control['value'] or {}).get(k)
                               for k in ('value', 'checked', 'focused')} if control else None),
             'observation': deepcopy(after['evidence']['image'])}
+        if self.task['fragment'].get('reference_protocol') == REFERENCE_PROTOCOL:
+            from .react_protocol import content_effect, control_state_transition
+            observed['target_owner_transition'] = control_state_transition(before_state, after_state, cid)
+            ids = content_effect(before_state, after_state, cid) if 'visible_content' in effect['fields'] else []
+            observed['visible_result_changes'] = [{'element_id':e['element_id'], 'text':e.get('text','')[:200]}
+                for e in after_state.get('elements', []) if e['element_id'] in ids][:8]
         raw['react']['after_observation_id'] = after['observation_id']
         raw['react']['observed'] = observed
         raw['react']['effect_evidence'] = effect
@@ -1174,12 +1466,35 @@ class ReactSession:
             'observed': observed,
             'semantic_goal': step['goal'], 'semantic_expected': step['expected'],
             'primitive': row['action']}
+        if self.task['fragment'].get('reading_progress_protocol') and len(self.trajectory) >= 2:
+            from .reading_progress import same_view, control_return
+            first,last=self.trajectory[-2:]
+            origin=load_json(self.observation_records[first['before_observation_id']]['evidence']['state']['path'])
+            middle=load_json(self.observation_records[first['after_observation_id']]['evidence']['state']['path'])
+            returned=load_json(self.observation_records[last['after_observation_id']]['evidence']['state']['path'])
+            if same_view(origin,returned) and first['action']==last['action']=='scroll':
+                if control_return(origin,middle,returned,raw['operation']):
+                    self.event('reading-control-return', restored_observation_id=last['after_observation_id'],
+                               next_operation_id=operation['operation_id'],target=cid)
         if self.steps_directory is not None:
             self._write_raw(len(self.trajectory) + 1, raw)
-            row_record['raw_step'] = {'path': str((self.steps_directory / f"step_{len(self.trajectory)+1:03}.json").resolve())}
+            row_record['raw_step'] = {'path': str(self._action_raw_path(len(self.trajectory)+1).resolve())}
             if self.native:
                 row_record['raw_step']['sha256'] = file_sha(row_record['raw_step']['path'])
         self.append_trajectory(row_record)
+        if self.task['fragment'].get('reading_progress_protocol') and len(self.trajectory) >= 2:
+            from .reading_progress import same_view
+            prior = self.trajectory[-2]
+            origin = load_json(self.observation_records[prior['before_observation_id']]['evidence']['state']['path'])
+            from .consumer_page_policy import enabled as page_policy, returned_pair
+            boundary_return=page_policy(self.task) and returned_pair(origin,before_state,after_state,prior,row_record)
+            if (same_view(origin, after_state) and not (
+                    row_record['action'] == 'back' and prior['action'] in ('click','double_click','open_url','hotkey','type','select')
+                    and before_state['url'] != after_state['url']) and not boundary_return):
+                # Keep a pending return until the next actual control action
+                # proves why this viewport was restored. Finish alone cannot
+                # waive it; sealed postprocessing validates the whole sequence.
+                self.event('reading-return-pending', reason='两步回到同一原始状态；须由下一真实控件动作证明用途，不能凑步或凭摘要放行')
         self.event('action-effect', operation=operation['operation_id'],
                    before_observation_id=before_id, after_observation_id=after['observation_id'],
                    changed_fields=changed_fields)
@@ -1190,7 +1505,9 @@ class ReactSession:
         if self.steps_directory is None:
             return
         from .collect import checkpoint_json
-        checkpoint_json(self.steps_directory / f'step_{step_id:03}.json', raw)
+        path=self._action_raw_path(step_id)
+        path.parent.mkdir(parents=True,exist_ok=True)
+        checkpoint_json(path, raw)
 
     # ------------------------------------------------------------------ finish
 
@@ -1234,6 +1551,16 @@ class ReactSession:
 
     async def _native_finish(self, arguments):
         current_id = self.current['observation_id']
+        submitted = deepcopy(arguments)
+        reference = self.active_reference
+        alias = reference['reference'] if reference else None
+        if self.task['fragment'].get('reference_protocol') == REFERENCE_PROTOCOL and reference:
+            if (reference['attempt_id'] == self.attempt_id and reference['observation_id'] == current_id
+                    and reference['decision'] == self.used['max_decisions']):
+                arguments = deepcopy(arguments)
+                if arguments['observation_id'] == alias:
+                    arguments['observation_id'] = current_id
+                arguments['evidence_refs'] = [current_id if ref == alias else ref for ref in arguments['evidence_refs']]
         if (arguments['observation_id'] != current_id or current_id not in arguments['evidence_refs']
                 or any(ref not in self.observations for ref in arguments['evidence_refs'])):
             corrected = {**arguments, 'observation_id':current_id, 'evidence_refs':[current_id]}
@@ -1245,8 +1572,33 @@ class ReactSession:
             return rejected
         if self._left('max_observations') >= 1:
             await self._observe()
+        if self.plan_controller is not None and arguments['stop_reason']=='ready':
+            if not self.plan_controller.proved(self.plan_controller.plan['finish_when'],self):
+                return self._rejected('finish','HOST_ENDPOINT_CHANGED: refreshed sealed final frame no longer proves finish_when')
+        if self.task['fragment'].get('ending_policy'):
+            from .reading_progress import ending
+            proof = ending(len(self.trajectory), load_json(self.current['evidence']['state']['path']))
+            self.event('ending-evidence', **proof, final_observation_id=self.current['observation_id'])
+            if arguments['stop_reason'] == 'ready' and self.trajectory and not proof['visible_terminal_material']:
+                return self._rejected('finish','当前末帧缺少可核对的可见终态；第五步不能自动宣告成功', data=proof)
+            if len(self.trajectory)>=2:
+                from .reading_progress import same_view
+                first,last=self.trajectory[-2:]
+                origin=load_json(self.observation_records[first['before_observation_id']]['evidence']['state']['path'])
+                end=load_json(self.observation_records[last['after_observation_id']]['evidence']['state']['path'])
+                if first['action']==last['action']=='scroll' and same_view(origin,end):
+                    raise ReactStop('blocked','READING_ROUND_TRIP: 两步原样往返尚无后续真实控件用途，保留原动作并拒收','collector')
+        self.event('finish-basis', observation_id=current_id, evidence_refs=arguments['evidence_refs'],
+                   final_observation_id=self.current['observation_id'], summary=arguments['summary'],
+                   submitted_references={'observation_id':submitted['observation_id'], 'evidence_refs':submitted['evidence_refs']},
+                   request_reference=reference)
         self.state = 'finished'
         self.stop_reason, self.stop_summary = arguments['stop_reason'], arguments['summary']
+        if self._v2():
+            original_stop=self.stop_reason
+            self._range_close(('HOST_PLAN_ENDPOINT' if self.plan_controller else 'VISIBLE_GOAL_REPORTED') if original_stop=='ready' else 'AGENT_STOP',
+                              arguments['summary'],force_pending=original_stop!='ready')
+            self.stop_reason=original_stop
         self.short_flow = 0 < len(self.trajectory) < 5
         self.short_flow_reason = self._short_reason() if self.short_flow else None
         return self._ok('finish', summary='原始执行待封存：' + self.stop_reason,
@@ -1287,7 +1639,9 @@ class ReactSession:
                                             for i, url in enumerate(self.page_urls) if not self.native or i < 24],
                          'page_coverage': {'shown':min(len(self.page_urls),24) if self.native else len(self.page_urls),
                             'total':len(self.page_urls), 'remaining_via':'inspect(kind=pages, query, offset)'}},
-            'tools': (native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol']) if self.native
+            'tools': (native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
+                    self.task['fragment'].get('reference_protocol'),self.task['fragment'].get('planning_intent_protocol'),
+                    not getattr(self,'planning_intents',[])) if self.native
                       else tool_definitions(self.task['fragment']['allowed_actions'])),
             **({'_history': self.history} if self.native else {}),
             'output_requirement': '每轮恰一个原生工具调用' if self.native else '只输出一个 JSON 对象，顶层字段恰为 goal_update（可为 null）、'
@@ -1295,11 +1649,35 @@ class ReactSession:
         }
 
         if self.task['fragment'].get('decision_protocol') == NATIVE_VERSION:
-            from .react_context import project as project_context
+            from .react_context import project as project_context, collection_facts
+            result['collection_facts'] = deepcopy(self.context.get('collection_facts') or collection_facts())
+            if self.active_reference:
+                result['output_requirement'] += '；finish可用本请求request_observation_ref短引用，其他工具继续用原观察ID'
+                result['request_observation_ref'] = self.active_reference['reference']
+            result['progress']['counting_basis'] = '仅原子派发且效果已验证；observe/inspect与语义工具调用不计步'
             result['host_facts'] = {'actions': compact_trajectory(self.trajectory),
                 'failed_tools': [event for event in getattr(self, 'failure_facts', [])],
                 'unknown': self.unknown, 'glm_http_requests': self.glm_http_requests,
                 'visited_pages': list(dict.fromkeys(o['url'] for o in self.observation_records.values()))}
+            if self.task['fragment'].get('reading_progress_protocol'):
+                from .reading_progress import project as reading, ending
+                states = {oid:load_json(o['evidence']['state']['path']) for oid,o in self.observation_records.items()}
+                result['reading_progress'] = reading(states, self.current['observation_id'], self.trajectory)
+                result['ending_evidence'] = ending(len(self.trajectory), states[self.current['observation_id']])
+            if self._v2():
+                from .closing_policy import system_prompt, VERSION as POLICY
+                # V1 remains byte-for-byte available to historical tasks.
+                result['system'] = system_prompt(result['system'])
+                result['ending_evidence']={'protocol':POLICY,'business_attempts':len(getattr(self,'business_attempt_refs',[])),
+                    'actual_atomic_dispatches':self.actual_dispatches,'verified_effective_steps':len(self.trajectory),
+                    'unverified_tail_dispatches':self.actual_dispatches-len(self.trajectory),
+                    'finish_counted_as_action':False,'attempt_interval':[5,8]}
+                result['reading_progress']['instruction']='按当前新正文与位置核对目标；达到目标就finish，不凑步。5–8次业务动作尝试内异常尾步由宿主收口并标记。'
+            if self.task['fragment'].get('planning_intent_protocol'):
+                result['planning_basis']={'site_primary_category':self.task.get('site_category','UNKNOWN'),
+                    'page_purpose':(self.task.get('candidate_binding') or {}).get('candidate',{}).get('page_purpose','UNKNOWN'),
+                    'intent_history':getattr(self,'planning_intents',[])[-2:],
+                    'instruction':'首轮task_intent按原目标、主类、有据用途与可信首帧建立类型意向及可见结束条件；用途UNKNOWN可先observe。只提交本轮一个下一工具。意向不是实际标签，不声明未执行的购买/对局。链接清单不是已访问正文。'}
             return project_context(result)
         return result
 
@@ -1310,6 +1688,8 @@ class ReactSession:
         return stripped
 
     async def _round(self):
+        dispatches_before = self.actual_dispatches
+        effective_before = len(self.trajectory)
         try:
             await self._round_impl()
             if self.budgets['max_no_progress'] is None:
@@ -1329,7 +1709,18 @@ class ReactSession:
             self.no_progress = self.no_progress + 1 if stalled else 0
             if self.no_progress >= self.budgets['max_no_progress']:
                 raise ReactStop('blocked', '连续无进展轮次达到上限', 'collector')
+        except ReactStop as error:
+            if self.native and self.pending_tool_call_id:
+                from .react_protocol import effect_feedback
+                self.last_tool_result = {'tool':'host', 'status':'stopped', 'summary':str(error),
+                    'data':{'actual_actions_delta':self.actual_dispatches-dispatches_before,
+                            'effect_status':'UNKNOWN' if self.unknown or error.unknown else 'NOT_ESTABLISHED',
+                            'effective_steps_delta':len(self.trajectory)-effective_before,
+                            'effects':[effect_feedback(row) for row in self.trajectory[effective_before:]],
+                            'stop_reason':error.stop_reason, 'business_completion':'NOT_CLAIMED'}}
+            raise
         finally:
+            self.active_reference = None
             if self.native and self.pending_tool_call_id:
                 result = deepcopy(self.last_tool_result) if self.last_tool_result else {
                     'tool': 'host', 'status': 'stopped', 'stop_reason': self.stop_reason,
@@ -1339,14 +1730,26 @@ class ReactSession:
                 self.pending_tool_call_id = None
 
     async def _round_impl(self):
+        if self.plan_controller is not None:
+            try:
+                await self.plan_controller.round(self)
+            except ValueError as error:
+                self.event('plan-protocol-rejected',reason=str(error),actual_dispatches=self.actual_dispatches)
+                raise ReactStop('blocked',str(error),'model') from error
+            return
         from jsonschema import Draft202012Validator
         if self.native or self.glm_session_id:
             self._check_request_budget()
+        if self.task['fragment'].get('reference_protocol') == REFERENCE_PROTOCOL:
+            self.active_reference = {'reference': 'r_' + secrets.token_urlsafe(12),
+                'attempt_id':self.attempt_id, 'observation_id':self.current['observation_id'],
+                'decision':self.used['max_decisions'] + 1, 'boundary':self.binding}
+            self.event('request-observation-reference', **self.active_reference)
         try:
             prompt = self._prompt()
         except ValueError as error:
             raise ReactStop('blocked', str(error), 'program') from error
-        self.event('model-intent', prompt=self._strip_prompt(prompt))
+        self._last_model_intent=self.event('model-intent', prompt=self._strip_prompt(prompt))
         self._consume('max_decisions')
         if not self.native:
             self._consume('max_model_calls')
@@ -1391,6 +1794,15 @@ class ReactSession:
                 self.event('decision-rejected', reason=self.last_tool_result['summary'])
                 return
             cid = response['tool_call_id']
+            intent=response['arguments'].get('task_intent')
+            if intent is not None:
+                if intent['basis_observation_id'] != self.current['observation_id'] or (intent['status']=='GROUNDED' and not intent['task_types']):
+                    self.last_tool_result=self._rejected('protocol','task_intent 必须引用当前观察；缺类型依据请用UNKNOWN')
+                    self.event('intent-rejected',intent=intent)
+                    return
+                if not hasattr(self,'planning_intents'):self.planning_intents=[]
+                self.planning_intents.append(deepcopy(intent))
+                self.event('planning-intent',intent=intent)
             self.tool_call_ids.add(cid)
             self.history.extend([deepcopy(response['user_message']), deepcopy(response['assistant_message'])])
             self.pending_tool_call_id = cid
@@ -1404,7 +1816,7 @@ class ReactSession:
                 '决策 JSON 不符合协议：' + str(error).splitlines()[0])
             self.event('decision-rejected', response=decision, reason=str(error))
             return
-        self.event('decision', decision={'goal_update': decision['goal_update'],
+        self._last_decision=self.event('decision', decision={'goal_update': decision['goal_update'],
             'decision_summary': decision['decision_summary'],
             'tool_call': decision['tool_call']})
         self.last_decision_summary = decision['decision_summary']
@@ -1511,6 +1923,44 @@ class ReactSession:
     async def _run_preflight(self):
         if self.preflight is not None:
             record = await self.preflight(self.page, self.root / 'preflight')
+            if self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+                for retry in range(1,3):
+                    summary=(record or {}).get('summary',{})
+                    if summary.get('routing')!='REVIEW_REQUIRED' or not summary.get('related_stability_failures') or record.get('error') or record.get('completed_probe_count',0)<2:break
+                    self.event('preflight-strict-recheck',prior_summary=summary,recheck=retry,same_page=True,no_navigation=True)
+                    await self.page.wait_for_timeout(400)
+                    record=await self.preflight(self.page,self.root/('preflight-recheck-'+str(retry)))
+                    if (record or {}).get('summary',{}).get('routing')!='REVIEW_REQUIRED':
+                        await self._observe()
+                        break
+                summary=(record or {}).get('summary',{})
+                if (summary.get('routing')=='REVIEW_REQUIRED' and not record.get('error')
+                        and summary.get('routing_before_stability_override')=='NORMAL_M1'
+                        and summary.get('related_stability_failures')):
+                    from .browser import stability_pair
+                    from .goal_evidence import VERSION as evidence_version, contract_for, search_focus_from_pair
+                    contract = contract_for(self.task) or {}
+                    for retry in range(1,4):
+                        await self.page.wait_for_timeout(600)
+                        await self._observe();before=self.current
+                        await self._observe();after=self.current
+                        proof=stability_pair(load_json(before['evidence']['state']['path']),
+                            load_json(after['evidence']['state']['path']),
+                            Path(before['evidence']['image']['path']).read_bytes(),
+                            Path(after['evidence']['image']['path']).read_bytes())
+                        self.event('preflight-current-strict-pair',pair=retry,before=before['evidence'],
+                            after=after['evidence'],proof=proof,old_diagnostic_route='REVIEW_REQUIRED',
+                            same_page=True,no_navigation=True,rule_unchanged=True)
+                        if proof['accepted']:return
+                        if (contract.get('kind') == 'reading' and contract.get('version') == evidence_version
+                                and record.get('completed_probe_count', 0) >= 2):
+                            target = search_focus_from_pair(before, after, proof)
+                            if target:
+                                self.preflight_search_focus = target
+                                self.event('preflight-scoped-search-focus', target=target, pair=retry,
+                                           before=before['evidence'], after=after['evidence'],
+                                           full_page_accepted=False, authorized_first_action='focus_by_click')
+                                return
             routing = (record or {}).get('summary', {}).get('routing')
             if routing == 'REVIEW_REQUIRED':
                 summary = record.get('summary', {})
@@ -1549,7 +1999,15 @@ class ReactSession:
         if self.native:
             self.short_flow = 0 < len(self.trajectory) < 5
             self.short_flow_reason = self._short_reason() if self.short_flow else None
+        if self._v2() and not getattr(self,'collection_ending',None):
+            original_stop=self.stop_reason
+            budget_prefix=(original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
+                           and 5<=len(getattr(self,'business_attempt_refs',[]))<=8 and bool(self.trajectory))
+            self._range_close('MODEL_BUDGET_LIMIT' if budget_prefix else 'RAW_PENDING',
+                              self.stop_summary or '未获得可保存的可信结束依据',unknown=self.unknown,force_pending=not budget_prefix)
+            self.stop_reason=original_stop
         terminal = {'protocol': REACT_VERSION, 'state': self.state, 'stop_reason': self.stop_reason,
+            **({'collection_ending':self.collection_ending} if self._v2() else {}),
             'host_failure':getattr(self,'host_failure',False),
             **({'glm_http_requests':self.glm_http_requests} if self.glm_http_requests is not None else {}),
             **({'stop_details': self.stop_details} if self.stop_details else {}),
@@ -1562,6 +2020,9 @@ class ReactSession:
             'final_observation_id': self.observations[-1] if self.observations else None,
             'trajectory': [row['operation_id'] for row in self.trajectory],
             'goal_updates': self.goal_updates, 'working_goal': self.working_goal,
+            **({'goal_evidence':self.plan_controller.fact_progress(self)} if self.plan_controller else {}),
+            'delayed_navigations': getattr(self,'delayed_navigations',[]),
+            'planning_intents': getattr(self,'planning_intents',[]),
             'used': {k: self.used[k] for k in BUDGET_KEYS},
             'elapsed_seconds': time.monotonic() - self.started}
         terminal_ref = exclusive(self.root / 'terminal.json', terminal)
@@ -1615,6 +2076,7 @@ class ReactSession:
         self.host_failure = stop is not None
         receipt = self._close()
         return {'host_failure':self.host_failure, 'stop_reason': self.stop_reason, 'stop_summary': self.stop_summary,
+                **({'collection_ending':self.collection_ending} if self._v2() else {}),
                 **({'stop_details': self.stop_details} if self.stop_details else {}),
                 'failure_class': self.failure_class, 'unknown': self.unknown,
                 'effective_steps': len(self.trajectory), 'actual_actions': self.actual_dispatches,
@@ -1747,8 +2209,14 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
     """Original attempt identity, tool history and actual HTTP dispatch accounting."""
     from .model_gateway import ModelGateway
     from .agent_controller import _job_request_count
+    from .goal_evidence import contract_for
     gateway = None  # Cached/UNKNOWN paths do not select or read an account.
     protocol = task['fragment']['decision_protocol']
+    first_plan_effort = 'max'
+    grounded = bool(contract_for(task))
+    current_plan = task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8')
+    if ledger.real_glm and task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+        first_plan_effort = 'low' if grounded else ledger.config['model'].get('reasoning_effort', 'max')
     request_limit = task['fragment']['budgets']['max_model_calls']
     if ledger.real_glm and 'glm_http_call_limit' in task['fragment']:
         request_limit = min(request_limit or SessionGLMCallLimit.limit, SessionGLMCallLimit.limit)
@@ -1801,7 +2269,10 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
             if gateway is None:
                 gateway = ModelGateway(ledger)
             user_payload = {key: value for key, value in prompt.items()
-                            if key not in ('system', 'tools', '_history')}
+                            if key not in ('system', 'tools', '_history', '_images')}
+            if prompt.get('protocol') in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+                user_payload=deepcopy(user_payload)
+                user_payload['observation'].pop('image_ref',None)
             history = deepcopy(prompt.get('_history', []))
             if ledger.real_glm:
                 # Keep the current PNG and most recent historical images in this
@@ -1813,6 +2284,27 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                 for image in images[:excess]:
                     image.clear()
                     image.update(type='text', text='该轮截图已保存在原观察记录中，本次请求省略重传。')
+            if prompt.get('protocol') in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+                text_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+                common = dict(system=prompt['system'], images=(prompt.get('_images') or [prompt['observation']['image_ref']])[-ledger.config['model']['max_images']:],
+                    attempts=2 if grounded else 1, output_limit=ledger.config['model']['max_completion_tokens'],
+                    reasoning_effort=first_plan_effort if prompt['phase'] == 'first' or grounded else 'max',
+                    attempt_id=attempt_id, max_requests=request_limit)
+                if prompt['phase'] == 'first':
+                    patient = current_plan and ledger.real_glm
+                    first_timeout = None
+                    if patient:
+                        first_timeout = choose.first_plan_timeout_seconds
+                    elif prompt['protocol'] in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+                        first_timeout = min(300,ledger.config['budget']['lease_seconds']-10)
+                    response = await asyncio.to_thread(gateway.call_tool, job, prompt['protocol'],
+                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
+                else:
+                    from .banded_plan import choice_schema
+                    response = await asyncio.to_thread(gateway.call_message, job, prompt['protocol'],
+                        text_payload, choice_schema(grounded, inherited=prompt['protocol']=='webcollect-banded-conditional-plan-8'), grounded_choice=grounded, content_envelope=('single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
+                ledger.finish(job, result=response)
+                return response
             response = await asyncio.to_thread(gateway.call_tool, job, protocol,
                 json.dumps(user_payload, ensure_ascii=False, sort_keys=True), prompt['tools'],
                 system=prompt['system'], history=history,
@@ -1828,6 +2320,13 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
             ledger.finish(job, 'failed', error='budget:' + (error.code if isinstance(error, SessionGLMCallLimit) else type(error).__name__))
             raise
         except ValueError as error:
+            with ledger.connect() as con:
+                unresolved=[row['id'] for row in con.execute("SELECT id,state FROM model_requests WHERE job_id=? AND state IN ('reserved','unknown')",(job['id'],))
+                    if row['state']=='reserved' or not ledger.timeout_retry_answered(con,row['id'])]
+            if unresolved:
+                # A local lease error cannot turn an already-dispatched UNKNOWN
+                # into a settled model fault or authorize a replacement request.
+                raise OutcomeUnknown('Original decision HTTP unresolved after '+type(error).__name__+': '+','.join(unresolved)) from error
             sent = _job_request_count(ledger, job['id'])
             ledger.finish(job, 'failed', error=('settled:' if sent else 'local:') + type(error).__name__)
             if sent:
@@ -1838,4 +2337,7 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
             raise
 
     choose.request_limit = request_limit
+    choose.first_plan_reasoning_effort = first_plan_effort
+    choose.first_plan_timeout_seconds = 600 if current_plan and ledger.real_glm else None
+    choose.branch_reasoning_effort = first_plan_effort if grounded else 'max'
     return choose

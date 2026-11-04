@@ -196,7 +196,7 @@ async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_ch
         write_json(directory / 'failure.json', error)
     summary = summarize_preflight(probes, assessments, changes)
     if stability_failures:
-        summary={**summary,'routing':'REVIEW_REQUIRED','related_stability_failures':stability_failures,
+        summary={**summary,'routing_before_stability_override':summary['routing'],'routing':'REVIEW_REQUIRED','related_stability_failures':stability_failures,
                  'reasons':summary.get('reasons',[])+['New synchronized observations have incomplete loading, changed task evidence or pixels outside proved unrelated IMG regions.']}
     if error:
         summary = {**summary, 'routing': 'REVIEW_REQUIRED', 'incomplete': True,

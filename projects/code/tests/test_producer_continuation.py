@@ -213,7 +213,7 @@ class Continuation(unittest.TestCase):
         with ledger.connect() as con:
             self.assertEqual(tuple(con.execute("select state,usage from model_requests where id='refused'").fetchone()),('unknown',None))
 
-    def test_closed_producer_get_only_holds_its_uri_on_project_opt_in(self):
+    def test_closed_producer_get_only_holds_its_uri_before_and_after_legacy_opt_in(self):
         from test_model_provider_protocols import ProviderProtocolTests
         from site_planner.entry_access import check_entry
         from webcollect.site_failure_stop import SiteFailureStore, SiteStopped
@@ -227,7 +227,7 @@ class Continuation(unittest.TestCase):
         with patch('site_planner.entry_access.fetch_status',side_effect=ConnectionResetError('test closed')):
             record,ref=check_entry(ledger,'a',first,self.root)
         self.assertEqual(record['result'],'HELD')
-        with self.assertRaises(SiteStopped):guard.guard(second)
+        self.assertEqual(guard.guard(second)['page_scoped_unknowns'],1)
         with self.assertRaises(ValueError):
             guard.enable_closed_entry_uri_scope(scope['history_set'],scope['consumer_db'],'operator decision')
         guard.enable_closed_entry_uri_scope(scope['history_set'],scope['producer_db'],'operator decision')

@@ -46,7 +46,7 @@ def pool_for_catalog(catalog):
     return str(Path(value['pool']).resolve())
 
 
-def _page(pool, uri):
+def _page(pool, uri, candidate=None):
     from site_planner.site_pool import page_uri
     app = pool.application(uri)
     if app is None:
@@ -54,11 +54,22 @@ def _page(pool, uri):
     path = urlsplit(page_uri(uri)).path.rstrip('/') or '/'
     key = object_sha256([app['id'], path])
     with pool.connect() as con:
+        if candidate:
+            claimed = con.execute(
+                'SELECT q.snapshot,q.version,d.application_id FROM candidate_claims q '
+                'JOIN data_candidates d ON d.candidate_id=q.candidate_id '
+                'WHERE q.candidate_id=? AND q.claim_id=?',
+                (candidate['candidate_id'], candidate['claim_id'])).fetchone()
+            if (not claimed or claimed['version'] != candidate['version'] or claimed['application_id'] != app['id']
+                    or json.loads(claimed['snapshot']).get('entry_url') != uri):
+                raise ValueError('Table2 projection differs from the original claimed entry')
         candidates = [row for row in con.execute(
             'WITH RECURSIVE related(id) AS (SELECT ? UNION SELECT m.source FROM merges m JOIN related r ON m.target=r.id) '
             'SELECT p.id,p.uri FROM pages p JOIN related r ON p.application_id=r.id', (app['id'],))
             if (urlsplit(row['uri']).path.rstrip('/') or '/') == path]
     if not candidates:
+        if candidate:
+            return candidate['candidate_id'], key
         raise ValueError('Collection page must already exist in the shared pool')
     exact = [row for row in candidates if row['uri'] == page_uri(uri)]
     return (exact or candidates)[0]['id'], key
@@ -66,6 +77,22 @@ def _page(pool, uri):
 
 def _revision(con, scope):
     return con.execute('SELECT COALESCE(MAX(event_id),0) FROM m4_events WHERE scope_id=?', (scope,)).fetchone()[0]
+
+
+def _projection_uri(task):
+    # New consumer tasks project against the producer's original candidate
+    # page. A proved redirect remains attempt evidence; it never requires a
+    # consumer-created Table1 page. Old frozen tasks keep their original map.
+    if (task.get('workflow_proposal',{}).get('spec',{}).get('consumer_projection') in ('candidate-entry-1','table2-entry-2')
+            and task.get('candidate_binding')):
+        return task['candidate_binding']['candidate']['entry_url']
+    return task.get('pilot_identity', {}).get('task_page', {}).get('canonical_uri', task['site_uri'])
+
+
+def _projection_candidate(task):
+    if task.get('workflow_proposal', {}).get('spec', {}).get('consumer_projection') == 'table2-entry-2':
+        binding = task['candidate_binding']
+        return {k:binding[k] for k in ('candidate_id','claim_id','version')}
 
 
 def _snapshot(registry, scope):
@@ -77,7 +104,7 @@ def _snapshot(registry, scope):
         rows = []
         for row in con.execute('SELECT * FROM m4_tasks WHERE scope_id=? ORDER BY task_key', (scope,)):
             task = json.loads(row['task_json'])
-            uri = task.get('pilot_identity', {}).get('task_page', {}).get('canonical_uri', task['site_uri'])
+            uri = _projection_uri(task)
             attempts = [dict(a) for a in con.execute(
                 'SELECT attempt_id,sample_id,status,failure_class,root_cause,evidence_json FROM m4_attempts '
                 'WHERE task_key=? ORDER BY created_at,rowid', (row['task_key'],))]
@@ -97,6 +124,7 @@ def _snapshot(registry, scope):
                 status = 'failed'  # Retry eligibility stays in the original task status.
             rows.append({'task_key': row['task_key'], 'task_id': row['task_id'],
                 'task_version': row['task_version'], 'uri': uri, 'status': status,
+                **({'table2_entry':entry} if (entry := _projection_candidate(task)) else {}),
                 'production_status': row['status'], 'attempts': attempts, 'qc': qc,
                 'fragment': 'fragment' in task,
                 'blocking': row['status'] in BLOCKING})
@@ -119,7 +147,7 @@ def sync(pool_path, registry, scope):
     per_task = check_pool_binding(pool, registry)
     value = _snapshot(registry, scope)
     digest = object_sha256(value)
-    mapped = [(row, *_page(pool, row['uri'])) for row in value['tasks']]
+    mapped = [(row, *_page(pool, row['uri'], row.get('table2_entry') if per_task else None)) for row in value['tasks']]
     with pool.connect(write=True) as con:
         con.executescript(POOL_SCHEMA)  # Additive, opt-in extension; base schema and evidence stay intact.
         con.execute('BEGIN IMMEDIATE')
@@ -154,14 +182,14 @@ def sync(pool_path, registry, scope):
     return value['revision']
 
 
-def page_state(pool, uri):
+def page_state(pool, uri, *, candidate=None):
     from site_planner.site_pool import page_uri
     with pool.connect() as con:
         if not _exists(con, 'collection_tasks'):
-            if not con.execute('SELECT 1 FROM pages WHERE uri=?', (page_uri(uri),)).fetchone():
-                _page(pool, uri)  # Unknown pages and unresolved aliases still fail closed.
+            if candidate or not con.execute('SELECT 1 FROM pages WHERE uri=?', (page_uri(uri),)).fetchone():
+                _page(pool, uri, candidate)
             return {'status': 'not_started', 'dispatch_allowed': True, 'tasks': []}
-    _, key = _page(pool, uri)
+    _, key = _page(pool, uri, candidate)
     with pool.connect() as con:
         tasks = [dict(r) for r in con.execute('SELECT * FROM collection_tasks WHERE page_key=?', (key,))]
         pending = False
@@ -200,8 +228,8 @@ def guard_plan(pool_path, registry, scope, plan):
                 raise ValueError('Cannot replace an existing shared pool binding')
             store.sync_site_pool()
     for task in plan['tasks']:
-        uri = task.get('pilot_identity', {}).get('task_page', {}).get('canonical_uri', task['site_uri'])
-        state = page_state(pool, uri)
+        uri = _projection_uri(task)
+        state = page_state(pool, uri, candidate=_projection_candidate(task) if per_task else None)
         from .fragment_workflow import is_fragment
         foreign = [t for t in state['tasks'] if t['blocking'] and not per_task and not is_fragment(task) and not (
             t['registry'] == str(Path(registry).resolve()) and t['scope_id'] == scope

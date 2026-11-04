@@ -1,7 +1,6 @@
 """Runtime-only model credentials; never return them in configuration or logs."""
 import hashlib
 import os
-import random
 import re
 from pathlib import Path
 
@@ -18,14 +17,8 @@ def account_id(value):
     return 'glm-' + hashlib.sha256(value.encode()).hexdigest()
 
 
-def _glm_session_key(account_keys, excluded_accounts=(), required_account=None):
-    """One uniform random pick per session; kept for the whole session.
-
-    2026-10-30 user authorization: the glm account list holds several equally
-    authorized keys; each ModelGateway (one planning-collection trajectory)
-    selects one when it starts. A failing key is never rotated mid-session —
-    the failure is recorded in the original ledger like any other.
-    """
+def _glm_session_key(account_keys, excluded_accounts=(), required_account=None, selection_index=0):
+    """Use YAML list order for new reservations; recover an existing account by its identity."""
     available = []
     seen = set()
     for entry in account_keys:
@@ -45,10 +38,10 @@ def _glm_session_key(account_keys, excluded_accounts=(), required_account=None):
             if account_id(key) == required_account:
                 return key
         raise ValueError('Original credential account unavailable; no replacement selection')
-    return random.SystemRandom().choice(account_keys)
+    return account_keys[selection_index % len(account_keys)]
 
 
-def _yaml_account(path, account, excluded_accounts=(), required_account=None):
+def _yaml_account(path, account, excluded_accounts=(), required_account=None, selection_index=0):
     import yaml
     class UniqueLoader(yaml.SafeLoader):
         pass
@@ -77,7 +70,7 @@ def _yaml_account(path, account, excluded_accounts=(), required_account=None):
         else:
             value=accounts[account]
             if account=='glm' and isinstance(value,list):
-                value=_glm_session_key(value, excluded_accounts, required_account)
+                value=_glm_session_key(value, excluded_accounts, required_account, selection_index)
             if isinstance(value,dict):value=value['api_key']
         if not isinstance(value,str):raise ValueError('String account key required')
         return value.strip()
@@ -97,7 +90,7 @@ def _ark_value(value):
     return value  # A dedicated ark1 file or environment variable is one token.
 
 
-def credential(model, *, excluded_accounts=(), required_account=None):
+def credential(model, *, excluded_accounts=(), required_account=None, selection_index=0):
     explicit_yaml = model.get('api_key_file') and Path(model['api_key_file']).suffix.lower() in ('.yaml', '.yml')
     value = None if explicit_yaml and model['provider'] == 'glm' else os.environ.get(model['api_key_env'])
     if not value:
@@ -113,7 +106,7 @@ def credential(model, *, excluded_accounts=(), required_account=None):
                 source = Path(source) / 'ark1'
             if Path(source).suffix.lower() in ('.yaml','.yml'):
                 account = 'ark1' if model['provider'] == 'ark' else PROJECT_GLM_ACCOUNT
-                value=_yaml_account(source,account,excluded_accounts,required_account)
+                value=_yaml_account(source,account,excluded_accounts,required_account,selection_index)
             else:
                 with Path(source).open('r', encoding='utf-8') as stream:
                     value = stream.read(4097).strip()

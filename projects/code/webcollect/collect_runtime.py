@@ -72,7 +72,7 @@ def source_identity():
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
              'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
              'workflow_proposal.py', 'fragment_workflow.py', 'agent_controller.py', 'agent_observation.py', 'agent_audit.py', 'agent_feedback.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py',
-             'react_session.py', 'postprocess.py']
+             'react_session.py', 'react_context.py', 'collection_context.py', 'postprocess.py', 'request_quarantine.py','closing_policy.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -349,17 +349,22 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             ledger.consume('probe_pages', (parent_job or {'id': 'collection'})['id'] + ':react-preflight', 1)
         from .preflight import inspect_page
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
-    feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger)
+    feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger,
+        candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
     if feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
+    from .banded_plan import enabled as banded_plan_enabled
+    if banded_plan_enabled(task):
+        from .band_budget import reserve as reserve_plan_band
+        feedback_context['band_budget'] = reserve_plan_band(registry, task, attempt)
     chooser = react_chooser(ledger, task, attempt['attempt_id'], parent_job=parent_job)
     if page is None:
         page = await context.new_page()
     page.set_default_timeout(15000)
     session = ReactSession(task, evidence / 'raw', chooser, page, steps_directory=evidence,
         navigation=navigation, url_check=url_check, preflight=preflight,
-        frame_guard=frame_guard, site_context=feedback_context,
+        frame_guard=frame_guard, site_context=feedback_context, attempt_id=attempt['attempt_id'],
         **({'entry_observation': entry_observation} if entry_observation is not None else {}))
     summary = await session.run()
     raw_receipt = summary['raw_receipt']
@@ -382,6 +387,16 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         return {'status': 'rejected', 'failure_class': failure_class,
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, **stop_data}
+    ending=summary.get('collection_ending')
+    if ending and not ending.get('safe_for_pending_sample'):
+        pending=evidence/'raw-ending-pending.json'
+        write_json(pending,{'schema_version':'webcollect-raw-ending-pending-2',
+            'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
+            'saved_raw':True,'normal_sample_saved':False,'requires_reconciliation':True,'QC_status':'NOT_RUN'})
+        result=finish_failure('interrupted' if summary['unknown'] else 'collector',
+            'react_raw_ending_pending:'+ending['reason'],_evidence(pending))
+        return {**result,'raw_preservation_status':'saved_pending_reconciliation','collection_ending':ending,
+                'pending_receipt':str(pending),'QC_status':'NOT_RUN'}
     if summary['unknown'] or summary['failure_class'] == 'interrupted':
         react_close_event(store, attempt, 'react_raw_unknown', _event_now(),
             {'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, 'unknown': True})
@@ -441,6 +456,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                               _evidence(collision) + [derived_ref])
     index.add_sample(sample)
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
+            **({'collection_ending':ending} if ending else {}),
             'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
             'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve()), **stop_data}
 
@@ -696,6 +712,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 from .agent_feedback import site_context
                                 planning_context = plan.get('generation',{}).get('site_planning_context') or {}
                                 feedback_context = site_context(registry, task['site_uri'], model_ledger=controller_ledger,
+                                    candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'),
                                     generation=planning_context.get('history',[]),
                                     quality=[q['reference'] for q in planning_context.get('quality_feedback',[])])
                                 if feedback_context['unresolved']:

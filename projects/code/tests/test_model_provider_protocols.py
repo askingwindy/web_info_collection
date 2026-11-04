@@ -600,7 +600,10 @@ class NativeToolProtocolTests(unittest.TestCase):
                     gateway.call_tool(job, 'parallel-' + str(index), 'x', self.tools, system='s',
                                       attempt_id='shared-attempt', max_requests=24)
                     return 'sent'
-                except BudgetStop:
+                except (BudgetStop, OutcomeUnknown):
+                    # The last permitted request can still be reserved while
+                    # this thread reaches the cap. Its UNKNOWN denial must
+                    # remain distinct from a settled budget denial.
                     return 'denied'
             with ThreadPoolExecutor(max_workers=4) as executor:
                 outcomes = list(executor.map(send, range(25)))

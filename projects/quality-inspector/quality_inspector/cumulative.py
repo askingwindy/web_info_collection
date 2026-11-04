@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .contract import digest, fingerprint
+from .category_coverage import parent_category, category_coverage
 from .duplicates import analyze_inputs, analysis_error, summarize
 from .format_checks import run as format_run
 from .layout import discover
@@ -54,7 +55,7 @@ def _check_quality_batch(ids, categories, short_ids, duplicate, targets):
     if (duplicate['summary'].get('analysis_status') != 'COMPLETE'
             or duplicate['summary'].get('unadjudicated_pair_count') != 0):
         raise ValueError('Quality batch requires a complete four-route scan with no unresolved pairs')
-    distribution = Counter(categories[sid] for sid in ids)
+    distribution = Counter(parent_category(categories[sid]) for sid in ids)
     short = len(short_ids.intersection(ids))
     resolution = summarize(duplicate, ids)
     routes = resolution['current_route_pair_counts']
@@ -101,9 +102,10 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
     targets = selected['configuration']['targets']; errors = []; paths = []; snapshots = {}; annotations = []
     errors.extend(versions['errors'])
     samples = []; rows = []; packages = []; sites = {}; uri_owners = {}; ids = set(); active_sites = set()
+    mapped_categories = {}
     contract, contract_hash = fingerprint()
     if selected['configuration']['attachments'] != contract['attachments']:
-        errors.append({'reason': 'Profile attachments differ from installed four-document authority'})
+        errors.append({'reason': 'Profile attachments differ from installed authority'})
     for item in raw['packages']:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not isinstance(item.get('package_files_sha256'), dict):
             raise ValueError('Each cumulative package must have a path and complete file hashes')
@@ -140,6 +142,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             assignments = {row['sample_id']: row['site_id'] for row in listing['samples']}
             local_ids = {sample['sample_id'] for sample in formats['samples']}
             metadata_ids = [row.get('sample_id') for row in local_rows]
+            metadata_counts = Counter(metadata_ids)
             if len(metadata_ids) != len(set(metadata_ids)) or set(metadata_ids) != local_ids:
                 errors.append({'package': str(root), 'reason': 'metadata IDs must cover local samples exactly once'})
             if (listing.get('schema_version') != 'webcollect-site-list-1'
@@ -152,6 +155,8 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
                 site = local_sites.get(row['site_id'])
                 if not site or site.get('site_category') != row['site_category'] or assignments.get(row['sample_id']) != row['site_id']:
                     errors.append({'package': str(root), 'reason': 'site/category/sample mapping differs: ' + row['sample_id']})
+                elif row['sample_id'] in effective_ids and metadata_counts[row['sample_id']] == 1:
+                    mapped_categories[row['sample_id']] = parent_category(site.get('site_category'))
             for sid, site in local_sites.items():
                 uri = urlsplit(site['uri'])
                 if uri.scheme not in ('http', 'https') or not uri.hostname or uri.username or uri.password:
@@ -160,7 +165,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
                 members = site.get('sample_ids')
                 if not isinstance(members, list) or len(members) != len(set(members)) or set(members) != assigned:
                     errors.append({'package': str(root), 'reason': 'site membership differs: ' + str(sid)})
-                identity = (site['uri'], site['site_category'])
+                identity = (site['uri'], parent_category(site['site_category']))
                 if sid in sites and sites[sid] != identity:
                     errors.append({'package': str(root), 'reason': 'site identity/category changes across packages: ' + sid})
                 if site['uri'] in uri_owners and uri_owners[site['uri']] != sid:
@@ -169,7 +174,12 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         except (OSError, ValueError, KeyError, TypeError, AttributeError, csv.Error) as error:
             errors.append({'package': str(root), 'reason': 'cumulative metadata/source error: ' + str(error)})
     batch_ids = _quality_batch_ids(raw['quality_batch_ids']) if 'quality_batch_ids' in raw else None
-    categories = Counter(row.get('site_category', '') for row in rows); resolutions = set(); short = 0
+    categories = Counter(parent_category(row.get('site_category')) for row in rows); resolutions = set(); short = 0
+    coverage = category_coverage(Counter(mapped_categories.values()), selected['configuration'])
+    if coverage['status'] == 'FAIL':
+        errors.append({'rule_id': 'FORMAL_CATEGORY_COVERAGE',
+                       'reason': 'Formal corpus missing required site categories: ' + ', '.join(coverage['missing']),
+                       'missing_categories': coverage['missing']})
     short_ids = set()
     batch_members = set(batch_ids or ())
     task_types, action_types, lengths = Counter(), Counter(), Counter()
@@ -198,10 +208,10 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             registry=SitePool(registry_path,readonly=True)
         for row in rows:
             aid=application_key(sites[row['site_id']][0],registry)
-            if registry and registry.application(sites[row['site_id']][0])['category']!=row['site_category']:
+            if registry and parent_category(registry.application(sites[row['site_id']][0])['category'])!=parent_category(row['site_category']):
                 raise ValueError('Effective sample category differs from the bound Table1 parent category')
             application_counts[aid]+=1
-            category=row['site_category']
+            category=parent_category(row['site_category'])
             if aid in application_categories and application_categories[aid]!=category:
                 raise ValueError('Effective application has conflicting categories')
             application_categories[aid]=category
@@ -262,6 +272,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             'manifest': raw, 'manifest_sha256': digest(raw), 'contract_sha256': contract_hash,
             'local_profile': selected, 'sample_count': count, 'site_count': len(active_sites),
             'statistics': {'categories': dict(categories), 'maximum_category_share': share,
+                           'category_coverage': coverage,
                            'applications':{'limit':500,'counts':dict(application_counts),
                                            'category_counts':dict(Counter(application_categories.values())),
                                            'identity_basis':'bound_registry' if raw.get('application_registry') else 'canonical_hostname',

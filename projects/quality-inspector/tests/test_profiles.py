@@ -65,6 +65,14 @@ class LocalProfiles(unittest.TestCase):
         (self.data / 'docs/合成方式说明.md').write_text('# fixture-test-line\nunified_gui_v4\n独立合成测试，不是实际审核。')
         manifests(self.data)
         baseline = json.loads((HERE / 'config/customer-samples.json').read_text()); baseline['repository_root'] = str(REPO)
+        # This suite exercises local profile aggregation using disposable
+        # references, never the historical customer sample paths in the config.
+        reference = self.root / 'synthetic-reference'
+        shutil.copytree(self.samples[0], reference)
+        baseline['samples'] = [{'path': str(reference), 'files': {
+            p.relative_to(reference).as_posix(): sha(p) for p in reference.rglob('*') if p.is_file()}}]
+        baseline['supplemental_documents'] = [row for row in baseline['supplemental_documents']
+                                               if '/samples/' not in row['path']]
         # Keep the historical profile's original authority SHA; isolate this
         # legacy compatibility fixture from current requirement edits.
         legacy=Path(__file__).parent/'fixtures/legacy-clarification-20261026.md'

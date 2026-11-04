@@ -598,6 +598,10 @@ class FragmentController:
             self.last_control = None
 
 
+class SelectionValueMismatch(ValueError):
+    """A current observed option disproves the unexecuted planned value."""
+
+
 def compile_step(task, page_urls, step, observation, navigation_count=0):
     """Only current-target primitives; set_value expands before budget accounting.
 
@@ -659,7 +663,7 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         options = c['binding'].get('options', [])
         match = [o for o in options if o['value'] == step.get('value') and not o.get('disabled')]
         if len(match) != 1 or sum(o['label'] == match[0]['label'] for o in options) != 1:
-            raise ValueError('Selection must name a unique observed enabled option')
+            raise SelectionValueMismatch('Selection must name a unique observed enabled option')
         if step['value'] == c['value'].get('value'):
             raise ValueError('Unchanged selection is not effective')
         primitive['option'] = match[0]['label']

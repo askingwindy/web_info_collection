@@ -50,7 +50,7 @@ class Grounded(unittest.TestCase):
 
     def run_new(self,home,key='new',target=4,**kwargs):
         args=dict(pool_path=self.pool.path,ledger_path=self.root/'model.db',history_set=self.f.chain,
-                  output=self.root/'output'/key,sources=[home],batch_key=key,target=target,batch_size=10,max_batches=2)
+                  output=self.root/'output'/key,model_protocol='entry-tools-4',sources=[home],batch_key=key,target=target,batch_size=10,max_batches=2)
         args.update(kwargs)
         return produce_entries(self.f.cfg,**args)
 
@@ -59,7 +59,7 @@ class Grounded(unittest.TestCase):
         sources=self.root/'sources.json';save_json(sources,[home])
         command=['produce-entries','--config',str(config),'--pool',str(self.pool.path),'--ledger',str(self.root/'model.db'),
                  '--history-set',str(self.f.chain),'--output',str(self.root/'output/new'),'--sources',str(sources),
-                 '--target','4','--batch-size','10','--max-batches','2']
+                 '--target','4','--batch-size','10','--max-batches','2','--model-protocol','entry-tools-4']
         def invoke():
             stream=io.StringIO()
             with redirect_stdout(stream):main(command)

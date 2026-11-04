@@ -18,6 +18,7 @@ from .candidate_pool import CandidatePool, VERSION2, entry_identity, landing_key
 from .discovery_agent import model_tool_decision
 from .discovery_tools import reference, glm_search, search_channel_hold
 from .entry_selection import PAGE_TYPES, distribution, existing_candidate, order_sources
+from .entry_access import wire_uri
 
 PROTOCOL = 'entry-tools-3'
 VERSION = 'first-party-entries-1'
@@ -39,11 +40,15 @@ TOOLS = [{'type':'function','function':{'name':'submit_entry_links','description
 
 
 class Links(HTMLParser):
-    def __init__(self):
+    def __init__(self, *, track_context=False):
         super().__init__(convert_charrefs=True)
+        self.track_context=track_context;self.context=[]
         self.links=[]; self.current=None; self.heading=''; self.heading_tag=None; self.heading_parts=[]; self.hidden=0;self.base_href=None
     def handle_starttag(self, tag, attrs):
         a=dict(attrs)
+        if self.track_context and tag not in ('input','img','br','hr','meta','link','source','wbr','area','base','embed','param'):
+            marker=' '.join(a.get(k,'') for k in ('class','id','aria-label')).lower()
+            self.context.append((tag,bool(re.search(r'lang|locale|language|语言|語言',marker)) or any(v for _,v in self.context)))
         if tag in ('script','style'): self.hidden+=1
         if self.hidden: return
         if tag=='base' and a.get('href') and self.base_href is None:self.base_href=a['href']
@@ -51,11 +56,16 @@ class Links(HTMLParser):
             self.heading_tag=tag; self.heading_parts=[]
         if tag=='a' and a.get('href'):
             self.current={'href':a['href'],'anchor_parts':[], 'heading':self.heading,'hreflang':a.get('hreflang','')}
+            if self.track_context:self.current['language_context']=any(v for _,v in self.context)
     def handle_data(self, text):
         if self.hidden:return
         if self.heading_tag:self.heading_parts.append(text)
         if self.current:self.current['anchor_parts'].append(text)
     def handle_endtag(self, tag):
+        if self.track_context:
+            for i in range(len(self.context)-1,-1,-1):
+                if self.context[i][0]==tag:
+                    del self.context[i:];break
         if tag in ('script','style'):self.hidden=max(0,self.hidden-1)
         if self.hidden:return
         if tag==self.heading_tag:
@@ -66,7 +76,7 @@ class Links(HTMLParser):
             self.links.append(item)
 
 
-def extract_links(document, aliases=None):
+def extract_links(document, aliases=None, *, strict=False):
     """Freeze original href, text, nearest preceding heading and byte references."""
     from webcollect.candidate_contract import application_matches
     original=verify_document(document)
@@ -74,7 +84,7 @@ def extract_links(document, aliases=None):
         raise ValueError('HTML byte reference differs from original site document')
     if not document.get('raw_html'):return []
     verify_evidence([document['raw_html']])
-    parser=Links();parser.feed(Path(document['raw_html']['path']).read_bytes().decode(document.get('encoding','utf-8-sig'),errors='replace'))
+    parser=Links(track_context=strict);parser.feed(Path(document['raw_html']['path']).read_bytes().decode(document.get('encoding','utf-8-sig'),errors='replace'))
     links=[]; seen=set()
     for ordinal,item in enumerate(parser.links):
         href=item['href'].strip()
@@ -98,8 +108,94 @@ def extract_links(document, aliases=None):
     return links
 
 
+def game_business_priority(link):
+    """Prefer game destinations over directories and reject unrelated tool shelves."""
+    anchor=link['anchor'].strip()
+    path=urlsplit(link['uri']).path
+    if (not anchor or path in ('','/') or re.search('计算器|转换器|生成器|在线工具|攻略|资讯|公告|下载|隐私|注册|客服',anchor)
+            or re.search(r'^/(?:t|tools?|news|help|download|about|login)(?:/|$)',path,re.I)):
+        return None
+    if re.search(r'/(?:flash|play|games?|h5|g)/.+',path,re.I):
+        return 0
+    if re.search('游戏|试玩|在线玩|H5',anchor,re.I):
+        return 1
+    if re.search('游戏|试玩|在线玩',link.get('heading','')):
+        return 2
+    return None
+
+
+def demo_business_link(link):
+    """An admin category alone cannot turn its login/home, notices or manuals into demos."""
+    p=urlsplit(link['uri'])
+    anchor=link['anchor'].strip()
+    route=p.path+'#'+p.fragment
+    if (not anchor or (p.path in ('','/') and not p.fragment and not p.query)
+            or re.search(r'规则|公告|隐私|协议|注册|登录|备案|购买|下载|文档|手册|教程|关于我们|联系我们',anchor)
+            or re.search(r'/(?:login|register|announce|policy|docs?|manual|news)(?:[/.#?]|$)',route,re.I)):
+        return False
+    return bool(re.search(r'演示|示例|实例|预览|体验|仪表盘|工作台|工作流|看板|报表|图表|表单|表格|'
+                          r'可视化|组件|用户管理|权限管理|订单管理|流程管理|Demo|Example|Dashboard',anchor+' '+route,re.I))
+
+
+def public_demo_proof(ledger, run, link, root, *, strict=True):
+    """Bind a demo page to an anonymous 2xx HTML document before publication."""
+    from .application_discovery import homepage_document
+    doc,ref=homepage_document(ledger,run+'/public-demo',link['uri'],root)
+    if strict=='v5':
+        from .page_purpose_v5 import observed_material,demo_proof
+        return demo_proof({**doc,'reference':ref},evidence=observed_material(ledger,link,doc,ref))
+    if strict:
+        if strict=='v4':from .page_purpose_v4 import demo_proof
+        else:from .page_purpose import demo_proof
+        return demo_proof({**doc,'reference':ref})
+    verify_evidence([ref,doc['raw_html']])
+    html=Path(doc['raw_html']['path']).read_bytes().decode(doc['encoding'],errors='replace')
+    lines=[line.strip() for line in doc['content'].splitlines() if line.strip()]
+    signals=[line for line in lines if re.search(r'示例|演示|组件|表格|表单|布局|图表|可视化|仪表盘|'
+             r'工作台|工作流|看板|权限管理|订单管理|数据管理|画布|编辑器|Dashboard|Examples?',line,re.I)]
+    login=re.search(r'<input\b[^>]*\btype\s*=\s*["\']?password',html,re.I) and any('登录' in line for line in lines)
+    controls=re.findall(r'<(button|select|textarea|table|canvas|iframe|form|input|svg)\b',html,re.I)
+    catalog=sum(demo_business_link(h) for h in extract_links({**doc,'reference':ref},
+                (ledger.config.get('site_failure_guard') or {}).get('application_registry')))
+    if not doc['chinese'] or login or not signals or (not controls and catalog<2):
+        raise ValueError('No verified anonymous Chinese demo controls or example directory at destination')
+    return {'document':ref,'raw_html':doc['raw_html'],'uri':doc['uri'],'visible_quotes':signals[:4],
+            'html_elements':dict(Counter(controls)),'same_site_demo_links':catalog}
+
+
+def demo_destinations(documents, search_hits, aliases):
+    """One explicit demo link on a search publisher can lead to another application."""
+    from .site_pool import host_identity, page_uri
+    from webcollect.candidate_contract import application_matches
+    leads=[];seen={host_identity(h['uri']) for h in search_hits}
+    for doc in documents:
+        if doc.get('site_evidence')!='homepage' or not doc.get('raw_html'):continue
+        original=verify_document(doc)
+        verify_evidence([original['raw_html']])
+        parser=Links()
+        parser.feed(Path(original['raw_html']['path']).read_bytes().decode(original.get('encoding','utf-8-sig'),errors='replace'))
+        base=urljoin(doc['uri'],parser.base_href or '')
+        for h in parser.links:
+            explicit=re.search(r'演示|体验后台|后台体验|在线体验|查看示例|在线示例|Live\s*Demo|^Demo$',h['anchor'],re.I)
+            if not explicit and not re.search(r'^(?:https?:)?//(?:demo|examples?)\.',h['href'],re.I):continue
+            uri=urljoin(base,h['href'])
+            try:host=host_identity(page_uri(uri))
+            except ValueError:continue
+            if host in seen or application_matches(doc['uri'],uri,aliases):continue
+            seen.add(host)
+            leads.append({'uri':uri,'title':h['anchor'],'content':'','reference':doc['reference'],
+                          'via_demo_link':{'observed_on':doc['uri'],'href':h['href'],'anchor':h['anchor'],
+                                           'raw_html':original['raw_html'],'reference':doc['reference']}})
+            if len(leads)==3:return leads
+    return leads
+
+
 def language_or_login(link):
     text=link['anchor'].strip()
+    if link.get('language_context') and not re.search('中文|汉语|漢語|简体|繁體|Chinese',text,re.I):
+        return 'non_chinese_language_switch'
+    if 'language_context' in link and link.get('hreflang') and not re.match(r'zh(?:-|$)|x-default$',link['hreflang'],re.I):
+        return 'non_chinese_language_switch'
     if (re.fullmatch(r'English|EN|English\s*(?:version|site)|英文(?:版|站)?',text,re.I)
             or re.match(r'en(?:-|$)',link.get('hreflang',''),re.I)
             or re.search(r'/(?:en|en-us|en-gb)(?:/|$)|[?&](?:lang|locale)=en(?:[&#-]|$)',link['uri'],re.I)):
@@ -167,7 +263,7 @@ ID_SYSTEM = ('选择中文第一方直达入口。站点主类已核定。网页
     '缺证选UNKNOWN或不选；ops允许空数组，不得编造操作证据。URI和精确引文由宿主绑定。')
 
 
-def id_selection(ledger, links, scope, cause=None):
+def id_selection(ledger, links, scope, cause=None, *, categories=(), protocol='entry-tools-4'):
     quotes={}; menu=[]
     for i,h in enumerate(links):
         snippets=list(dict.fromkeys(q for q in (h['anchor'],h['heading']) if q))
@@ -180,11 +276,25 @@ def id_selection(ledger, links, scope, cause=None):
             'quote':{'type':'integer','minimum':0,'maximum':1},
             'ops':{'type':'array','items':{'type':'integer','minimum':0,'maximum':1},'maxItems':2,'uniqueItems':True}}}}}}
     tools=[{'type':'function','function':{'name':'submit_entry_ids','description':ID_SYSTEM,'parameters':schema}}]
-    payload={'version':'entry-tools-4','scope':scope,'goal':GOAL,'page_types':dict(enumerate(PAGE_TYPES)),
+    payload={'version':protocol,'scope':scope,'goal':GOAL,'page_types':dict(enumerate(PAGE_TYPES)),
              'links':menu,'original_settled_cause':cause}
     # The original per-chunk request owns its tool schema across code upgrades.
     # In particular, making ops optional cannot create a successor for UNKNOWN.
     system=ID_SYSTEM
+    if protocol=='entry-tools-5':
+        from .producer_evidence import SELECTION_SYSTEM,business_role,business_signature
+        system=SELECTION_SYSTEM
+        templates={value:i for i,value in enumerate(dict.fromkeys(business_signature(h) for h in links))}
+        payload['business_hints']=[{'row':i,'role':business_role(h),'template':templates[business_signature(h)]} for i,h in enumerate(links)]
+    if categories:
+        system += ' 选择能实际浏览或使用本站主营业务的入口，如主题栏目、商品或游戏、示例界面。略过登录、宣传、备案、隐私和纯下载。'
+        from .producer_authority import isolation_host
+        registry=(ledger.config.get('site_failure_guard') or {}).get('application_registry')
+        if '小游戏' in categories:
+            system += ' 游戏类只选游戏、试玩或游戏分类入口，工具、攻略和资讯不入选。'
+        payload['target_site_categories']=list(categories)
+        payload['source_hosts']=sorted({isolation_host(h['uri'],registry) for h in links})
+        tools=[{'type':'function','function':{'name':'submit_entry_ids','description':system,'parameters':schema}}]
     if ledger is not None:
         with ledger.connect() as con:
             prior=con.execute("SELECT payload FROM jobs WHERE kind='ai-grounded-entry-ids-1' AND json_extract(payload,'$.input.scope')=? ORDER BY attempts DESC,created,id LIMIT 1",(scope,)).fetchone()
@@ -196,7 +306,8 @@ def id_selection(ledger, links, scope, cause=None):
     settled_cause=None
     from .discovery_agent import SettledSelectionRejected
     try:
-        jid,env=model_tool_decision(ledger,ModelGateway(ledger),'ai-grounded-entry-ids-1',payload,tools,system=system)
+        jid,env=model_tool_decision(ledger,ModelGateway(ledger),'ai-grounded-entry-ids-1',payload,tools,system=system,
+                                    source_uris=[h['uri'] for h in links] if ledger and ledger.producer_policy else ())
     except SettledSelectionRejected as error:
         jid=error.receipt['job_id']
         raw_rows,settled_cause=settled_selection_rows(ledger,jid)
@@ -237,9 +348,9 @@ def settled_selection_rows(ledger, job_id):
     return rows,{'job_id':job_id,'request_ids':[r['id'] for r in records],'states':[r['state'] for r in records],'tool_call_id':call_id}
 
 
-def select_entries(ledger, links, scope, original_job_id=None):
+def select_entries(ledger, links, scope, original_job_id=None, *, categories=(), protocol='entry-tools-4'):
     """Keep valid paid rows, correct only rejected IDs once with the ID protocol."""
-    if not original_job_id:return id_selection(ledger,links,scope)
+    if not original_job_id:return id_selection(ledger,links,scope,**({'categories':categories} if categories else {}),**({'protocol':protocol} if protocol!='entry-tools-4' else {}))
     rows,cause=settled_selection_rows(ledger,original_job_id)
     original_input=ledger.get(original_job_id)['payload']['input']
     # Older ID corrections bind their row numbers through the original frozen
@@ -315,6 +426,7 @@ def rank_links(links, categories, counts, feedback):
         for host in hosts:
             if not buckets[host]:continue
             options=list(buckets[host]);selected=min(range(len(options)),key=lambda i:(options[i]['ranking_reason']['deprioritized'],
+                -options[i]['ranking_reason'].get('saved_evidence_count',0),
                 rule_decision(options[i])['page_type']=='UNKNOWN',modality_counts.get(rule_decision(options[i])['page_type'],0),i))
             h=options[selected];del buckets[host][selected]
             ranked.append({**h,'ranking_reason':{'category':categories.get(host,'UNKNOWN'),
@@ -342,13 +454,13 @@ def index_settled_landings(pool):
 def produce(config, *, pool_path, ledger_path, output, history_set, queries, sources, directions,
             goals_path, target, max_searches, max_batches, batch_size, search_engine, stall_threshold,
             per_direction_cap, batch_key, excluded_applications, discovery_mode, feedback_scope, search_count,
-            entry_selection='rule', model_protocol=PROTOCOL, categories=()):
+            entry_selection='rule', model_protocol=PROTOCOL, categories=(), probe_search_hold=None, dispatch_holds=None):
     target_categories=tuple(categories)
     from .site_pool import category
     for value in categories: category(value)
     if 'UNKNOWN' in categories: raise ValueError('A concrete target category is required')
     PROTOCOL = model_protocol
-    VERSION = 'first-party-entries-2' if model_protocol=='entry-tools-4' else 'first-party-entries-1'
+    VERSION = 'first-party-entries-3' if model_protocol in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else 'first-party-entries-2' if model_protocol in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else 'first-party-entries-1'
     from .candidate_discovery import _publish_entry, QueryPolicy, fold_query_state, record_query_outcome, normalize_query
     from webcollect.current_chain import (read_chain_scope,check_project_pool,check_project_guard,
         require_evidence_path,current_evidence_roots,assert_current_evidence)
@@ -381,34 +493,80 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         from webcollect.candidate_feedback import summarize_scope
         feedback=previous.get('feedback') if previous else summarize_scope(feedback_input)
     else:feedback=previous.get('feedback')
+    if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') and not previous:
+        from .producer_evidence import consumer_feedback
+        feedback=consumer_feedback(pool,feedback)
     goals_ref=reference(goals_path) if goals_path else None
     frozen={'version':VERSION,'model_protocol':PROTOCOL,'table_policy':POLICY,'goal':GOAL,'system':SYSTEM,'tools':TOOLS,
         'site_protocol':'producer-site-classification-2',
-        **({'id_system':ID_SYSTEM,'directory_limit_per_site':4} if PROTOCOL=='entry-tools-4' else {}),
+        **({'id_system':ID_SYSTEM,'directory_limit_per_site':4} if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else {}),
         'config_sha256':object_sha256(config),'sources':list(sources),'directions':list(directions),'queries':list(queries),
         'target':target,'max_searches':max_searches,'max_batches':max_batches,'batch_size':batch_size,'search_engine':search_engine,
         'stall_threshold':stall_threshold,'per_direction_cap':per_direction_cap,'entry_selection':entry_selection,
         'discovery_mode':discovery_mode,'feedback_scope':feedback_ref,'feedback':feedback,'search_count':search_count,
         'goals':goals_ref,'excluded_applications':list(excluded_applications),'output':str(root),'ledger':str(Path(ledger_path).resolve()),
         **({'current_chain_manifest':chain['manifest']} if chain else {})}
+    independent = bool(categories and discovery_mode=='new-sites' and not (queries or directions or sources or goals_path)
+                       and (not previous or previous.get('category_query_plan',{}).get('version') in ('producer-category-query-2','producer-category-query-3')))
+    public_business = independent and (not previous or previous['category_query_plan']['version']=='producer-category-query-3')
     if categories:
-        frozen['category_query_plan']={'version':'producer-category-query-1','categories':list(categories)}
+        plan_version = 'producer-category-query-3' if public_business else 'producer-category-query-2' if independent else 'producer-category-query-1'
+        frozen['category_query_plan']={'version':plan_version,
+                                       'categories':list(categories)}
+    if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+        from .producer_evidence import SELECTION_SYSTEM
+        frozen['site_protocol']='producer-site-classification-5' if PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else 'producer-site-classification-4'
+        frozen['id_system']=SELECTION_SYSTEM
+        frozen['ranking_policy']='business-diversity-unknown-fifth-1'
+        if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+            if PROTOCOL=='entry-tools-11':from . import producer_task_value as purpose
+            elif PROTOCOL=='entry-tools-10':from . import page_purpose_v6 as purpose
+            elif PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):from . import page_purpose_v5 as purpose
+            elif PROTOCOL=='entry-tools-7':from . import page_purpose_v4 as purpose
+            else:from . import page_purpose as purpose
+            PURPOSE_SYSTEM,PURPOSE_VERSION=purpose.SYSTEM,purpose.VERSION
+            frozen.update(purpose_version=PURPOSE_VERSION,purpose_system=PURPOSE_SYSTEM,purpose_path='rule_then_model')
+            if PROTOCOL=='entry-tools-11':
+                frozen.update(purpose_path='business_natural_task_once',purpose_is_advisory=True,
+                              classification_reinspection=False)
+            if previous and previous.get('purpose_version')!=PURPOSE_VERSION:
+                raise ValueError('Restore original frozen purpose protocol; no replacement of prior batch')
+    if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11'):
+        from .page_consumption import VERSION as consumption_policy
+        frozen['page_consumption_policy']=consumption_policy
+        frozen['page_consumption_scope']='entry_and_target'
+        if PROTOCOL in ('entry-tools-10','entry-tools-11'):frozen['page_observation_policy']='producer-shared-observation-1'
+    if independent:
+        frozen['site_protocol']='producer-site-classification-5' if PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else 'producer-site-classification-4' if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else 'producer-site-classification-3'
+        frozen['probe_search_hold'] = probe_search_hold
+        frozen['dispatch_holds'] = reference(dispatch_holds) if dispatch_holds else None
+    rechecks = {}
     for source in sources:
         verify_evidence([source['reference']])
         if chain:assert_current_evidence(chain,[source['reference']])
+        if 'entry_recheck' in source:
+            auth = source['entry_recheck']
+            if not isinstance(auth,dict) or not auth.get('reason') or not auth.get('references'):
+                raise ValueError('Entry recheck requires a reason and bound evidence')
+            verify_evidence(auth['references'])
+            if chain:assert_current_evidence(chain,auth['references'])
+            identity = wire_uri(source['uri'])
+            if rechecks.setdefault(identity,auth) != auth:
+                raise ValueError('Conflicting recheck evidence for the same request URI')
     if goals_ref:
         verify_evidence([goals_ref])
         if chain:assert_current_evidence(chain,[goals_ref])
     with pool.pool.connect() as con:
         session_row=con.execute('SELECT config FROM runs WHERE id=?',(session,)).fetchone()
-    if session_row and PROTOCOL=='entry-tools-4':
+    if session_row and PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
         original_session=json.loads(session_row[0])
         if original_session.get('config_sha256')!=object_sha256(config) or original_session.get('ledger')!=str(Path(ledger_path).resolve()):
             raise ValueError('Original producer session config/ledger binding differs')
     else:
         pool.pool.freeze_run(session,{'version':VERSION,'model_protocol':PROTOCOL,'config_sha256':object_sha256(config),
             'ledger':str(Path(ledger_path).resolve()),**({'current_chain_manifest':chain['manifest']} if chain else {})},inventory=False)
-    pool.pool.freeze_run(run,frozen,inventory=False)
+    baseline = pool.pool.freeze_run(run,frozen,inventory=independent)
+    prior_apps = {a['id'] for a in baseline}
     root.mkdir(parents=True,exist_ok=True)
     ledger=BatchLedger(ledger_path,config,initialize=per_task or not Path(ledger_path).exists())
     def counters():
@@ -429,9 +587,15 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     isolated=(ledger.producer_policy or {}).get('deferred',{}) if per_task else {}
     excluded={isolation_host(u,aliases) for u in excluded_applications}
     excluded.update(isolation_host(u,aliases) for item in isolated.values() for u in item['source_urls'])
-    historical={u for h in sources for u in h.get('excluded_entry_identities',[])} if PROTOCOL=='entry-tools-4' else set()
+    historical={u for h in sources for u in h.get('excluded_entry_identities',[])} if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else set()
     held_entries=set()
-    for h in sources:
+    if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+        with ledger.connect() as con:
+            # Read original jobs, including pre-visit failures absent from the
+            # visit table. Their states/counters are never reset.
+            for original in con.execute("SELECT payload FROM jobs WHERE kind IN ('application-evidence-get','candidate-entry-http') AND state!='done' AND attempts>0"):
+                held_entries.add(entry_identity(json.loads(original['payload'])['uri']))
+    for h in [*sources, *([{'dispatch_holds':{'reference':frozen['dispatch_holds']}}] if independent and frozen['dispatch_holds'] else [])]:
         holds=h.get('dispatch_holds')
         if holds:
             verify_evidence([holds['reference']])
@@ -447,6 +611,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         with pool.pool.connect() as con:return con.execute("SELECT COUNT(*) FROM candidate_batch_rows WHERE run_id=? AND result='NEW'",(run,)).fetchone()[0]
     def publish_items(items, selection_ref, job_id, scope_key):
         nonlocal batches
+        from webcollect.batch_core import OutcomeUnknown
         for i,item in enumerate(items):
             candidate=item['candidate'];hit=item['hit'];row=item['decision'];aid=item['application_id']
             header={'row_id':object_sha256([VERSION,run,scope_key,i]),'run_id':run,'batch':batches,'request_id':job_id,
@@ -459,16 +624,31 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             else:
                 refs=[hit['reference'],selection_ref]+([hit['raw_html']] if hit.get('raw_html') else [])
                 site=sites.get(aid)
-                source={'origin':'glm_agent' if entry_selection=='model' else 'codex_session','run_id':session,
+                source={'origin':'glm_agent' if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') or entry_selection=='model' or independent else 'codex_session','run_id':session,
                     'protocol':'candidate-producer-3','model_protocol':PROTOCOL,'source_pipeline':VERSION,'table_policy':POLICY,
-                    'expected_site_decision_id':(site or {}).get('decision_id'),
+                    'expected_site_decision_id':hit.get('site_decision_id') if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else (site or {}).get('decision_id'),
                     'page_type':row['page_type'],'page_evidence':{**row,'reference':hit['reference'],
                         'raw_html':hit.get('raw_html'),'href':hit.get('href'),'anchor':hit.get('anchor'),'heading':hit.get('heading'),
                         'observed_on':hit.get('observed_on'),'base_uri':hit.get('base_uri'),'language_hint':hit.get('language_hint','UNKNOWN')},
                     'site_origin':item['site_origin'],'page_origin':hit['page_origin'],
                     'selection_method':'caller_list' if hit['page_origin']=='caller_list' else entry_selection,
                     'ranking_reason':hit.get('ranking_reason'),'references':refs}
-                if entry_selection=='model':
+                if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                    source['business_diagnostic']={k:hit.get(k) for k in ('business_role_hint','template_identity')}
+                    source['business_diagnostic']['acceptance']='UNKNOWN: operation differences require consumer evidence'
+                if independent:
+                    source['required_supply_kind']='project_first_discovery_output'
+                if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                    decision_receipt=load_json(selection_ref['path'])
+                    record=next(r for r in decision_receipt['records'] if r['link_id']==hit['link_id'])
+                    source['purpose_evidence']=record
+                    if PROTOCOL=='entry-tools-11':
+                        source['task_diagnostic']={k:record.get(k) for k in ('task_value','task_hint','priority','task_qualification')}
+                        source['purpose_is_advisory']=True
+                    source['selection_method']=record['method']
+                    target_ev=record['target_evidence']
+                    refs.extend(target_ev[k] for k in ('document','raw_html','observation','rendered_dom','screenshot') if k in target_ev)
+                elif entry_selection=='model':
                     decision_receipt=load_json(selection_ref['path'])
                     source.update(model_job_id=job_id,model_request_id=decision_receipt['model_request_id'],
                                   tool_call_id=decision_receipt['tool_call_id'])
@@ -478,12 +658,38 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 elif entry_identity(candidate['entry_url']) in historical:
                     outcome=pool.record_row_conclusion(header,result='REJECTED',reason='previously admitted identity excluded from net new',original_row=row)
                 else:
+                    recheck = rechecks.get(wire_uri(candidate['entry_url']))
+                    if recheck:
+                        source['entry_recheck'] = recheck
+                        source['references'].extend(ref for ref in recheck['references'] if ref not in source['references'])
                     if historical:
                         from .entry_access import check_entry
-                        access,access_ref=check_entry(ledger,run,candidate['entry_url'],root)
+                        shared=None
+                        if PROTOCOL in ('entry-tools-10','entry-tools-11') and not recheck:
+                            from .producer_observation import entry_receipt
+                            shared=entry_receipt(pool,ledger,candidate['entry_url'],root)
+                            if PROTOCOL=='entry-tools-11' and shared is None:
+                                raise OutcomeUnknown('Original supply observation missing; no replacement GET')
+                        access,access_ref=shared if shared else check_entry(ledger,run,candidate['entry_url'],root,recheck=recheck)
                     if historical and access.get('result')=='PASS' and entry_identity(access['landed_uri']) in historical:
                         outcome=pool.record_row_conclusion(header,result='REJECTED',reason='previously admitted landing excluded from net new',original_row=row,entry_http=access_ref)
-                    else:outcome=_publish_entry(pool,ledger,run,root,header,candidate,source,row,application_id=aid)
+                    else:
+                        proof_error=None
+                        if public_business and site['category']=='企业后台与开源演示站':
+                            try:
+                                proof=public_demo_proof(ledger,run,hit,root,strict='v5' if PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else 'v4' if PROTOCOL=='entry-tools-7' else PROTOCOL=='entry-tools-6')
+                            except (ValueError,OSError) as error:
+                                proof_error=str(error) or type(error).__name__
+                            else:
+                                source['public_demo']=proof
+                                source['references'].extend([proof['document'],proof['raw_html']])
+                        if proof_error:
+                            outcome=pool.record_row_conclusion(header,result='HELD',reason=proof_error,original_row=row)
+                        else:
+                            try:outcome=_publish_entry(pool,ledger,run,root,header,candidate,source,row,application_id=aid)
+                            except OutcomeUnknown as error:
+                                if PROTOCOL not in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):raise
+                                outcome=pool.record_row_conclusion(header,result='HELD',reason=str(error),original_row=row)
             sites.conclude(scopes[aid],item,outcome)
             # Classification allocation spans the frozen per-site input across
             # chunks; unselected and failed rows never receive NEW allocations.
@@ -509,27 +715,65 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 seeds=[dict(h) for h in seed_sources];search_request_id=query=direction=None
                 pool.pool.checkpoint(run,key+'/input',{'seeds':seeds})
             else:
-                if PROTOCOL=='entry-tools-4' and not queries and not directions and not target_categories:
+                if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') and not queries and not directions and not target_categories:
                     exhausted=True;break
                 hold=search_channel_hold(pool.pool,session)
-                if hold:
+                if hold and not independent:
                     stopped={'stage':'search',**hold};break
+                if independent and unit >= (max_searches or 4):
+                    exhausted=True;break
                 state=fold_query_state(pool.pool,session,policy)
-                if target_categories and not queries and not directions:
-                    from .producer_query_plan import next_query
-                    decision=next_query(pool.pool,ledger,run,key,target_categories,state,failures,root)
-                else:decision=policy.next_query(state)
-                if decision is None:exhausted=True;break
+                intent=pool.pool.checkpoint(run,key+'/search-intent') if independent else None
+                if intent:
+                    decision=intent['decision'];engine=intent['engine'];probe=intent['probe_of']
+                else:
+                    # A known index hold must stop before paying to plan a query.
+                    public_index=None
+                    if independent and search_engine=='public':
+                        from .category_search import public_engine
+                        public_index=public_engine(pool.pool,unit)
+                    if target_categories and not queries and not directions:
+                        from .producer_query_plan import next_query
+                        decision=next_query(pool.pool,ledger,run,key,target_categories,state,failures,root,
+                                            **({'independent':True,'public_business':public_business} if independent else {}),
+                                            **({'purpose_grounded':True,**({'purpose_protocol':PROTOCOL} if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else {})} if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else {}))
+                    else:decision=policy.next_query(state)
+                    if decision is None:exhausted=True;break
+                    engine=search_engine;probe=None
+                    if independent and search_engine=='public':
+                        engine=public_index
+                    elif independent and not hold and unit and failures:
+                        engine=('360-public','bing-rss')[(unit-1) % 2]
+                    elif independent and hold:
+                        if unit==0 and probe_search_hold==hold['request_id'] and not pool.pool.checkpoint(session,'search-probe/'+probe_search_hold):
+                            probe=probe_search_hold
+                        else:
+                            engine=('360-public','bing-rss')[(unit-int(bool(probe_search_hold))) % 2]
+                    if independent:
+                        intent=pool.pool.checkpoint(run,key+'/search-intent',{'decision':decision,'engine':engine,'probe_of':probe})
                 from .candidate_discovery import _prior_search_status
                 seen,original_state,status,_=_prior_search_status(pool.pool,session,decision['query'])
-                if seen=='blocked':
+                if seen=='blocked' and not independent:
                     state['blocked'][normalize_query(decision['query'])]={'state':original_state,'http_status':status}
                     pool.pool.checkpoint(session,'entry-query/stats/grounded-block/'+object_sha256([run,decision]),state)
                     continue
-                search=glm_search(pool.pool,session,config['model'],decision['query'],root,engine=search_engine,
-                                  maximum=max_searches,batch_scope=run,count=search_count)
+                query=decision['query'];direction=decision['direction']
                 from .entry_selection import search_hits
-                seeds=search_hits(search);search_request_id=search['request_id'];query=decision['query'];direction=decision['direction']
+                from .category_search import public_search
+                from webcollect.batch_core import OutcomeUnknown
+                try:
+                    if seen=='blocked':
+                        raise OutcomeUnknown('Original search remains held')
+                    if engine in ('360-public','ddg-html','bing-rss'):
+                        search=public_search(pool.pool,session,query,root,engine=engine,maximum=max_searches,batch_scope=run,count=search_count)
+                    else:
+                        search=glm_search(pool.pool,session,config['model'],query,root,engine=engine,maximum=max_searches,
+                                          batch_scope=run,count=search_count,**({'probe_of':probe} if probe else {}))
+                    seeds=search_hits(search);search_request_id=search['request_id']
+                except OutcomeUnknown as error:
+                    if not independent:raise
+                    search_request_id=object_sha256([session,'search',query]);seeds=[]
+                    failures.append({'stage':'search','query':query,'engine':engine,'request_id':search_request_id,'reason':str(error)})
                 pool.pool.checkpoint(session,'entry-query/decision/grounded/'+object_sha256([run,unit]),{'scope':run,'batch':unit,**decision})
                 pool.pool.checkpoint(run,key+'/input',{'seeds':seeds,'search_request_id':search_request_id,'query':query,'direction':direction})
             unit_initial=pool.pool.checkpoint(run,key+'/new-before')
@@ -537,52 +781,95 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 unit_initial=pool.pool.checkpoint(run,key+'/new-before',new_count())
             prepared=pool.pool.checkpoint(run,key+'/prepared')
             if prepared is None:
-                eligible=[]
-                for h in seeds:
-                    verify_evidence([h['reference']])
-                    if chain:assert_current_evidence(chain,[h['reference']])
-                    if isolation_host(h['uri'],aliases) in excluded or entry_identity(h['uri']) in held_entries:
-                        failures.append({'uri':h['uri'],'reason':'original_unresolved_source'});continue
-                    if guard:guard.guard(h['uri'])
-                    eligible.append(h)
-                baseline=pool.pool.checkpoint(run,key+'/site-baseline')
-                if baseline is None:
-                    baseline={}
-                    for h in eligible:
-                        app=pool.pool.application(h['uri'])
-                        with pool.pool.connect() as con:
-                            produced=bool(app and con.execute('SELECT 1 FROM data_candidates WHERE application_id=? LIMIT 1',(app['id'],)).fetchone())
-                        baseline[h['uri']]='known_site_expansion' if produced else 'pending_lead_first_output' if app else 'project_first_discovery_output'
-                    pool.pool.checkpoint(run,key+'/site-baseline',baseline)
-                context,errors=site_context(pool,ledger,run,eligible,root);failures.extend(errors)
+                def eligible_seeds(hits):
+                    eligible=[]
+                    for h in hits:
+                        if not h.get('context_only') and pool.consumption(h['uri'],kind='target' if goals else 'entry'):
+                            failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
+                        verify_evidence([h['reference']])
+                        if (public_business and target_categories==('企业后台与开源演示站',) and h in seeds
+                                and not re.search('后台|演示|管理系统|开源|示例|组件|实例|可视化|仪表盘|低代码|Demo|Dashboard|Admin|Examples',h['title']+' '+h.get('content',''),re.I)):
+                            failures.append({'uri':h['uri'],'reason':'no_demo_signal_in_search_hit'});continue
+                        if chain:assert_current_evidence(chain,[h['reference']])
+                        if isolation_host(h['uri'],aliases) in excluded or entry_identity(h['uri']) in held_entries:
+                            failures.append({'uri':h['uri'],'reason':'original_unresolved_source'});continue
+                        if independent and (pool.pool.application(h['uri']) or {}).get('id') in prior_apps:
+                            failures.append({'uri':h['uri'],'reason':'previously_registered_application'});continue
+                        if guard:
+                            from webcollect.site_failure_stop import SiteStopped
+                            try:guard.guard(h['uri'])
+                            except SiteStopped:
+                                if not independent:raise
+                                failures.append({'uri':h['uri'],'reason':'original_site_dispatch_hold'});continue
+                        eligible.append(h)
+                    return eligible
+                eligible=eligible_seeds(seeds)
+                context,errors=site_context(pool,ledger,run,eligible,root,**({'isolate_homepages':True} if independent else {}))
+                failures.extend(errors)
+                if independent and '企业后台与开源演示站' in target_categories:
+                    lead_docs=list(context)
+                    if public_business:
+                        # A result publisher may link to an actual demo. Never use its article to classify the destination.
+                        from .application_discovery import homepage_document
+                        detailed=0
+                        for h in seeds:
+                            if isolation_host(h['uri'],aliases) in excluded or entry_identity(h['uri']) in held_entries:continue
+                            known=pool.pool.application(h['uri'])
+                            if known and known['id'] in prior_apps:
+                                record=sites.get(known['id'])
+                                if record and record.get('decision'):
+                                    lead_docs.append(record['decision']['homepage'])
+                            if detailed>=3:continue
+                            if (urlsplit(h['uri']).path in ('','/') or not re.search('演示|示例|管理系统|Demo',h['title'],re.I)
+                                    or isolation_host(h['uri'],aliases) in excluded or entry_identity(h['uri']) in held_entries):
+                                continue
+                            detailed+=1
+                            try:
+                                doc,ref=homepage_document(ledger,run+'/search-landing',h['uri'],root)
+                                lead_docs.append({**doc,'reference':ref})
+                            except ValueError as error:
+                                failures.append({'stage':'demo_source_page','uri':h['uri'],'reason':str(error)})
+                            except OSError as error:
+                                failures.append({'stage':'demo_source_page','uri':h['uri'],'reason':type(error).__name__})
+                    extra=eligible_seeds(demo_destinations(lead_docs,seeds,aliases))
+                    if extra:
+                        more,errors=site_context(pool,ledger,run,extra,root,isolate_homepages=True)
+                        context.extend(more);eligible.extend(extra);failures.extend(errors)
                 documents={};site_origins={};categories={}
                 for h in eligible:
                     app=pool.pool.application(h['uri']);aid=app['id'];site=sites.get(aid)
                     if aid in site_origins:continue
                     site_origins[aid]={'kind':'search' if search_request_id else 'caller_seed','reference':h['reference'],
                                        'uri':h['uri'],'search_request_id':search_request_id,
-                                       'supply_kind':baseline[h['uri']],
+                                       **({'via_demo_link':h['via_demo_link']} if h.get('via_demo_link') else {}),
                                        'site_decision_reused':bool(site and site['classification_state']=='confirmed')}
                     if not site or site['classification_state']!='confirmed':
                         homes=[d for d in context if d.get('site_evidence')=='homepage' and (pool.pool.application(d['uri']) or {}).get('id')==aid]
                         if not homes:
                             failures.append({'application_id':aid,'reason':'homepage_unavailable_or_insufficient'});continue
-                        try:site=classify_homepage(pool,ledger,homes[0],root,protocol='producer-site-classification-2')
+                        try:site=classify_homepage(pool,ledger,homes[0],root,protocol=frozen['site_protocol'])
                         except ValueError as error:
                             failures.append({'application_id':aid,'reason':str(error)});continue
+                    if independent and site['category'] not in target_categories:
+                        failures.append({'application_id':aid,'reason':'outside_target_category','category':site['category']});continue
                     homepage=site['decision']['homepage']
                     # Old protocols projected only classification fields. Read
                     # their original document for byte-bound HTML expansion.
                     documents[aid]={**verify_document(homepage),'reference':homepage['reference']}
                     categories[urlsplit(h['uri']).hostname]=site['category']
-                if PROTOCOL=='entry-tools-4':
+                if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
                     documents, directory_errors=bounded_directories(pool,ledger,run,documents,eligible,root,aliases,excluded,held_entries)
                     failures.extend(directory_errors)
                 links=[]; link_seen=set()
                 for document_key,document in documents.items():
                     aid=document.get('application_id',document_key)
-                    for h in extract_links(document,aliases):
+                    for h in extract_links(document,aliases,strict=PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11')):
+                        if pool.consumption(h['uri'],kind='target' if goals else 'entry'):
+                            failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
                         if entry_identity(h['uri']) in historical:continue
+                        if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') and entry_identity(h['uri']) in held_entries:
+                            failures.append({'uri':h['uri'],'stage':'target_preflight','reason':'original_unsettled_page_job_no_dispatch'})
+                            continue
                         if entry_identity(h['uri']) in link_seen:continue
                         link_seen.add(entry_identity(h['uri']))
                         if not goals and not existing_candidate(pool,{'candidate_kind':'entry','entry_url':h['uri']},aid):
@@ -592,11 +879,25 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     counts['page_types']=dict(con.execute("SELECT COALESCE(json_extract(record,'$.source.page_type'),'UNKNOWN'),COUNT(*) FROM candidate_events WHERE kind='discovered' GROUP BY 1"))
                     counts['counts']=dict(con.execute('SELECT a.category,COUNT(*) FROM data_candidates c JOIN applications a ON a.id=c.application_id GROUP BY a.category'))
                 drops=[{**h,'reason':language_or_login(h)} for h in links if language_or_login(h)]
+                if public_business:
+                    filtered=[]
+                    app_categories={aid:(sites.get(aid) or {}).get('category') for aid in site_origins}
+                    demo_apps={aid for aid,cat in app_categories.items() if cat=='企业后台与开源演示站'}
+                    for h in links:
+                        if h['application_id'] in demo_apps and not demo_business_link(h):
+                            drops.append({**h,'reason':'no_public_demo_or_admin_function_link'})
+                        elif app_categories.get(h['application_id'])=='小游戏' and game_business_priority(h) is None:
+                            drops.append({**h,'reason':'no_game_or_game_directory_evidence'})
+                        else:filtered.append(h)
+                    links=filtered
                 links=rank_links(links,categories,counts,feedback)
+                if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                    from .producer_evidence import diverse_order
+                    links=diverse_order(links,version='2') if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else diverse_order(links)
                 links=[h for h in links if not language_or_login(h)]
                 # Caller seeds are also legitimate first-party entries. Their page
                 # role remains UNKNOWN unless original HTML provides evidence.
-                for h in eligible:
+                for h in ([] if independent else eligible):
                     aid=pool.pool.application(h['uri'])['id']
                     if aid not in documents or h.get('context_only') or entry_identity(h['uri']) in historical:continue
                     if not goals and existing_candidate(pool,{'candidate_kind':'entry','entry_url':h['uri']},aid):continue
@@ -605,6 +906,11 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                           'anchor':h.get('title',''),'heading':'','reference':h['reference'],'application_id':aid,
                           'page_origin':'search' if search_request_id else 'caller_list','language_hint':'UNKNOWN'}
                     if not language_or_login(link):links.append(link)
+                if independent:
+                    # Keep the best-supplied matching site together for a small per-site target.
+                    supply=Counter(h['application_id'] for h in links)
+                    links.sort(key=lambda h:(-supply[h['application_id']],h['application_id'],
+                        (game_business_priority(h) or 0) if public_business and app_categories.get(h['application_id'])=='小游戏' else 0))
                 prepared={'links':links,'site_origins':site_origins,'dropped':drops,'failures':failures,'distribution':counts}
                 pool.pool.checkpoint(run,key+'/prepared',prepared)
             failures=prepared['failures']
@@ -620,15 +926,40 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     if not bound:sites.bind_mining_request(site_allocation_scopes[aid],decision['mining_job_id'],decision['mining_request_receipt'])
             for start in range(0,len(prepared['links']),batch_size):
                 chunk=prepared['links'][start:start+batch_size];chunk_key=key+'/'+str(start)
+                chunk=[h for h in chunk if not pool.consumption(h['uri'],kind='target' if goals else 'entry')]
+                if not chunk:continue
+                if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):chunk=chunk[:max(0,target-new_count())]
+                if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                    chunk=[{**h,'site_category':sites.get(h['application_id'])['category'],
+                            'site_decision_id':sites.get(h['application_id'])['decision_id']} for h in chunk]
                 saved_selection=pool.pool.checkpoint(run,chunk_key+'/selection')
                 if saved_selection is None:
                     if max_batches is not None and batches>=max_batches:break
                     if new_count()>=target:break
-                    if entry_selection=='model' and PROTOCOL=='entry-tools-4':
+                    if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                        if PROTOCOL=='entry-tools-11':from .producer_task_value import classify
+                        elif PROTOCOL=='entry-tools-10':from .page_purpose_v6 import classify
+                        elif PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):from .page_purpose_v5 import classify
+                        elif PROTOCOL=='entry-tools-7':from .page_purpose_v4 import classify
+                        else:from .page_purpose import classify
+                        unscreened_chunk=chunk
+                        screen_records=[]
+                        if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11'):
+                            if PROTOCOL in ('entry-tools-10','entry-tools-11'):from .producer_observation import screen
+                            else:from .page_consumption import screen
+                            chunk,screen_records=screen(pool,ledger,chunk,root)
+                        rows,selection_body=classify(ledger,chunk,run+'/'+chunk_key,root,**({'pool':pool} if PROTOCOL in ('entry-tools-10','entry-tools-11') else {})) if chunk else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                        if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11'):
+                            selection_body['page_consumption']=screen_records
+                            chunk=unscreened_chunk
+                        job_id=selection_body['calls'][0]['job_id'] if selection_body['calls'] else 'purpose-entries/'+object_sha256([run,chunk_key])
+                    elif entry_selection=='model' and PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
                         original_jobs={h.get('settled_selection_job_id') for h in seeds if h.get('settled_selection_job_id')}
                         if len(original_jobs)>1:raise ValueError('One settled recovery job per unit required')
                         from .discovery_agent import SettledSelectionRejected
-                        try:rows,selection_body=select_entries(ledger,chunk,run+'/'+chunk_key,next(iter(original_jobs),None))
+                        try:rows,selection_body=select_entries(ledger,chunk,run+'/'+chunk_key,next(iter(original_jobs),None),
+                                                                **({'categories':target_categories} if independent else {}),
+                                                                **({'protocol':PROTOCOL} if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11') else {}))
                         except SettledSelectionRejected as error:
                             rows=[];selection_body={'job_id':error.receipt['job_id'],'arguments':{'entries':[]},'settled_rejection':error.receipt}
                         job_id=selection_body['job_id']
@@ -643,8 +974,13 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         rows=[rule_decision(h) for h in chunk if h['anchor'] or h['heading']]
                         job_id='caller-entries/'+object_sha256([run,chunk_key,rows])
                         selection_body={'version':VERSION,'method':'rule','arguments':{'entries':rows}}
-                    if PROTOCOL=='entry-tools-4':
-                        bound,rejected=isolate_decisions(rows,chunk)
+                    if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                        if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
+                            # Source binding and target purpose are separate evidence layers.
+                            verified,rejected=isolate_decisions([{**r,'page_type':'UNKNOWN'} for r in rows],chunk)
+                            lookup={r['link_id']:r for r in rows}
+                            bound=[(h,lookup[r['link_id']]) for h,r in verified]
+                        else:bound,rejected=isolate_decisions(rows,chunk)
                         selection_body['rejected_rows']=rejected
                     else:bound=bind_decisions(rows,chunk)
                     items=[{'candidate':{'schema_version':VERSION2,'candidate_kind':'target' if g else 'entry','entry_url':h['uri'],

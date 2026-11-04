@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import datetime
 import hashlib
 import json
+import re
 from pathlib import Path
 import platform
 from urllib.parse import urlsplit
@@ -96,11 +97,15 @@ def natural_instruction(task, record, effective):
     actual = list(dict.fromkeys(row.get('semantic_goal') or row.get('goal') or '' for row in record['trajectory']))
     focus = '、'.join(g for g in actual if g)
     if focus:
-        return f'在「{app}」上{focus}，查看实际输入与页面结果'
+        from .task_instruction import generated_instruction
+        return generated_instruction(f'在「{app}」上{focus}，查看实际输入与页面结果')
     return f'在「{app}」上连续完成{effective}步真实网页操作并查看实际状态'
 
 
 def completion_evidence(record):
+    from .react_protocol import effect_feedback
+    from .trajectory_types import classify
+    from .reading_progress import ending
     terminal = record['terminal']
     final_id = terminal.get('final_observation_id') or record['trajectory'][-1]['after_observation_id']
     state = _observation_state(record, final_id)
@@ -111,14 +116,40 @@ def completion_evidence(record):
             'visible_text': state.get('visible_text', ''),
             'host_stop_reason': terminal.get('stop_reason'), 'agent_summary': terminal.get('stop_summary'),
             'business_completion': 'NOT_CLAIMED',
+            **({'goal_evidence':deepcopy(terminal['goal_evidence'])} if terminal.get('goal_evidence') else {}),
+            **({'collection_ending':deepcopy(terminal['collection_ending'])} if terminal.get('collection_ending') else {}),
+            'ending_evidence': ending(len(record['trajectory']),state),
+            'actual_effects': [effect_feedback(row) for row in record['trajectory']],
             'page_hosts': {key: urlsplit(_observation_state(record,key)['url']).hostname
                            for key in record['observations']},
+            'planning_intents':deepcopy(terminal.get('planning_intents',[])),
+            'actual_task_types': classify(record),
             'source_metadata': deepcopy((record['task'].get('candidate_binding') or {}).get('sources', []))}
 
 
 def _same_view(before, after):
     return all(before.get(key) == after.get(key) for key in
                ('url', 'scroll', 'values', 'elements', 'visible_text'))
+
+
+def _delayed_bridge(record, previous, before_id, after_id):
+    from .candidate_navigation import delayed_landing, DELAYED_PROTOCOL
+    if record['task']['fragment'].get('delayed_navigation_protocol') != DELAYED_PROTOCOL:
+        return None
+    for proof in record['terminal'].get('delayed_navigations',[]):
+        if proof['operation_id'] != previous['operation_id']:
+            continue
+        source = _observation_state(record, proof['source_observation_id'])
+        start = _observation_state(record, proof['from_observation_id'])
+        end = _observation_state(record, proof['to_observation_id'])
+        operation = load_json(previous['raw_step']['path'])['operation']
+        if (proof['source_observation_id'] == previous['before_observation_id']
+                and _same_view(start,_observation_state(record,before_id))
+                and _same_view(end,_observation_state(record,after_id))
+                and delayed_landing(operation,source,start,end,same_tab=proof.get('same_tab') is True,
+                    no_other_action=proof.get('no_other_action') is True,no_new_tab=proof.get('no_new_tab') is True)):
+            return operation
+    return None
 
 
 def effective_trajectory(record):
@@ -130,7 +161,7 @@ def effective_trajectory(record):
     if record['task']['fragment'].get('decision_protocol') not in NATIVE_VERSIONS:
         return record['trajectory']
     rows, seen = [], {}
-    for row in record['trajectory']:
+    for row_index,row in enumerate(record['trajectory']):
         dispatch_key = row['dispatch']['sha256']
         if dispatch_key in seen:
             if row != seen[dispatch_key]:
@@ -167,29 +198,51 @@ def effective_trajectory(record):
                                rule_version=record['task']['fragment'].get('effective_action_rule', RULE_VERSION))
         if not effect['verified']:
             raise ValueError('动作对应效果不可核验：' + row['operation_id'])
-        if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before):
+        if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before) and not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],row['before_observation_id']):
             raise ValueError('连续轨迹存在未解释的状态缺口')
         if rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
             navigation_return = (record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2'
                 and row['action'] == 'back' and rows[-1]['action'] in ('click','double_click','open_url','hotkey','type','select')
                 and before['url'] != after['url'])
-            if not navigation_return:
+            useful_return=False
+            if record['task']['fragment'].get('reading_progress_protocol') and row_index+1 < len(record['trajectory']):
+                from .reading_progress import control_return
+                following=record['trajectory'][row_index+1]
+                next_operation=load_json(following['raw_step']['path'])['operation']
+                useful_return=(rows[-1]['action']==row['action']=='scroll'
+                    and control_return(_observation_state(record, rows[-1]['before_observation_id']),before,after,next_operation))
+            from .consumer_page_policy import enabled as page_policy, returned_pair
+            boundary_return=page_policy(record['task']) and returned_pair(
+                _observation_state(record, rows[-1]['before_observation_id']),before,after,rows[-1],row)
+            if not navigation_return and not useful_return and not boundary_return:
                 raise ValueError('存在两步后回到原样的无效往返')
         rows.append(row)
     if rows and record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2':
         from .candidate_navigation import verify_path
         states,operations = [],[]
+        previous_id=None;previous_row=None
         for row in rows:
             before = _observation_state(record,row['before_observation_id'])
             if states:
-                states.append(before);operations.append(None)
+                bridge=_delayed_bridge(record,previous_row,previous_id,row['before_observation_id']) if previous_id else None
+                states.append(before);operations.append(bridge)
             else:
                 states.append(before)
             states.append(_observation_state(record,row['after_observation_id']))
             operations.append(load_json(row['raw_step']['path'])['operation'])
+            previous_id=row['after_observation_id'];previous_row=row
         verify_path(record['task'],states,operations)
-    if rows and record['terminal'].get('actual_actions') != len(rows):
+    from .closing_policy import enabled as v2, validate_record as validate_closing
+    if v2(record['task']):
+        marker=validate_closing(record)
+        if not marker['safe_for_pending_sample']:
+            raise ValueError('V2 raw ending is pending reconciliation, not a deliverable sample')
+    elif rows and record['terminal'].get('actual_actions') != len(rows):
         raise ValueError('实际派发数与有证据的原子操作数不一致，不能跳过未记录的动作')
+    final_id=record['terminal'].get('final_observation_id')
+    if rows and final_id and _observation_state(record,rows[-1]['after_observation_id'])['url'] != _observation_state(record,final_id)['url']:
+        if not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],final_id):
+            raise ValueError('末帧导航缺少原点击与延迟落地绑定')
     return rows
 
 
@@ -213,6 +266,12 @@ def terminal_outcome(task, record, final_state):
                or title in challenge or first_line in challenge
                or ('samwaf' in title + ' ' + visible and any(phrase in visible for phrase in denial)))
     terminal = record['terminal']
+    if task['fragment'].get('ending_policy') and not lines:
+        return 'failed', description
+    from .closing_policy import enabled as v2
+    marker=terminal.get('collection_ending')
+    if v2(task) and marker and marker.get('safe_for_pending_sample') and marker.get('flagged') and not blocked:
+        return 'controlled_exception','本段异常收尾，完整目标未确认完成；'+marker['reason']+'；'+description
     if blocked or terminal.get('unknown') or terminal.get('stop_reason') in ('blocked', 'no_path'):
         # Exception eligibility must be frozen by the trusted caller. A model
         # finish summary or a WAF page cannot grant it.
@@ -312,7 +371,8 @@ def derive(task, record, delivery, ids, manifest):
                   'precondition': f'当前页面为「{before["title"]}」' + (
                       f'，可见「{op["evidence"]["target_label"]}」目标控件'
                       if element and op['evidence'].get('target_label') else ''),
-                  'expected_result': row['expected']}
+                  'expected_result': (row['expected'] if re.search(r'[\u4e00-\u9fff]',row['expected'])
+                                      else '预期状态：「'+row['expected']+'」')}
         if element:
             action.update(target_bbox=element['bbox'], target_control_type=element['element_type'])
         step = {'step_id': index, 'image_path': image_path,
@@ -371,13 +431,27 @@ def derive(task, record, delivery, ids, manifest):
                   'next_step_rationale': final_description,
                   'step_result': '最终页面已确认，' + final_goal,
                   'exception_evidence': []})
+    if record['terminal'].get('goal_evidence'):
+        steps[-1]['tool_result']['return_value']['goal_evidence']=deepcopy(record['terminal']['goal_evidence'])
+    if record['terminal'].get('collection_ending'):
+        marker=deepcopy(record['terminal']['collection_ending'])
+        steps[-1]['tool_result']['return_value']['collection_ending']=marker
+        if marker['flagged']:
+            steps[-1]['exception_evidence']=['本段按异常尾步或八次尝试上限结束；目标未确认完成，尾部原件已单独保留。',
+                f"业务动作尝试{marker['business_attempts']}次，真实原子派发{marker['actual_atomic_dispatches']}次，已验证有效步{effective}，未验证尾步{marker['unverified_tail_dispatches']}。"]
+            steps[-1]['step_result']='异常收尾后保留可信末态；'+final_goal
     for position in range(len(steps) - 1):
         steps[position]['tool_result']['return_value']['screen_changed'] = \
             file_sha(delivery / steps[position]['image_path']) != file_sha(delivery / steps[position + 1]['image_path'])
     stop_summary = (record['terminal'].get('stop_summary') or '').strip()
     final_result = final_result if native else stop_summary or task['final_result']
+    from .trajectory_types import classify
+    actual_types=classify(record) if task['fragment'].get('planning_intent_protocol') else {'task_type':task['task_type'],'status':'LEGACY'}
+    result['actual_task_types']=actual_types
+    if not actual_types['task_type']:
+        return {**result,'status':'task_type_pending','error':'No evidence-backed customer task_type'}
     annotation = {'sample_id': ids['sample_id'], 'task_instruction': instruction,
-        'task_type': task['task_type'], 'terminal_type': 'Web',
+        'task_type': actual_types['task_type'], 'terminal_type': 'Web',
         'device_info': {'device_model': '', 'os_name': 'macOS' if platform.system() == 'Darwin' else platform.system(),
                         'os_version': (platform.mac_ver()[0] or platform.release())
                         if platform.system() == 'Darwin' else platform.release(),
@@ -484,6 +558,13 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     # Success path: project raw steps (actions already written live by the
     # session; the terminal complete record is projected here), identity and
     # the sealed delivery receipt.
+    from .closing_policy import enabled as v2
+    if v2(task):
+        # Project verified prefix copies only. Failed/unverified tail files stay
+        # in action-attempts and remain bound by the raw attempt journal.
+        for number,row in enumerate(record['trajectory'],1):
+            with (evidence_root/f'step_{number:03}.json').open('xb') as stream:
+                stream.write(Path(row['raw_step']['path']).read_bytes())
     final_raw = _write_terminal_step(evidence_root, record, ids)
     # The capture audit re-derives the per-step target ground truth from the
     # same raw steps and compares it to this manifest; write it from those
@@ -567,6 +648,8 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
              'sample_files_sha256': sample_files, 'capture_files_sha256': capture_files,
              'semantic_review': 'REVIEW_REQUIRED',
              'raw_execution': {'protocol': REACT_VERSION,
+                               **({'goal_evidence':deepcopy(record['terminal']['goal_evidence'])} if record['terminal'].get('goal_evidence') else {}),
+                               **({'collection_ending':deepcopy(record['terminal']['collection_ending'])} if record['terminal'].get('collection_ending') else {}),
                                **({'stop_details':record['terminal']['stop_details']} if 'stop_details' in record['terminal'] else {}),
                                'receipt': record['receipt']['terminal'],
                                'stop_reason': record['terminal'].get('stop_reason'),

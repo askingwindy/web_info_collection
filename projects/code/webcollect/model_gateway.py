@@ -20,6 +20,26 @@ from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, _int
 from .planning import object_sha256
 
 
+def _read_first_plan_body(opener, request, timeout, timing):
+    """Record observable non-streaming phases even when urllib raises."""
+    started = time.monotonic()
+    timing.update(socket_timeout_seconds=timeout, request_bytes=len(request.data),
+                  headers_ms=None, body_read_returned=False)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            timing['headers_ms'] = round((time.monotonic() - started) * 1000)
+            body = response.read(16_000_001)
+            timing['body_read_returned'] = True
+            return body
+    except urllib.error.HTTPError:
+        # HTTPError is raised after urllib receives the response headers.
+        if timing['headers_ms'] is None:
+            timing['headers_ms'] = round((time.monotonic() - started) * 1000)
+        raise
+    finally:
+        timing['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+
+
 def response_usage(raw, provider):
     """Normalize explicit provider counts; absent cache billing stays unknown."""
     counts = raw.get('usage', {})
@@ -79,6 +99,16 @@ def parse_content(content, provider):
     return json.loads(content), normalized
 
 
+def strict_plan_content(message, declared):
+    """One complete strict JSON plan, with original content provenance; no call ID."""
+    if set(declared)!={'submit_plan'} or message.get('tool_calls'):
+        raise ValueError('Content plan requires the sole declared submit_plan and no tool calls')
+    arguments=json.loads(message.get('content') or '')
+    if not isinstance(arguments,dict):raise ValueError('Content plan must be an object')
+    Draft202012Validator(declared['submit_plan']).validate(arguments)
+    return arguments
+
+
 class ModelGateway:
     def __init__(self, ledger):
         self.ledger = ledger
@@ -93,7 +123,8 @@ class ModelGateway:
 
     def call_tool(self, job, purpose, text, tools, *, system, history=(), images=(),
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
-                  max_requests=None, synthetic_response=None):
+                  max_requests=None, synthetic_response=None, inference=False, content_plan_protocol=None,
+                  timeout_seconds=None, patient_first_plan=False):
         """Versioned native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
         Returned assistant/user messages are copied verbatim into attempt history;
@@ -125,6 +156,17 @@ class ModelGateway:
             if not isinstance(schema, dict) or schema.get('type') != 'object':
                 raise ValueError('Function parameters must declare an object Schema')
             declared[name] = schema
+        if content_plan_protocol not in (None,'strict-plan-content-1'):
+            raise ValueError('Unknown content plan protocol')
+        if timeout_seconds is not None and (type(timeout_seconds) is not int or not 1<=timeout_seconds<=600):
+            raise ValueError('Explicit bounded request timeout required')
+        if patient_first_plan and (not timeout_seconds or content_plan_protocol != 'strict-plan-content-1'
+                                   or job['kind'] != 'react-native-decision'):
+            raise ValueError('Patient wait requires the original first-plan decision')
+        if not patient_first_plan and timeout_seconds is not None and timeout_seconds+5>=self.config['budget']['lease_seconds']:
+            raise ValueError('Request timeout must leave more than five seconds inside the original job lease')
+        if content_plan_protocol and (set(declared)!={'submit_plan'} or history):
+            raise ValueError('Content plan only supports a first sole submit_plan request')
         history = deepcopy(list(history))
         seen, pending = set(), None
         for message in history:
@@ -157,11 +199,39 @@ class ModelGateway:
             raise ValueError('Missing final tool result in history')
         context = {'version': 'native-tool-1', 'system': system, 'history': history,
                    'reasoning_effort': reasoning_effort, 'seen_ids': seen,
-                   'attempt_id': attempt_id, 'max_requests': max_requests, 'declared': declared}
+                   'attempt_id': attempt_id, 'max_requests': max_requests, 'declared': declared,
+                   'inference_images': inference,'content_plan_protocol':content_plan_protocol,
+                   'timeout_seconds':timeout_seconds,
+                   'dispatch_policy':'patient-first-plan-1' if patient_first_plan else None}
         return self._call(job, purpose + ':native-tool-1', text, {'type': 'object'},
                           images=images, attempts=attempts, output_limit=output_limit,
                           tools=deepcopy(list(tools)), tool_choice='auto',
                           synthetic_response=synthetic_response, native_context=context)
+
+    def call_message(self, job, purpose, text, schema, *, system, images=(), attempts=1,
+                     output_limit=None, reasoning_effort=None, attempt_id=None, max_requests=None,
+                     synthetic_response=None, content_envelope=None, grounded_choice=False):
+        """Versioned inference-only text JSON. No tools or native history on wire.
+
+        The same native dispatch context binds account, attempt, UNKNOWN and cap.
+        Customer/QC call() still requires original PNGs.
+        """
+        if not isinstance(attempt_id, str) or not attempt_id or len(attempt_id)>200:
+            raise ValueError('Original attempt identity required')
+        if max_requests is not None and (type(max_requests) is not int or max_requests<1):
+            raise ValueError('Positive request cap required')
+        if (attempts not in ((1,2) if grounded_choice else (1,))
+                or not isinstance(system,str) or not system.strip()):
+            raise ValueError('Text decision has one strict parse attempt')
+        if content_envelope not in (None,'single-json-fence-1'):raise ValueError('Unknown text envelope protocol')
+        adapter_version='banded-plain-json-2' if content_envelope else 'banded-plain-json-1'
+        context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
+                   'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,
+                   'max_requests':max_requests,'declared':{},'plain_json':True,'inference_images':True,
+                   'dispatch_policy':'grounded-choice-1' if grounded_choice else None}
+        return self._call(job,purpose+':'+adapter_version,text,schema,images=images,
+                          attempts=attempts,output_limit=output_limit,native_context=context,
+                          synthetic_response=synthetic_response)
 
     def call(self, job, purpose, text, schema, *, images=(), synthetic_response=None,
              attempts=2, output_limit=None, tools=None, tool_choice=None):
@@ -196,14 +266,16 @@ class ModelGateway:
                 raise ValueError('Missing/or non-original image')
             from PIL import Image
             with Image.open(path) as im:
-                if im.format != 'PNG':
+                image_format = im.format
+                if image_format != 'PNG' and not ((native_context or {}).get('inference_images') and image_format == 'JPEG'):
                     raise ValueError('Original customer review images must be PNG')
                 im.verify()
+            mime = 'image/jpeg' if image_format == 'JPEG' else 'image/png'
             encoded = base64.b64encode(path.read_bytes()).decode()
             if model['provider'] == 'glm':
-                image_url = {'url': ('data:image/png;base64,' if model.get('image_encoding', 'data_url' if native_context else 'raw_base64') == 'data_url' else '') + encoded}
+                image_url = {'url': ('data:' + mime + ';base64,' if model.get('image_encoding', 'data_url' if native_context else 'raw_base64') == 'data_url' else '') + encoded}
             else:
-                image_url = {'url': 'data:image/png;base64,' + encoded, 'detail': 'high'}
+                image_url = {'url': 'data:' + mime + ';base64,' + encoded, 'detail': 'high'}
             parts.append({'type': 'image_url', 'image_url': image_url})
         # Legacy callers (site qualification re-derivation) rebuild this exact
         # identity dict; native-tool fields only join when actually requested.
@@ -216,6 +288,12 @@ class ModelGateway:
             identity.update(protocol=native_context['version'], history=native_context['history'],
                             reasoning_effort=native_context['reasoning_effort'],
                             attempt_id=native_context['attempt_id'], max_requests=native_context['max_requests'])
+            if native_context.get('content_plan_protocol'):
+                identity['content_plan_protocol']=native_context['content_plan_protocol']
+            if native_context.get('timeout_seconds'):
+                identity['request_timeout_seconds']=native_context['timeout_seconds']
+            if native_context.get('dispatch_policy'):
+                identity['dispatch_policy'] = native_context['dispatch_policy']
         purpose = purpose + ':' + object_sha256(identity)
         native_tools = tools and (model['provider'] == 'glm' or native_context)
         user_message = {'role': 'user', 'content': parts}
@@ -257,6 +335,7 @@ class ModelGateway:
         timeout_retry = {}
         timeout_retries = invalid_attempts = 0
         for attempt in range(attempts + 3):
+            dispatch_policy = (native_context or {}).get('dispatch_policy')
             if model['provider']!='synthetic':
                 # DNS resolution is provably before HTTP dispatch. Do not turn
                 # a local resolution failure into a sent/chargeable UNKNOWN;
@@ -277,9 +356,14 @@ class ModelGateway:
                         raise ValueError('Local provider DNS preflight failed before reservation/HTTP dispatch') from None
             while True:
                 try:
+                    if dispatch_policy == 'patient-first-plan-1':
+                        self.ledger.heartbeat(job, request_timeout=native_context['timeout_seconds'])
+                    elif dispatch_policy == 'grounded-choice-1':
+                        self.ledger.heartbeat(job)
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
                         'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
                         'accounting_mode':'tokens-1', **timeout_retry,
+                        **({'dispatch_policy':dispatch_policy} if dispatch_policy else {}),
                         'schema':schema,'images':[{'path':str(Path(p).resolve()),'sha256':file_sha(p)} for p in images],
                         'provider':model['provider'],'model':model['model'],'prompt_identity':purpose,
                         **({'tools':tools,'tool_choice':tool_choice} if native_tools else {}),
@@ -288,7 +372,9 @@ class ModelGateway:
                             'dispatch_max_requests':native_context['max_requests'],
                             'http_dispatch':model['provider'] != 'synthetic',
                             'account_id':self._account_id(),
-                            'reasoning_effort':native_context['reasoning_effort']} if native_context else {})})
+                            'reasoning_effort':native_context['reasoning_effort'],
+                            'content_plan_protocol':native_context.get('content_plan_protocol'),
+                            'request_timeout_seconds':native_context.get('timeout_seconds') or model['timeout_seconds']} if native_context else {})})
                     break
                 except ModelRateWait as limit:
                     self.ledger.heartbeat(job)
@@ -305,6 +391,7 @@ class ModelGateway:
                 continue  # Previously charged invalid response is retained, never resent under the same identity.
             rid = request['id']
             usage, parsed, raw = None, None, None
+            transport_receipt = {}
             try:
                 if model['provider'] == 'synthetic':
                     if synthetic_response is None:
@@ -313,7 +400,7 @@ class ModelGateway:
                            'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(synthetic_response)}}],
                            'usage': {'prompt_tokens': 20 + len(images), 'completion_tokens': 10,
                                      'prompt_tokens_details': {'cached_tokens': 0}}}
-                    if native_context:
+                    if native_context and not native_context.get('plain_json'):
                         raw['choices'] = [{'finish_reason': 'tool_calls', 'message': deepcopy(synthetic_response)}]
                 else:
                     payload = {'model': model['model'], 'messages': [
@@ -322,7 +409,8 @@ class ModelGateway:
                         payload['messages'] = [{'role':'system','content':system}] + native_context['history'] + [user_message]
                         if correction:
                             payload['messages'][-1]['content'] = deepcopy(parts) + [{'type':'text','text':correction}]
-                        payload.update(tools=tools, tool_choice='auto')
+                        if not native_context.get('plain_json'):
+                            payload.update(tools=tools, tool_choice='auto')
                         payload['max_tokens' if compatible_provider else 'max_completion_tokens'] = output_limit or model['max_completion_tokens']
                         if model['provider'] == 'glm':
                             payload['thinking'] = {'type':'enabled', 'clear_thinking':False}
@@ -359,6 +447,12 @@ class ModelGateway:
                         payload.update(response_format={'type': 'json_schema', 'json_schema': {
                             'name': 'webcollect_result', 'strict': True, 'schema': schema}},
                             max_completion_tokens=output_limit or model['max_completion_tokens'], store=False)
+                    trace_first_plan = (model['provider'] == 'glm' and native_context
+                                        and native_context.get('content_plan_protocol') == 'strict-plan-content-1')
+                    if trace_first_plan:
+                        # BigModel accepts a caller-provided request_id in the JSON body.
+                        # Bind this HTTP attempt, including a timeout, to its existing ledger ID.
+                        payload['request_id'] = rid
                     req = urllib.request.Request(model['endpoint'], json.dumps(payload).encode(), headers={
                         'Authorization': 'Bearer ' + self._credential,
                         'Content-Type': 'application/json', 'X-Client-Request-Id': rid})
@@ -366,8 +460,16 @@ class ModelGateway:
                     class NoRedirect(urllib.request.HTTPRedirectHandler):
                         def redirect_request(self, req, fp, code, msg, headers, newurl):
                             return None
-                    with urllib.request.build_opener(NoRedirect).open(req, timeout=model['timeout_seconds']) as response:
-                        raw = json.loads(response.read(16_000_001))
+                    timeout = (native_context or {}).get('timeout_seconds') or model['timeout_seconds']
+                    opener = urllib.request.build_opener(NoRedirect)
+                    if trace_first_plan:
+                        timing = {'client_request_id': rid}
+                        transport_receipt['http_timing'] = timing
+                        body = _read_first_plan_body(opener, req, timeout, timing)
+                    else:
+                        with opener.open(req, timeout=timeout) as response:
+                            body = response.read(16_000_001)
+                    raw = json.loads(body)
                 usage = response_usage(raw, model['provider'])
                 if model['provider'] == 'ark' and raw.get('model') != model['model']:
                     raise ValueError('Returned Ark model differs from configured version')
@@ -378,25 +480,41 @@ class ModelGateway:
                     raise ValueError('Incomplete/refused response')
                 tool_calls = choice['message'].get('tool_calls') or []
                 tool_name = None
-                if native_context:
-                    if not isinstance(tool_calls, list) or len(tool_calls) != 1:
-                        raise ValueError('Tool protocol requires exactly one tool call')
-                    call = tool_calls[0]
-                    cid = call.get('id') if isinstance(call, dict) else None
-                    if not isinstance(cid, str) or not cid.strip() or cid in native_context['seen_ids']:
-                        raise ValueError('Tool protocol requires a unique nonempty call ID')
-                    function = call.get('function') or {}
-                    name = function.get('name')
-                    if call.get('type') != 'function' or name not in native_context['declared']:
-                        raise ValueError('Tool name not declared')
-                    arguments = json.loads(function.get('arguments') or '')
-                    if not isinstance(arguments, dict):
-                        raise ValueError('Tool arguments must be an object')
-                    Draft202012Validator(native_context['declared'][name]).validate(arguments)
-                    parsed = {'name':name, 'arguments':arguments, 'tool_call_id':cid,
-                              'assistant_message':{**deepcopy(choice['message']), 'role':'assistant'},
-                              'user_message':deepcopy(user_message), 'request_id':rid}
-                    normalized = False
+                if native_context and not native_context.get('plain_json'):
+                    if not tool_calls and native_context.get('content_plan_protocol')=='strict-plan-content-1':
+                        arguments=strict_plan_content(choice['message'],native_context['declared'])
+                        parsed={'response_kind':'strict_plan_content','content_plan_protocol':'strict-plan-content-1',
+                                'arguments':arguments,'request_id':rid,'source':'provider_content',
+                                'assistant_message':{**deepcopy(choice['message']),'role':'assistant'}}
+                        normalized=False
+                    else:
+                        if not isinstance(tool_calls, list) or len(tool_calls) != 1:
+                            raise ValueError('Tool protocol requires exactly one tool call')
+                        call = tool_calls[0]
+                        cid = call.get('id') if isinstance(call, dict) else None
+                        if not isinstance(cid, str) or not cid.strip() or cid in native_context['seen_ids']:
+                            raise ValueError('Tool protocol requires a unique nonempty call ID')
+                        function = call.get('function') or {}
+                        name = function.get('name')
+                        if call.get('type') != 'function' or name not in native_context['declared']:
+                            raise ValueError('Tool name not declared')
+                        arguments = json.loads(function.get('arguments') or '')
+                        if not isinstance(arguments, dict):
+                            raise ValueError('Tool arguments must be an object')
+                        Draft202012Validator(native_context['declared'][name]).validate(arguments)
+                        parsed = {'name':name, 'arguments':arguments, 'tool_call_id':cid,
+                                  'assistant_message':{**deepcopy(choice['message']), 'role':'assistant'},
+                                  'user_message':deepcopy(user_message), 'request_id':rid}
+                        normalized = False
+                elif native_context and native_context.get('plain_json'):
+                    if tool_calls:
+                        raise ValueError('Plain decision must not contain provider tool calls')
+                    content=choice['message']['content']; normalized=False
+                    if native_context.get('content_envelope')=='single-json-fence-1':
+                        match=re.fullmatch(r'\s*```json[ \t]*\r?\n(.*?)\r?\n```\s*',content,re.DOTALL)
+                        if match and '```' not in match.group(1):content=match.group(1);normalized=True
+                    parsed=json.loads(content)
+                    Draft202012Validator(schema).validate(parsed)
                 elif tool_calls:
                     first = (tool_calls[0] or {}).get('function') or {}
                     tool_name = first.get('name')
@@ -408,7 +526,7 @@ class ModelGateway:
                 if not native_context:
                     Draft202012Validator(schema).validate(parsed)
                 self.ledger.settle_request(rid, state='succeeded', usage=usage,
-                    response={'result': parsed, 'provider_response': raw,
+                    response={'result': parsed, 'provider_response': raw, **transport_receipt,
                               'content_envelope_normalized': normalized,
                               **({'tool_call_name': tool_name} if tool_name else {})})
                 return parsed
@@ -428,7 +546,7 @@ class ModelGateway:
                 except (ValueError, OSError, AttributeError, TypeError):
                     pass
                 self.ledger.settle_request(rid, state='unknown', error='HTTPError:' + str(error.code),
-                                           response={'provider_error': detail})
+                                           response={'provider_error': detail, **transport_receipt})
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
             except (urllib.error.URLError, TimeoutError, OSError) as error:
                 # Retain each timeout as UNKNOWN; retry only within this active call.
@@ -437,8 +555,11 @@ class ModelGateway:
                 for key in ('errno','verify_code'):
                     value=getattr(root,key,None)
                     if type(value) is int:detail[key]=value
-                self.ledger.settle_request(rid, state='unknown', error=type(error).__name__,response={'transport_error':detail})
-                retry_allowed = isinstance(root, TimeoutError) and timeout_retries < 3
+                self.ledger.settle_request(rid, state='unknown', error=type(error).__name__,
+                                           response={'transport_error': detail, **transport_receipt})
+                producer_discovery = job['kind'] in ('ai-search-plan','ai-application-site-classification-1','ai-grounded-entry-ids-1')
+                retry_allowed = (isinstance(root, TimeoutError) and timeout_retries < 3
+                                 and not producer_discovery and not dispatch_policy)
                 if retry_allowed and native_context:
                     with self.ledger.connect() as con:
                         used = self.ledger.session_http_usage(con, native_context['attempt_id'])['used']
@@ -467,7 +588,7 @@ class ModelGateway:
                     for k in ('input_tokens', 'output_tokens', 'cached_input_tokens')) and usage['cached_input_tokens']<=usage['input_tokens']
                 self.ledger.settle_request(rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
-                                           response={'result': parsed, 'provider_response': raw}, error=type(error).__name__)
+                                           response={'result': parsed, 'provider_response': raw, **transport_receipt}, error=type(error).__name__)
                 if not valid_usage:
                     raise OutcomeUnknown('Missing provider usage; reservation retained') from None
                 invalid_attempts += 1

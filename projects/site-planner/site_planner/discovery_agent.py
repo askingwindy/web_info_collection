@@ -71,7 +71,7 @@ def _raise_settled_selection(ledger,jid):
         raise SettledSelectionRejected(jid,[r['id'] for r in rows])
 
 
-def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, reasoning_effort='low', isolated_requests=()):
+def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, reasoning_effort='low', isolated_requests=(), source_uris=()):
     """One durable selection tool call, without a follow-up completion to ack IO."""
     if isolated_requests:
         from .producer_authority import isolation_host
@@ -82,6 +82,14 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
         excluded = {isolation_host(uri,registry) for rid in isolated_requests for uri in decisions[rid]['source_urls']}
         if not payload.get('sources') or any(isolation_host(s['uri'],registry) in excluded for s in payload['sources']):
             raise OutcomeUnknown('This selection includes an original unresolved source')
+    elif purpose == 'ai-application-site-classification-1' and payload.get('homepage_uri'):
+        from .producer_authority import disjoint_requests
+        isolated_requests = disjoint_requests(ledger,urls=[payload['homepage_uri']],
+                                             independent=payload.get('protocol') in ('producer-site-classification-3','producer-site-classification-4','producer-site-classification-5'))
+    elif purpose in ('ai-grounded-entry-ids-1','ai-target-page-purpose-1') and source_uris:
+        from .producer_authority import disjoint_requests
+        isolated_requests = disjoint_requests(ledger,scope=payload['scope'],urls=source_uris,
+                                             independent=purpose=='ai-target-page-purpose-1' or bool(payload.get('target_site_categories')))
     frozen = {'protocol': 'native-tool-1', 'input': payload, 'tools': tools,
               'system': system, 'reasoning_effort': reasoning_effort}
     jid = ledger.enqueue(purpose, frozen)

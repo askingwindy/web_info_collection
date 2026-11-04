@@ -1,0 +1,100 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WebCollect · 数据流与工程进展</title><style>
+*{box-sizing:border-box}html{color-scheme:light}body{margin:0;background:#f6f8f6;color:#192f35;font:16px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{max-width:1080px;margin:auto;padding:46px 44px 70px}h1,h2,h3{line-height:1.35;letter-spacing:-.015em}h1{font-size:clamp(28px,4vw,44px);margin:5px 0 12px}h2{font-size:26px;margin:42px 0 14px;border-bottom:2px solid #ccdcd8;padding-bottom:8px}h3{font-size:19px;margin:24px 0 6px}p{margin:7px 0 13px}header .meta,.label{font-weight:650;color:#35665f;font-size:13px;letter-spacing:.09em}header .scope{font-size:14px;color:#4c6265}a{color:#155d70;text-underline-offset:3px}code{font: .9em ui-monospace,Menlo,monospace;overflow-wrap:anywhere}figure{margin:20px 0}figure svg{width:100%;height:auto;display:block}table{border-collapse:collapse;width:100%;background:white;font-size:14px}th,td{border-bottom:1px solid #d7e1df;padding:8px 10px;text-align:left}th{background:#e3eeea}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}.sum td{font-weight:700;background:#eef5f1}.refs{font-size:13px;margin:6px 0 15px}.refs a{display:inline-block;margin-right:4px}.lead{font-size:20px}.steps{display:grid;grid-template-columns:1fr 1fr;gap:20px}.steps section{background:white;padding:0 18px 4px;border-left:4px solid #49877b}.scroll{overflow:auto}.end{margin-top:34px;border-top:1px solid #bdcec8;padding-top:13px;font-size:13px;color:#4c6265}@media(max-width:740px){main{padding:24px 16px}.steps{grid-template-columns:1fr}table{white-space:nowrap}}@media print{main{padding:0}h2,h3{break-after:avoid}figure,table,.steps section{break-inside:avoid}body{background:white}a{color:inherit}}
+</style><main><header><div class="meta">WEBCOLLECT　/　2026.11.04　/　源码与工程文档</div><h1>从网页候选到独立质检</h1><p class="lead">V9 在具名批次中登记了 100 个有来源、可访问的入口。页面能否支持具体任务、消费者能否证明目标完成，以及样本能否进入交付，在不同阶段分别决定。</p><p class="scope">工作树快照为北京时间 18:05，含未提交改动。本文的生产数字引自具名工程文档，未读取凭据、SQLite、日志、原始请求、采集包或验证目录，未实跑生产或质检。</p></header><figure><svg xmlns="http://www.w3.org/2000/svg" width="1120" height="794" viewBox="0 0 1120 794" role="img" aria-labelledby="title desc">
+<title id="title">WebCollect 三程序数据流</title>
+<desc id="desc">生产者登记站点、核验页面后将候选写入 Table2。消费者冻结版本与领取，复用同一网页采集并将正式收据提交为待审。导出和准备 QC 输入后，独立质检依据样本、资料、人工与批次记录进行核验，通过显式集合才可封包。发布与客户验收分别记录。</desc>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 Z" fill="#42576a"/></marker>
+  <style>
+    text{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#132b3b}
+    .title{font-size:35px;font-weight:650}.subtitle{font-size:19px;fill:#445967}
+    .role{font-size:20px;font-weight:650}.sectionNo{font-family:Menlo,monospace;font-size:16px;font-weight:bold;fill:#fff}
+    .cardTitle{font-size:23px;font-weight:650}.body{font-size:18px;fill:#304757}
+    .code{font-family:Menlo,Consolas,monospace;font-size:17px;fill:#34465c}.marker{font-size:16px;font-weight:600;fill:#405569}
+    .foot{font-size:18px;fill:#344954}.footCode{font-family:Menlo,Consolas,monospace;font-size:18px;fill:#273e4c}
+    .arrow{stroke:#42576a;stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+  </style>
+</defs>
+<rect width="1120" height="794" rx="18" fill="#fafbf8"/>
+<rect x="0" y="0" width="12" height="794" fill="#1d3e4b"/>
+<text x="44" y="55" class="title">WebCollect 三程序数据流</text>
+<text x="45" y="91" class="subtitle">沿箭头追踪一个候选，直到采集收据、审核结论和发布记录。</text>
+<path d="M44 113 H1076" stroke="#bdc9c8" />
+
+<rect x="44" y="128" width="34" height="24" rx="5" fill="#006766"/>
+<text x="51" y="146" class="sectionNo">01</text>
+<text x="90" y="147" class="role">生产者</text>
+<rect x="44" y="163" width="320" height="134" rx="11" fill="#eff8f4" stroke="#8bbab4" stroke-width="1.3"/>
+<rect x="44" y="180" width="4" height="26" rx="2" fill="#006766"/>
+<text x="61" y="198" class="cardTitle">Table1 · 站点与应用</text>
+<text x="61" y="228" class="body">登记站点，依据第一方首页核类</text>
+<text x="61" y="254" class="body">沿第一方链接选业务入口</text>
+<rect x="400" y="163" width="320" height="134" rx="11" fill="#eff8f4" stroke="#8bbab4" stroke-width="1.3"/>
+<rect x="400" y="180" width="4" height="26" rx="2" fill="#006766"/>
+<text x="417" y="198" class="cardTitle">页面选入与来源核验</text>
+<text x="417" y="228" class="body">核业务依据、落地页和 GET 2xx</text>
+<text x="417" y="254" class="body">页面用途可以保留 UNKNOWN</text>
+<rect x="756" y="163" width="320" height="134" rx="11" fill="#eff8f4" stroke="#8bbab4" stroke-width="1.3"/>
+<rect x="756" y="180" width="4" height="26" rx="2" fill="#006766"/>
+<text x="773" y="198" class="cardTitle">Table2 · 发布候选</text>
+<text x="773" y="228" class="code">CandidatePool.publish_row</text>
+<text x="773" y="254" class="code">data_candidates</text>
+<text x="773" y="280" class="body">关联 NEW 发布行、版本和来源</text>
+<path d="M366 230 H396" class="arrow"/>
+<path d="M722 230 H752" class="arrow"/>
+<path d="M916 299 V344" class="arrow"/>
+<text x="769" y="326" class="marker">① 候选交接</text>
+<rect x="44" y="312" width="34" height="24" rx="5" fill="#335985"/>
+<text x="51" y="330" class="sectionNo">02</text>
+<text x="90" y="331" class="role">消费者</text>
+<rect x="756" y="348" width="320" height="143" rx="11" fill="#f0f5fa" stroke="#9eafc9" stroke-width="1.3"/>
+<rect x="756" y="365" width="4" height="26" rx="2" fill="#335985"/>
+<text x="773" y="383" class="cardTitle">独占领取候选快照</text>
+<text x="773" y="413" class="code">CandidatePool.claim_next</text>
+<text x="773" y="439" class="body">锁定候选、目标、版本和来源</text>
+<text x="773" y="465" class="body">过期领取转入原账对账</text>
+<rect x="400" y="348" width="320" height="143" rx="11" fill="#f0f5fa" stroke="#9eafc9" stroke-width="1.3"/>
+<rect x="400" y="365" width="4" height="26" rx="2" fill="#335985"/>
+<text x="417" y="383" class="cardTitle">同一会话执行与取证</text>
+<text x="417" y="413" class="code">consume → ReactSession.run</text>
+<text x="417" y="439" class="body">保留原目标，首帧观察补全任务</text>
+<text x="417" y="465" class="body">逐步保存图、树、动作与终态</text>
+<rect x="44" y="348" width="320" height="143" rx="11" fill="#f0f5fa" stroke="#9eafc9" stroke-width="1.3"/>
+<rect x="44" y="365" width="4" height="26" rx="2" fill="#335985"/>
+<text x="61" y="383" class="cardTitle">正式保存待审</text>
+<text x="61" y="413" class="code">postprocess.process</text>
+<text x="61" y="439" class="body">saved_sample.json + 原库提交</text>
+<text x="61" y="465" class="code">collected_pending_review</text>
+<path d="M754 418 H724" class="arrow"/>
+<path d="M398 418 H368" class="arrow"/>
+<path d="M204 493 V540" class="arrow"/>
+<text x="219" y="523" class="marker">② 采集结果送审</text>
+<rect x="44" y="510" width="34" height="24" rx="5" fill="#82502d"/>
+<text x="51" y="528" class="sectionNo">03</text>
+<text x="90" y="529" class="role">质检交接</text>
+<rect x="44" y="545" width="320" height="155" rx="11" fill="#faf5ed" stroke="#c5ab91" stroke-width="1.3"/>
+<rect x="44" y="562" width="4" height="26" rx="2" fill="#82502d"/>
+<text x="61" y="580" class="cardTitle">客户包与待审输入</text>
+<text x="61" y="610" class="code">build_client_package</text>
+<text x="61" y="636" class="code">prepare_qc_inputs</text>
+<text x="61" y="662" class="body">冻结抽检计划及有效集合</text>
+<text x="61" y="688" class="code">QC_NOT_RUN</text>
+<rect x="400" y="545" width="320" height="155" rx="11" fill="#faf5ed" stroke="#c5ab91" stroke-width="1.3"/>
+<rect x="400" y="562" width="4" height="26" rx="2" fill="#82502d"/>
+<text x="417" y="580" class="cardTitle">独立质检与审核</text>
+<text x="417" y="610" class="code">delivery_pipeline.run</text>
+<text x="417" y="636" class="body">按计划核验样本，必要时转人工</text>
+<text x="417" y="662" class="body">单样本、包级及批次各记结论</text>
+<rect x="756" y="545" width="320" height="155" rx="11" fill="#faf5ed" stroke="#c5ab91" stroke-width="1.3"/>
+<rect x="756" y="562" width="4" height="26" rx="2" fill="#82502d"/>
+<text x="773" y="580" class="cardTitle">封包、发布和客户验收</text>
+<text x="773" y="610" class="code">delivery_pipeline.finalize</text>
+<text x="773" y="636" class="body">按有效集合及跨包报告核验封包</text>
+<text x="773" y="662" class="body">另记发布凭证和客户验收状态</text>
+<path d="M366 622 H396" class="arrow"/>
+<path d="M722 622 H752" class="arrow"/>
+<path d="M44 732 H1076" stroke="#bdc9c8"/>
+<text x="44" y="765" class="foot">跨程序追溯</text>
+<text x="162" y="765" class="footCode">candidate_id  /  claim_id  /  attempt_id  /  sample_id</text>
+</svg>
+</figure><h2>两次交接在哪里发生</h2><div class="steps"><section><h3>① Table2 候选交接</h3><p>生产者核验 Table1 分类、第一方来源和入口 GET。<code>CandidatePool.publish_row → _put_v2</code> 在短事务内写入 <code>data_candidates</code>、版本、来源和发布行。V2 正文保留 <code>schema_version</code>、<code>candidate_kind</code>、<code>entry_url</code>、<code>requested_goal</code>。</p><p><code>candidate_consumer.run → claim_next</code> 在同库核对候选 ID、版本和发布正文，冻结领取快照。唯一活动领取者和事务保证同一候选只能由一个进程领取；租约过期转入原账对账。页面用途未知仍可有业务来源，原模型或访问请求未决则按其绑定范围隔离。</p><div class="refs"><a href="../projects/site-planner/site_planner/candidate_discovery.py#L649">生产者发布门禁 · L649</a>　<a href="../projects/site-planner/site_planner/candidate_pool.py#L412">写入候选 · L412</a>　<a href="../projects/site-planner/site_planner/candidate_pool.py#L562">独占领取 · L562</a>　<a href="../projects/code/webcollect/candidate_consumer.py#L705">消费者调用 · L705</a></div></section><section><h3>② 正式保存与送审</h3><p><code>consume → task_generation.execute → collect_m4</code> 复用首访会话。<code>postprocess.process</code> 从连续原件生成保存收据，由 <code>RuntimeStore.finish_attempt</code> 登记待审。候选池的消费成功另由原保存收据回写。</p><p><code>build_client_package → _prepare_qc_handoff → prepare_qc_inputs</code> 绑定原 attempt、样本字节、客户包、抽样及有效集合。缺策略返回 <code>qc_configuration_required</code>，成功冻结返回 <code>QC_NOT_RUN</code>。独立审核才从单包 <code>single_record.qc</code> 或批量准备与排队进入后续程序。</p><div class="refs"><a href="../projects/code/webcollect/task_generation.py#L1487">采集与导出 · L1487</a>　<a href="../projects/code/webcollect/task_generation.py#L1327">送审路由 · L1327</a>　<a href="../projects/code/webcollect/qc_handoff.py#L241">交接收据 · L241</a>　<a href="../projects/code/webcollect/single_record.py#L250">独立单包 QC · L250</a></div></section></div><p>生产者维护 Table1。消费者在 <code>RuntimeStore</code> 登记编号、正式尝试及样本，在 <code>BatchLedger</code> 记录作业、请求和用量；命名批次中已绑定 ID 与版本的首次访问或保存结果可回供生产者排序。QC 按摘要绑定独立报告，批次接纳、终审、发布和客户验收各有自己的记录。</p><div class="refs"><a href="../projects/site-planner/site_planner/producer_evidence.py#L78">生产者读取反馈 · L78</a>　<a href="../projects/code/webcollect/candidate_consumer.py#L233">消费结果回写 · L233</a>　<a href="../projects/code/webcollect/runtime.py#L1136">登记质检报告 · L1136</a>　<a href="../projects/code/webcollect/runtime.py#L1257">发布记录 · L1257</a></div><h2>进展按批次看</h2><h3>11 月 4 日生产者 V9</h3><p>净增 <b>100</b> 个 GET 2xx、落地唯一的候选，Table2 从 <b>7,640</b> 到 <b>7,740</b>；Table1 新增 38 站，其中 28 站分类确认、10 站待分类。32 页来自找新站，68 页来自本轮新站的第一方扩页。独立用途盲评的精度 <b>24/29（82.76%）</b>，覆盖 <b>24/91（26.37%）</b>，与冻结门槛 95%、80% 仍有距离。此前另一批已验收匿名表格、表单和仪表盘，场景补证和 V9 用途指标分批统计。</p><div class="refs"><a href="../docs/%E7%94%9F%E4%BA%A7%E8%80%85V9%E6%96%B0%E6%8C%96%E6%8E%98100%E9%A1%B5%E4%B8%8E%E6%80%A7%E8%83%BD%E5%BD%92%E5%9B%A0-20261104.md#L3">V9 数量与独立指标 · L3</a>　<a href="../docs/%E7%94%9F%E4%BA%A7%E8%80%85V9%E6%96%B0%E6%8C%96%E6%8E%98100%E9%A1%B5%E4%B8%8E%E6%80%A7%E8%83%BD%E5%BD%92%E5%9B%A0-20261104.md#L23">来源分布 · L23</a>　<a href="../docs/%E7%94%9F%E4%BA%A7%E8%80%85UNKNOWN%E4%B8%8E%E5%8C%BF%E5%90%8D%E5%90%8E%E5%8F%B0%E5%A4%8D%E7%9B%98%E5%8F%8A%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88-20261104.md#L76">冻结阈值 · L76</a>　<a href="../docs/%E7%94%9F%E4%BA%A7%E8%80%85%E6%96%B0%E7%89%88100%E7%BD%91%E9%A1%B5%E7%9C%9F%E5%AE%9E%E9%AA%8C%E8%AF%81%E4%B8%8E%E7%8B%AC%E7%AB%8B%E7%94%A8%E9%80%94%E9%AA%8C%E6%94%B6-20261104.md#L21">前一批后台实测 · L21</a></div><h3>11 月 3 日消费者四份名单</h3><div class="scroll"><table><thead><tr><th>具名范围</th><th class="n">固定候选</th><th class="n">首访</th><th class="n">正式尝试</th><th class="n">保存待审</th><th class="n">其中短流程</th><th class="n">AI 已审</th><th class="n">AI 通过</th><th class="n">AI 待复核</th></tr></thead><tbody><tr><td>第一轮 50 候选</td><td class="n">50</td><td class="n">27</td><td class="n">20</td><td class="n">4</td><td class="n">2</td><td class="n">4</td><td class="n">2</td><td class="n">2</td></tr><tr><td>第二轮 50 候选，中途停止</td><td class="n">50</td><td class="n">27</td><td class="n">20</td><td class="n">11</td><td class="n">7</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr><tr><td>模板 A/B</td><td class="n">8</td><td class="n">8</td><td class="n">6</td><td class="n">2</td><td class="n">1</td><td class="n">2</td><td class="n">1</td><td class="n">1</td></tr><tr><td>Muxtly 模板学习</td><td class="n">3</td><td class="n">3</td><td class="n">3</td><td class="n">1</td><td class="n">1</td><td class="n">1</td><td class="n">0</td><td class="n">1</td></tr><tr class="sum"><td>合计</td><td class="n">111</td><td class="n">65</td><td class="n">49</td><td class="n">18</td><td class="n">11</td><td class="n">7</td><td class="n">3</td><td class="n">4</td></tr></tbody></table></div><p>49 次正式尝试另有 29 次拒收、2 次中断。18 条保存中 7 条达至少 5 个有效操作，其中 1 条有完整独立 AI 五项通过记录。已审 7 条对应的包级报告均为 FAIL；当日新增人工审核、批次正式接纳、终审合格、发布均为 0，客户验收未执行。两轮 50 候选的名单和收尾规则不同，第二轮 11 条虽已交接，当天尚无独立 AI 结果。</p><div class="refs"><a href="../projects/prd/%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93%E4%B8%8E%E4%B8%8B%E4%B8%80%E6%AD%A5%E5%AE%89%E6%8E%92-20261103.md#L11">四批分母与质量分层 · L11</a>　<a href="../projects/prd/%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93%E4%B8%8E%E4%B8%8B%E4%B8%80%E6%AD%A5%E5%AE%89%E6%8E%92-20261103.md#L21">已保存样本的收尾与选取 · L21</a></div><h3>后续消费者验证</h3><p>另行冻结的条件计划 V2 批次访问 19/100，正式保存 0，余 81 未访问。计划所能表达的终点与宿主校验不一致，通用选择器也不足以证明左栏目标，批次因工程验证阻塞结束。V4 只获准处理原序 20–24，当前选取的工程文档未给出保存数。11 月 4 日“自由內容＋房贷”双基线正常通过和正式保存均为 0，独立 AI 未执行；两条未决目标保留原账。后继规约和租约修复的离线检查单列。新长期基线“月食＋矩形面积”使用两份独立目标，不能继承旧题结论。</p><div class="refs"><a href="../README.md#L295">100 候选与后续小批 · L295</a>　<a href="../README.md#L303">双基线结论 · L303</a>　<a href="../docs/%E6%B6%88%E8%B4%B9%E8%80%85Agent%E6%95%B4%E4%BD%93%E7%A0%94%E5%8F%91%E4%B8%8E%E5%8D%95%E6%9D%A1%E7%9C%9F%E5%AE%9E%E9%AA%8C%E6%94%B6%E5%AE%9E%E6%96%BD%E6%96%B9%E6%A1%88-20261101.md#L16">长期基准 · L16</a></div><h2>问题与下一次验收</h2><h3>生产者：可到达的网页很多，可判定用途的证据不足</h3><p><b>工程侧。</b> V9 的 192 次图片探针累计 21.59 分钟，命中无需消费 0 次；本次生产自然耗时 59.60 分钟、用量 842,880 token，独立用途评估另计 854,161 token。可对复用同一匿名观察的路径核对每页是否少一次访问，以及是否保留原件、时效和落地绑定。当前源码已把共享观察、主内容结构证据和发布前 GET 收据复用接入显式 entry-tools-10 分支。选取的工程文档尚无这版独立用途验收或节省耗时的实测数字。</p><p><b>站点挖掘 Agent。</b> 对实体集合、介绍正文和可操作工具使用同一组冻结反例。让模型在工具输入中引用主区控件、实体列表或正文结构，显式保留缺证项。验收继续分别报“非 UNKNOWN 的正确数/判定数”和“正确识别数/独立证据充分数”，另列同目标的成本与时间。</p><div class="refs"><a href="../docs/%E7%94%9F%E4%BA%A7%E8%80%85V9%E6%96%B0%E6%8C%96%E6%8E%98100%E9%A1%B5%E4%B8%8E%E6%80%A7%E8%83%BD%E5%BD%92%E5%9B%A0-20261104.md#L17">V9 用量与后续归因 · L17</a>　<a href="../projects/site-planner/site_planner/producer_observation.py#L14">共享观察实现 · L14</a>　<a href="../projects/site-planner/site_planner/purpose_structure.py#L103">结构事实核验 · L103</a></div><h3>消费者：目标有可见证据、动作生效和片段结束需要分别判断</h3><p>第二轮 131 分钟里约 115 分钟在等待模型。已保存的第 8 条在教程首页看到年份，在指定的简介章节仍缺证；两个八步上限样本也未确认完成目标。模板对照的两条保存均来自原 ReAct，跨页学习的模板直接保存仍为 0。下一次具名验证可固定当前 Table2 的 ID、版本、目标及判据：矩形面积核两次输入变化、具名结果和单位；月食阅读核真实搜索、落地、滚动与原文引文。逐条关联正式收据及同一样本独立 QC，并按成功与失败合计耗时、实际调用和已知 token。原 UNKNOWN 只按原请求对账。</p><div class="refs"><a href="../projects/prd/%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93%E4%B8%8E%E4%B8%8B%E4%B8%80%E6%AD%A5%E5%AE%89%E6%8E%92-20261103.md#L21">耗时及目标缺证 · L21</a>　<a href="../projects/prd/%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93%E4%B8%8E%E4%B8%8B%E4%B8%80%E6%AD%A5%E5%AE%89%E6%8E%92-20261103.md#L30">模板与规划器边界 · L30</a>　<a href="../docs/%E6%B6%88%E8%B4%B9%E8%80%85Agent%E6%95%B4%E4%BD%93%E7%A0%94%E5%8F%91%E4%B8%8E%E5%8D%95%E6%9D%A1%E7%9C%9F%E5%AE%9E%E9%AA%8C%E6%94%B6%E5%AE%9E%E6%96%BD%E6%96%B9%E6%A1%88-20261101.md#L16">两项固定目标 · L16</a></div><h3>独立质检：审过一条与放行一包的依据不同</h3><p>11 月 3 日的 4 条 AI 待复核涉及与历史轨迹的实质差异，第二轮则已有 11 份待审核交接可供核对。工程上，单包入口显式传入 <code>collection_checks</code>；批量准备与排队路径没有透传同一参数。差异审核会根据该参数补入采集侧点名的历史样本。可用含一个“默认近邻之外、指定必比”样本的离线夹具，对照两个入口生成的审核任务。这项静态差异不能用来归因既有包级 FAIL。</p><div class="refs"><a href="../projects/prd/%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93%E4%B8%8E%E4%B8%8B%E4%B8%80%E6%AD%A5%E5%AE%89%E6%8E%92-20261103.md#L36">待复核项 · L36</a>　<a href="../projects/code/webcollect/single_record.py#L281">单包参数 · L281</a>　<a href="../projects/code/webcollect/batch_qc.py#L84">批量入队 · L84</a>　<a href="../projects/quality-inspector/quality_inspector/ai_worker.py#L299">追加指定近邻 · L299</a></div><div class="end">图谱基线　<code>8efeb29b28af</code>（含未提交改动）　·　511 份文件　·　4,345 个节点　·　13,663 条关系　·　9 个层　·　8 步导览。源码内容指纹 <code>9b6dac81ca944718</code>。文件、调用及表关系经过静态校验；交付前复查时，生产者 page_consumption.py 已有此快照之后的改动。本文没有重新检查生产原账。<br><a href="knowledge-graph.json">图谱 JSON</a>　<a href="webcollect-flow.svg">矢量数据流图</a></div></main></html>

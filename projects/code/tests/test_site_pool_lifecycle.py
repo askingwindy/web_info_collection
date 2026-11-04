@@ -237,6 +237,7 @@ class CollectionWritebackIntegration(unittest.IsolatedAsyncioTestCase):
         facts = case.output / 'facts.json'; save_json(facts, derive(capture))
         dataset = case.output / 'candidate'
         build_client_package(Path(__file__).resolve().parents[3], capture, dataset, facts=facts)
+        save_json(case.output / 'candidate-receipt.json', {'files_sha256':package_files(dataset)})
         handoff = prepare_qc_inputs(dataset, case.chain_manifest, case.output / 'qc-inputs',
             ai_percent=100, human_percent=0, seed='CONTROLLED-writeback')
         profile = load_json(DEFAULT_DELIVERY_PROFILE)

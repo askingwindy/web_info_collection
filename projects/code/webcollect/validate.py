@@ -89,6 +89,8 @@ def validate_sample(directory, mode='delivery', manifest=None):
         ids = set()
         steps = data['steps']
         effective = sum(s['action']['action_type'] not in ('wait','complete') for s in steps)
+        from .closing_policy import annotation_errors
+        for error in annotation_errors(data):fail('collection_ending','steps',error)
         if effective < 5 and (data.get('short_flow') is not True or not data.get('short_flow_reason','').strip()):
             fail('effective_steps','steps','少于 5 个有效操作步，必须标记短流程并说明原因')
         if data.get('short_flow') is True and (effective >= 5 or not data.get('short_flow_reason','').strip()):

@@ -276,10 +276,17 @@ def order_sources(hits, feedback):
     enriched = []
     for hit in hits:
         gs = matches(hit)
+        consumer_groups=[g for g in (feedback or {}).get('consumer_groups',[])
+                         if g['host']==urlsplit(hit['uri']).hostname and g['page_type']==hit.get('page_type','UNKNOWN')]
         page_type = hit.get('page_type','UNKNOWN')
         lowered = [g for g in gs if g['page_type']==page_type and g.get('deprioritized')]
         enriched.append({**hit,'feedback':gs,'ranking_reason':{'deprioritized':bool(lowered),
             'candidate_ids':[cid for g in lowered for cid in g.get('streak_candidate_ids',[])]}})
+        if consumer_groups:
+            reason=enriched[-1]['ranking_reason']
+            reason['deprioritized']=reason['deprioritized'] or any(g['deprioritized'] for g in consumer_groups)
+            reason['saved_evidence_count']=sum(g['saved_count'] for g in consumer_groups)
+            reason['consumer_candidate_bindings']=[b for g in consumer_groups for b in g['candidate_bindings']]
     return sorted(enriched,key=lambda h:h['ranking_reason']['deprioritized'])
 
 

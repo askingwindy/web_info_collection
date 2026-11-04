@@ -67,3 +67,26 @@ def project(prompt):
         'images': 1, 'history_closed_rounds': len(closed),
         'history_rounds_omitted_for_size': min(len(groups),2)-len(closed), 'limits_chars': LIMITS}
     return result
+
+
+def collection_facts(report=None):
+    """Project an explicitly bound aggregate; absence is never a zero rate.
+
+    Callers must supply an owning current-project effective-set report. The
+    default consumer has no such explicit set, so it reports UNKNOWN.
+    """
+    unknown = {'status': 'UNKNOWN', 'numerator': None, 'denominator': None,
+               'reason': '没有绑定当前工程显式有效集合及已完成判重的汇总报告'}
+    result = {'schema_version': 'consumer-collection-facts-1',
+              'short_flow': deepcopy(unknown), 'near_duplicate_unique_samples': deepcopy(unknown),
+              'in_progress_saved': {'status': 'UNKNOWN', 'reason': '待审保存数不是正式有效集合分母'}}
+    if not report or not all(report.get(k) for k in ('scope', 'source', 'rules', 'effective_set')):
+        return result
+    for key in ('short_flow', 'near_duplicate_unique_samples'):
+        metric = report.get(key, {})
+        n, d = metric.get('numerator'), metric.get('denominator')
+        if (metric.get('status') == 'COMPLETE' and type(n) is int and type(d) is int
+                and 0 <= n <= d and d == len(set(report['effective_set'])) and d > 0):
+            result[key] = {'status': 'KNOWN', 'numerator': n, 'denominator': d, 'ratio': n / d,
+                           'scope': report['scope'], 'source': report['source'], 'rules': report['rules']}
+    return result

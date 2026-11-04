@@ -379,8 +379,17 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(browser.validate_capture_receipt(result['state'],result['capture'],result['png']))
 
     async def test_loading_and_target_occlusion_never_grant_capture(self):
-        await self.prepare();await self.page.locator('img').evaluate('(image)=>{image.src="https://must-never-load.invalid/image.png"}')
+        await self.prepare()
+        # Keep the image request genuinely pending throughout capture. A completed
+        # failure on proven unrelated decoration follows a separate V6 rule.
+        pending=[]
+        async def hold(route):
+            pending.append(route)
+        await self.page.route('https://must-never-load.invalid/image.png', hold)
+        await self.page.locator('img').evaluate('(image)=>{image.src="https://must-never-load.invalid/image.png"}')
         with self.assertRaisesRegex(ValueError,'拒绝保存'):await browser.capture(self.page,'#go',retries=1)
+        self.assertEqual(len(pending),1)
+        await pending[0].abort()
         await self.prepare();captured=await browser.capture(self.page,'#go',retries=1)
         await self.page.evaluate('''()=>{const cover=document.createElement('div');cover.style='position:absolute;left:0;top:130px;width:200px;height:100px;background:black';document.body.append(cover)}''')
         with self.assertRaises(ValueError):await browser.verify_execution_state(self.page,captured['state'],'#go')
@@ -474,9 +483,7 @@ class CompactRepaintNoiseTests(unittest.TestCase):
         noise = proof.get('paint_noise_proof', [])
         # The default rule version stamps its own noise-rule label; v4 receipts
         # carry compact-repaint-noise-v2 (tag/window-aware paint guard).
-        self.assertEqual({entry['rule'] for entry in noise},
-                         {'compact-repaint-noise-v2' if browser.STABILITY_VERSION in ('webcollect-related-stability-4','webcollect-related-stability-5')
-                          else 'compact-repaint-noise-v1'})
+        self.assertEqual({entry['rule'] for entry in noise}, {'compact-repaint-noise-v2'})
         for kwargs, label in ((dict(allow_border=False), 'v3-first-attempt'),
                               (dict(allow_border=True, rule_version=browser.STABILITY_V2), 'v2-receipt')):
             with self.subTest(rule=label):

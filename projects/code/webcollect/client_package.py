@@ -87,6 +87,9 @@ def validate_client_sample(sample, *, allow_legacy_narrative=False, allow_legacy
     if data['app_info']['ui_language'] != 'zh' or data['completion_status'] == 'failed':
         raise ValueError('Customer delivery requires Chinese UI and a completed trajectory')
     effective = sum(s['action']['action_type'] not in ('wait', 'complete') for s in data['steps'])
+    from .closing_policy import annotation_errors
+    ending_errors=annotation_errors(data)
+    if ending_errors:raise ValueError('; '.join(ending_errors))
     if effective < 5 and not (data.get('short_flow') is True and data.get('short_flow_reason', '').strip()):
         raise ValueError('Fewer than five effective actions require a short-flow reason')
     if data.get('short_flow') is True and (effective >= 5 or not data.get('short_flow_reason', '').strip()):

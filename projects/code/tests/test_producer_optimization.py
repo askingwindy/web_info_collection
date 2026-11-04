@@ -95,7 +95,7 @@ class Optimization(unittest.TestCase):
         report=self.cli([],goals=goals,key='goals',mode='expand')
         self.assertEqual(report['listed_unique_candidates'],2,report)
         self.assertEqual(report['row_results'],{'NEW':2,'DUPLICATE':1})
-        self.assertEqual(report['new_dispatches']['GET'],1)
+        self.assertEqual(report['new_dispatches']['GET'],0)
         self.assertEqual(report['new_dispatches']['model'],0)
 
     def test_mixed_keeps_independent_controls_and_skips_language_and_content_variants(self):

@@ -662,6 +662,44 @@
                 "properties": {
                   "screen_changed": {
                     "type": "boolean"
+                  },
+                  "collection_ending": {
+                    "type": "object",
+                    "properties": {
+                      "protocol": {
+                        "const": "webcollect-five-eight-attempt-ending-2"
+                      }
+                    },
+                    "required": [
+                      "protocol"
+                    ],
+                    "additionalProperties": true
+                  },
+                  "goal_evidence": {
+                    "type": "object",
+                    "properties": {
+                      "protocol": {
+                        "const": "webcollect-plan-facts-1"
+                      },
+                      "is_ai_review": {
+                        "const": false
+                      },
+                      "business_goal_status": {
+                        "enum": [
+                          "VERIFIED",
+                          "PARTIAL",
+                          "UNVERIFIED",
+                          "NOT_SPECIFIED"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "protocol",
+                      "is_ai_review",
+                      "checks",
+                      "business_goal_status"
+                    ],
+                    "additionalProperties": true
                   }
                 },
                 "required": [],

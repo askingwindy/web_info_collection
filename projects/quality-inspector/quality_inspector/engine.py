@@ -358,6 +358,7 @@ def _delivery_documents(dataset,profile,roles=None):
 def _delivery_statistics(dataset,outputs,profile):
     import csv
     from collections import defaultdict
+    from .category_coverage import parent_category
     rows=[];errors=[];sites=defaultdict(set);resolutions=set();short=0
     try:
         with (dataset/'metadata.csv').open(newline='',encoding='utf-8-sig') as stream:rows=list(csv.DictReader(stream))
@@ -390,7 +391,7 @@ def _delivery_statistics(dataset,outputs,profile):
             resolutions.add(tuple(annotation['device_info']['screen_resolution']))
             short+=int(annotation.get('short_flow') is True)
         except (OSError,ValueError,KeyError,TypeError):errors.append('Missing distribution facts: '+sample['sample_id'])
-    count=len(outputs);categories=Counter(row.get('site_category','') for row in rows);targets=profile['configuration']['targets']
+    count=len(outputs);categories=Counter(parent_category(row.get('site_category','')) for row in rows);targets=profile['configuration']['targets']
     maximum=max(categories.values(),default=0)/count if count else 0
     selection=None
     for document in ('来源与合规说明.md','README.md'):
@@ -560,7 +561,7 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
     formats=format_run(None,dataset);layout=discover(dataset)
     contract,fingerprint=contract_fingerprint()
     if profile['configuration']['attachments']!=contract['attachments']:
-        initial_errors.append('Profile attachments differ from the installed four-document authority.')
+        initial_errors.append('Profile attachments differ from the installed authority.')
     base={'status':'PASS','integrity':'PASS','config_sha256':fingerprint,'scope':'installed-delivery-contract',
           'samples':[],'known_limits':[],'note':'No external reference sample, baseline or raw log is required.'}
     semantic_sampling=None

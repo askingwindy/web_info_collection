@@ -240,7 +240,7 @@ class SitePool:
             con.commit()
             return baseline
 
-    def reserve_tool(self, run_id, kind, key, payload, *, maximum=None, batch_scope=None):
+    def reserve_tool(self, run_id, kind, key, payload, *, maximum=None, batch_scope=None, probe_of=None):
         identity = object_sha256([run_id, kind, key])
         with self.connect(write=True) as con:
             con.execute('BEGIN IMMEDIATE')
@@ -251,6 +251,15 @@ class SitePool:
                 if old['state'] != 'succeeded':
                     raise ValueError('Tool outcome UNKNOWN/failed; reconcile original, do not resend')
                 return identity, json.loads(old['result'])
+            if probe_of:
+                prior = con.execute("SELECT run_id,state,result FROM tool_requests WHERE id=? AND kind='search'",(probe_of,)).fetchone()
+                if (not prior or prior['run_id'] != run_id or prior['state'] != 'unknown'
+                        or str(json.loads(prior['result']).get('provider_code')) != '1113'):
+                    raise ValueError('A probe must name the original 1113 in this session')
+                claim = con.execute('INSERT OR IGNORE INTO checkpoints VALUES(?,?,?,?)',
+                    (run_id,'search-probe/'+probe_of,canonical({'request_id':identity}),time.time()))
+                if not claim.rowcount:
+                    raise ValueError('The original search hold already has a probe')
             if maximum is not None:
                 if batch_scope is None:
                     used = con.execute('SELECT COUNT(*) FROM tool_requests WHERE run_id=? AND kind=?', (run_id,kind)).fetchone()[0]

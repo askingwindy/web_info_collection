@@ -100,11 +100,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
             self.assertTrue(self.decisions,'unexpected model request beyond the controlled script')
             decision=self.decisions.pop(0)(prompt)
             name=decision['tool_call']['name']
-            arguments={**decision['tool_call']['arguments'],'goal_update':decision['goal_update'],
-                       'decision_summary':decision['decision_summary']}
-            if name=='finish':
-                arguments.pop('short_flow',None);arguments.pop('short_flow_reason',None)
-                arguments['evidence_refs']=[prompt['observation']['observation_id']]
+            arguments=engineering.scripted_native_arguments(decision, prompt, payload['tools'])
             call_id='OFFLINE-consumer-call-'+str(len(self.prompts))
         raw={'id':'OFFLINE-http-'+str(len(self.wire)),'model':'glm-5.3-flash',
              'usage':{'prompt_tokens':50,'completion_tokens':20,'prompt_tokens_details':{'cached_tokens':0}},
@@ -114,11 +110,11 @@ class PipelineAcceptance(engineering.EntryEngineering):
                     'arguments':json.dumps(arguments,ensure_ascii=False)}}]}}]}
         return io.BytesIO(json.dumps(raw,ensure_ascii=False).encode())
 
-    def boundaries(self, *, search=False):
+    def boundaries(self, *, search=False, legacy_protocol=True):
         stack=ExitStack()
         # The actual ModelGateway constructor, call_tool, parser, reservation,
         # request cache and history serializer run without method replacements.
-        stack.enter_context(self.io_boundaries(mock_gateway=False))
+        stack.enter_context(self.io_boundaries(mock_gateway=False, legacy_protocol=legacy_protocol))
         stack.enter_context(patch.dict(os.environ,{'WEBCOLLECT_JOINT_FAKE_KEY':'CONTROLLED-NOT-A-CREDENTIAL'}))
         stack.enter_context(patch('webcollect.model_gateway.socket.getaddrinfo',return_value=[('CONTROLLED_DNS',)]))
         opener=type('Opener',(),{'open':lambda _,request,timeout:self.transport(request,timeout)})()
@@ -615,7 +611,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
             report = await asyncio.to_thread(self.invoke,producer_cli,producer+['--query','受控工具','--target','1'])
             result, = await asyncio.to_thread(self.invoke,consumer_cli,consumer+[
                 '--producer-batch',report['batch_scope'],'--request-prefix','default-entry'])
-        self.assertEqual(report['model_protocol'],'entry-tools-3')
+        self.assertEqual(report['model_protocol'],'entry-tools-4')
         self.assertEqual(report['row_results'],{'NEW':1})
         self.assertEqual(result['state'],'succeeded',result)
         self.assertEqual(result['QC'],'pending_review')

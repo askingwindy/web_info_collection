@@ -103,6 +103,24 @@ class NativeWindowChrome(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.browser.close();await self.runtime.stop()
 
+    async def test_pulsing_bookmark_is_captured_in_its_natural_zero_scale_phase(self):
+        from webcollect.browser import validate_capture_receipt, verify_execution_state
+        await self.page.set_content('''<style>
+        #bookmark{position:relative;margin:80px;width:42px;height:32px}
+        #bookmark::before{content:"";position:absolute;left:0;top:20px;width:32px;height:32px;
+          border-radius:100%;background:blue;animation:pulse 3s infinite ease-out}
+        @keyframes pulse{0%{transform:scale(0);opacity:0}25%{transform:scale(0);opacity:.1}
+        50%{transform:scale(.1);opacity:.3}75%{transform:scale(.5);opacity:.5}100%{transform:scale(1);opacity:0}}
+        </style><main><h1>资料库</h1><button id="bookmark">收藏</button></main>''')
+        await self.page.wait_for_timeout(850)
+        result=await capture(self.page)
+        attempts=result['capture']['attempts']
+        self.assertEqual(len(attempts[-1]['png_phase_waits']),2)
+        self.assertTrue(validate_capture_receipt(result['state'],result['capture'],result['png']))
+        self.assertTrue((await verify_execution_state(self.page,result['state']))['matched'])
+        self.assertLessEqual(result['capture']['natural_wait_requested_ms'],8000)
+        self.assertEqual(await self.page.evaluate('document.getAnimations()[0].playState'),'running')
+
     async def test_periodic_motion_waits_for_natural_hold_without_pausing(self):
         await self.page.set_content('''<!doctype html><meta charset="utf-8"><style>
           body{font:20px sans-serif}#moving{width:100px;height:100px;background:#ddf;position:absolute;right:30px;top:100px;animation:fixture-motion 4s infinite}

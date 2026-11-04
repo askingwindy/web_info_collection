@@ -50,15 +50,16 @@ class ProductionNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.job = self.ledger.claim('test', job_id=self.ledger.enqueue('test', {'case': self._testMethodName}))
         self.navigation = BatchNavigation(self.ledger, self.job)
 
-    async def test_preflight_and_collection_share_visit_cap_before_dispatch(self):
+    async def test_retired_visit_ceiling_is_metered_without_blocking_dispatch(self):
         page = Page(self.ledger)
         await self.navigation.goto(page, 'https://example.org/task', purpose='preflight:task')
         await self.navigation.goto(page, 'https://example.org/task', purpose='collection:sample')
-        with self.assertRaisesRegex(BudgetStop, 'max_top_level_visits'):
-            await self.navigation.goto(page, 'https://example.org/task', purpose='collection:retry')
-        self.assertEqual(len(page.calls), 2)
+        await self.navigation.goto(page, 'https://example.org/task', purpose='collection:retry')
+        self.assertEqual(len(page.calls), 3)
         visits = self.ledger.visits()
-        self.assertEqual([v['state'] for v in visits], ['succeeded', 'succeeded'])
+        self.assertEqual([v['state'] for v in visits], ['succeeded', 'succeeded', 'succeeded'])
+        self.assertEqual(self.ledger.config['budget']['max_top_level_visits'],2)
+        self.assertIsNone(self.ledger.summary()['max_top_level_visits'])
         self.assertGreaterEqual(visits[1]['dispatched_at'] - visits[0]['dispatched_at'], 0.99)
         self.assertEqual(visits[0]['metrics']['main_frame_navigation_events'], 1)
         self.assertEqual(page.listeners, {})
@@ -98,14 +99,14 @@ class ProductionNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.listeners, {})
         self.assertLessEqual(page.calls[0][1]['timeout'], 20)
 
-    async def test_expired_run_does_not_dispatch(self):
+    async def test_retired_run_ceiling_does_not_reset_old_account_or_block_dispatch(self):
         with self.ledger.transaction() as con:
             con.execute('UPDATE batch_meta SET started=started-?', (self.ledger.config['budget']['max_run_seconds'] + 1,))
         page = Page(self.ledger)
-        with self.assertRaises(BudgetStop):
-            await self.navigation.goto(page, 'https://example.org/task', purpose='preflight:task')
-        self.assertEqual(page.calls, [])
-        self.assertEqual(self.ledger.visits(), [])
+        await self.navigation.goto(page, 'https://example.org/task', purpose='preflight:task')
+        self.assertEqual(len(page.calls),1)
+        self.assertEqual(len(self.ledger.visits()),1)
+        self.assertGreater(self.ledger.summary()['wall_seconds'],self.ledger.config['budget']['max_run_seconds'])
 
     async def test_private_url_rejected_before_reservation(self):
         page = Page(self.ledger)

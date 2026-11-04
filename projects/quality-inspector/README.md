@@ -197,7 +197,7 @@ C12另依据附件A的`step_result`实际观察要求，拦截已确认的待审
 
 小规模试跑使用 `python -m quality_inspector.ai_worker prepare --trial-sample <sample_id> --effective-set <试跑清单>`，另按 `--help` 提供配置、原账、数据和输出目录。可重复传 `--trial-sample`。试跑队列和审核件与正式用途分开，report 逐条区分实审结果、机械阻断和待审，小样本比例用于诊断。正式流水线继续要求有效的跨包报告和绑定的审核证据。
 
-`contract.py` 的 `webcollect-delivery-contract-2` 指纹包含需求书、澄清记录、附件 A/B 四份安装原文及 SHA，字段和动作规则、五类审核与逐帧策略、参与判定的代码 SHA。安装资源在 `quality_inspector/authority/`，运行不依赖仓库内历史目录。规则变化会产生新指纹，不能把旧审核的 `baseline_sha256` 改写后当作新审核。
+`contract.py` 的 `webcollect-delivery-contract-2` 指纹绑定需求书、当前澄清、站点分类与轨迹口径、轨迹补充、QC 抽检计数方案及附件 A/B 共七份安装原文的 SHA，以及字段、动作、审核策略和正式类目覆盖规则。安装资源在 `quality_inspector/authority/`，不依赖当前工作目录或仓库历史目录；`contract-authority.json` 保留原路径、优先关系和历史适用范围。实现源码 SHA 留作报告溯源，不进入审核接纳身份。五项样本审核使用各自语义版本；本次补齐需求资源和累计类目检查不改五项判据，不触发新 AI 请求，也不改签旧 `baseline_sha256`。无逐项版本的旧收据仍须显式影响评估，原 FAIL、待审与 UNKNOWN 保持。
 
 新 `qc-review-2` 的明确结论要求：五类检查齐全；`provenance.frames_viewed` 和 `step_observations` 对实际步骤恰好覆盖一次；每步有实际判断，真人明确选择ok时允许空备注，其他逐步观察仍须非空；各项 PASS/FAIL 的 `evidence_steps` 引用有效步骤。真人PASS无需书面原因，FAIL及AI明确结论仍须理由。可选逐步文件引用还要属于该步且 SHA 相符，真人资料PASS允许空note/detail但仍须有效文件引用。缺帧、重复代替缺帧、陈旧证据和缺失结论均不可发布。这是内部证据记录协议，不新增客户要求的审核文件格式；也无法认证填写者身份或证明其实际看过图像。
 
@@ -232,6 +232,12 @@ projects/code/.venv/bin/python projects/quality-inspector/qc.py check-set \
 截图 SHA 倒排和完整序列索引保留精确命中；Hamming 半径 r 采用 r+1 个互不重叠 bit 分块，保证阈值内候选不漏召回，再精算距离。`--verify-exhaustive` 另从实际图像重算指纹，并与全部 n(n−1)/2 对的朴素穷举比较；差异或缓存事实不一致均 FAIL。缓存键绑定实际 annotation、全部截图 SHA、算法代码及 Pillow 版本。`pair_comparisons` 表示完整逻辑比较域，真实索引候选量另列。该优化不证明本地 dHash/SimHash 等价于客户算法，外部结果仍 UNKNOWN。
 
 `check-set` 的机械 PASS 退出码为 0，但 **始终 `release_ready=false`、语义/资料审核 NOT_EVALUATED、客户验收 UNKNOWN**。最终统一客户目录仍必须执行带真实审核的 `check --stage final`。`config/delivery-m4-1000-20261025.json` 的累计目标为 1000 条；其中 20 URI、任务族、非滚动占比、各波和真人抽样属于 `internal_targets` 信息，不进入客户合同硬门槛。中间波须使用明确累计样本数的 profile，不能用 1000 配置的 FAIL 假称当前波通过。内部 G4/G5、真人首 20 及后续抽样、客户 2% 验收都由执行规划分别管理，任何本地 PASS 不等于 M4 完成或客户验收。
+
+显式 `release.kind == 'formal'` 的 20 万条全集还要求原需求列出的 14 个站点父类全部出现。`statistics.category_coverage` 报告所需、已出现、缺席及每类有效样本数；缺类返回 `FORMAL_CATEGORY_COVERAGE`，各类不另设最低比例。`医疗健康科普→健康科普`、`图书影音榜单→图书文化`、`百科与文档站→百科与文档` 等明确等价名称合并核算覆盖及单类 ≤20%；同站跨包允许这些等价写法，包内 metadata/site-list 与原件绑定仍逐项核对。“金融股票交易等”的“等”是原文列举修饰，不是合法别名；该自由文本、空值、UNKNOWN 和工程额外类目不能补齐必需项，“知识文库”也不是第 15 个客户必需类目。未解析版本及来源映射不一致的行不能贡献覆盖计数。不从页面用途或 URI 推测类目。
+
+5,000 条质量批、`formal-package` 的单个一万条成员包、小试及未声明正式全集的检查，其全类覆盖项为 `NOT_APPLICABLE`；现有短流程、四路重复、分布、应用累计 500、视口及审核门禁各自继续执行。finalize/archive 继续重算当前显式集合并比对统计与合约；旧统计、旧指纹、错绑集合或 FAIL 报告不能替当前集合定版。下文及较早的 `current-chain-r01` 页面独占和三败停站说明限于原冻结试点，新候选工程按最新澄清解释。
+
+2026-11-04 二次复核补齐两条报告入口绑定：finalize/archive 要求单包报告保留当前 `requirements_baseline.sha256`，并重新加载其 `local_profile.path`，核对原 SHA 与配置快照。缺字段、旧需求指纹、文件缺失、profile 已变或只改报告内配置均拒绝，不能借缺失字段跳过比较。单包 `DELIVERY_CATEGORY_SHARE` 也与累计/质量批使用相同父类映射；`report-only` 仍只统计、不新增比例门槛。该机械分布政策进入合约指纹，旧单包/跨包报告需重做确定性检查；样本的五项审核版本保持，按原图树与逐项语义绑定复用，不自动派发 AI 请求。
 
 2026-10-26按用户要求调整正常步骤的真人输入格式（whole-trajectory-review-3）。现有盲审入口只更新界面模板，嵌入证据、原baseline与data_id保持不变，已存草稿按同一键恢复。reviews.py变化使后续QC实现指纹改变；原版导出通过已有显式审核迁移机制接入新版，需核对原记录/图树与规则影响，不覆盖原记录。此改动不改变样本合同标准、不增加真人审核量。
 

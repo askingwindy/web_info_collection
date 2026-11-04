@@ -4,6 +4,22 @@ from .candidate_contract import same_application
 
 LEGACY_PAGE_LIMIT=64
 NAV_ACTIONS={'click','double_click','hotkey','type','select','open_url','back'}
+DELAYED_PROTOCOL='webcollect-explicit-href-landing-1'
+
+
+def delayed_landing(operation, source, current, landed, *, same_tab, no_other_action, no_new_tab):
+    """Exact observed href only. This is attribution, never a replay/click."""
+    if not (same_tab and no_other_action and no_new_tab and operation
+            and operation.get('action_type') in ('click','double_click')
+            and current.get('url') == source.get('url') and landed.get('url') != current.get('url')):
+        return None
+    cid=operation.get('evidence',{}).get('anchor_element_id')
+    control=next((c for c in source.get('capture_controls',[]) if c.get('element_id')==cid),None)
+    if not control or control.get('target') not in (None,'','_self') or control.get('href') != landed.get('url'):
+        return None
+    return {'rule_version':DELAYED_PROTOCOL,'operation_id':operation['operation_id'],
+            'source_url':source['url'],'href':control['href'],'landed_url':landed['url'],
+            'same_tab':True,'no_other_action':True,'no_new_tab':True,'control_id':cid}
 
 
 def excluded_article(task, url):

@@ -2,7 +2,7 @@
   "schema_version": "qc-local-profile-1",
   "profile_id": "webcollect-delivery-contract-v1",
   "scope": "delivery",
-  "authority": "Web requirement v3 and annex A/B, with confirmed 2026-10-21 clarifications. No pilot minimum is applied.",
+  "authority": "Installed contract-authority.json pins the requirement, annex A/B and dated clarifications. Latest explicit decisions override conflicting historical clauses only within their scope. No pilot minimum is applied; all-category coverage is enforced only for an explicit formal corpus.",
   "duplicates": {
     "exact_images": "zero-cross-sample-reuse",
     "sequence": "exact-action_type+target_text+page_name-list",

@@ -19,6 +19,23 @@ from site_planner.candidate_pool import CandidatePool
 from site_planner.discovery_tools import reference
 
 
+def scripted_native_arguments(decision, prompt, tools):
+    name = decision['tool_call']['name']
+    arguments = {**decision['tool_call']['arguments'], 'goal_update': decision['goal_update'],
+                 'decision_summary': decision['decision_summary']}
+    schema = next(t['function']['parameters'] for t in tools if t['function']['name'] == name)
+    observation = prompt['observation']['observation_id']
+    if 'task_intent' in schema.get('required', []):
+        arguments['task_intent'] = {'status': 'UNKNOWN', 'task_types': [], 'basis_observation_id': observation,
+                                    'visible_end_condition': '受控输入值和可见结果已核对',
+                                    'basis': '离线传输夹具，无实际页面业务结论'}
+    if name == 'finish':
+        arguments.pop('short_flow', None)
+        arguments.pop('short_flow_reason', None)
+        arguments['evidence_refs'] = [observation]
+    return arguments
+
+
 class EntryEngineering(legacy.Consumption):
     async def test_sealed_known_failure_reconciliation_preserves_raw_and_blocks_unknown(self):
         from webcollect.runtime import RuntimeStore
@@ -91,8 +108,19 @@ class EntryEngineering(legacy.Consumption):
             '--history-set',os.path.relpath(self.chain),'--worker-id',worker,
             '--request-prefix',prefix,'--protocol','entry','--limit','1']
 
-    def io_boundaries(self, *, mock_gateway=True):
+    def io_boundaries(self, *, mock_gateway=True, legacy_protocol=None):
         stack = ExitStack()
+        if legacy_protocol is None:
+            legacy_protocol = mock_gateway
+        if legacy_protocol:
+            from webcollect.react_session import build_url_task
+
+            def native_task(**kwargs):
+                # The scripted transport below returns the historical four-tool protocol.
+                kwargs.pop('plan_protocol', None)
+                return build_url_task(**kwargs)
+
+            stack.enter_context(patch('webcollect.react_session.build_url_task', side_effect=native_task))
         def gateway_init(gateway,ledger):
             gateway.ledger=ledger;gateway.config=ledger.config
         def reserve(gateway,job,purpose,request_payload=None):
@@ -115,11 +143,7 @@ class EntryEngineering(legacy.Consumption):
             if not self.decisions: raise AssertionError('unexpected extra model call')
             decision=self.decisions.pop(0)(value)
             name=decision['tool_call']['name']
-            args={**decision['tool_call']['arguments'], 'goal_update':decision['goal_update'],
-                  'decision_summary':decision['decision_summary']}
-            if name=='finish':
-                args.pop('short_flow',None);args.pop('short_flow_reason',None)
-                args['evidence_refs']=[value['observation']['observation_id']]
+            args=scripted_native_arguments(decision, value, tools)
             cid='CONTROLLED-call-'+str(len(self.prompts))
             assistant={'role':'assistant','content':None,'tool_calls':[{'id':cid,'type':'function',
                 'function':{'name':name,'arguments':json.dumps(args,ensure_ascii=False)}}]}
@@ -191,6 +215,8 @@ class EntryEngineering(legacy.Consumption):
     async def test_entry_cli_legacy_decision_adapter_compatibility(self):
         from webcollect.react_session import build_url_task,REACT_VERSION
         def old_task(**kwargs):
+            # Explicitly exercise the archived session-1 protocol boundary.
+            kwargs.pop('plan_protocol',None)
             return build_url_task(**{**kwargs,'decision_protocol':REACT_VERSION})
         with patch('webcollect.react_session.build_url_task',side_effect=old_task):
             result=(await self.invoke_cli())[0]
@@ -320,8 +346,9 @@ class EntryEngineering(legacy.Consumption):
         self.ledger.claim('react-native-decision',job_id=jid)
         self.pool.stage(self.claim,'planning',{'ledger':str(self.ledger.path)})
         self.pool.finish(self.claim,state='failed',stage='planning',reason='CONTROLLED unresolved original job')
-        with self.assertRaisesRegex(ValueError,'planning/decision unresolved'):
+        with self.assertRaisesRegex(OutcomeUnknown, 'Original planning job unresolved for this scope') as blocked:
             retry(self.pool,self.cid,reason='Must inspect original native job')
+        self.assertIn(jid, str(blocked.exception))
         self.assertEqual(self.ledger.summary()['model_requests'],0)
 
     async def test_entry_lost_lease_before_formal_attempt(self):

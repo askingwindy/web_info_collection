@@ -58,19 +58,28 @@ class ProtocolTests(unittest.TestCase):
         payload=json.loads(opener.calls[0].data)
         self.assertTrue(payload['messages'][1]['content'][1]['image_url']['url'].startswith('data:image/png;base64,'))
         self.assertTrue(payload['response_format']['json_schema']['strict'])
-        self.assertEqual(ledger.summary()['model_cost_micros'],300) # 150 uncached + 50 cached + 100 output
+        with ledger.connect() as con:
+            row=con.execute('SELECT usage,cost FROM model_requests').fetchone()
+            self.assertEqual(json.loads(row['usage'])['cached_input_tokens'],100)
+            self.assertIsNone(row['cost']) # New gateway requests account tokens; serialized historical rates don't invent fees.
+        self.assertNotIn('model_cost_micros',ledger.summary()) # token-only report, original money stays in its row
         ledger.export(self.root/'metering')
         self.assertNotIn('synthetic-secret-never-log',''.join(p.read_text() for p in (self.root/'metering').glob('*.json')))
 
-    def test_timeout_keeps_monetary_reservation_and_prevents_second_dispatch(self):
+    def test_timeout_preserves_unknown_original_and_prevents_same_request_redispatch(self):
         config=self.real_config();ledger=self.ledger(config);job=self.job(ledger)
         with patch.dict('os.environ',{'WEBCOLLECT_TEST_KEY':'synthetic-secret'}),patch('urllib.request.OpenerDirector.open',side_effect=urllib.error.URLError('controlled timeout')):
             with self.assertRaises(OutcomeUnknown):
                 ModelGateway(ledger).call(job,'timeout','JSON',{'type':'object'},attempts=2)
         self.assertEqual(ledger.summary()['model_requests'],1)
-        self.assertEqual(ledger.summary()['model_cost_micros'],'UNKNOWN')
-        self.assertEqual(ledger.summary()['uncertain_reserved_cost_micros'],100000)
-        with self.assertRaises(BudgetStop):ledger.reserve_request(job,'another',0)
+        with ledger.connect() as con:
+            row=con.execute('SELECT state,cost,reserved_cost FROM model_requests').fetchone()
+            self.assertEqual(tuple(row),('unknown',None,100000))
+        with patch('urllib.request.OpenerDirector.open') as send:
+            with self.assertRaises(OutcomeUnknown):
+                ModelGateway(ledger).call(job,'timeout','JSON',{'type':'object'},attempts=2)
+            send.assert_not_called()
+        self.assertEqual(ledger.summary()['model_requests'],1)
         ledger.finish(job,'review_required')
 
     def test_missing_cached_usage_stays_unknown_instead_of_zero(self):
@@ -82,7 +91,8 @@ class ProtocolTests(unittest.TestCase):
         with patch.dict('os.environ',{'WEBCOLLECT_TEST_KEY':'synthetic-secret'}),patch('urllib.request.build_opener',return_value=Opener()):
             with self.assertRaises(OutcomeUnknown):ModelGateway(ledger).call(job,'usage','JSON',{'type':'object'})
         self.assertEqual(ledger.summary()['model_requests'],1)
-        self.assertEqual(ledger.summary()['model_cost_micros'],'UNKNOWN')
+        with ledger.connect() as con:
+            self.assertIsNone(con.execute('SELECT cost FROM model_requests').fetchone()[0])
 
     def test_long_trajectory_all_original_frames_and_segment_failures_retained(self):
         config=deepcopy(self.config);config['model']['max_images']=3

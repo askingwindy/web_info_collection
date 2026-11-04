@@ -647,6 +647,8 @@ def _search_cooldown(pool,run_id):
 
 
 def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *, application_id=None):
+    if pool.consumption(candidate['entry_url'],kind=candidate.get('candidate_kind')):
+        return pool.record_row_conclusion(header,result='REJECTED',reason='NO_CONSUME: producer image-only page exclusion',original_row=row)
     if source.get('table_policy'):
         try:
             app = pool.pool.application(candidate['entry_url'])
@@ -677,8 +679,15 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
         if duplicate:
             return pool.publish_row(header,candidate,source,application_id=application_id)
     try:
-        access, ref = check_entry(ledger,batch,candidate['entry_url'],root)
-    except SiteStopped as held:
+        shared=None
+        if source.get('model_protocol') in ('entry-tools-10','entry-tools-11') and not source.get('entry_recheck'):
+            from .producer_observation import entry_receipt
+            shared=entry_receipt(pool,ledger,candidate['entry_url'],root)
+            if source['model_protocol']=='entry-tools-11' and shared is None:
+                raise OutcomeUnknown('Original supply observation missing; no replacement GET')
+        access, ref = shared if shared else check_entry(ledger,batch,candidate['entry_url'],root,recheck=source.get('entry_recheck'))
+    except (SiteStopped,OutcomeUnknown) as held:
+        if isinstance(held,OutcomeUnknown) and not source.get('required_supply_kind'):raise
         return pool.record_row_conclusion(header,result='HELD',reason=str(held),original_row=row)
     if access['result'] != 'PASS':
         return pool.record_row_conclusion(header,result=access['result'],original_row=row,entry_http=ref,
@@ -693,24 +702,26 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
 
 def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=None, queries=(), sources=(), directions=(),
                     goals_path=None, target=1000, max_searches=None, max_batches=None, batch_size=50,
-                    search_engine='search_std', stall_threshold=2, per_direction_cap=None, batch_key=None,
+                    search_engine=None, stall_threshold=2, per_direction_cap=None, batch_key=None,
                     excluded_applications=(), model_protocol=None, discovery_mode=None, feedback_scope=None,
-                    search_count=10, entry_selection='rule', categories=()):
+                    search_count=10, entry_selection='rule', categories=(), probe_search_hold=None, dispatch_holds=None):
     """Entry/target candidate producer on webcollect-data-candidate-2.
 
     Per-response-row publication with stable identities; interruption resumes
     from the original response only. No browser, no full-pool entity loads.
     """
-    if model_protocol is not None and model_protocol not in ('entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4'):
+    if model_protocol is not None and model_protocol not in ('entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11'):
         raise ValueError('Unsupported entry model protocol')
     if (any(type(n) is not int or n < 1 for n in (target, batch_size))
             or any(type(n) is not int or n < 1 for n in (max_searches, max_batches) if n is not None)
             or batch_size > 100):
         raise ValueError('Positive bounded target/budgets and batch size <=100 required')
-    if search_engine not in ('search_std', 'search_pro'):
+    if search_engine not in (None, 'public', 'search_std', 'search_pro'):
         raise ValueError('Unsupported search engine')
     if type(search_count) is not int or not 1 <= search_count <= 50:
         raise ValueError('Search result count must be 1–50')
+    if (probe_search_hold or dispatch_holds) and (not categories or discovery_mode!='new-sites' or queries or sources or directions or goals_path):
+        raise ValueError('Search probe and dispatch holds require a category-only new-sites batch')
     if not queries and not sources and not directions and not categories and goals_path is None:
         raise ValueError('Explicit queries, directions, goals or evidence-backed sources required')
     pool = CandidatePool(pool_path)
@@ -725,6 +736,11 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             'SELECT id,config FROM runs WHERE id IN (?,?)', (session_id,run_id))}
     previous = frozen_rows.get(session_id, {})
     previous_batch = frozen_rows.get(run_id, {})
+    category_only=bool(categories and discovery_mode=='new-sites' and not (queries or sources or directions or goals_path))
+    if search_engine is None:
+        search_engine=previous_batch.get('search_engine') or ('public' if category_only else 'search_std')
+    if search_engine=='public' and (not category_only or probe_search_hold):
+        raise ValueError('Public search requires category-only new-sites. A paid probe requires an explicit BigModel search engine.')
     table_policy = previous_batch.get('table_policy') if previous_batch else site_tables.POLICY
     if table_policy:
         if table_policy != site_tables.POLICY: raise ValueError('Unsupported frozen site-table policy')
@@ -738,13 +754,17 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             per_direction_cap = previous_batch.get('query_policy',previous_batch).get('per_direction_cap')
     http_binding = _entry_http_binding(frozen_rows.get(run_id),config)
     if model_protocol is None:
-        if previous:
+        if categories and previous_batch:
+            model_protocol = previous_batch.get('model_protocol','entry-content-1')
+        elif categories and table_policy and (config.get('model') or {}).get('provider')=='glm' and config['model'].get('model')=='glm-5.3-flash':
+            model_protocol = 'entry-tools-7'
+        elif previous:
             model_protocol = previous.get('model_protocol', 'entry-content-1')
         else:
             model = config.get('model') or {}
-            model_protocol = (('entry-tools-4' if table_policy else selection.TOOL_PROTOCOL) if model.get('provider') == 'glm'
+            model_protocol = (('entry-tools-7' if table_policy else selection.TOOL_PROTOCOL) if model.get('provider') == 'glm'
                               and model.get('model') == 'glm-5.3-flash' else 'entry-content-1')
-    if model_protocol in ('entry-tools-3','entry-tools-4'):
+    if model_protocol in ('entry-tools-3','entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):
         from .grounded_entries import produce as produce_grounded
         return produce_grounded(config,pool_path=pool_path,ledger_path=ledger_path,output=output or previous_batch.get('output'),
             history_set=history_set or previous.get('current_chain_manifest',{}).get('path'),
@@ -752,7 +772,8 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             max_searches=max_searches,max_batches=max_batches,batch_size=batch_size,search_engine=search_engine,
             stall_threshold=stall_threshold,per_direction_cap=per_direction_cap,batch_key=batch_key,
             excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
-            search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories)
+            search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories,
+            probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds)
     if categories: raise ValueError('Category planning requires entry-tools-3 or entry-tools-4')
     optimized = bool(previous_batch.get('selection_version')) if previous_batch else (
         discovery_mode is not None or model_protocol == selection.TOOL_PROTOCOL)
@@ -1346,11 +1367,15 @@ def main(argv=None):
     entry.add_argument('--history-set',type=Path,help='Current-chain manifest used by the consumer; derives the evidence directory by default')
     entry.add_argument('--output',help='Explicit evidence directory (must be inside the chain when --history-set is used)')
     entry.add_argument('--category',action='append',default=[],help='Target category; host freezes an Agent search plan when no explicit terms are given')
+    entry.add_argument('--search-engine',choices=['public','search_std','search_pro'],
+                       help='Category-only new sites default to public search. BigModel search requires an explicit choice.')
+    entry.add_argument('--probe-search-hold',help='Permit one new business query against this original 1113, preserving the old request')
+    entry.add_argument('--dispatch-holds',type=Path,help='Negative host and URI constraints from this project')
     entry.add_argument('--query',action='append',default=[],help='Plain seed queries (single implicit direction)')
     entry.add_argument('--sources',help='JSON list of uri/title/content/reference')
     entry.add_argument('--directions',help='JSON file: [{"direction","category","queries":[...]}]')
     entry.add_argument('--goals',help='JSON file {"schema_version":"webcollect-caller-goals-1","goals":[{"uri","requested_goal"}]}')
-    entry.add_argument('--model-protocol', choices=['entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4'],
+    entry.add_argument('--model-protocol', choices=['entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11'],
                        help='New GLM-5.3-Flash sessions use native tools; existing sessions use their frozen protocol')
     entry.add_argument('--discovery-mode', choices=['new-sites','expand','mixed'])
     entry.add_argument('--entry-selection', choices=['rule','model'], default='rule',
@@ -1376,7 +1401,7 @@ def main(argv=None):
             goals_path=Path(a.goals).absolute() if a.goals else None,target=a.target,max_searches=a.max_searches,
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,model_protocol=a.model_protocol,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
-            search_count=a.search_count, categories=a.category, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else ()),
+            search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else ()),
             ensure_ascii=False));return
     print(json.dumps(produce(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,
         queries=a.query,sources=load_json(a.sources) if a.sources else (),target=a.target,max_searches=a.max_searches,

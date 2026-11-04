@@ -25,8 +25,9 @@ STABILITY_V3='webcollect-related-stability-3'
 # tags previously defaulted to 'text' and escaped their intended guard set, so
 # genuine self-painting content changes could pass as compact repaint noise.
 STABILITY_V4='webcollect-related-stability-4'
-STABILITY_VERSION='webcollect-related-stability-5'
-STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION)
+STABILITY_V5='webcollect-related-stability-5'
+STABILITY_VERSION='webcollect-related-stability-6'
+STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION)
 # Compact repaint-noise bounds, verified by the fixture set in
 # test_related_capture_stability: antialias/underline strips stay thin in one
 # dimension, tiny in area, low-amplitude, and away from text/interactive boxes.
@@ -110,7 +111,7 @@ def _merge_intervals(intervals):
     return merged
 
 
-def _native_animation_window(observation,remaining_ms,required_ms=1000):
+def _native_animation_window(observation,remaining_ms,required_ms=1000, *, png_phase=False):
     """Prove a common native hold interval; this never certifies a capture."""
     guard=50.0
     horizon=remaining_ms+required_ms+guard*2
@@ -121,7 +122,9 @@ def _native_animation_window(observation,remaining_ms,required_ms=1000):
         if animation.get('play_state')!='running' and not animation.get('pending'):
             detail['status']='not_running_no_wait_needed';continue
         timing=animation.get('timing',{});current=animation.get('current_time');rate=animation.get('playback_rate')
-        if (animation.get('pending') or animation.get('pseudo_element') or
+        pseudo = animation.get('pseudo_element')
+        pulse = png_phase and pseudo in ('::before','::after') and animation.get('kind') == 'CSSAnimation'
+        if (animation.get('pending') or (pseudo and not pulse) or
             not _finite_number(current) or not _finite_number(rate) or rate<=0 or
             not _finite_number(animation.get('start_time'))):
             unsupported.append(index);detail.update(status='unsupported',reason='Pending/pseudo/non-numeric timeline or non-positive rate.');continue
@@ -150,7 +153,14 @@ def _native_animation_window(observation,remaining_ms,required_ms=1000):
                 unsupported.append(index);detail.update(status='unsupported',reason='Complete replace keyframes with numeric offsets and actual properties required.');continue
             holds=[]
             for left,right in zip(keyframes,keyframes[1:]):
-                if all(key in left and key in right and left[key]==right[key] for key in properties):
+                if pulse:
+                    # Opacity may change while a pseudo-element has zero painted area.
+                    # This is scheduling advice only. Compare every original pixel.
+                    hold = (properties <= {'transform','opacity'} and
+                            left.get('transform') == right.get('transform') == 'scale(0)')
+                else:
+                    hold = all(key in left and key in right and left[key]==right[key] for key in properties)
+                if hold:
                     holds.append([left['computedOffset'],right['computedOffset']])
             holds=_merge_intervals(holds);detail['hold_offsets']=holds;detail['compared_properties']=sorted(properties)
             if not holds:
@@ -189,7 +199,7 @@ def _native_animation_window(observation,remaining_ms,required_ms=1000):
             'details':details,'prediction_is_not_capture_acceptance':True}
 
 
-async def _wait_for_native_window(page,remaining_ms,required_ms):
+async def _wait_for_native_window(page,remaining_ms,required_ms, *, png_phase=False):
     result={'observations':[],'requested_wait_ms':0.0,'observed_wait_ms':0.0}
     # Recheck actual native timing after waiting. A prediction is never a
     # substitute for the unchanged before/PNG/after fingerprint comparison.
@@ -197,7 +207,7 @@ async def _wait_for_native_window(page,remaining_ms,required_ms):
         try:observation=await asyncio.wait_for(page.evaluate(_ANIMATION_OBSERVATION_JS),timeout=3)
         except Exception as error:
             result['status']='native_reader_unavailable';result['reader_error']=str(error);return result
-        plan=_native_animation_window(observation,max(0,remaining_ms-result['requested_wait_ms']),required_ms)
+        plan=_native_animation_window(observation,max(0,remaining_ms-result['requested_wait_ms']),required_ms,png_phase=png_phase)
         result['observations'].append({'native':observation,'plan':plan})
         delay=plan['wait_ms']
         if delay<=0:
@@ -222,7 +232,7 @@ def _loaded(state):
             and ready.get('fonts_ready') is True and ready.get('images_ready') is True)
 
 
-def _image_regions(state):
+def _image_regions(state, *, unloaded=False):
     width,height=state['screen_resolution'];regions=[]
     def box_ok(box):
         return (isinstance(box,list) and len(box)==4 and all(type(n) in (int,float) and math.isfinite(n) for n in box)
@@ -253,9 +263,13 @@ def _image_regions(state):
                 and len(basis.get('hit_samples',[]))==9
                 and [h.get('point') for h in basis['hit_samples']]==points
                 and all(h.get('ancestor') is True and h.get('hit_tag') for h in basis['hit_samples']))
-        if (image.get('eligible') is True and image.get('exclusion_reasons')==[] and image.get('complete') is True
+        readiness=(image.get('eligible') is True and image.get('exclusion_reasons')==[] and image.get('complete') is True
+                   and image.get('natural_width',0)>0 and image.get('natural_height',0)>0)
+        if unloaded:
+            readiness=(image.get('exclusion_reasons')==['image_not_loaded'] and image.get('complete') is True
+                       and image.get('natural_width')==0 and image.get('natural_height')==0)
+        if (readiness
                 and proved
-                and image.get('natural_width',0)>0 and image.get('natural_height',0)>0
                 and isinstance(box,list) and len(box)==4 and all(type(x) is int for x in box)
                 and 0<=box[0]<box[2]<=width and 0<=box[1]<box[3]<=height):
             regions.append({'element_id':image['element_id'],'bbox':box})
@@ -294,16 +308,30 @@ def related_projection(state):
 
 def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True):
     """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
-    loaded=_loaded(before) and _loaded(after)
     full=fingerprint(before)==fingerprint(after)
     rule_version=rule_version or STABILITY_VERSION
     if rule_version not in STABILITY_RULES:raise ValueError('Unknown stability rule')
     left,right=related_projection(before),related_projection(after)
-    if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
+    loading_proof=[];geometry_proof=[]
+    if rule_version==STABILITY_VERSION:
+        # Readiness exceptions do not exempt a single image pixel. A failed
+        # glyph, semantic image, control, overlap or incomplete proof stays held.
+        for original,projected in ((before,left),(after,right)):
+            failed=[i for i in original.get('capture_images',[]) if not
+                    (i.get('complete') and i.get('natural_width',0)>0 and i.get('natural_height',0)>0)]
+            safe={r['element_id'] for r in _image_regions(original,unloaded=True)}
+            if failed and all(i.get('element_id') in safe for i in failed):
+                projected['capture_readiness']['images_ready']=True
+                loading_proof.append({'state_fingerprint':fingerprint(original),'images':deepcopy(failed),
+                    'reason':'Explicit decorative failed images disjoint from target, text, controls and protected results; pixels remain exact.'})
+        from .capture_geometry import compare_geometry
+        right,geometry_proof=compare_geometry(left,right)
+    loaded=_loaded(left) and _loaded(right)
+    if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
         left['capture_readiness']['document_ready']='complete'
     related=loaded and left==right
     regions=_image_regions(before) if related else []
-    media_regions=_media_regions(before) if related and rule_version==STABILITY_VERSION else []
+    media_regions=_media_regions(before) if related and rule_version in (STABILITY_V5,STABILITY_VERSION) else []
     with Image.open(BytesIO(png_before)) as first,Image.open(BytesIO(png_after)) as last:
         if first.format!='PNG' or last.format!='PNG' or list(first.size)!=before['screen_resolution'] or first.size!=last.size:
             raise ValueError('同步像素证明需要相同视口分辨率的完整原始PNG')
@@ -312,12 +340,16 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         for channel in channels[1:]:diff=ImageChops.lighter(diff,channel)
         changed=diff.point(lambda value:255 if value else 0)
         mask=Image.new('L',first.size,0);draw=ImageDraw.Draw(mask)
-        for region in regions+media_regions:
+        geometry_regions=[]
+        if rule_version==STABILITY_VERSION and related:
+            from .capture_geometry import translation_regions
+            geometry_regions=translation_regions(before,after,geometry_proof,first,last)
+        for region in regions+media_regions+geometry_regions:
             x1,y1,x2,y2=region['bbox'];draw.rectangle((x1,y1,x2-1,y2-1),fill=255)
         # New receipts only. Never reinterpret v1 failures. A local edge proof
         # and unchanged full semantic state are necessary; no whole-page score.
         border_proof=[]
-        if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION) and related and allow_border:
+        if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and related and allow_border:
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             for region in before.get('paint_borders',[]):
                 box=region['bbox'];edges=region['edges']
@@ -348,7 +380,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # untracked lines, tolerated only when compact, low-amplitude and away
         # from every text/interactive element box.
         paint_noise_proof=[]
-        if (rule_version in (STABILITY_V3,STABILITY_V4,STABILITY_VERSION) and allow_border and related and full
+        if (rule_version in (STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and allow_border and related and full
                 and before['capture_readiness'].get('document_ready')=='complete'):
             rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             guard=[]
@@ -407,7 +439,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                 for component,box,deltas in compliant:
                     for x,y in component:mask.putpixel((x,y),255)
                     paint_noise_proof.append({'bbox':list(box),'points':[list(point) for point in sorted(component)],'rgb_deltas':deltas,
-                                              'rule':'compact-repaint-noise-v2' if rule_version in (STABILITY_V4,STABILITY_VERSION) else 'compact-repaint-noise-v1'})
+                                              'rule':'compact-repaint-noise-v2' if rule_version in (STABILITY_V4,STABILITY_V5,STABILITY_VERSION) else 'compact-repaint-noise-v1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
                       'bbox':list(changed.getbbox()) if changed.getbbox() else None,
@@ -418,7 +450,8 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
             'related_fingerprint':fingerprint(related_projection(before)),
             'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
-            'allowed_image_regions':regions,**({'allowed_media_regions':media_regions} if rule_version==STABILITY_VERSION else {}),**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_VERSION) else {}),
+            'allowed_image_regions':regions,**({'allowed_media_regions':media_regions} if rule_version in (STABILITY_V5,STABILITY_VERSION) else {}),**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) else {}),
+            **({'geometry_proof':geometry_proof,'geometry_pixel_proof':geometry_regions,'unloaded_image_proof':loading_proof} if rule_version==STABILITY_VERSION else {}),
             **({'paint_noise_proof':paint_noise_proof} if paint_noise_proof else {}),'pixel_change':pixel_change}
 
 
@@ -514,17 +547,29 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
                                                    max(1000.0,recent_capture_ms+250.0))
         requested_wait+=native_window['requested_wait_ms']/1000
         observed_wait+=native_window['observed_wait_ms']/1000
+        native = next((v['native'] for v in reversed(native_window['observations'])), {})
+        pulse = (any(a.get('pseudo_element') in ('::before','::after') for a in native.get('visible_animations',[]))
+                 and _native_animation_window(native,8000,150,png_phase=True)['status']=='native_window_predicted')
+        png_waits=[]
+        async def timed_png():
+            nonlocal requested_wait, observed_wait
+            if pulse:
+                wait=await _wait_for_native_window(page,max(0,(_CAPTURE_WAIT_BUDGET-requested_wait)*1000),150,png_phase=True)
+                png_waits.append(wait)
+                requested_wait+=wait['requested_wait_ms']/1000
+                observed_wait+=wait['observed_wait_ms']/1000
+            return await asyncio.wait_for(viewport_png(page),timeout=25)
         started=time.time_ns()
         options={**({'assertions':assertions} if assertions else {}),
                  **({'protected_selectors':protected_selectors} if protected_selectors else {}),
                  'timeout': timeout}
         before=await observe(page,selector,index,**options)
-        try:png,screenshot_evidence=await asyncio.wait_for(viewport_png(page),timeout=25)
+        try:png,screenshot_evidence=await timed_png()
         except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
         after=await observe(page,selector,index,**options)
         extra={};v2='capture_readiness' in before
         if v2:
-            comparison,comparison_method=await asyncio.wait_for(viewport_png(page),timeout=25)
+            comparison,comparison_method=await timed_png()
             final=await observe(page,selector,index,**options)
             stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0)
             final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0)
@@ -547,6 +592,7 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
                          'delay_before_ms':round(delay_before*1000),'next_retry_delay_ms':round(next_delay*1000),
                          'native_window_wait_ms':round(native_window['requested_wait_ms'],3),
                          'native_window_evidence':native_window,
+                         **({'png_phase_waits':png_waits} if png_waits else {}),
                          'mismatch_fields':[key for key in sorted(before.keys()|after.keys())
                                             if key not in before or key not in after or before[key]!=after[key]
                                             or v2 and before.get(key)!=final.get(key)],
@@ -556,7 +602,7 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
             with Image.open(BytesIO(png)) as im:
                 if list(im.size)!=before['screen_resolution']:
                     raise ValueError('截图像素分辨率与 DOM 坐标系不一致')
-            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png,'border_enabled':attempt_index>0}
+            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png,'border_enabled':attempt_index>0,'png_phase':pulse}
             return {'state':before,'png':png,'capture':{**({'schema_version':CAPTURE_VERSION} if v2 else {}),
                     'attempts':attempts,'screenshot_sha256':hashlib.sha256(png).hexdigest(),
                     'natural_wait_requested_ms':round(requested_wait*1000),
@@ -625,7 +671,12 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
         if not captured or captured['state']!=state:raise ValueError('派发缺少本次原始capture像素绑定')
         rejections=[]
         delays=iter(_PREVERIFY_RETRY_DELAYS)
+        phase_budget_ms=3000
         while True:
+            phase_wait=None
+            if captured.get('png_phase'):
+                phase_wait=await _wait_for_native_window(page,phase_budget_ms,150,png_phase=True)
+                phase_budget_ms=max(0,phase_budget_ms-phase_wait['requested_wait_ms'])
             png,method=await asyncio.wait_for(viewport_png(page),timeout=25)
             final=await observe(page,selector,index,**options)
             allow_border=captured.get('border_enabled',False) or bool(rejections)
@@ -636,6 +687,7 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
                         'state_fingerprint':fingerprint(state),'live_state_fingerprint':fingerprint(live),
                         'final_state_fingerprint':fingerprint(final),'target':live.get('target'),'stability':proof,'final_stability':final_proof,
                         'live_state':live,'final_state':final,'png_base64':base64.b64encode(png).decode('ascii'),'screenshot':method,
+                        **({'png_phase_wait':phase_wait} if phase_wait else {}),
                         **({'superseded_rejections':rejections} if rejections else {})}
             rejections.append({'schema_version':'webcollect-execution-state-rejection-1',
                 'snapshot_before':state,'snapshot_live':live,'snapshot_final':final,

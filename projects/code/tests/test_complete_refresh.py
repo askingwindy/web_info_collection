@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from webcollect import collect
-from webcollect.browser import fingerprint
+from webcollect.browser import fingerprint, EvidenceStale
 
 STALE = '截图后页面状态发生变化，拒绝用陈旧坐标或终态执行：elements'
 URI = 'https://example.org/CONTROLLED-completion'
@@ -37,7 +37,7 @@ class CompleteRefreshTests(unittest.IsolatedAsyncioTestCase):
     async def test_late_once_then_stable_recaptures_full_frame_and_all_assertions(self):
         first, second = frame(0), frame(75)
         with patch.object(collect, 'capture', AsyncMock(side_effect=[first, second])) as capture, \
-                patch.object(collect, 'verify_execution_state', AsyncMock(side_effect=[ValueError(STALE),
+                patch.object(collect, 'verify_execution_state', AsyncMock(side_effect=[EvidenceStale(STALE),
                     {'matched': True, 'state_fingerprint': fingerprint(second['state'])}])) as verify, \
                 patch.object(collect.asyncio, 'sleep', AsyncMock()) as wait, \
                 patch.object(collect, 'execute', AsyncMock()) as execute:
@@ -60,7 +60,7 @@ class CompleteRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.root / 'terminal_candidates/candidate_001.png').read_bytes(), first['png'])
 
     async def test_persistent_change_rejects_original_error_after_three_candidates(self):
-        errors = [ValueError(STALE) for _ in range(3)]
+        errors = [EvidenceStale(STALE) for _ in range(3)]
         with patch.object(collect, 'capture', AsyncMock(side_effect=[frame(i) for i in range(3)])) as capture, \
                 patch.object(collect, 'verify_execution_state', AsyncMock(side_effect=errors)), \
                 patch.object(collect.asyncio, 'sleep', AsyncMock()), \
@@ -141,7 +141,7 @@ class CompleteRefreshTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse((evidence / 'step_005_postconditions.json').exists())
                     self.assertFalse((evidence / 'step_005_narrative.json').exists())
                 if persistent or final_checks == 1:
-                    raise ValueError(STALE)
+                    raise EvidenceStale(STALE)
             return {'matched': True, 'state_fingerprint': fingerprint(state)}
 
         with ExitStack() as stack:

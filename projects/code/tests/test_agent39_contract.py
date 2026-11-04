@@ -131,13 +131,15 @@ class AgentContract(unittest.TestCase):
             config['model']['api_key_file']=str(token)
             config['model']['request_overhead_tokens']=1
             ledger=BatchLedger(root/'jobs.sqlite3',config,initialize=True)
-            with patch.dict('os.environ',{},clear=True), patch('random.SystemRandom.choice',side_effect=lambda values:values[-1]):
+            with patch.dict('os.environ',{},clear=True):
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     values=list(executor.map(lambda _:ledger.bind_model_session('attempt'),range(2)))
-                self.assertEqual(values,['offline-second']*2)
+                self.assertEqual(values,['offline-first']*2)
+                self.assertEqual(BatchLedger(ledger.path,config).bind_model_session('second-attempt'),'offline-second')
+                self.assertEqual(ledger.bind_model_session('third-attempt'),'offline-first')
                 token.write_text('glm: [offline-second, offline-first]')
-                self.assertEqual(ledger.bind_model_session('attempt'),'offline-second')
-                token.write_text('glm: [offline-first]')
+                self.assertEqual(ledger.bind_model_session('attempt'),'offline-first')
+                token.write_text('glm: [offline-second]')
                 with self.assertRaisesRegex(ValueError,'suppressed'):
                     ledger.bind_model_session('attempt')
                 self.assertEqual(ledger.summary()['model_requests'],0)

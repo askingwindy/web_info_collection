@@ -92,6 +92,28 @@ def _bound_report(source, report_path):
     return report, files
 
 
+def _delivery_report_bindings(report):
+    """A cached PASS must retain its current requirement and profile bindings.
+
+    Rechecking these local facts does not rerun any semantic review. A report
+    without a contract identity cannot opt out of the cross-package comparison.
+    """
+    from quality_inspector.contract import fingerprint
+    from quality_inspector.profiles import load as load_profile
+    baseline = report.get('requirements_baseline')
+    current_contract = fingerprint()[1]
+    if not isinstance(baseline, dict) or baseline.get('sha256') != current_contract:
+        raise ValueError('QC report requirement identity is missing or changed; rerun deterministic QC with the original reviews')
+    profile = report.get('local_profile')
+    try:
+        current_profile = load_profile(profile['path'])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError('QC report profile binding is missing or changed') from error
+    if profile != current_profile:
+        raise ValueError('QC report profile binding changed; rerun deterministic QC with the original reviews')
+    return current_contract
+
+
 def _source_population(report):
     """A missing original denominator stays unknown; never substitute selected N."""
     source = Path(report.get('dataset', '')) / '来源与合规说明.md'
@@ -277,9 +299,10 @@ def finalize_client_package(repo, source, qc_report, output, *, effective_set=No
     report, original_files = _bound_report(source, report_path)
     if report.get('delivery_status') != 'PASS' or report.get('inspection_stage') != 'payload':
         raise ValueError('Customer release requires a PASS delivery check; no failed or pending release')
+    contract_hash = _delivery_report_bindings(report)
     from quality_inspector.delivery_scope import verify_delivery_scope
     scope = verify_delivery_scope(effective_set, cross_package_report, dataset=source,
-        expected_contract=report.get('requirements_baseline', {}).get('sha256'))
+        expected_contract=contract_hash)
     from quality_inspector.profiles import verify_member_release
     verify_member_release(report, scope)
     _protect_scope_output(output, scope)
@@ -329,9 +352,10 @@ def archive_client_package(source, qc_report, output, *, effective_set=None, cro
     report,original=_bound_report(source,Path(qc_report).resolve())
     if report.get('delivery_status')!='PASS' or report.get('inspection_stage')!='final' or report.get('release_ready') is not True:
         raise ValueError('Archive requires a final PASS release-ready QC report')
+    contract_hash = _delivery_report_bindings(report)
     from quality_inspector.delivery_scope import verify_delivery_scope
     scope = verify_delivery_scope(effective_set, cross_package_report, dataset=source, phase='final',
-        expected_contract=report.get('requirements_baseline', {}).get('sha256'))
+        expected_contract=contract_hash)
     from quality_inspector.profiles import verify_member_release
     verify_member_release(report, scope)
     _protect_scope_output(output, scope)

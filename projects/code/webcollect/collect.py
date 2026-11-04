@@ -98,13 +98,24 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
 
 
 async def capture_before_action(page, evidence, selector=None, index=0, **options):
-    """Refresh complete candidates before publication or dispatch, never replay actions."""
+    """One total caller-controlled deadline for capture and verification; no actions."""
+    started=time.monotonic()
+    budget=float(options.pop('timeout',12))
+    if budget <= 0:raise ValueError('Action evidence timeout must be positive')
+    timing={'timeout_seconds':budget,'stage':'capture','attempts':[],
+            'action_executed':False,'started_at':time.time()}
+    def remaining():return max(.001,budget-(time.monotonic()-started))
     async def bounded_refresh():
         for number in range(1,4):
             observation=None
+            attempt={'attempt':number};timing['attempts'].append(attempt)
             try:
-                observation=await capture(page,selector,index,**options)
-                await verify_execution_state(page,observation['state'],selector,index,**options)
+                timing['stage']='capture';phase=time.monotonic()
+                try:observation=await capture(page,selector,index,timeout=remaining(),**options)
+                finally:attempt['capture_seconds']=time.monotonic()-phase
+                timing['stage']='verify_execution_state';phase=time.monotonic()
+                try:await verify_execution_state(page,observation['state'],selector,index,timeout=remaining(),**options)
+                finally:attempt['verification_seconds']=time.monotonic()-phase
                 return observation
             except EvidenceStale as error:
                 from .batch_core import save_json
@@ -118,8 +129,18 @@ async def capture_before_action(page, evidence, selector=None, index=0, **option
                 if observation:
                     with (folder/(name+'.png')).open('xb') as stream:stream.write(observation['png'])
                 if number==3:raise
+                timing['stage']='stale_retry_wait'
                 await asyncio.sleep(.25)
-    return await asyncio.wait_for(bounded_refresh(),timeout=12)
+    try:
+        observation=await asyncio.wait_for(bounded_refresh(),timeout=budget)
+    except Exception as error:
+        timing.update(elapsed_seconds=time.monotonic()-started,accepted=False,
+                      error_type=type(error).__name__,error_message=str(error))
+        error.action_refresh=timing
+        raise
+    timing.update(elapsed_seconds=time.monotonic()-started,accepted=True,stage='complete')
+    observation['action_refresh']=timing
+    return observation
 
 
 def chinese_ratio(text):
@@ -395,9 +416,9 @@ def visible_numeric_context(state):
         for head in row_headers:
             matches=[c for c in cells_in_row if abs(c['bbox'][0]-head['bbox'][0])<=2 and abs(c['bbox'][2]-head['bbox'][2])<=2]
             if len(matches)!=1:break
-            pairs.append(head['text']+'='+matches[0]['text'])
+            pairs.append('「'+head['text']+'」='+'「'+matches[0]['text']+'」')
         if len(pairs)==len(row_headers):rows.append('，'.join(pairs))
-    if rows:contexts.append('可见表格行包括'+ '；'.join('「'+row+'」' for row in rows[:4]))
+    if rows:contexts.append('可见表格行包括'+ '；'.join(rows[:4]))
     return '；'.join(contexts)
 
 

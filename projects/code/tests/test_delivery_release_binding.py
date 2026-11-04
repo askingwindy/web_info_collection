@@ -15,12 +15,14 @@ from delivery_scope_fixture import freeze_scope
 from quality_inspector.engine import inspect
 from quality_inspector.profiles import package_files
 from quality_inspector import semantic, contract
+from quality_inspector.__main__ import main as qc_main
 from webcollect.client_reports import finalize_client_package, archive_client_package
 
 
 class DeliveryReleaseBindingTests(unittest.TestCase):
     def setUp(self):
         test_delivery.DeliveryContractTests.setUp(self)
+        self.root = self.root.resolve()
         prompt = self.client / '动作空间与系统提示.md'
         prompt.write_text('# 离线测试动作空间\n' + prompt.read_text())
         self.seal()
@@ -125,6 +127,99 @@ class DeliveryReleaseBindingTests(unittest.TestCase):
             self.assertTrue(Path(archived['archive']).is_file())
             self.assertEqual(package_files(result['output']), before)
             model.assert_not_called()
+
+    def test_normal_formal_missing_category_report_blocks_finalize_and_archive(self):
+        payload, result, final, manifest, cross = self.prepare_actual_final()
+        profile = json.loads(Path(json.loads(cross.read_text())['local_profile']['path']).read_text())
+        profile['release'] = {'kind': 'formal', 'version': 'SYNTHETIC-ONLY'}
+        profile['targets'].update(expected_samples=200000, category_share='enforced')
+        formal_profile = self.root / 'formal-profile.json'; formal_profile.write_text(json.dumps(profile))
+        output = self.root / 'formal-cumulative-output'
+        exit_code = qc_main(['check-set', '--manifest', str(manifest), '--profile', str(formal_profile),
+                             '--output', str(output)])
+        self.assertEqual(exit_code, 1)
+        failed = output / 'report.json'; rejected = json.loads(failed.read_text())
+        self.assertEqual(rejected['sample_count'], 1)
+        self.assertEqual(rejected['statistics']['category_coverage']['status'], 'FAIL')
+        self.assertTrue(any(row.get('rule_id') == 'FORMAL_CATEGORY_COVERAGE' for row in rejected['errors']))
+        with self.assertRaisesRegex(ValueError, 'PASS cross-package report'):
+            finalize_client_package(self.root, self.client, payload, self.root / 'blocked-final',
+                effective_set=manifest, cross_package_report=failed)
+        with self.assertRaisesRegex(ValueError, 'PASS cross-package report'):
+            archive_client_package(result['output'], final, self.root / 'blocked.zip',
+                effective_set=manifest, cross_package_report=failed)
+        self.assertFalse((self.root / 'blocked-final').exists()); self.assertFalse((self.root / 'blocked.zip').exists())
+        print('NORMAL check-set CLI exit 1, formal 1-sample missing-class report -> finalize/archive both blocked')
+
+    def test_old_statistics_other_set_and_stale_contract_cannot_seal_current_member(self):
+        payload, result, final, manifest, cross = self.prepare_actual_final()
+        original = json.loads(cross.read_text())
+        for mutation, expected in (('old_statistics', 'statistics'), ('other_set', 'exact effective-set'),
+                                   ('old_contract', 'contract_sha256')):
+            changed = deepcopy(original)
+            if mutation == 'old_statistics': changed['statistics'].pop('category_coverage')
+            elif mutation == 'other_set': changed['manifest_sha256'] = '0' * 64
+            else: changed['contract_sha256'] = '0' * 64
+            wrong = self.root / (mutation + '.json'); wrong.write_text(json.dumps(changed))
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(ValueError, expected):
+                    finalize_client_package(self.root, self.client, payload, self.root / ('blocked-' + mutation),
+                        effective_set=manifest, cross_package_report=wrong)
+                with self.assertRaisesRegex(ValueError, expected):
+                    archive_client_package(result['output'], final, self.root / (mutation + '.zip'),
+                        effective_set=manifest, cross_package_report=wrong)
+
+    def test_payload_and_final_reports_must_keep_current_requirement_identity(self):
+        payload, result, final, manifest, cross = self.prepare_actual_final()
+        originals = [json.loads(path.read_text()) for path in (payload, final)]
+        for mutation in ('missing_baseline', 'missing_sha', 'old_sha'):
+            for index, original in enumerate(originals):
+                changed = deepcopy(original)
+                if mutation == 'missing_baseline': changed.pop('requirements_baseline')
+                elif mutation == 'missing_sha': changed['requirements_baseline'].pop('sha256')
+                else: changed['requirements_baseline']['sha256'] = '0' * 64
+                wrong = self.root / f'{mutation}-{index}.json'; wrong.write_text(json.dumps(changed))
+                with self.subTest(mutation=mutation, stage=index):
+                    with self.assertRaisesRegex(ValueError, 'requirement.*identity|contract identities'):
+                        if index == 0:
+                            finalize_client_package(self.root, self.client, wrong, self.root / (mutation + '-output'),
+                                effective_set=manifest, cross_package_report=cross)
+                        else:
+                            archive_client_package(result['output'], wrong, self.root / (mutation + '.zip'),
+                                effective_set=manifest, cross_package_report=cross)
+        self.assertEqual(json.loads(payload.read_text()), originals[0])
+        self.assertEqual(json.loads(final.read_text()), originals[1])
+
+    def test_single_package_profile_changes_cannot_borrow_old_payload_or_final_pass(self):
+        payload, result, final, manifest, cross = self.prepare_actual_final()
+        profile = json.loads(self.profile.read_text())
+        profile['profile_id'] = 'SYNTHETIC changed after the package QC report'
+        self.profile.write_text(json.dumps(profile))
+        with self.assertRaisesRegex(ValueError, 'profile.*changed|profile.*binding'):
+            finalize_client_package(self.root, self.client, payload, self.root / 'stale-profile-final',
+                effective_set=manifest, cross_package_report=cross)
+        with self.assertRaisesRegex(ValueError, 'profile.*changed|profile.*binding'):
+            archive_client_package(result['output'], final, self.root / 'stale-profile.zip',
+                effective_set=manifest, cross_package_report=cross)
+
+    def test_cached_profile_configuration_and_missing_profile_are_rejected_at_both_stages(self):
+        payload, result, final, manifest, cross = self.prepare_actual_final()
+        for index, path in enumerate((payload, final)):
+            for mutation in ('configuration', 'missing_profile', 'missing_file'):
+                changed = json.loads(path.read_text())
+                if mutation == 'configuration':
+                    changed['local_profile']['configuration']['release'] = {'kind': 'experiment', 'version': 'different'}
+                elif mutation == 'missing_profile': changed.pop('local_profile')
+                else: changed['local_profile']['path'] = str(self.root / 'never-created-profile.json')
+                wrong = self.root / f'profile-{mutation}-{index}.json'; wrong.write_text(json.dumps(changed))
+                with self.subTest(stage=index, mutation=mutation):
+                    with self.assertRaisesRegex(ValueError, 'profile.*binding'):
+                        if index == 0:
+                            finalize_client_package(self.root, self.client, wrong, self.root / (mutation + '-final'),
+                                effective_set=manifest, cross_package_report=cross)
+                        else:
+                            archive_client_package(result['output'], wrong, self.root / (mutation + '.zip'),
+                                effective_set=manifest, cross_package_report=cross)
 
 
 if __name__ == '__main__':

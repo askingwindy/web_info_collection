@@ -15,40 +15,88 @@ from .batch_core import BatchLedger, BudgetStop, load_json, file_sha, OutcomeUnk
 from .planning import canonical, verify_evidence
 from .agent_controller import exclusive
 from .candidate_contract import capability
+from .request_quarantine import job_conflicts
 
 
-def guard_request_scope(ledger, uri):
-    """Quarantine unresolved requests by proved application; never replay them.
-
-    Unscoped uncertainty and in-flight dispatch block all consumers. A request
-    proved to belong to another application retains its original reservation.
-    Provider authorization holds are still enforced by ModelGateway itself.
-    """
+def guard_request_scope(ledger, uri, *, candidate_id=None):
+    """Check original request ownership before any browser/model dispatch."""
     from .application_identity import canonical_key
-    aliases = ledger.config.get('site_failure_guard', {}).get('application_registry')
-    target = canonical_key(uri, aliases) if uri is not None else None
+    from .current_chain import PROJECT_RULES
+    from .request_quarantine import endpoint
+    guard = ledger.config.get('site_failure_guard') or {}
+    aliases = guard.get('application_registry')
+    scoped = guard.get('dispatch_rules')==PROJECT_RULES
     isolated = []
     with ledger.connect() as con:
         from .provider_recovery import holds
         if holds(con):
             raise OutcomeUnknown('Original provider authorization hold; no dispatch')
-        requests = con.execute("""SELECT m.id,m.state,m.error,j.payload FROM model_requests m
-            LEFT JOIN jobs j ON j.id=m.job_id WHERE m.state IN ('reserved','unknown')""").fetchall()
+        requests = con.execute("""SELECT m.id,m.state,m.error,j.payload,
+                json_extract(m.request_json,'$.dispatch_attempt_id') AS dispatch_attempt,
+                json_extract(p.payload,'$.registry') AS registry
+            FROM model_requests m LEFT JOIN jobs j ON j.id=m.job_id
+            LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
+            WHERE m.state IN ('reserved','unknown')""").fetchall()
         for row in requests:
             if row['state'] == 'unknown' and ledger.timeout_retry_answered(con, row['id']):
                 continue  # Original UNKNOWN usage remains; its bounded retry supplied a response.
             payload = json.loads(row['payload']) if row['payload'] else {}
             site = payload.get('site_uri')
-            if (row['state'] == 'reserved' or not site
-                    or str(row['error']).startswith(('HTTPError:401', 'HTTPError:403'))
-                    or canonical_key(site, aliases) == target):
+            if str(row['error']).startswith(('HTTPError:401', 'HTTPError:403')) or job_conflicts(
+                    ledger,uri,candidate_id,payload,running=row['state']=='reserved',
+                    registry=row['registry'],dispatched_attempt=row['dispatch_attempt']):
                 raise OutcomeUnknown('Original model request unresolved for this scope; no dispatch: ' + row['id'])
             isolated.append({'kind':'model_request','id':row['id'],'site_uri':site,'state':row['state']})
         if con.execute("SELECT 1 FROM sqlite_master WHERE name='top_level_visits'").fetchone():
             for row in con.execute("SELECT id,state,target_uri FROM top_level_visits WHERE state IN ('reserved_for_dispatch','unknown')"):
-                if row['state']=='reserved_for_dispatch' or not row['target_uri'] or canonical_key(row['target_uri'],aliases)==target:
+                target = row['target_uri']
+                if scoped:
+                    blocked = not target or bool(uri and endpoint(target,aliases)==endpoint(uri,aliases))
+                else:
+                    blocked = row['state']=='reserved_for_dispatch' or not target or bool(uri and canonical_key(target,aliases)==canonical_key(uri,aliases))
+                if blocked:
                     raise OutcomeUnknown('Original navigation unresolved for this scope; no dispatch: '+row['id'])
                 isolated.append({'kind':'navigation','id':row['id'],'site_uri':row['target_uri'],'state':row['state']})
+    return isolated
+
+
+def guard_candidate_dispatch(ledger, uri, *, candidate_id):
+    """Read-only preflight shared by candidate selection, collection and targeted recovery."""
+    isolated = guard_request_scope(ledger, uri, candidate_id=candidate_id)
+    guard = ledger.config.get('site_failure_guard')
+    if guard:
+        from .site_failure_stop import SiteFailureStore
+        SiteFailureStore(guard).guard(uri, candidate_id=candidate_id)
+    # Formal planning also checks unfinished decision jobs, including those
+    # without a reserved HTTP request. Use the same owner resolver here before
+    # selection/first visit rather than discover this only after claim.
+    with ledger.connect() as con:
+        jobs = con.execute("""SELECT j.id,j.state,j.payload,json_extract(p.payload,'$.registry') AS registry
+            FROM jobs j LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
+            WHERE j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')
+            AND j.state IN ('queued','running','review_required')""").fetchall()
+    for row in jobs:
+        if job_conflicts(ledger, uri, candidate_id, json.loads(row['payload']),
+                         running=row['state']=='running', registry=row['registry']):
+            raise OutcomeUnknown('Original planning job unresolved for this scope; no dispatch: '+row['id'])
+    # Site facts may not yet have ingested a just-interrupted formal attempt.
+    # Consult its owning original registry read-only, as formal site_context does.
+    from .current_chain import PROJECT_RULES, registry_project, check_project_guard
+    registry=ledger.path.with_name('production-registry.sqlite3')
+    if (guard or {}).get('dispatch_rules') == PROJECT_RULES and registry.is_file():
+        from .application_identity import canonical_key
+        with closing(sqlite3.connect(registry.as_uri()+'?mode=ro',uri=True)) as con:
+            scope=registry_project(con)
+            check_project_guard(scope,guard,ledger.path,role='consumer')
+            attempts=con.execute("""SELECT a.attempt_id,t.task_json FROM m4_attempts a
+                JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.campaign_id=?
+                AND (a.status IN ('reserved','running','interrupted') OR a.failure_class IN ('unknown','interrupted'))""",
+                (scope['chain_id'],)).fetchall()
+        for attempt_id,raw in attempts:
+            task=json.loads(raw);owner=(task.get('candidate_binding') or {}).get('candidate_id')
+            conflict=owner==candidate_id if owner else canonical_key(task['site_uri'],guard.get('application_registry'))==canonical_key(uri,guard.get('application_registry'))
+            if conflict:
+                raise OutcomeUnknown('Original formal attempt unresolved for this scope; no dispatch: '+attempt_id)
     return isolated
 
 
@@ -59,7 +107,7 @@ async def first_observation(ledger, claim, root):
     from .site_failure_stop import SiteFailureStore
     task={'site_uri':claim['snapshot']['entry_url']}
     guard=ledger.config.get('site_failure_guard')
-    if guard: SiteFailureStore(guard).guard(task['site_uri'])
+    guard_candidate_dispatch(ledger, task['site_uri'], candidate_id=claim['candidate_id'])
     jid=ledger.enqueue('candidate-observation',{'claim_id':claim['claim_id'],'site_uri':task['site_uri']})
     old=ledger.get(jid)
     if old['state']=='done':
@@ -319,9 +367,7 @@ async def entry_session(ledger, pool, claim, root):
     from .site_failure_stop import SiteFailureStore, execution_id
     uri = claim['snapshot']['entry_url']
     guard = ledger.config.get('site_failure_guard')
-    if guard:
-        SiteFailureStore(guard).guard(uri)
-    guard_request_scope(ledger, uri)
+    guard_candidate_dispatch(ledger, uri, candidate_id=claim['candidate_id'])
     jid = ledger.enqueue('candidate-observation', {'claim_id': claim['claim_id'], 'site_uri': uri})
     previous = ledger.get(jid)
     if previous['state'] != 'queued' or previous['attempts']:
@@ -362,6 +408,13 @@ async def entry_session(ledger, pool, claim, root):
                     anchor = {'image': {'path': str(root/(prefix+'.png')), 'sha256': file_sha(root/(prefix+'.png'))},
                         'state': exclusive(root/(prefix+'-state.json'),captured['state']),
                         'capture': exclusive(root/(prefix+'-capture.json'),captured['capture'])}
+                    from .consumer_page_policy import full_image
+                    image_failure=full_image(captured['state'])
+                    if image_failure:
+                        # No action/plan will use this frame. Retain the trusted
+                        # capture and reject immediately, without live re-probes.
+                        exclusive(root/'first-frame-image-policy.json',image_failure)
+                        break
                     try:
                         await verify_execution_state(page, captured['state'])
                         break
@@ -432,7 +485,7 @@ def release_observation(ledger, pool, claim):
     return {'state':'observed','candidate_state':'pending','job_id':job['id'],'evidence':evidence}
 
 
-async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False):
+async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None):
     """Exactly one original claim, one goal and at most one saved result."""
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
     current=pool.get_claim(claim['claim_id'])
@@ -444,11 +497,11 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     paths = startup_check(ledger, output=output, registry=registry, policy=policy, history_set=history_set, qc_policy=qc_policy, pool=pool)
     output, registry, policy, history_set = (paths[k] for k in ('output','registry','policy','history_set'))
     supplied_policy = load_json(policy)
-    isolated_unknown = guard_request_scope(ledger, claim['snapshot']['entry_url'])
-    guard = ledger.config.get('site_failure_guard')
-    if guard:
-        from .site_failure_stop import SiteFailureStore
-        SiteFailureStore(guard).guard(claim['snapshot']['entry_url'])
+    objective_binding=None
+    if session_objective is not None:
+        from .session_objective import bind
+        objective_binding=bind(session_objective,claim)
+    isolated_unknown = guard_candidate_dispatch(ledger, claim['snapshot']['entry_url'], candidate_id=claim['candidate_id'])
     root = Path(output)/claim['claim_id']
     # The transaction elects the sole executor before directories or external IO.
     won = pool.stage(claim, 'observation', {'registry':registry, 'ledger':str(ledger.path),
@@ -457,6 +510,14 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     if not won:
         return finish_or_reconcile(pool, claim)
     root.mkdir(parents=True, exist_ok=False)
+    if objective_binding is not None:
+        # A user goal is input metadata, not an out-of-chain observation. Freeze
+        # the exact validated bytes inside this original project's claim root.
+        original_reference=objective_binding['reference']
+        local_reference=exclusive(root/'session-objective.json',load_json(original_reference['path']))
+        exclusive(root/'session-objective-binding.json',{'original':original_reference,'local':local_reference,
+            'candidate_id':claim['candidate_id'],'version':claim['version']})
+        objective_binding={**objective_binding,'reference':local_reference}
     claim = {**current, 'pool':str(pool.path),
         'application_registry':supplied_policy.get('site_failure_guard',{}).get('application_registry')}
     claim_ref = exclusive(root/'claim.json', claim)
@@ -482,11 +543,8 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
             hints = _entry_hints(claim)
             record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
                 category=hints['category'], name=hints['name'])
-            pool.pool.record({'schema_version':'webcollect-site-discovery-1','origin':'codex_session',
-                'run_id':ledger.config['run_id'],'event_id':'candidate-landing/'+claim['claim_id'],
-                'uri':record['site_uri'],'name':hints['name'],
-                'category_hint':hints['category'],
-                'source_refs':[claim_ref,*session['anchor'].values()], 'stage':'consumer_observation'})
+            # Consumer evidence belongs to this claim/attempt. Table1's site
+            # identity, category, page inventory and availability are producer-owned.
             catalog = root/'catalog.json'
             exclusive(catalog, {'schema_version':'webcollect-capability-catalog-1','mode':ledger.config['mode'],'records':[record]})
             from .single_record import identity
@@ -498,16 +556,11 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
                 generator='react-url', history_registry=registry, history_set=history_set,
                 react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
                 react_site_category=hints['category'], react_app_name=hints['name'],
-                react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles})
+                react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles,'session_objective':objective_binding})
             catalog = root/'planning/catalog.json'
         else:
             anchor=await first_observation(ledger,claim,root)
             record=capability(claim,anchor,claim_ref,ledger.config['mode'])
-            pool.pool.record({'schema_version':'webcollect-site-discovery-1','origin':'codex_session',
-                'run_id':ledger.config['run_id'],'event_id':'candidate-landing/'+claim['claim_id'],
-                'uri':record['site_uri'],'name':claim['snapshot']['name'],
-                'category_hint':claim['snapshot']['parent_category'],
-                'source_refs':[claim_ref,*anchor.values()], 'stage':'consumer_observation'})
             catalog=root/'catalog.json'; exclusive(catalog,{'schema_version':'webcollect-capability-catalog-1','mode':ledger.config['mode'],'records':[record]})
             pool.stage(claim,'planning',{'catalog':str(catalog)}); stage='planning'
             from .single_record import identity
@@ -572,11 +625,13 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
 
 def _cohort_rows(path, pool, registry, batch):
     cohort = load_json(path)
-    if cohort.get('schema_version') != 'webcollect-validation-cohort-1':
+    multi=cohort.get('schema_version') == 'webcollect-consumer-multibatch-cohort-1'
+    if not multi and cohort.get('schema_version') != 'webcollect-validation-cohort-1':
         raise ValueError('Unsupported frozen validation cohort')
-    verify_evidence([cohort['source_scope']])
-    scope = load_json(cohort['source_scope']['path'])
-    if (scope['batch'] != cohort['producer_batch'] or batch not in (None, scope['batch'])
+    scope_ref=cohort['scope'] if multi else cohort['source_scope']
+    verify_evidence([scope_ref])
+    scope = load_json(scope_ref['path'])
+    if ((not multi and scope['batch'] != cohort['producer_batch']) or batch not in (None, scope['batch'])
             or any(Path(v).resolve() != pool.path for v in (scope['pool'],cohort['pool']))
             or any(Path(v).resolve() != Path(registry).resolve() for v in (scope['registry'],cohort['registry']))):
         raise ValueError('Frozen cohort belongs to another project or batch')
@@ -585,11 +640,15 @@ def _cohort_rows(path, pool, registry, batch):
             or [r['order'] for r in rows] != list(range(1, len(rows) + 1))
             or len({r['candidate_id'] for r in rows}) != len(rows)):
         raise ValueError('Invalid frozen candidate list')
-    return cohort['producer_batch'], rows
+    if multi:
+        verify_evidence([cohort['manifest']])
+        if Path(cohort['manifest']['path']).resolve()!=Path(scope['history_set']).resolve() or any(not r.get('producer_batch') for r in rows):
+            raise ValueError('Multibatch cohort lost original manifest or source batch')
+    return scope['batch'] if multi else cohort['producer_batch'], rows
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              protocols=None, poll_seconds=None, producer_batch=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, **kwargs):
+              protocols=None, poll_seconds=None, producer_batch=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, **kwargs):
     rows = None
     if cohort is not None:
         if any((categories, application_id, recovery_version, target is not None, poll_seconds is not None)) or protocols not in (None, ('webcollect-data-candidate-2',)):
@@ -611,6 +670,9 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     if recovery_version and not producer_batch:
         raise ValueError('Recovery requires an explicit producer batch')
     from .candidate_batch import report, record_outcome
+    from .current_chain import PROJECT_RULES
+    from .site_failure_stop import SiteStopped
+    project_worker = (ledger.config.get('site_failure_guard') or {}).get('dispatch_rules') == PROJECT_RULES
     stop_reason = 'processing_limit'
     stop_details = None
     poll = 0
@@ -623,7 +685,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             break
         try:
             checked = startup_check(ledger, pool=pool, before_claim=True, **kwargs)
-            if producer_batch:
+            if producer_batch or project_worker:
                 guard_request_scope(ledger, None)
         except (BudgetStop, OutcomeUnknown) as error:
             if target is None and rows is None:
@@ -639,9 +701,10 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             break
         kwargs.update(checked)
         selected = rows[poll] if rows is not None else None
+        row_batch = selected.get('producer_batch',producer_batch) if selected else producer_batch
         claim=pool.claim_next(worker_id,f'{request_prefix}/{poll}',categories=categories,application_id=application_id,
                               protocols=protocols, **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
-                              **({'producer_batch': producer_batch} if producer_batch else {}),
+                              **({'producer_batch': row_batch} if row_batch else {}),
                               **({'recovery_version':recovery_version} if recovery_version else {}))
         poll += 1
         if selected and claim['state'] in ('EMPTY','ALREADY_CLAIMED'):
@@ -658,7 +721,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             await asyncio.sleep(poll_seconds)
             continue
         try:
-            result=await consume(pool,claim,ledger,**kwargs,**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+            result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
         except BudgetStop as error:
             if target is None and rows is None: raise
             current = pool.get_claim(claim['claim_id'])
@@ -666,9 +729,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 pool.finish(claim,state='reconcile',stage=current['stage'],reason=str(error))
             result = {'state':'reconcile','resource_stop':{'reason':str(error)}}
         except Exception as error:
-            if not producer_batch:
+            if not producer_batch and not (project_worker and isinstance(error,(SiteStopped,OutcomeUnknown))):
                 raise
-            from .site_failure_stop import SiteStopped
             current = pool.get_claim(claim['claim_id'])
             if current['state'] == 'consuming' and current['stage'] == 'claimed' and isinstance(error,(SiteStopped,OutcomeUnknown)):
                 pool.finish(claim, state='reconcile', stage='claimed', reason=str(error))
@@ -679,7 +741,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         if producer_batch:
             record_outcome(pool, claim, result)
         results.append({**result, 'claim_id':claim['claim_id'], 'candidate_id':claim['candidate_id']} if producer_batch else result)
-        if result.get('resource_stop') or (result['state']=='reconcile' and not producer_batch):
+        if result.get('resource_stop') or (result['state']=='reconcile' and not (producer_batch or project_worker)):
             stop_reason = 'resource_pause' if result.get('resource_stop') else 'account_reconciliation'
             break
     if rows is not None:
@@ -725,19 +787,15 @@ def retry(pool, candidate_id, *, reason, recovery=None):
     if binding.get('ledger'):
         with closing(sqlite3.connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
             config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
-            jobs=con.execute("SELECT state,payload FROM jobs WHERE state IN ('running','review_required') AND kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')").fetchall()
+            jobs=con.execute("""SELECT j.state,j.payload,json_extract(p.payload,'$.registry') FROM jobs j
+                LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
+                WHERE j.state IN ('running','review_required') AND j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')""").fetchall()
         ledger=BatchLedger(binding['ledger'],config)
-        guard_request_scope(ledger,original['snapshot']['entry_url'])
-        from .application_identity import canonical_key
-        aliases=config.get('site_failure_guard',{}).get('application_registry')
-        target=canonical_key(original['snapshot']['entry_url'],aliases)
-        for state,raw in jobs:
-            site=json.loads(raw).get('site_uri')
-            if state=='running' or not site or canonical_key(site,aliases)==target:
+        uri=original['snapshot']['entry_url']
+        guard_candidate_dispatch(ledger,uri,candidate_id=candidate_id)
+        for state,raw,registry in jobs:
+            if job_conflicts(ledger,uri,candidate_id,json.loads(raw),running=state=='running',registry=registry):
                 raise ValueError('Original planning/decision unresolved for this scope; no retry')
-        if config.get('site_failure_guard'):
-            from .site_failure_stop import SiteFailureStore
-            SiteFailureStore(config['site_failure_guard']).guard(original['snapshot']['entry_url'])
     with pool.transaction() as con:
         disposition = pool.disposition(con, candidate_id)
         if recovery:

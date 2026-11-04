@@ -18,9 +18,9 @@ class ContractSourceIsolationTests(unittest.TestCase):
             shutil.copyfile(source / 'contract-authority.json', package / 'contract-authority.json')
             shutil.copytree(source / 'authority', package / 'authority')
             identity = contract_identity(root)
-            self.assertEqual(identity['version'], 2)
-            self.assertEqual(identity['authority_source'], 'installed-four-document-authority')
-            self.assertEqual(len(identity['authority_files_sha256']), 4)
+            self.assertEqual(identity['version'], 3)
+            self.assertEqual(identity['authority_source'], 'installed-document-authority')
+            self.assertEqual(len(identity['authority_files_sha256']), 7)
             self.assertFalse(any('samples/' in name for name in identity['authority_files_sha256']))
             (package / 'authority/附件A-字段说明.md').write_text('CONTROLLED tamper')
             with self.assertRaisesRegex(ValueError, 'authority document changed'):

@@ -19,6 +19,10 @@ def native(build, cid):
         args = {**decision['tool_call']['arguments'], 'goal_update': decision['goal_update'],
                 'decision_summary': decision['decision_summary']}
         name = decision['tool_call']['name']
+        schema=next((t['function']['parameters'] for t in prompt.get('tools',[]) if t['function']['name']==name),{})
+        if 'task_intent' in schema.get('required',[]) or 'planning_basis' in prompt:
+            args['task_intent']={'status':'UNKNOWN','task_types':[], 'basis_observation_id':prompt['observation']['observation_id'],
+                'visible_end_condition':'受控页面最终状态','basis':'离线协议夹具；不猜测业务类型'}
         return {'name': name, 'arguments': args, 'tool_call_id': cid,
                 'assistant_message': {'role': 'assistant', 'content': None,
                     'reasoning_content': 'opaque-protocol-private',

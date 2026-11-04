@@ -6,7 +6,7 @@ from pathlib import Path
 from .batch_core import load_json, BudgetStop, SessionGLMCallLimit
 from .planning import verify_evidence
 
-VERSION = 'candidate-batch-routing-1'
+VERSION = 'candidate-batch-routing-2'
 
 
 def batch_ids(pool, producer_batch):
@@ -130,6 +130,9 @@ def english_quiz_reason(state):
 
 def first_frame_disposition(state):
     """Route direct first-frame facts; this does not certify later frames."""
+    from .consumer_page_policy import full_image
+    if full_image(state):
+        return 'abandon', 'first_frame_image_fills_viewport'
     title = (state.get('title') or '').strip().casefold()
     text = (state.get('visible_text') or '').strip()
     if title in ('404', '404 not found', '页面不存在', '网页不存在') and any(

@@ -165,9 +165,9 @@ class M4ContractTests(unittest.TestCase):
                 self.mutate(mutation);result=self.report()
                 self.assertEqual(any(row['rule_id']=='C09' and row['status']=='FAIL' for row in result['samples'][0]['checks']),expected)
 
-    def test_four_authorities_and_rule_changes_are_bound(self):
+    def test_installed_authorities_and_rule_changes_are_bound(self):
         value,before=contract.fingerprint()
-        self.assertEqual({row['role'] for row in value['authority']['documents']},{'clarification','requirement','annex_a','annex_b'})
+        self.assertEqual({row['role'] for row in value['authority']['documents']},{'clarification','site_trajectory_scope','trajectory_supplement','qc_sampling','requirement','annex_a','annex_b'})
         changed=copy.deepcopy(value['authority']);changed['documents'][0]['sha256']='a'*64
         with patch.object(contract,'authority',return_value=changed):self.assertNotEqual(contract.fingerprint()[1],before)
 

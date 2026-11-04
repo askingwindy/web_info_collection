@@ -35,6 +35,8 @@ def subject(kind, payload):
         value['neighbors'] = [_sample(item) for item in payload['neighbors']]
         value['pending_collection_checks'] = payload.get('pending_collection_checks', [])
         value['required_history_missing'] = payload.get('required_history_missing', [])
+        if payload.get('difference_protocol'):
+            value['difference_protocol'] = payload['difference_protocol']
     return value
 
 

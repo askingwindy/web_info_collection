@@ -271,6 +271,8 @@ TOOL=obj({'tool_name':S,'call_id':S,'arguments':{'type':'object'},'timestamp':S,
 STEP=obj({'step_id':INT,'image_path':NONEMPTY,'ui_tree_path':NONEMPTY,'page_name':NONEMPTY,'user_goal':NONEMPTY,'action':ACTION,'tool_call':TOOL,'tool_result':obj({'status':{'enum':['success','error']},'return_value':{'type':'object','properties':{'screen_changed':BOOL}},'error':S}),'next_step_rationale':NONEMPTY,'step_result':NONEMPTY,'exception_evidence':array(S)})
 ANNOTATION=obj({'sample_id':NONEMPTY,'task_instruction':NONEMPTY,'task_type':array({'type':'string','enum':LABELS},1,3),'terminal_type':{'enum':['Android','iOS','Windows','macOS','Linux','Web']},'device_info':obj({'device_model':S,'os_name':S,'os_version':S,'screen_resolution':RES}),'app_info':obj({'app_name':NONEMPTY,'app_version':S,'environment':NONEMPTY,'ui_language':{'enum':['zh','en']}}),'risk_level':{'enum':['normal','sensitive','high_risk']},'trajectory_source':obj({'source_type':{'enum':['human','agent','human_agent_hybrid']},'data_type':NONEMPTY,'action_space':NONEMPTY}),'steps':array(STEP,1),'final_state_image':S,'final_result':NONEMPTY,'completion_status':{'enum':['success','controlled_exception','failed']},'completion_judgement':NONEMPTY,'short_flow':BOOL,'short_flow_reason':S},['sample_id','task_instruction','task_type','terminal_type','device_info','app_info','risk_level','trajectory_source','steps','final_result','completion_status','completion_judgement'])
 ELEMENT=obj({'element_id':NONEMPTY,'parent_id':NONEMPTY,'element_type':NONEMPTY,'native_role':S,'text':S,'bbox':BOX,'clickable':BOOL,'inputable':BOOL,'scrollable':BOOL,'visible':BOOL,'enabled':BOOL,'state':{'enum':['default','selected','checked','unchecked','expanded','collapsed','disabled','focused']}})
+STEP['properties']['tool_result']['properties']['return_value']['properties']['collection_ending']={
+    'type':'object','properties':{'protocol':{'const':'webcollect-five-eight-attempt-ending-2'}},'required':['protocol']}
 TREE=obj({'image_path':NONEMPTY,'screen_resolution':RES,'elements':array(ELEMENT)})
 Strict=validators.extend(Draft202012Validator,type_checker=Draft202012Validator.TYPE_CHECKER.redefine('integer',lambda checker,value:type(value) is int))
 
@@ -313,6 +315,8 @@ def sample_check(directory,diagnostic_allow_empty_task_type=False):
     if a['trajectory_source']['action_space']!='unified_gui_v4':observations.append(problem('I03','trajectory_source/action_space','Different from two example values; exact identifier acceptance remains UNKNOWN.'))
     if a['completion_status']=='failed':errors.append(problem('C10','completion_status','Failed trajectories cannot be delivered.'))
     effective=sum(st['action']['action_type'] not in ('wait','complete') for st in a['steps'])
+    from webcollect.closing_policy import annotation_errors
+    errors += [problem('C10','collection_ending',message) for message in annotation_errors(a)]
     if effective<5 and not(a.get('short_flow') is True and a.get('short_flow_reason','').strip()):errors.append(problem('C11','steps','Fewer than five effective actions without explicit short-flow reason.'))
     if a['app_info']['ui_language']!='zh':errors.append(problem('C02','app_info/ui_language','Web collection contract requires Chinese UI.'))
     def boxok(b):return 0<=b[0]<b[2]<=res[0] and 0<=b[1]<b[3]<=res[1]

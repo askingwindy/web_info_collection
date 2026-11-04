@@ -1206,13 +1206,18 @@
       const siblings=n.parentElement?[...n.parentElement.children].filter(s=>s.localName===n.localName):[n];
       parts.unshift(n.localName+':nth-of-type('+(siblings.indexOf(n)+1)+')');n=n.parentElement;
     }
-    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
+    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,target:node.localName==='a'?(node.getAttribute('target')||''):null,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
       options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:clean(o.label),disabled:o.disabled})):[]};
   });
   return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
     unrelated_transform_proofs:transformProofs, capture_images:captureImages,capture_media:captureMedia,paint_borders:paintBorders,capture_controls:captureControls,
+    geometry_witnesses:nodes.map((node,i)=>{const b=records[i].bbox;
+      const samples=[];for(const x of [b[0]+.5,(b[0]+b[2])/2,b[2]-.5])for(const y of [b[1]+.5,(b[1]+b[3])/2,b[3]-.5]){
+        const hit=document.elementFromPoint(x,y);samples.push({point:[x,y],ancestor:!!hit&&(node===hit||node.contains(hit)),
+          hit_tag:hit?.localName||null,hit_id:hit?.id||''});}
+      return {element_id:records[i].element_id,bbox:b,samples};}),
     document_identity:{url_without_fragment:location.href.split('#')[0],performance_time_origin:performance.timeOrigin},
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,

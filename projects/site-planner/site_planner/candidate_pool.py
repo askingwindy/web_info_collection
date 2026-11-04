@@ -117,6 +117,21 @@ def landing_key(value, application_id, landed_uri):
                           normalize(value['requested_goal']) if value['candidate_kind']=='target' else None])
 
 
+def first_output_kind(con, application_id, run_id):
+    """Determine first discovery and first production under the publication lock."""
+    first = con.execute(
+        "SELECT c.candidate_id,b.run_id,json_extract(e.record,'$.source.site_origin.supply_kind') AS kind "
+        "FROM data_candidates c LEFT JOIN candidate_batch_rows b ON b.candidate_id=c.candidate_id AND b.result='NEW' "
+        "LEFT JOIN candidate_events e ON e.candidate_id=c.candidate_id AND e.kind='discovered' "
+        "WHERE c.candidate_id=(SELECT candidate_id FROM data_candidates WHERE application_id=? ORDER BY created,rowid LIMIT 1)",
+        (application_id,)).fetchone()
+    if first:
+        return first['kind'] if first['run_id']==run_id and first['kind'] else 'known_site_expansion'
+    discovery = con.execute("SELECT d.run_id FROM discoveries d JOIN pages p ON p.id=d.page_id "
+                            "WHERE p.application_id=? ORDER BY d.rowid LIMIT 1",(application_id,)).fetchone()
+    return 'project_first_discovery_output' if discovery and discovery[0]==run_id else 'pending_lead_first_output'
+
+
 def validate_candidate_v2(value):
     """Body of webcollect-data-candidate-2: URL is bound by the program, the
     frozen requested_goal comes only from trusted caller parameters."""
@@ -185,8 +200,36 @@ class CandidatePool:
             if row[0] == EXTENSION2 and 'candidate_batch_rows' not in tables:
                 raise ValueError('Candidate producer extension incomplete; explicit reinstall required')
             self.extension_version = row[0]
+            self._concurrency_contract(con)
             check=con.execute('PRAGMA foreign_key_check').fetchone()
             if check: raise ValueError('Candidate pool foreign-key integrity failed')
+
+    @staticmethod
+    def _concurrency_contract(con):
+        """An ID identifies work; the transaction and unique holder exclude it.
+
+        Validate the existing schema without adding IDs, migrating rows or
+        reclaiming expired work. A damaged/missing index must not silently
+        disable exclusive claiming.
+        """
+        primary=[r['name'] for r in con.execute('PRAGMA table_info(data_candidates)') if r['pk']]
+        if primary!=['candidate_id']:
+            raise ValueError('Table2 requires candidate_id primary key')
+        indexes=[dict(r) for r in con.execute('PRAGMA index_list(candidate_claims)')]
+        unique={tuple(r['name'] for r in con.execute('SELECT name FROM pragma_index_info(?) ORDER BY seqno',(i['name'],)))
+                for i in indexes if i['unique'] and not i['partial']}
+        holder=con.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name='one_candidate_holder'").fetchone()
+        normalized=''.join(holder[0].lower().split()) if holder else ''
+        expected="createuniqueindexone_candidate_holderoncandidate_claims(candidate_id)wherestate='consuming'"
+        if normalized!=expected or ('request_id',) not in unique:
+            raise ValueError('Candidate exclusive-claim or request-id uniqueness constraint missing/changed')
+        return {'table':'data_candidates','primary_key':'candidate_id','claim_index':'one_candidate_holder',
+                'transaction':'BEGIN IMMEDIATE','expired_claim_policy':'reconcile_without_redispatch'}
+
+    def concurrency_contract(self):
+        """Read-only description of the existing Table2/claim exclusion contract."""
+        with self.pool.connect() as con:
+            return self._concurrency_contract(con)
 
     @property
     def entry_protocol_installed(self):
@@ -320,6 +363,8 @@ class CandidatePool:
                     if prior['response_sha256'] != row_header['response_sha256']:
                         raise ValueError('Row conclusion digest conflict; verify the original response')
                     return json.loads(prior['record'])
+            if self.consumption(value['entry_url'],con,kind=value['candidate_kind']):
+                raise ValueError('NO_CONSUME: producer image-only page exclusion')
             old = con.execute('SELECT candidate_id FROM data_candidates WHERE dedup_key=?', (key,)).fetchone()
             if source.get('table_policy'):
                 from .application_discovery import Discovery, POLICY
@@ -336,12 +381,14 @@ class CandidatePool:
                 if confirmed_category([*previous_sources,source]) != site['category']:
                     raise ValueError('Original reader retains a conflicting category; preserve and quarantine original row')
                 if not old:
+                    from .entry_access import wire_uri
                     receipt=source.get('entry_http')
                     if not receipt: raise ValueError('New Table2 entry requires the final GET receipt')
                     verify_evidence([receipt]); access=load_json(receipt['path'])
                     if (access.get('result')!='PASS' or access.get('method')!='GET'
                             or type(access.get('http_status')) is not int or not 200<=access['http_status']<300
-                            or access.get('entry_uri')!=page_uri(value['entry_url'])):
+                            or not isinstance(access.get('entry_uri'),str)
+                            or wire_uri(access['entry_uri'])!=wire_uri(value['entry_url'])):
                         raise ValueError('Entry GET receipt does not confirm this original URI')
             duplicate = old is not None
             cid = old['candidate_id'] if old else 'candidate-' + str(uuid.uuid4())
@@ -349,11 +396,18 @@ class CandidatePool:
             if source.get('table_policy') and source.get('entry_http'):
                 access = load_json(source['entry_http']['path'])
                 if access.get('result')=='PASS':
+                    if self.consumption(access.get('landed_uri') or access['entry_uri'],con,kind=value['candidate_kind']):
+                        raise ValueError('NO_CONSUME: producer image-only landed page exclusion')
                     landed_key = landing_key(value,aid,access.get('landed_uri') or access['entry_uri'])
                     landing = con.execute('SELECT candidate_id FROM candidate_landings WHERE landing_key=?',(landed_key,)).fetchone()
                     if landing and landing['candidate_id']!=cid and not old:
                         raise ValueError('Duplicate settled landed URI; original candidate '+landing['candidate_id'])
             if not old:
+                if row_header and source.get('site_origin') and source.get('source_pipeline'):
+                    source = {**source,'site_origin':{**source['site_origin'],
+                              'supply_kind':first_output_kind(con,aid,row_header['run_id'])}}
+                    if source.get('required_supply_kind') and source['site_origin']['supply_kind']!=source['required_supply_kind']:
+                        raise ValueError('Another batch owns the first discovery or first output of this site')
                 con.execute('INSERT INTO candidate_versions VALUES(?,?,?,?)', (cid,1,canonical(value),time.time()))
                 con.execute('INSERT INTO data_candidates VALUES(?,?,?,?,?,?,?)',
                             (cid,aid,key,1,canonical(value),time.time(),'pending'))
@@ -444,6 +498,11 @@ class CandidatePool:
             row = con.execute('SELECT candidate_id,state FROM data_candidates WHERE dedup_key=?', (key,)).fetchone()
             return {'candidate_id':row['candidate_id'],'state':row['state']} if row else None
 
+    def consumption(self, uri, con=None, *, kind='entry'):
+        """Producer-owned entry exclusion, shared across workers and batches."""
+        from .page_consumption import exclusion
+        return exclusion(self,uri,kind=kind,con=con)
+
     def reject_unconsumed(self, candidate_id, reason):
         if not reason: raise ValueError('Rejection reason required')
         with self.transaction() as con:
@@ -476,6 +535,7 @@ class CandidatePool:
                     row['result']['record']=json.loads(row['result']['record'])
                     row['result']['qc_report']=json.loads(row['result']['qc_report']) if row['result']['qc_report'] else None
                 row['disposition'] = self.disposition(con, row['candidate_id'])
+                row['consumption'] = self.consumption(row['candidate']['entry_url'],con,kind=row['candidate'].get('candidate_kind'))
                 out.append(row)
             return out
 
@@ -555,10 +615,17 @@ class CandidatePool:
                 elif disposition:
                     continue
                 body = json.loads(row['body'])
+                if self.consumption(body['entry_url'],con,kind=body.get('candidate_kind')):continue
                 if body.get('schema_version') not in protocols: continue
                 if categories and self._row_category(row, con) not in categories: continue
                 if application_id and row['application_id'] != application_id: continue
                 sources=[json.loads(s[0]) for s in con.execute('SELECT source FROM candidate_sources WHERE candidate_id=?', (row['candidate_id'],))]
+                if frozen_row is not None and frozen_row.get('sources_sha256'):
+                    ordered_sources=[json.loads(s[0]) for s in con.execute(
+                        'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created,source_key', (row['candidate_id'],))]
+                    if object_sha256(ordered_sources) != frozen_row['sources_sha256']:
+                        raise ValueError('Frozen candidate sources changed; no replacement claim')
+                    verify_evidence([frozen_row['entry_http']])
                 for src in sources:
                     verify_evidence(src['references'])
                 cid = row['candidate_id']; claim = str(uuid.uuid4()); token = str(uuid.uuid4())
@@ -584,8 +651,10 @@ class CandidatePool:
             complete = con.execute("SELECT 1 FROM checkpoints WHERE run_id=? AND key LIKE 'entry-complete/%'", (producer_batch,)).fetchone()
             if not complete and not recovery_version:
                 return False
-            for row in con.execute("""SELECT c.candidate_id FROM candidate_batch_rows b JOIN data_candidates c USING(candidate_id)
+            for row in con.execute("""SELECT c.candidate_id,c.body FROM candidate_batch_rows b JOIN data_candidates c USING(candidate_id)
                     WHERE b.run_id=? AND b.result='NEW' AND c.state='pending'""", (producer_batch,)):
+                body=json.loads(row['body'])
+                if self.consumption(body['entry_url'],con,kind=body.get('candidate_kind')):continue
                 d = self.disposition(con, row[0])
                 if (not recovery_version and not d) or (recovery_version and d and d.get('disposition') == 'recovery_ready' and d.get('fix_version') == recovery_version):
                     return False

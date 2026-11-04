@@ -16,6 +16,21 @@ from .site_pool import page_uri
 POLICY = 'producer-entry-http-get-1'
 
 
+def wire_uri(uri):
+    return request_uri(page_uri(uri))
+
+
+def document_http_failure(con, job_id):
+    """A sealed HTTP error can be replayed from the original visit, including legacy jobs."""
+    return con.execute(
+        "SELECT v.id,v.target_uri,v.response_status FROM top_level_visits v JOIN jobs j ON j.id=v.job_id "
+        "WHERE j.id=? AND j.kind='application-evidence-get' AND j.state='review_required' AND j.error='HTTPError' "
+        "AND v.purpose=j.kind AND v.state='failed' AND v.error_type='HTTPError' "
+        "AND v.finished_at IS NOT NULL AND v.response_status BETWEEN 300 AND 599 "
+        "AND NOT EXISTS (SELECT 1 FROM top_level_visits other WHERE other.job_id=j.id AND other.id<>v.id)",
+        (job_id,)).fetchone()
+
+
 class RedirectBlocked(ValueError):
     responsibility = 'collector'
 
@@ -48,7 +63,7 @@ def fetch_status(uri, timeout, metrics, mode, aliases, guard=None):
 def _checked_receipt(ledger, jid, uri, ref):
     verify_evidence([ref])
     record = load_json(ref['path'])
-    if record['job_id'] != jid or request_uri(page_uri(record['entry_uri'])) != request_uri(page_uri(uri)) or record['policy'] != POLICY:
+    if record['job_id'] != jid or wire_uri(record['entry_uri']) != wire_uri(uri) or record['policy'] != POLICY:
         raise ValueError('Original entry HTTP receipt does not match its job')
     if record['result'] == 'PASS' and ledger.config.get('site_failure_guard'):
         SiteFailureStore(ledger.config['site_failure_guard']).guard(uri)
@@ -60,17 +75,18 @@ def shared_job(ledger, batch, uri, *, purpose='candidate-entry-http', policy=POL
     conditions = {'access': 'public-anonymous-get',
                   'aliases': (ledger.config.get('site_failure_guard') or {}).get('application_registry')}
     identity = {'project': (ledger.config.get('site_failure_guard') or {}).get('campaign_id', ledger.config['run_id']),
-                'request_uri': request_uri(page_uri(uri)), 'purpose': purpose,
+                'request_uri': wire_uri(uri), 'purpose': purpose,
                 'conditions': conditions, 'policy': policy}
     key = object_sha256(identity)
     with ledger.transaction() as con:
         con.execute('CREATE TABLE IF NOT EXISTS producer_page_checks ('
                     'identity TEXT PRIMARY KEY, binding TEXT NOT NULL, job_id TEXT NOT NULL)')
         unresolved=con.execute("SELECT id FROM jobs WHERE kind=? AND json_extract(payload,'$.policy')=? "
-            "AND json_extract(payload,'$.uri')=? AND state!='done' AND attempts>0 LIMIT 1",
-            (purpose,policy,page_uri(uri))).fetchone()
-        if unresolved:
-            raise OutcomeUnknown('Original page check unsettled; reconcile original job: '+unresolved[0])
+            "AND (json_extract(payload,'$.uri')=? OR json_extract(payload,'$.check_identity.request_uri')=?) "
+            "AND state!='done' AND attempts>0", (purpose,policy,page_uri(uri),identity['request_uri']))
+        for original in unresolved:
+            if purpose!='application-evidence-get' or not document_http_failure(con,original['id']):
+                raise OutcomeUnknown('Original page check unsettled; reconcile original job: '+original['id'])
         prior = con.execute('SELECT job_id FROM producer_page_checks WHERE identity=?', (key,)).fetchone()
         if not prior:
             # Legacy public checks have exactly these access conditions. Do not
@@ -79,9 +95,12 @@ def shared_job(ledger, batch, uri, *, purpose='candidate-entry-http', policy=POL
                 "AND json_extract(payload,'$.policy')=? AND json_extract(payload,'$.check_identity') IS NULL "
                 "ORDER BY CASE WHEN state!='done' AND attempts>0 THEN 0 ELSE 1 END,created,id",
                 (purpose,policy)).fetchall()
-            old=next((r for r in legacy_rows if request_uri(page_uri(json.loads(r['payload'])['uri']))==identity['request_uri']),None)
-            if old and old['state']!='done' and old['attempts']:
-                raise OutcomeUnknown('Original page check unsettled; reconcile original job: '+old['id'])
+            matches=[r for r in legacy_rows if wire_uri(json.loads(r['payload'])['uri'])==identity['request_uri']]
+            for original in matches:
+                if original['state']!='done' and original['attempts'] and not (
+                        purpose=='application-evidence-get' and document_http_failure(con,original['id'])):
+                    raise OutcomeUnknown('Original page check unsettled; reconcile original job: '+original['id'])
+            old=next(iter(matches),None)
             payload = {'uri':page_uri(uri), 'policy':policy, 'check_identity':identity}
             jid = old[0] if old else object_sha256({'kind':purpose, 'payload':payload})
             if not old:

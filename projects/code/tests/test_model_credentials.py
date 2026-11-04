@@ -98,8 +98,8 @@ class RuntimeCredentialTests(unittest.TestCase):
 
     def test_authorized_glm_list_accepts_indent_tabs_and_pins_first_account(self):
         path=self.root/'token.yaml';path.write_text('glm:\n\t- "offline-first"\n\t- "offline-second"\nark1: "offline-other"\n')
-        with patch.object(model_credentials,'PROJECT_GLM_ACCOUNT','glm'), patch('random.SystemRandom.choice', side_effect=lambda values:values[0]):
-            self.assertEqual(model_credentials.credential(self.config()['model']),'offline-first')
+        with patch.object(model_credentials,'PROJECT_GLM_ACCOUNT','glm'):
+            self.assertEqual(model_credentials.credential(self.config()['model'],selection_index=1),'offline-second')
             self.assertEqual(model_credentials.credential(self.config()['model']),'offline-first')
             path.write_text('glm:\n  - "invalid credential with spaces"\n  - "offline-second"\n')
             with self.assertRaisesRegex(ValueError,'suppressed'):

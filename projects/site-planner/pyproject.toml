@@ -13,3 +13,6 @@ webcollect-sites = "site_planner.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["site_planner*"]
+
+[tool.setuptools.package-data]
+site_planner = ["*.js"]

@@ -386,11 +386,16 @@ class BatchLedger:
                 raise ValueError('Lost/expired parent collection lease')
         return row
 
-    def heartbeat(self, job):
+    def heartbeat(self, job, *, request_timeout=None):
         with self.transaction() as con:
-            self._owned(con, job)
+            row = self._owned(con, job)
+            lease_seconds = self.config['budget']['lease_seconds']
+            if request_timeout is not None:
+                if row['kind'] != 'react-native-decision' or type(request_timeout) is not int or not 1 <= request_timeout <= 600:
+                    raise ValueError('Only an owned native decision can extend its bounded request lease')
+                lease_seconds = max(lease_seconds, request_timeout + 30)
             con.execute('UPDATE jobs SET lease=? WHERE id=?',
-                        (time.time() + self.config['budget']['lease_seconds'], job['id']))
+                        (time.time() + lease_seconds, job['id']))
 
     def finish(self, job, state='done', result=None, error=None):
         if state not in ('done', 'failed', 'review_required', 'queued'):
@@ -451,14 +456,27 @@ class BatchLedger:
         if self.config['mode'] == 'real' and not self.config.get('site_failure_guard'):
             raise BudgetStop('Real website dispatch requires the original whole-site failure guard; no request sent')
         self.sync_visit_failures()
-        if self.config.get('site_failure_guard'):
+        guard = self.config.get('site_failure_guard')
+        if guard:
             from .site_failure_stop import SiteFailureStore
-            SiteFailureStore(self.config['site_failure_guard']).guard(target_uri)
+            SiteFailureStore(guard).guard(target_uri)
         with self.transaction() as con:
             self._owned(con, job)
             self._ensure_visit_schema(con)
             if not con.execute('SELECT history_complete FROM visit_accounting_meta WHERE id=1').fetchone()[0]:
                 raise BudgetStop('Legacy top-level visit history UNKNOWN; reconcile original visits before dispatch')
+            from .current_chain import PROJECT_RULES
+            if guard and guard.get('dispatch_rules')==PROJECT_RULES:
+                from .request_quarantine import endpoint
+                aliases=guard.get('application_registry')
+                target=endpoint(target_uri,aliases)
+                # A concurrent reservation may have arrived after the site-fact read.
+                con.execute("""CREATE INDEX IF NOT EXISTS unresolved_visit_endpoints ON top_level_visits(target_uri,id)
+                    WHERE state IN ('reserved_for_dispatch','unknown')""")
+                for previous in con.execute("""SELECT id,target_uri FROM top_level_visits
+                        WHERE state IN ('reserved_for_dispatch','unknown')"""):
+                    if endpoint(previous['target_uri'],aliases)==target:
+                        raise OutcomeUnknown('Original visit unresolved for this endpoint; no dispatch: '+previous['id'])
             now = time.time()
             last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
             delay = last[0] + self.config['budget']['min_domain_interval_seconds'] - now if last else 0
@@ -664,7 +682,9 @@ class BatchLedger:
                 original = next(iter(accounts), None)
             else:
                 original = old[0]
-            secret = credential(self.config['model'], excluded_accounts=self._unavailable_model_accounts(con), required_account=original)
+            ordinal = con.execute('SELECT COALESCE(MAX(rowid),0) FROM model_sessions').fetchone()[0] if original is None else 0
+            secret = credential(self.config['model'], excluded_accounts=self._unavailable_model_accounts(con),
+                                required_account=original, selection_index=ordinal)
             con.execute('INSERT OR IGNORE INTO model_sessions VALUES(?,?)', (session_id, account_id(secret)))
             return secret
 
@@ -687,7 +707,7 @@ class BatchLedger:
             from .provider_recovery import holds, permits_probe
             if holds(con) and not permits_probe(con,job['id'],request_json,attempt):
                 raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
-            native_http = request_json and request_json.get('protocol') == 'native-tool-1' and request_json.get('http_dispatch')
+            native_http = request_json and request_json.get('protocol') in ('native-tool-1','banded-plain-json-1') and request_json.get('http_dispatch')
             aid = request_json.get('dispatch_attempt_id') if native_http else None
             react = owned['kind'] in ('react-decision','react-native-decision')
             if react and self.real_glm:

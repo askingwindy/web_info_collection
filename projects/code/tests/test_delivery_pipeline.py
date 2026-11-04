@@ -108,15 +108,15 @@ class DeliveryPipelineTests(unittest.TestCase):
         context=ledger.get(revised['document_job'])['payload']['supplementary_evidence']['verified_sample_review_state']
         self.assertEqual(context['semantic_sampling']['actual_ai_reviewed'],1)
         self.assertEqual(context['semantic_sampling']['actual_human_reviewed'],0)
-        self.assertEqual(context['semantic_sampling']['human_pending_count'],0)
-        self.assertEqual(context['samples'][0]['status'],'PASS')
+        self.assertEqual(context['semantic_sampling']['human_pending_count'],1)
+        self.assertEqual(context['samples'][0]['status'],'REVIEW_REQUIRED')
         self.assertEqual({jid for jid in original['jobs'] if original['jobs'][jid]['kind']!='ai-documents'},
                          {jid for jid in revised['jobs'] if revised['jobs'][jid]['kind']!='ai-documents'})
         before=ledger.summary()['model_requests']
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
             resolved=pipeline.run(second['receipt'],self.root/'verified-doc-run',max_jobs=10)
         self.assertEqual(ledger.summary()['model_requests'],before+1)
-        self.assertEqual(resolved['payload_status'],'PASS')
+        self.assertEqual(resolved['payload_status'],'REVIEW_REQUIRED') # documents cannot settle missing pair evidence
         self.assertEqual(resolved['actual_human_reviewed'],0)
 
     def test_document_coverage_preserves_pending_selected_sample_review(self):
@@ -227,18 +227,28 @@ class DeliveryPipelineTests(unittest.TestCase):
                                            '--output',str(self.root/'cli-status')]),0)
         self.assertEqual(self.ledger.summary()['model_requests'],0)
 
-    def test_mock_glm_protocol_runs_full_payload_final_archive_without_claiming_real_production(self):
+    def test_empty_comparison_blocks_archive_until_explicit_controlled_human_resolution(self):
         ledger=self.real_ledger_fixture()
         prepared=pipeline.prepare(ledger,self.dataset,self.plan,self.effective,self.root/'mock-prepared',
                                   profile=self.fixture.profile,cross_package_report=self.cross_report,mode='real')
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway),\
                 patch('urllib.request.build_opener',side_effect=AssertionError('No actual service')):
             state=pipeline.run(prepared['receipt'],self.root/'mock-run',max_jobs=10)
-        self.assertEqual(state['payload_status'],'PASS')
-        self.assertEqual(state['human_pending_count'],0)
+        self.assertEqual(state['payload_status'],'REVIEW_REQUIRED')
+        self.assertEqual(state['human_pending_count'],1)
         self.assertEqual(state['pipeline_model_usage']['model_requests'],2)
         archive=self.root/'CONTROLLED-TEST-NOT-PRODUCTION.zip'
-        final=pipeline.finalize(prepared['receipt'],self.root/'mock-run/status.json',self.root/'mock-final',archive=archive)
+        with self.assertRaisesRegex(ValueError,'remain unresolved'):
+            pipeline.finalize(prepared['receipt'],self.root/'mock-run/status.json',self.root/'blocked-final',archive=archive)
+        self.assertFalse(archive.exists())
+        # Authored disposable human protocol fixture, never a real review or a
+        # host-generated PASS for an absent comparison set.
+        human=self.fixture.reviewed();value=json.loads(human.read_text());value.pop('delivery_document_review',None)
+        for row in value['records']:row['reviewer']={'kind':'human','name':'CONTROLLED HUMAN PROTOCOL ONLY'}
+        human.write_text(json.dumps(value))
+        resolved=pipeline.import_human(prepared['receipt'],[human],self.root/'mock-human-resolution')
+        self.assertEqual(resolved['payload_status'],'PASS')
+        final=pipeline.finalize(prepared['receipt'],self.root/'mock-human-resolution/status.json',self.root/'mock-final',archive=archive)
         self.assertEqual(final['delivery_status'],'PASS')
         self.assertTrue(final['release_ready'])
         self.assertTrue(archive.is_file())
@@ -279,7 +289,7 @@ class DeliveryPipelineTests(unittest.TestCase):
             profile=self.fixture.profile,cross_package_report=cross,mode='real')
         with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
             result=pipeline.run(second['receipt'],self.root/'relocated-run',max_jobs=10)
-        self.assertEqual(result['payload_status'],'PASS');self.assertEqual(ledger.summary()['model_requests'],count)
+        self.assertEqual(result['payload_status'],'REVIEW_REQUIRED');self.assertEqual(ledger.summary()['model_requests'],count)
         self.assertEqual(result['pipeline_model_usage']['model_requests'],0)
 
     def test_worker_revalidates_frozen_scope_without_repeating_global_pair_checks(self):
@@ -291,7 +301,7 @@ class DeliveryPipelineTests(unittest.TestCase):
             self.assertEqual(checks.call_count,1)
             with patch.object(pipeline.ai_worker,'ModelGateway',self.PassingProtocolGateway):
                 state=pipeline.run(prepared['receipt'],self.root/'count-run',max_jobs=10)
-            self.assertEqual(state['payload_status'],'PASS');self.assertEqual(checks.call_count,1)
+            self.assertEqual(state['payload_status'],'REVIEW_REQUIRED');self.assertEqual(checks.call_count,1)
             pipeline.status(prepared['receipt'],self.root/'count-status')
             self.assertEqual(checks.call_count,1)
         value=json.loads(self.cross_report.read_text());value['cross_package_status']='FAIL'
@@ -392,7 +402,7 @@ class DeliveryPipelineTests(unittest.TestCase):
 
     def test_imported_human_fail_is_sticky_when_status_omits_parameter_or_uses_old_status(self):
         ledger,prepared,state=self.run_mock_real()
-        self.assertEqual(state['payload_status'],'PASS')
+        self.assertEqual(state['payload_status'],'REVIEW_REQUIRED')
         human=self.fixture.reviewed();raw=json.loads(human.read_text());raw.pop('delivery_document_review',None)
         raw['records'][0]['reviewer']={'kind':'human','name':'CONTROLLED STICKY REJECTION FIXTURE'}
         initial_human=self.root/'initial-human-pass.json';initial_human.write_text(json.dumps(raw))
@@ -419,11 +429,15 @@ class DeliveryPipelineTests(unittest.TestCase):
 
     def test_progress_rejection_precedes_archive_publication(self):
         _,prepared,state=self.run_mock_real()
+        human=self.fixture.reviewed();value=json.loads(human.read_text());value.pop('delivery_document_review',None)
+        for row in value['records']:row['reviewer']={'kind':'human','name':'CONTROLLED HUMAN PROGRESS FIXTURE ONLY'}
+        human.write_text(json.dumps(value))
+        pipeline.import_human(prepared['receipt'],[human],self.root/'progress-human')
         class RejectProgress:
             def import_qc(self,*args,**kwargs):raise ValueError('CONTROLLED progress admission rejection')
         archive=self.root/'must-not-exist.zip'
         with self.assertRaisesRegex(ValueError,'progress admission rejection'):
-            pipeline.finalize(prepared['receipt'],self.root/'real-run/status.json',self.root/'denied-final',
+            pipeline.finalize(prepared['receipt'],self.root/'progress-human/status.json',self.root/'denied-final',
                               archive=archive,progress=RejectProgress(),request_id='CONTROLLED-reject')
         self.assertFalse(archive.exists())
 
@@ -459,7 +473,8 @@ class DeliveryPipelineTests(unittest.TestCase):
         value['delivery_document_review']['reviewer']={'kind':'human','name':'CONTROLLED DOCUMENT HUMAN FIXTURE'}
         human.write_text(json.dumps(value))
         resolved=pipeline.import_human(prepared['receipt'],[human],self.root/'doc-human')
-        self.assertEqual(resolved['payload_status'],'PASS')
+        self.assertEqual(resolved['payload_status'],'REVIEW_REQUIRED')
+        self.assertEqual(resolved['human_pending_count'],1) # documentary decision does not decide the sample's missing comparison
         self.assertEqual(resolved['document_review_status'],'HUMAN_PASS')
         replay=pipeline.status(prepared['receipt'],self.root/'doc-replay')
         self.assertEqual(replay['document_review_status'],'HUMAN_PASS')

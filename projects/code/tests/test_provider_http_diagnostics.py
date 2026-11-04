@@ -81,25 +81,24 @@ class NativeAccountHealth(unittest.TestCase):
         source.write_text('glm:\n' + ''.join('  - '+key+'\n' for key in keys))
         cfg = f.config('glm')
         cfg['model'].update(api_key_file=str(source), api_key_env='CONTROLLED_UNUSED_ENV')
-        with patch('webcollect.model_credentials.random.SystemRandom.choice', side_effect=lambda values: values[0]):
-            ledger, job, gateway = f.gateway(cfg)
-            f.opener.error = urllib.error.HTTPError('https://provider.invalid',429,'opaque',{},
-                io.BytesIO(b'{"error":{"code":"1113"}}'))
-            with self.assertRaises(OutcomeUnknown):
-                gateway.call_tool(job,'first','x',self.tools,system='s',attempt_id='a',max_requests=2)
-            with ledger.connect() as con:
-                original = dict(con.execute('SELECT * FROM model_requests').fetchone())
-            self.assertEqual(ledger.unavailable_model_accounts(), {account_id(keys[0])})
-            # A session already bound to key one cannot rotate after its failure.
-            with self.assertRaises(OutcomeUnknown):
-                gateway.call_tool(job,'next','x',self.tools,system='s',attempt_id='a',max_requests=2)
-            self.assertEqual(len(f.opener.calls),1)
-            f.opener.error = None
-            f.opener.raw['choices'] = [{'finish_reason':'tool_calls','message':{
-                'tool_calls':[{'id':'other','type':'function','function':{'name':'act','arguments':'{"answer":1}'}}]}}]
-            next_gateway = ModelGateway(ledger)
-            other_job = ledger.claim('test',job_id=ledger.enqueue('test',{'offline':'independent'}))
-            next_gateway.call_tool(other_job,'other','x',self.tools,system='s',attempt_id='b',max_requests=2)
+        ledger, job, gateway = f.gateway(cfg)
+        f.opener.error = urllib.error.HTTPError('https://provider.invalid',429,'opaque',{},
+            io.BytesIO(b'{"error":{"code":"1113"}}'))
+        with self.assertRaises(OutcomeUnknown):
+            gateway.call_tool(job,'first','x',self.tools,system='s',attempt_id='a',max_requests=2)
+        with ledger.connect() as con:
+            original = dict(con.execute('SELECT * FROM model_requests').fetchone())
+        self.assertEqual(ledger.unavailable_model_accounts(), {account_id(keys[0])})
+        # A session already bound to key one cannot rotate after its failure.
+        with self.assertRaises(OutcomeUnknown):
+            gateway.call_tool(job,'next','x',self.tools,system='s',attempt_id='a',max_requests=2)
+        self.assertEqual(len(f.opener.calls),1)
+        f.opener.error = None
+        f.opener.raw['choices'] = [{'finish_reason':'tool_calls','message':{
+            'tool_calls':[{'id':'other','type':'function','function':{'name':'act','arguments':'{"answer":1}'}}]}}]
+        next_gateway = ModelGateway(ledger)
+        other_job = ledger.claim('test',job_id=ledger.enqueue('test',{'offline':'independent'}))
+        next_gateway.call_tool(other_job,'other','x',self.tools,system='s',attempt_id='b',max_requests=2)
         self.assertEqual(len(f.opener.calls),2)
         self.assertEqual(f.opener.calls[-1].get_header('Authorization'),'Bearer '+keys[1])
         with ledger.connect() as con:
@@ -138,5 +137,4 @@ class NativeAccountHealth(unittest.TestCase):
         source.write_text('glm:\n  - api_key: offline-dict-one\n  - api_key: offline-dict-two\n')
         model = f.config('glm')['model']
         model.update(api_key_file=str(source), api_key_env='CONTROLLED_UNUSED_ENV')
-        with patch('webcollect.model_credentials.random.SystemRandom.choice', side_effect=lambda values: values[0]):
-            self.assertEqual(credential(model, excluded_accounts={account_id('offline-dict-one')}), 'offline-dict-two')
+        self.assertEqual(credential(model, excluded_accounts={account_id('offline-dict-one')}), 'offline-dict-two')

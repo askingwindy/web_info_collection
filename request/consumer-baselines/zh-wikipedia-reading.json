@@ -1,0 +1,55 @@
+{
+  "schema_version": "webcollect-session-objective-1",
+  "candidate_id": "candidate-00d1b827-04df-4e8d-84cd-8cd9e5681924",
+  "version": 1,
+  "entry_url": "https://zh.wikipedia.org/wiki/%E4%B8%AD%E6%96%87%E7%BB%B4%E5%9F%BA%E7%99%BE%E7%A7%91",
+  "requested_goal": null,
+  "objective": {
+    "kind": "reading",
+    "description": "从中文维基百科入口使用站内检索查阅「月食」。打开有关条目并往下阅读，用正文说明发生月食时月球与地球的位置关系。",
+    "evidence_contract": {
+      "kind": "reading",
+      "subject": "月食",
+      "aspects": [
+        "月球",
+        "地球"
+      ],
+      "version": "webcollect-goal-evidence-2"
+    },
+    "minimum_effective_steps": 5,
+    "preferred_band": "long"
+  },
+  "producer": {
+    "scope": {
+      "path": "results/candidate-project-20261101-r01/scope.json",
+      "sha256": "790571bc1e0ead2184fb1796c416ed0015515de40bad4f7ec88258663dc26c22"
+    },
+    "application_id": "app-692a94fed923f056a6a862fd",
+    "body": {
+      "candidate_kind": "entry",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E4%B8%AD%E6%96%87%E7%BB%B4%E5%9F%BA%E7%99%BE%E7%A7%91",
+      "requested_goal": null,
+      "schema_version": "webcollect-data-candidate-2"
+    },
+    "body_sha256": "678dce7ea82317a98fdf82686a082d88dfcdaa8d23d88efd161f2c718d1042c7",
+    "category": "百科与文档",
+    "page_type": "UNKNOWN",
+    "source_key": "51873c7bbbc0bd20fdebe6406c9228075cab635fd6904799cb36089734847ed3",
+    "source_evidence": {
+      "path": "results/candidate-project-20261101-r01/collections/reset-20261102-20s200p/source-inputs/native-sources-01.json",
+      "sha256": "d99694af82bf604a66c856ae5eaa8e97851abedb1042990c05753de0588b7841"
+    },
+    "publication": {
+      "run_id": "candidate-project-20261101-r01-producer/entry-batch/reset-20261102-20s200p-grounded-01",
+      "row_id": "4ef5ad412648ecfea6a25797e283c4019e1cb386b9e467d71475d404dbeee4b1",
+      "result": "NEW",
+      "response_sha256": "f102f468a98f57a301404bbf34d116a1efb5b322d1027130ea729dd3e93ee137"
+    },
+    "entry_get": {
+      "path": "results/candidate-project-20261101-r01/collections/reset-20261102-20s200p/producer/grounded-01/entry-http-af5c24787146867bc125c09ed53ccf846c831218606038548fdb4217f62d1ddf.json",
+      "sha256": "9674c01608930c542a78c03aa0d31420279b80ee7033e65243962f4bd365d076",
+      "job_id": "af5c24787146867bc125c09ed53ccf846c831218606038548fdb4217f62d1ddf",
+      "http_status": 200
+    }
+  }
+}

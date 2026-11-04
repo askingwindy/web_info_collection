@@ -20,8 +20,17 @@ SEARCH_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/web_search'
 def search_channel_hold(pool, run_id):
     """A channel receipt is separate from unresolved request settlement."""
     with pool.connect() as con:
-        rows = con.execute("SELECT id,run_id,state,result FROM tool_requests WHERE kind='search' ORDER BY started,id")
+        # A confirmed 1113 on a one-shot forward probe becomes the *current*
+        # channel barrier. Its predecessor remains UNKNOWN and never dispatches again.
+        superseded = {r[0] for r in con.execute(
+            "SELECT json_extract(t.result,'$.probe_of') FROM tool_requests t "
+            "JOIN checkpoints c ON c.run_id=t.run_id AND c.key='search-probe/'||json_extract(t.result,'$.probe_of') "
+            "AND json_extract(c.value,'$.request_id')=t.id WHERE t.run_id=? AND t.kind='search' AND "
+            "(t.state='succeeded' OR (t.state='unknown' AND json_extract(t.result,'$.provider_code')='1113'))",(run_id,))}
+        rows = con.execute("SELECT id,run_id,state,result,payload FROM tool_requests WHERE kind='search' ORDER BY started,id")
         for row in rows:
+            if row['id'] in superseded or json.loads(row['payload']).get('search_engine') in ('360-public','ddg-html','bing-rss'):
+                continue
             result = json.loads(row['result'] or '{}')
             if str(result.get('provider_code')) == '1113' or (row['run_id']==run_id and row['state']=='unknown' and result.get('http_status') in (401,403)):
                 return {'request_id':row['id'],'state':row['state'],
@@ -35,7 +44,7 @@ def reference(path):
     return {'path': str(Path(path).resolve()), 'sha256': file_sha(path)}
 
 
-def glm_search(pool, run_id, model, query, output, *, engine='search_std', maximum=None, count=10, batch_scope=None):
+def glm_search(pool, run_id, model, query, output, *, engine='search_std', maximum=None, count=10, batch_scope=None, probe_of=None):
     if not isinstance(query, str) or not 1 <= len(query) <= 70:
         raise ValueError('Search query must contain 1–70 characters')
     if type(count) is not int or not 1 <= count <= 50:
@@ -44,27 +53,36 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
     identity = object_sha256([run_id, 'search', query])
     with pool.connect() as con:
         first = con.execute('SELECT payload FROM tool_requests WHERE id=?',(identity,)).fetchone()
-    if not first and search_channel_hold(pool, run_id):
+    hold = search_channel_hold(pool, run_id)
+    if not first and hold and (not probe_of or hold['request_id'] != probe_of):
         raise OutcomeUnknown('Original search channel unavailable; no new dispatch')
     payload = {'search_engine': engine, 'search_query': query, 'search_intent': False,
                'count': json.loads(first[0])['count'] if first else count, 'content_size': 'medium'}
-    rid, old = pool.reserve_tool(run_id, 'search', query, payload, maximum=maximum, batch_scope=batch_scope)
+    rid, old = pool.reserve_tool(run_id, 'search', query, payload, maximum=maximum, batch_scope=batch_scope, **({'probe_of':probe_of} if probe_of else {}))
     if old is not None:
         verify_evidence([old['reference']])
         return old
-    from webcollect.model_credentials import credential
+    from webcollect.model_credentials import account_id, credential
     # Redirects must never carry the Authorization header to another host.
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             return None
+    account = {}
     try:
         # Search remains a separate BigModel service even when Ark supplies the
         # model reasoning. Never send an Ark credential to the BigModel host.
         search_model = ({'provider': 'glm', 'api_key_env': 'GLM_API_KEY'}
                         if model.get('provider') == 'ark' else model)
+        with pool.connect() as con:
+            ordinal = con.execute("SELECT COUNT(*) FROM tool_requests WHERE kind='search' "
+                                  "AND COALESCE(json_extract(payload,'$.search_engine'),'search_std') NOT IN ('360-public','ddg-html','bing-rss') "
+                                  "AND rowid < (SELECT rowid FROM tool_requests WHERE id=?)",(rid,)).fetchone()[0]
+        secret = credential(search_model,selection_index=ordinal)
+        account = {'account_id':account_id(secret), **({'probe_of':probe_of} if probe_of else {})}
+        pool.checkpoint(run_id,'search-account/'+rid,account)
         request = urllib.request.Request(SEARCH_ENDPOINT,
             json.dumps({**payload, 'request_id': rid}).encode(), headers={
-                'Authorization': 'Bearer ' + credential(search_model), 'Content-Type': 'application/json'})
+                'Authorization': 'Bearer ' + secret, 'Content-Type': 'application/json'})
         with urllib.request.build_opener(NoRedirect).open(request, timeout=45) as response:
             body = response.read(4_000_001)
         path = Path(output) / ('search-' + rid + '.json')
@@ -77,7 +95,7 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
         if not isinstance(raw.get('search_result'), list):
             detail = raw.get('error', {})
             if isinstance(detail, dict) and str(detail.get('code')) == '1113':
-                pool.settle_tool(rid, 'unknown', {'http_status':200,'provider_code':'1113',
+                pool.settle_tool(rid, 'unknown', {**account,'http_status':200,'provider_code':'1113',
                     'error_response':reference(path),'outcome_and_charge':'UNKNOWN'})
                 raise OutcomeUnknown('Search channel 1113; original receipt retained')
             raise ValueError('Search response has no structured result list')
@@ -90,7 +108,7 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
                 continue
             results.append({'index': index, 'uri': uri, 'title': row.get('title', ''),
                             'content': row.get('content', ''), 'reference': reference(path)})
-        result = {'request_id': rid, 'query': query, 'results': results,
+        result = {**account, 'engine':engine, 'request_id': rid, 'query': query, 'results': results,
                   'raw_result_count': len(raw['search_result']), 'rejected_results': rejected,
                   'reference': reference(path), 'usage': raw.get('usage', 'UNKNOWN'),
                   'cost': 'UNKNOWN', 'cost_scope': 'search service, separate from model token cost'}
@@ -100,7 +118,7 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
         # A structured 200 error has already been saved and settled above.
         if isinstance(error, OutcomeUnknown):
             raise
-        result = {'error_type': type(error).__name__, 'http_status': getattr(error, 'code', None),
+        result = {**account, 'error_type': type(error).__name__, 'http_status': getattr(error, 'code', None),
                   'outcome_and_charge': 'UNKNOWN'}
         if isinstance(error, urllib.error.HTTPError):
             # Keep the original provider response before closing it. A 429 can
@@ -133,9 +151,12 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
 
 
 class DiscoveryBrowser:
-    def __init__(self, pool, ledger, run_id, output):
+    def __init__(self, pool, ledger, run_id, output, *, image_screen=False, capture_document=False, fresh_pages=False):
         self.pool, self.ledger, self.run_id = pool, ledger, run_id
         self.output = Path(output)
+        self.image_screen = image_screen
+        self.capture_document, self.fresh_pages = capture_document, fresh_pages
+        if capture_document and not (image_screen and fresh_pages):raise ValueError('Shared document capture requires fresh anonymous image-screen pages')
 
     async def __aenter__(self):
         from playwright.async_api import async_playwright
@@ -143,8 +164,9 @@ class DiscoveryBrowser:
         try:
             self.pw = await async_playwright().start()
             self.browser = await self.pw.chromium.launch(channel='chrome', headless=True)
-            self.context = await self.browser.new_context(viewport={'width': 1280, 'height': 720},
-                locale='zh-CN', service_workers='block', accept_downloads=False)
+            if not self.fresh_pages:
+                self.context = await self.browser.new_context(viewport={'width': 1280, 'height': 720},
+                    locale='zh-CN', service_workers='block', accept_downloads=False)
         except BaseException:
             await self.__aexit__()
             raise
@@ -164,17 +186,29 @@ class DiscoveryBrowser:
 
     async def read(self, uri):
         # Covers new_page, JS evaluation and screenshot as well as navigation.
-        return await asyncio.wait_for(self._read(uri), timeout=60)
+        if not self.fresh_pages:return await asyncio.wait_for(self._read(uri), timeout=60)
+        self.context=await self.browser.new_context(viewport={'width':1280,'height':720},
+            locale='zh-CN',service_workers='block',accept_downloads=False)
+        try:return await asyncio.wait_for(self._read(uri),timeout=60)
+        finally:
+            await asyncio.wait_for(self.context.close(),timeout=5)
+            self.context=None
 
     async def _read(self, uri):
         from .pipeline import reserve_visit_async
         from webcollect.site_failure_stop import SiteFailureStore
-        uri = page_uri(uri)
-        rid, cached = self.pool.reserve_tool(self.run_id, 'browser', uri, {'uri': uri})
+        if self.image_screen:
+            from .candidate_pool import entry_identity
+            from .page_consumption import VERSION as image_policy
+            uri=entry_identity(uri)
+        else:uri=page_uri(uri)
+        extra={'image_policy':image_policy} if self.image_screen else {}
+        if self.capture_document:extra.update(document_policy='producer-shared-observation-1',access='fresh_context_no_login_get_only')
+        rid, cached = self.pool.reserve_tool(self.run_id, 'browser', uri, {'uri': uri,**extra})
         if cached is not None:
             verify_evidence([cached['observation'], cached['image']])
             return cached
-        jid = self.ledger.enqueue('site-discovery-page', {'uri': uri, 'run_id': self.run_id})
+        jid = self.ledger.enqueue('site-discovery-page', {'uri': uri, 'run_id': self.run_id,**extra})
         job = None; page = None; visit = None
         directory = self.output / ('page-' + rid)
         nav_error = None; nav_code = None; status = None; redirects = []; blocked = []
@@ -211,6 +245,8 @@ class DiscoveryBrowser:
                 nav_error = type(error).__name__
                 codes = re.findall(r'net::ERR_[A-Z_]+', str(error))
                 nav_code = codes[0] if codes else 'UNKNOWN'
+            if self.image_screen and nav_error:
+                raise OutcomeUnknown('Original image-screen navigation unresolved: '+nav_error)
             # Same-page bounded observation, no form entry, button dispatch or replay.
             try:
                 await page.locator('body').wait_for(state='visible', timeout=5000)
@@ -231,31 +267,60 @@ class DiscoveryBrowser:
                 verify_public_url(observation['landed_uri']); landed_public = True
             except ValueError:
                 landed_public = False
+            if self.image_screen:
+                image_script=Path(__file__).with_name('image_screen.js').read_text()
+                observation['image_view']=await page.evaluate(image_script)
             image = directory / 'viewport.png'; await page.screenshot(path=str(image), timeout=10000)
+            if self.image_screen:
+                await page.wait_for_timeout(1200)
+                observation['image_view_after']=await page.evaluate(image_script)
             observation.update({'requested_uri': uri, 'http_status': status if status is not None else 'UNKNOWN',
                 'navigation_error': nav_error, 'redirect_observations': redirects, 'blocked_requests': blocked,
                 'navigation_error_code': nav_code, 'landed_public_http': landed_public,
                 'observed_at': time.time(), 'interaction_scope': 'navigation and reading only'})
+            document_ref=None
+            if self.capture_document:
+                if not response or response.request.method!='GET':raise ValueError('No original browser GET response')
+                from .entry_access import wire_uri
+                if wire_uri(response.url)!=wire_uri(observation['landed_uri']):raise ValueError('Observed page moved beyond the captured GET response')
+                raw=await asyncio.wait_for(response.body(),timeout=5)
+                if len(raw)>4_000_000:raise ValueError('Original browser response exceeds evidence bound')
+                raw_path=directory/'response-body.bin';raw_path.write_bytes(raw)
+                dom_path=directory/'rendered-dom.html';dom_path.write_text(await page.content(),encoding='utf-8')
+                if page.url!=observation['landed_uri']:raise ValueError('Page route changed during shared capture')
+                encoding=await page.evaluate('document.characterSet')
+                document={'document_policy':'producer-shared-observation-1','uri':uri,'request_uri':uri,
+                    'landed_uri':observation['landed_uri'],'encoding':encoding,'content_type':response.headers.get('content-type',''),
+                    'title':observation['title'],'content':observation['text'],'chinese':bool(re.search(r'[\u4e00-\u9fff]',observation['text'])),
+                    'raw_html':reference(raw_path),'rendered_dom':reference(dom_path),'http_status':status,
+                    'job_id':jid,'visit_id':visit['id'],'method':response.request.method,'response_uri':response.url,
+                    'anonymous_context':True,'initial_cookies':0,'login_performed':False,'site_evidence':'browser_target'}
+                doc_path=directory/'document.json';save_json(doc_path,document);document_ref=reference(doc_path)
+                observation.update(document=document_ref,document_policy='producer-shared-observation-1')
             # Store full visible evidence; only a bounded subset is sent to the model.
             evidence_path = directory / 'observation.json'; save_json(evidence_path, observation)
             readable = landed_public and bool(observation['text'].strip()) and (status is None or status < 400)
             result = {'uri': uri, 'landed_uri': observation['landed_uri'], 'title': observation['title'],
                 'readable': readable, 'same_application_host': landed_public and host_identity(uri) == host_identity(observation['landed_uri']),
                 'observation': reference(evidence_path), 'image': reference(image),
-                'navigation_error': nav_error, 'navigation_error_code': nav_code, 'http_status': observation['http_status']}
-            self.ledger.settle_visit(visit, state='succeeded' if readable else 'failed',
+                'navigation_error': nav_error, 'navigation_error_code': nav_code, 'http_status': observation['http_status'],
+                **({'image_policy':image_policy,'job_id':jid,'visit_id':visit['id']} if self.image_screen else {})}
+            if document_ref:result.update(document=document_ref,document_policy='producer-shared-observation-1')
+            observation_ok=readable or (self.image_screen and nav_error is None and type(status) is int and 200<=status<300 and landed_public)
+            self.ledger.settle_visit(visit, state='succeeded' if observation_ok else 'failed',
                 response_status=status, landed_uri=observation['landed_uri'],
-                error=None if readable else ValueError('Page evidence not readable'), metrics={
+                error=None if observation_ok else ValueError('Page evidence not readable'), metrics={
                     'navigation_error': nav_error, 'redirect_request_events': max(0,len(redirects)-1),
                     'blocked_request_events': len(blocked)})
             self.pool.settle_tool(rid, 'succeeded', result)
             self.ledger.finish(job, result=result)
             return result
         except BaseException as error:
-            failure = {'uri': uri, 'error_type': type(error).__name__, 'charge': 'UNKNOWN'}
+            failure = {'uri': uri, 'error_type': type(error).__name__, 'charge': 'UNKNOWN',
+                       **({'navigation_error':nav_error,'navigation_error_code':nav_code} if self.image_screen else {})}
             if visit and any(v['id'] == visit['id'] and v['state'] == 'reserved_for_dispatch' for v in self.ledger.visits()):
-                self.ledger.settle_visit(visit, state='failed', error=error)
-            self.pool.settle_tool(rid, 'failed', failure)
+                self.ledger.settle_visit(visit, state='unknown' if self.image_screen and isinstance(error,(OSError,TimeoutError,asyncio.CancelledError,OutcomeUnknown)) else 'failed', error=error)
+            self.pool.settle_tool(rid, 'unknown' if self.image_screen else 'failed', failure)
             if job:
                 self.ledger.finish(job, 'review_required', result=failure, error=type(error).__name__)
             raise

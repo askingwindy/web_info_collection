@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="794" viewBox="0 0 1120 794" role="img" aria-labelledby="title desc">
+<title id="title">WebCollect 三程序数据流</title>
+<desc id="desc">生产者登记站点、核验页面后将候选写入 Table2。消费者冻结版本与领取，复用同一网页采集并将正式收据提交为待审。导出和准备 QC 输入后，独立质检依据样本、资料、人工与批次记录进行核验，通过显式集合才可封包。发布与客户验收分别记录。</desc>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 Z" fill="#42576a"/></marker>
+  <style>
+    text{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#132b3b}
+    .title{font-size:35px;font-weight:650}.subtitle{font-size:19px;fill:#445967}
+    .role{font-size:20px;font-weight:650}.sectionNo{font-family:Menlo,monospace;font-size:16px;font-weight:bold;fill:#fff}
+    .cardTitle{font-size:23px;font-weight:650}.body{font-size:18px;fill:#304757}
+    .code{font-family:Menlo,Consolas,monospace;font-size:17px;fill:#34465c}.marker{font-size:16px;font-weight:600;fill:#405569}
+    .foot{font-size:18px;fill:#344954}.footCode{font-family:Menlo,Consolas,monospace;font-size:18px;fill:#273e4c}
+    .arrow{stroke:#42576a;stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+  </style>
+</defs>
+<rect width="1120" height="794" rx="18" fill="#fafbf8"/>
+<rect x="0" y="0" width="12" height="794" fill="#1d3e4b"/>
+<text x="44" y="55" class="title">WebCollect 三程序数据流</text>
+<text x="45" y="91" class="subtitle">沿箭头追踪一个候选，直到采集收据、审核结论和发布记录。</text>
+<path d="M44 113 H1076" stroke="#bdc9c8" />
+
+<rect x="44" y="128" width="34" height="24" rx="5" fill="#006766"/>
+<text x="51" y="146" class="sectionNo">01</text>
+<text x="90" y="147" class="role">生产者</text>
+<rect x="44" y="163" width="320" height="134" rx="11" fill="#eff8f4" stroke="#8bbab4" stroke-width="1.3"/>
+<rect x="44" y="180" width="4" height="26" rx="2" fill="#006766"/>
+<text x="61" y="198" class="cardTitle">Table1 · 站点与应用</text>
+<text x="61" y="228" class="body">登记站点，依据第一方首页核类</text>
+<text x="61" y="254" class="body">沿第一方链接选业务入口</text>
+<rect x="400" y="163" width="320" height="134" rx="11" fill="#eff8f4" stroke="#8bbab4" stroke-width="1.3"/>
+<rect x="400" y="180" width="4" height="26" rx="2" fill="#006766"/>
+<text x="417" y="198" class="cardTitle">页面选入与来源核验</text>
+<text x="417" y="228" class="body">核业务依据、落地页和 GET 2xx</text>
+<text x="417" y="254" class="body">页面用途可以保留 UNKNOWN</text>
+<rect x="756" y="163" width="320" height="134" rx="11" fill="#eff8f4" stroke="#8bbab4" stroke-width="1.3"/>
+<rect x="756" y="180" width="4" height="26" rx="2" fill="#006766"/>
+<text x="773" y="198" class="cardTitle">Table2 · 发布候选</text>
+<text x="773" y="228" class="code">CandidatePool.publish_row</text>
+<text x="773" y="254" class="code">data_candidates</text>
+<text x="773" y="280" class="body">关联 NEW 发布行、版本和来源</text>
+<path d="M366 230 H396" class="arrow"/>
+<path d="M722 230 H752" class="arrow"/>
+<path d="M916 299 V344" class="arrow"/>
+<text x="769" y="326" class="marker">① 候选交接</text>
+<rect x="44" y="312" width="34" height="24" rx="5" fill="#335985"/>
+<text x="51" y="330" class="sectionNo">02</text>
+<text x="90" y="331" class="role">消费者</text>
+<rect x="756" y="348" width="320" height="143" rx="11" fill="#f0f5fa" stroke="#9eafc9" stroke-width="1.3"/>
+<rect x="756" y="365" width="4" height="26" rx="2" fill="#335985"/>
+<text x="773" y="383" class="cardTitle">独占领取候选快照</text>
+<text x="773" y="413" class="code">CandidatePool.claim_next</text>
+<text x="773" y="439" class="body">锁定候选、目标、版本和来源</text>
+<text x="773" y="465" class="body">过期领取转入原账对账</text>
+<rect x="400" y="348" width="320" height="143" rx="11" fill="#f0f5fa" stroke="#9eafc9" stroke-width="1.3"/>
+<rect x="400" y="365" width="4" height="26" rx="2" fill="#335985"/>
+<text x="417" y="383" class="cardTitle">同一会话执行与取证</text>
+<text x="417" y="413" class="code">consume → ReactSession.run</text>
+<text x="417" y="439" class="body">保留原目标，首帧观察补全任务</text>
+<text x="417" y="465" class="body">逐步保存图、树、动作与终态</text>
+<rect x="44" y="348" width="320" height="143" rx="11" fill="#f0f5fa" stroke="#9eafc9" stroke-width="1.3"/>
+<rect x="44" y="365" width="4" height="26" rx="2" fill="#335985"/>
+<text x="61" y="383" class="cardTitle">正式保存待审</text>
+<text x="61" y="413" class="code">postprocess.process</text>
+<text x="61" y="439" class="body">saved_sample.json + 原库提交</text>
+<text x="61" y="465" class="code">collected_pending_review</text>
+<path d="M754 418 H724" class="arrow"/>
+<path d="M398 418 H368" class="arrow"/>
+<path d="M204 493 V540" class="arrow"/>
+<text x="219" y="523" class="marker">② 采集结果送审</text>
+<rect x="44" y="510" width="34" height="24" rx="5" fill="#82502d"/>
+<text x="51" y="528" class="sectionNo">03</text>
+<text x="90" y="529" class="role">质检交接</text>
+<rect x="44" y="545" width="320" height="155" rx="11" fill="#faf5ed" stroke="#c5ab91" stroke-width="1.3"/>
+<rect x="44" y="562" width="4" height="26" rx="2" fill="#82502d"/>
+<text x="61" y="580" class="cardTitle">客户包与待审输入</text>
+<text x="61" y="610" class="code">build_client_package</text>
+<text x="61" y="636" class="code">prepare_qc_inputs</text>
+<text x="61" y="662" class="body">冻结抽检计划及有效集合</text>
+<text x="61" y="688" class="code">QC_NOT_RUN</text>
+<rect x="400" y="545" width="320" height="155" rx="11" fill="#faf5ed" stroke="#c5ab91" stroke-width="1.3"/>
+<rect x="400" y="562" width="4" height="26" rx="2" fill="#82502d"/>
+<text x="417" y="580" class="cardTitle">独立质检与审核</text>
+<text x="417" y="610" class="code">delivery_pipeline.run</text>
+<text x="417" y="636" class="body">按计划核验样本，必要时转人工</text>
+<text x="417" y="662" class="body">单样本、包级及批次各记结论</text>
+<rect x="756" y="545" width="320" height="155" rx="11" fill="#faf5ed" stroke="#c5ab91" stroke-width="1.3"/>
+<rect x="756" y="562" width="4" height="26" rx="2" fill="#82502d"/>
+<text x="773" y="580" class="cardTitle">封包、发布和客户验收</text>
+<text x="773" y="610" class="code">delivery_pipeline.finalize</text>
+<text x="773" y="636" class="body">按有效集合及跨包报告核验封包</text>
+<text x="773" y="662" class="body">另记发布凭证和客户验收状态</text>
+<path d="M366 622 H396" class="arrow"/>
+<path d="M722 622 H752" class="arrow"/>
+<path d="M44 732 H1076" stroke="#bdc9c8"/>
+<text x="44" y="765" class="foot">跨程序追溯</text>
+<text x="162" y="765" class="footCode">candidate_id  /  claim_id  /  attempt_id  /  sample_id</text>
+</svg>

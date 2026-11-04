@@ -4,7 +4,7 @@ Original collection/model ledgers are read-only sources. This module neither
 dispatches work nor retries requests. Unknown outcomes remain explicit holds.
 """
 import argparse
-from contextlib import closing
+from contextlib import ExitStack, closing
 import json
 from pathlib import Path
 import sqlite3
@@ -220,41 +220,86 @@ class SiteFailureStore:
             return row['target_uri']
         return None
 
-    def _entry_uri_holds(self, application, key, applied):
-        from site_planner.candidate_pool import entry_identity
+    def _fact_scope(self, fact, books, producer):
+        from .request_quarantine import attempt_owner, visit_uri
+        identity, _, stage, _, _, raw_refs = fact
+        refs = json.loads(raw_refs)
+        if len(refs) != 1 or not isinstance(refs[0], dict):
+            return None
+        ref = refs[0]
+        if stage == 'formal':
+            attempt_id = ref.get('attempt_id')
+            if not attempt_id or identity != 'formal:'+object_sha256({'attempt_id':attempt_id}):
+                return None
+            owner = attempt_owner(self.binding, ref.get('registry'), attempt_id)
+            if owner and (owner['status']=='interrupted' or owner['failure_class']=='interrupted'):
+                return owner
+        if stage == 'probe':
+            database = ref.get('ledger')
+            ledger = books.get(database)
+            if ledger is not None:
+                sealed = self._closed_producer_get_uri(ledger, database, fact) if database==producer else None
+                uri = sealed or visit_uri(ledger, fact)
+                if uri:
+                    return {'uri':uri, 'closed_entry':bool(sealed)}
+        return None
+
+    def _project_holds(self, application, key, applied, candidate_id):
+        from .request_quarantine import endpoint
+        holds = {'pages':0, 'closed_entries':0, 'tasks':0, 'matching_pages':[], 'matching_tasks':[]}
         uri = (application.get('initial_url') or application.get('site_uri')) if isinstance(application,dict) else application
-        if not uri or application_key(uri,self.binding.get('application_registry')) != key:
-            return 0, []
-        # HTTP never transmits fragments. A www alias or tracking suffix must not re-send an isolated page.
-        def endpoint(url):
-            parsed = urlsplit(entry_identity(url))
-            return (parsed.path.rstrip('/') or '/', parsed.query)
+        aliases = self.binding.get('application_registry')
+        if not uri:
+            return holds
+        if isinstance(application,dict):
+            candidate_id = (application.get('candidate_binding') or {}).get('candidate_id') or candidate_id
         netloc = urlsplit(key).netloc
         other = '//'+(netloc[4:] if netloc.startswith('www.') else 'www.'+netloc)+'/'
+        producer = self.path.with_name('producer-jobs.sqlite3')
         with self.connect() as con:
-            if not con.execute("SELECT 1 FROM sqlite_master WHERE name='entry_get_uri_policy'").fetchone():
-                return 0, []
-            policy = json.loads(con.execute('SELECT decision FROM entry_get_uri_policy WHERE id=1').fetchone()[0])
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name='entry_get_uri_policy'").fetchone():
+                policy = json.loads(con.execute('SELECT decision FROM entry_get_uri_policy WHERE id=1').fetchone()[0])
+                producer = Path(policy['producer_ledger'])
             facts = con.execute("SELECT execution_id,application_key,stage,reason,evidence_json,usage_refs_json "
-                                "FROM site_executions WHERE application_key IN (?,?) AND state='unknown' AND stage='probe'",
+                                "FROM site_executions WHERE application_key IN (?,?) AND state='unknown'",
                                 (key,other)).fetchall()
         if not facts:
-            return 0, []
-        target = endpoint(uri)
-        database = policy['producer_ledger']
-        scoped = 0
-        blocking = []
-        with closing(sqlite3.connect(Path(database).as_uri()+'?mode=ro',uri=True)) as ledger:
-            ledger.row_factory = sqlite3.Row
+            return holds
+        target = endpoint(uri,aliases)
+        if target[0] != netloc.removeprefix('www.'):
+            return holds
+        with ExitStack() as stack:
+            books = {}
+            for path in (producer, producer.with_name('consumer-jobs.sqlite3')):
+                if path.is_file() and not path.is_symlink():
+                    ledger = stack.enter_context(closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True)))
+                    ledger.row_factory = sqlite3.Row
+                    if ledger.execute("SELECT 1 FROM sqlite_master WHERE name='batch_meta'").fetchone():
+                        bound = ledger.execute("SELECT json_extract(config,'$.site_failure_guard') FROM batch_meta WHERE id=1").fetchone()
+                        if bound and json.loads(bound[0] or 'null') == self.binding:
+                            books[str(path)] = ledger
             for fact in facts:
                 if fact[0] in applied:
                     continue
-                closed_uri = self._closed_producer_get_uri(ledger,database,fact)
-                if closed_uri is not None:
-                    scoped += int(fact[1] == key)
-                    if endpoint(closed_uri) == target:
-                        blocking.append(fact[0])
-        return scoped, blocking
+                owner = self._fact_scope(fact, books, str(producer))
+                if not owner or endpoint(owner.get('site_uri') or owner['uri'], aliases)[0] != urlsplit(fact[1]).netloc.removeprefix('www.'):
+                    continue
+                own_key = fact[1] == key
+                same_page = endpoint(owner['uri'], aliases) == target
+                if owner.get('candidate_id'):
+                    holds['tasks'] += int(own_key)
+                    # A plain URL is a read-only request. Executing a task supplies
+                    # its stable candidate ID, including when claiming it again.
+                    if candidate_id == owner['candidate_id'] or (
+                            isinstance(application, dict) and not candidate_id and
+                            (application.get('task_id') == owner['task_id'] or same_page)):
+                        holds['matching_tasks'].append(fact[0])
+                else:
+                    holds['pages'] += int(own_key)
+                    holds['closed_entries'] += int(own_key and bool(owner.get('closed_entry')))
+                    if same_page:
+                        holds['matching_pages'].append(fact[0])
+        return holds
 
     def append_reassessment(self, identity, *, responsibility, reason, evidence):
         """Append evidence only. Original counts and stop/hold decisions remain binding."""
@@ -582,7 +627,7 @@ class SiteFailureStore:
                 con.commit()
         return {'source_reviews_consulted': len(rows), 'local_QC_approval_granted': False}
 
-    def status(self, application):
+    def status(self, application, *, candidate_id=None):
         key = application_key(application, self.binding.get('application_registry'))
         with self.connect() as con:
             counts = dict(con.execute('SELECT state,COUNT(*) FROM site_executions WHERE application_key=? GROUP BY state', (key,)))
@@ -625,11 +670,13 @@ class SiteFailureStore:
                     applied.update(identity for identity in decision['execution_ids'] if len(reviewed.get(identity,set()))==1)
         effective=failed-len(applied & failed_ids)
         effective_unknown=unknown-len(applied & unknown_ids)
-        scoped, uri_holds = self._entry_uri_holds(application,key,applied) if self.failure_limit is None else (0,[])
-        whole_unknown = effective_unknown - scoped
+        scopes = self._project_holds(application,key,applied,candidate_id) if self.failure_limit is None else {}
+        uri_holds = scopes.get('matching_pages',[])
+        task_holds = scopes.get('matching_tasks',[])
+        whole_unknown = effective_unknown - scopes.get('pages',0) - scopes.get('tasks',0)
         stopped=self.failure_limit is not None and effective>=self.failure_limit
         unavailable=stopped and not verified
-        state='unknown_hold' if whole_unknown else 'entry_uri_hold' if uri_holds else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
+        state='unknown_hold' if whole_unknown else 'task_hold' if task_holds else 'entry_uri_hold' if uri_holds else 'unavailable' if unavailable else 'succeeded' if verified else 'available'
         return {'application_key': key, 'failure_count': failed,'historical_stopped':self.failure_limit is not None and failed>=self.failure_limit,
                 'effective_site_failure_count':effective,'explicitly_reassessed_executions':sorted(applied),'reassessment_count':len(reassessments),
                 'reassessed_site_failure_count':max(0,adjusted),'reassessment_changes_dispatch':bool(applied), 'unknown_execution_count': unknown,
@@ -637,14 +684,16 @@ class SiteFailureStore:
                 'source_reported_success_count': successes - verified, 'used': bool(failed or unknown or successes),
                 'unavailable_before_first_valid': unavailable, 'state': state,
                 'round_id': self.binding['campaign_id'], 'automatic_round_reentry': False,
-                **({'closed_entry_uri_unknowns':scoped, 'matching_entry_uri_holds':uri_holds,
-                    'whole_application_unknowns':whole_unknown} if scoped or uri_holds else {}),
-                'stopped': stopped, 'dispatch_blocked': stopped or bool(whole_unknown or uri_holds)}
+                **({'closed_entry_uri_unknowns':scopes['closed_entries'],'page_scoped_unknowns':scopes['pages'],
+                    'task_scoped_unknowns':scopes['tasks'],'matching_entry_uri_holds':uri_holds,
+                    'matching_task_holds':task_holds,'whole_application_unknowns':whole_unknown} if scopes and (unknown or uri_holds or task_holds) else {}),
+                'stopped': stopped, 'dispatch_blocked': stopped or bool(whole_unknown or uri_holds or task_holds)}
 
-    def guard(self, application):
-        state = self.status(application)
+    def guard(self, application, *, candidate_id=None):
+        state = self.status(application,candidate_id=candidate_id)
         if state['dispatch_blocked']:
-            raise SiteStopped('Whole application dispatch stopped: ' + canonical(state))
+            reason = {'entry_uri_hold':'Original page request unresolved','task_hold':'Original candidate task unresolved'}.get(state['state'],'Whole application dispatch stopped')
+            raise SiteStopped(reason + ': ' + canonical(state))
         return state
 
     def sync_formal(self, registry, campaign_id):

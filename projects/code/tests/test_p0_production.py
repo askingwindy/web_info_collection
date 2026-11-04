@@ -300,6 +300,8 @@ class ProductionCallbackContracts(unittest.TestCase):
         profile=self.root/'scope'/'profile.json'
         report=inspect(None,self.dataset,profile=profile,reviews=review,inspection_stage='payload',delivery_sampling_plan=handoff['sampling_plan'])
         ref=lambda p:{'path':str(Path(p).resolve()),'sha256':file_sha(p)}
+        with self.assertRaisesRegex(ValueError,'Original production capture handoff'):
+            quality_report(report,ref(effective),ref(cross))
         report['production_quality']=quality_report(report,ref(effective),ref(cross),ref(handoff['receipt']))
         self.assertEqual(report['production_quality']['accepted_count'],2)
         path=self.root/'actual-program-report.json';save_json(path,report)

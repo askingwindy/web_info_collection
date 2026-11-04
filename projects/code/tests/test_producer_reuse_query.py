@@ -77,6 +77,29 @@ class ProducerReuseQuery(unittest.TestCase):
             receipt=access.check_entry(self.ledger,'two',uri,self.root,recheck=authorization)
         self.assertEqual(receipt[0]['result'],'PASS');self.assertEqual(fetch.call_count,1)
 
+    def test_formal_recheck_uses_only_explicit_repair_evidence(self):
+        _, home=self.f.site()
+        uri=home['uri']
+        goals=self.f.t.docs/'repair-goal.json'
+        save_json(goals,{'schema_version':'webcollect-caller-goals-1','goals':[{'uri':uri,
+                  'requested_goal':{'kind':'换算','entity':'长度','parameters':{'公里':3}}}]})
+        def produce(source,batch):
+            return self.f.run_new(source,key=batch,target=1,goals_path=goals,model_protocol='entry-tools-4')
+        with patch.object(access,'fetch_status',return_value=(404,uri)):
+            self.assertEqual(produce(home,'original')['row_results'],{'REJECTED':1})
+        evidence=self.f.t.docs/'site-repair.json';save_json(evidence,{'uri':uri,'fact':'fixture site restored'})
+        auth={'condition':'source_or_access_changed','reason':'public repair','references':[reference(evidence)]}
+        ledger=BatchLedger(self.root/'model.db',self.f.f.cfg)
+        with patch.object(access,'fetch_status',return_value=(200,uri)) as fetch:
+            _,ref=access.check_entry(ledger,'approved-recheck',uri,self.f.t.docs,recheck=auth)
+            self.assertEqual(produce(home,'unbound')['row_results'],{'REJECTED':1})
+            approved=produce({**home,'entry_recheck':auth},'with-proof')
+        self.assertEqual(approved['row_results'],{'NEW':1},approved)
+        self.assertEqual(fetch.call_count,1)
+        found=self.f.pool.rows(protocols=('webcollect-data-candidate-2',))[0]['sources'][0]
+        self.assertEqual(found['entry_http'],ref)
+        self.assertEqual(found['entry_recheck'],auth)
+
     def test_category_formal_entry_plan_classify_select_pool_and_restart(self):
         aid,home=self.f.site(confirmed=False)
         calls=[]

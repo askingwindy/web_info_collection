@@ -1,6 +1,7 @@
 """Record operator-approved uncapped discovery and named source quarantines on the original project ledger."""
 import argparse
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,12 +16,78 @@ def isolation_host(uri,registry):
     return urlsplit(canonical_key(uri,registry)).hostname.removeprefix('www.')
 
 
+def grounded_timeout_scope(pool, config, row):
+    """Bind the timed-out numbered rows to their original checkpoint and hosts."""
+    payload = json.loads(row['payload'])['input']
+    scope = payload['scope']
+    match = re.fullmatch(r'(.+)/grounded-unit/(\d+)/(\d+)', scope)
+    if (not match or payload.get('original_settled_cause') or row['error'] != 'TimeoutError'
+            or row['finished'] is None or row['attempts'] < 1 or row['job_state'] not in ('queued','review_required')):
+        raise ValueError('Only a finished original grounded selection timeout can be isolated')
+    run, unit, offset = match.groups()
+    if not run.startswith(config['run_id']+'/entry-batch/'):
+        raise ValueError('Grounded selection is outside the original producer')
+    with pool.connect() as con:
+        frozen = json.loads(con.execute('SELECT config FROM runs WHERE id=?',(run,)).fetchone()[0])
+    key = 'grounded-unit/'+unit+'/prepared'
+    prepared = pool.checkpoint(run,key)
+    links = prepared['links'][int(offset):int(offset)+frozen['batch_size']]
+    menu = [{'row':i,'quotes':{str(j):q for j,q in enumerate(dict.fromkeys(
+        q for q in (h['anchor'],h['heading']) if q))}} for i,h in enumerate(links)]
+    if (not links or frozen['config_sha256'] != object_sha256(config) or menu != payload['links']):
+        raise ValueError('Cannot bind original model rows to frozen site URLs')
+    return {'job_id':row['job_id'],'scope':scope,'checkpoint':key,'checkpoint_sha256':object_sha256(prepared),
+            'source_urls':sorted({h['uri'] for h in links})}
+
+
+def disjoint_requests(ledger, *, scope=None, urls=(), categories=(), independent=False):
+    """Return only operator-quarantined requests disjoint from this new work."""
+    from webcollect.batch_core import OutcomeUnknown
+    deferred = (ledger.producer_policy or {}).get('deferred', {})
+    registry = (ledger.config.get('site_failure_guard') or {}).get('application_registry')
+    hosts = {isolation_host(uri,registry) for uri in urls}
+    for item in deferred.values():
+        old_scope = item.get('scope')
+        if old_scope and scope and old_scope.split('/grounded-unit/')[0] == scope.split('/category-query-plan')[0].split('/grounded-unit/')[0]:
+            raise OutcomeUnknown('Original model batch remains isolated')
+        if hosts.intersection(isolation_host(uri,registry) for uri in item['source_urls']):
+            raise OutcomeUnknown('Original model source remains isolated')
+    allowed=set(deferred)
+    if independent and ledger.producer_policy:
+        # These new protocols record their semantic work unit before dispatch.
+        # A refusal/timeout stays on that unit, even across later batches.
+        with ledger.connect() as con:
+            rows=con.execute("SELECT r.id,r.error,r.response,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
+                "WHERE r.state='unknown' AND r.finished IS NOT NULL AND j.state IN ('review_required','queued') AND j.attempts>0")
+            for row in rows:
+                response=json.loads(row['response'] or '{}')
+                code=response.get('provider_error',{}).get('provider_code')
+                if row['error']!='TimeoutError' and code not in ('1113','1301','1302','1305'):
+                    continue
+                original=json.loads(row['payload']).get('input',{})
+                if row['kind']=='ai-search-plan' and original.get('version')=='producer-category-query-2':
+                    if not set(categories).intersection(original['categories']):
+                        allowed.add(row['id'])
+                elif row['kind']=='ai-application-site-classification-1' and original.get('protocol') in ('producer-site-classification-3','producer-site-classification-4'):
+                    if isolation_host(original['homepage_uri'],registry) not in hosts:
+                        allowed.add(row['id'])
+                elif row['kind']=='ai-target-page-purpose-1' and original.get('source_uris'):
+                    if set(urls).intersection(original['source_uris']):
+                        raise OutcomeUnknown('Original target purpose request unsettled; reconcile original job: '+str(row['id']))
+                    allowed.add(row['id'])
+                elif row['kind']=='ai-grounded-entry-ids-1' and original.get('target_site_categories') and original.get('source_hosts'):
+                    if not hosts.intersection(original['source_hosts']):
+                        allowed.add(row['id'])
+    return tuple(sorted(allowed))
+
+
 def authorize(scope_path, deferred_requests, reason):
     if not reason.strip():
         raise ValueError('A dated operator instruction is required')
     scope = load_json(scope_path)
     chain = read_chain_scope(Path(scope['history_set']).absolute())
-    if not check_project_pool(chain, SitePool(scope['pool'], readonly=True)):
+    pool = SitePool(scope['pool'], readonly=True)
+    if not check_project_pool(chain, pool):
         raise ValueError('A bound candidate project is required')
     config = load_json(scope['producer_config'])
     check_project_guard(chain, config.get('site_failure_guard'), scope['producer_db'], role='producer')
@@ -34,8 +101,11 @@ def authorize(scope_path, deferred_requests, reason):
         previous = json.loads(previous[0]) if previous else {}
         deferred = dict(previous.get('deferred', {}))
         for rid in sorted(set(deferred_requests)):
-            row = con.execute("SELECT r.state,r.error,r.job_id,r.finished,r.response,j.kind,j.payload,j.state AS job_state FROM model_requests r "
+            row = con.execute("SELECT r.state,r.error,r.job_id,r.finished,r.response,j.kind,j.payload,j.attempts,j.state AS job_state FROM model_requests r "
                               "JOIN jobs j ON j.id=r.job_id WHERE r.id=?", (rid,)).fetchone()
+            if row and row['state']=='unknown' and row['kind']=='ai-grounded-entry-ids-1':
+                deferred[rid] = grounded_timeout_scope(pool,config,row)
+                continue
             if not row or (row['state'],row['kind'],row['job_state']) != ('unknown','ai-candidate-entry-tool-1','review_required'):
                 raise ValueError('Original unsettled entry selection required')
             provider=json.loads(row['response'] or '{}').get('provider_error',{})

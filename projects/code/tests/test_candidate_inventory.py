@@ -126,7 +126,10 @@ class Inventory(unittest.TestCase):
         ledger=BatchLedger(self.root/'p.db',self.config())
         with ledger.connect() as con:
             self.assertEqual(dict(con.execute('SELECT kind,SUM(amount) FROM resources GROUP BY kind')),
-                             {'discovery_candidates':1,'probe_pages':2})
+                             {'discovery_candidates':1,'probe_pages':1})
+            # Both work units reuse the same original source GET.
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM top_level_visits').fetchone()[0],1)
+        self.assertEqual(self.entry_http.call_count,1)
         self.assertEqual(self.pool.stats()['consumption_attempts'],0)
 
     def test_flags_normalization_preserves_values_rejects_conflict_and_unknown_recovery(self):
@@ -223,7 +226,10 @@ class Inventory(unittest.TestCase):
         ledger=BatchLedger(self.root/'strict.db',self.config())
         with ledger.connect() as con:
             self.assertEqual(dict(con.execute('SELECT kind,SUM(amount) FROM resources GROUP BY kind')),
-                             {'discovery_candidates':4,'probe_pages':2})
+                             {'discovery_candidates':4,'probe_pages':1})
+            # Both work units reuse the same original source GET.
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM top_level_visits').fetchone()[0],1)
+        self.assertEqual(self.entry_http.call_count,1)
         for row in self.pool.rows():self.assertEqual(row['sources'][0]['normalization'],[])
 
     def test_strict_wrong_count_flat_flags_generic_and_duplicate_publish_nothing(self):

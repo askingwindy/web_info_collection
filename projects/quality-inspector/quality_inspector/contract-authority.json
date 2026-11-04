@@ -2,6 +2,9 @@
   "schema_version": "qc-installed-authority-1",
   "source_precedence": [
     "clarification",
+    "site_trajectory_scope",
+    "trajectory_supplement",
+    "qc_sampling",
     "requirement",
     "annex_a",
     "annex_b"
@@ -11,7 +14,25 @@
       "role": "clarification",
       "path": "request/需求澄清记录.md",
       "resource": "authority/需求澄清记录.md",
-      "sha256": "2a3c63de4f1f68efbaf54f0d7d7185eb3f80d3b6647b95b92efe38cef3a575f6"
+      "sha256": "e881da48372120e9a20b6d19533c805722fe685eae18416b204fc9aa3afa5a84"
+    },
+    {
+      "role": "site_trajectory_scope",
+      "path": "request/站点分类与轨迹采集口径-20261102.md",
+      "resource": "authority/站点分类与轨迹采集口径-20261102.md",
+      "sha256": "aa9a20f7f50c2e8b75505be39c63bd999538d3aa4c8a0251b97e1ac8c5578f55"
+    },
+    {
+      "role": "trajectory_supplement",
+      "path": "request/轨迹采集口径补充-20261030.md",
+      "resource": "authority/轨迹采集口径补充-20261030.md",
+      "sha256": "e28365c7f500c6b3cc07a6e439337108f7fd6fb770ac723f061e1208ca0dd71e"
+    },
+    {
+      "role": "qc_sampling",
+      "path": "docs/QC抽检与批次合格计数方案-20261030.md",
+      "resource": "authority/QC抽检与批次合格计数方案-20261030.md",
+      "sha256": "8b3b527e582ec5e11f6afa7e988becc921e8d84f110a6978be83d4cfd4ad697a"
     },
     {
       "role": "requirement",
@@ -32,5 +53,13 @@
       "sha256": "564ab9cc7a4297d3966aaebe5e14c4090e0b056da60072e232744a00422f5ed2"
     }
   ],
-  "internal_workflow_rules_are_not_customer_requirements": true
+  "internal_workflow_rules_are_not_customer_requirements": true,
+  "interpretation": {
+    "priority": "Later dated explicit clarifications override only conflicting earlier clauses; retain original dates and scope. References to execution records are not QC authority or runtime read dependencies.",
+    "current_candidate_projects": "No one-page-only-once or three-failure-site-stop gate; same-page goals are assessed by actual evidence and four-route duplicates. Frozen current-chain-r01 decisions remain historical.",
+    "language": "Controls follow page language; simplified Chinese narratives and original visible control labels. Numeric Chinese ratio is diagnostic; original-image review remains required.",
+    "operations": "Actual executed effective actions count; wait, complete and static observation do not. At least five, or justified short_flow; no mandatory 5–8 stop or automatic segmentation.",
+    "review_reuse": "Per-check semantic identities determine reuse. Historical PASS/FAIL/pending/UNKNOWN are immutable; NOT_SELECTED needs a valid batch acceptance receipt. Packaging and document changes do not themselves request a new AI review.",
+    "scope": "Installed customer authority plus explicitly identified operating clarifications; referenced engineering plans, producer implementation and run authorizations are not additional customer requirements."
+  }
 }

@@ -28,11 +28,20 @@ def qc_layers(sample_report, package_report=None, cross_report=None):
         complete = (set(checks) == {'REVIEW_' + k.upper() for k in SEMANTIC}
                     and all(c['status'] in ('PASS', 'FAIL') and
                             (c.get('reviewer') or {}).get('kind') == 'ai' for c in checks.values()))
+        expected_frames={s['step_id'] for s in sample.get('steps',[])}
+        full_frames=bool(expected_frames) and all(
+            (c.get('reviewer') or {}).get('kind') == 'ai'
+            and set((c.get('provenance') or {}).get('frames_viewed',[])) == expected_frames
+            for c in checks.values()) and set(checks) == {'REVIEW_' + k.upper() for k in SEMANTIC}
         rows.append({'sample_id': sample['sample_id'], 'actual_ai_reviewed': complete,
+                     'all_five_decided':complete, 'full_frame_ai_receipt':full_frames,
+                     'reported_sample_status':sample['status'],
                      'status': sample['status'] if complete else 'NOT_REVIEWED',
                      'checks': checks})
     result = {'sample_ai': {'report': ref, 'denominator': len(rows),
                            'actually_reviewed': sum(r['actual_ai_reviewed'] for r in rows),
+                           'full_frame_ai_receipts':sum(r['full_frame_ai_receipt'] for r in rows),
+                           'all_five_decided':sum(r['all_five_decided'] for r in rows),
                            'pass': sum(r['status'] == 'PASS' for r in rows), 'samples': rows},
               'package_document_ai': {'status': 'NOT_RUN'},
               'distribution': {'status': 'NOT_RUN'}, 'cumulative': {'status': 'NOT_RUN'},
