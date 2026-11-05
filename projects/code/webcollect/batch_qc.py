@@ -84,7 +84,7 @@ def queue_reviews(ledger, batch_receipt, output, *, document_review_mode='ai', s
     return prepare_reviews(ledger,handoff['dataset'],receipt['handoff']['sampling_plan'],
         receipt['effective_set'],output,cross_package_report=receipt['cross_package_report'],
         document_review_mode=document_review_mode,supporting_files=supporting_files,mode=mode,
-        sample_reviews=sample_reviews,
+        sample_reviews=sample_reviews,collection_checks=receipt['handoff'].get('collection_checks'),
         **({'production_handoff':{'path':receipt['handoff']['receipt'],'sha256':file_sha(receipt['handoff']['receipt'])}}
             if mode=='real' else {}),**kwargs)
 

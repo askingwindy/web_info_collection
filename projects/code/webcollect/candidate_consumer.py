@@ -96,6 +96,8 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
             task=json.loads(raw);owner=(task.get('candidate_binding') or {}).get('candidate_id')
             conflict=owner==candidate_id if owner else canonical_key(task['site_uri'],guard.get('application_registry'))==canonical_key(uri,guard.get('application_registry'))
             if conflict:
+                from .request_quarantine import accounted_rejected_focus
+                if accounted_rejected_focus(registry,attempt_id):continue
                 raise OutcomeUnknown('Original formal attempt unresolved for this scope; no dispatch: '+attempt_id)
     return isolated
 
@@ -175,6 +177,52 @@ def _original_attempts(claim):
         return rows
 
 
+def settle_unstarted_research(pool, claim_id, *, process_exit):
+    """Settle one returned zero-attempt research failure; preserve production state."""
+    verify_evidence([process_exit]);closed=load_json(process_exit['path'])
+    if closed.get('claim_id')!=claim_id or type(closed.get('returncode')) is not int:
+        raise ValueError('Original closed process receipt required')
+    claim=pool.get_claim(claim_id);research=pool.research_claim(claim)
+    if not research or claim['state']!='reconcile':raise ValueError('Only a reconciliable research execution is eligible')
+    original=pool.get_claim(research['original_claim_id'])
+    proof=known_unstarted_historical_claim(claim,original['binding'])
+    if not proof:raise ValueError('Research requests, visits or formal actions remain unresolved')
+    with pool.transaction() as con:
+        row=con.execute('SELECT state,binding FROM candidate_claims WHERE claim_id=?',(claim_id,)).fetchone()
+        if row['state']!='reconcile' or json.loads(row['binding'])!=claim['binding']:
+            raise ValueError('Research binding changed during reconciliation')
+        con.execute("UPDATE candidate_claims SET state='failed',reason='known_unstarted_research_failure',updated=? WHERE claim_id=?",(time.time(),claim_id))
+        pool.event(con,claim['candidate_id'],claim_id,'research_unstarted_reconciled',{'process_exit':process_exit,'proof':proof})
+    return pool.get_claim(claim_id)
+
+
+def known_unstarted_historical_claim(claim, successor_binding):
+    """Read-only proof for an expired pre-execution error, not UNKNOWN clearance."""
+    b=claim.get('binding') or {}
+    if not b.get('ledger') or not b.get('registry') or any(b.get(k)!=successor_binding.get(k) for k in ('ledger','registry')):
+        return None
+    if not Path(b['registry']).is_file() or _original_attempts(claim):return None
+    with closing(sqlite3.connect(Path(b['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+        con.row_factory=sqlite3.Row
+        jobs=[dict(r) for r in con.execute('SELECT id,kind,state,payload FROM jobs')]
+        ids={r['id'] for r in jobs if json.loads(r['payload']).get('claim_id')==claim['claim_id'] or r['id']==b.get('queue_job_id')}
+        if not ids:return None
+        edges=list(con.execute('SELECT job_id,parent_id FROM job_parents')) if con.execute("SELECT 1 FROM sqlite_master WHERE name='job_parents'").fetchone() else []
+        while True:
+            expanded=ids|{r['id'] for r in jobs if json.loads(r['payload']).get('parent_job_id') in ids}|{r['job_id'] for r in edges if r['parent_id'] in ids}
+            if expanded==ids:break
+            ids=expanded
+        chosen=[r for r in jobs if r['id'] in ids]
+        if any(not ((r['kind']=='candidate-observation' and r['state']=='done') or
+                    (r['kind']=='frozen-plan' and r['state']=='queued')) for r in chosen):return None
+        requests=[dict(r) for r in con.execute('SELECT id,job_id,state FROM model_requests') if r['job_id'] in ids]
+        visits=[dict(r) for r in con.execute('SELECT id,job_id,state FROM top_level_visits') if r['job_id'] in ids]
+        if requests or any(r['state']!='succeeded' for r in visits):return None
+    return {'claim_id':claim['claim_id'],'proof':'expired_historical_zero_formal_attempt_zero_model_request',
+            'jobs':[{k:r[k] for k in ('id','kind','state')} for r in chosen],'visits':visits,
+            'original_registry':b['registry'],'original_ledger':b['ledger'],'original_state_unchanged':True}
+
+
 def unverified_original_actions(attempt):
     """Read old dispatch gaps conservatively; never reinterpret them as zero actions."""
     references=json.loads(attempt.get('evidence_json') or '[]')
@@ -186,7 +234,25 @@ def unverified_original_actions(attempt):
         receipt=load_json(ref['path'])
         verify_evidence([receipt['terminal']])
         if load_json(receipt['terminal']['path']).get('unknown'):
-            yield receipt['terminal']
+            from .postprocess import cancelled_dispatch_audit
+            from .postprocess import rejected_focus_dispatch_audit
+            audited = False
+            for candidate in references:
+                if Path(candidate.get('path','')).suffix != '.json':continue
+                verify_evidence([candidate]);value=load_json(candidate['path'])
+                if value.get('schema_version')=='webcollect-cancelled-dispatch-audit-1' and value.get('raw_receipt')==ref:
+                    audited = (value==cancelled_dispatch_audit(raw_root)
+                               and value['attempt_id']==attempt['attempt_id']
+                               and attempt.get('root_cause')=='host_cancelled_between_verified_actions'
+                               and attempt['status']=='rejected')
+                if value.get('schema_version')=='webcollect-rejected-focus-dispatch-audit-1' and value.get('raw_receipt')==ref:
+                    audited=(value==rejected_focus_dispatch_audit(raw_root)
+                             and value['attempt_id']==attempt['attempt_id']
+                             and (attempt.get('root_cause')=='rejected_focus_effect_audited'
+                                  or (attempt.get('root_cause')==load_json(value['original_failure']['path'])['error']
+                                      and attempt.get('failure_class')=='interrupted'))
+                             and attempt['status']=='rejected')
+            if not audited:yield receipt['terminal']
             continue
         from .postprocess import session_record
         record=session_record(raw_root)
@@ -223,8 +289,10 @@ def verified_saved(claim):
                 if Path(name).is_absolute() or p.is_symlink() or not p.resolve().is_relative_to(base.resolve()) or file_sha(p)!=digest:
                     raise ValueError('Saved bytes changed')
         stop_details = saved.get('raw_execution', {}).get('stop_details')
+        prefix = saved.get('raw_execution', {}).get('trusted_prefix')
         found.append({'registry':claim['binding']['registry'],'attempt_id':row['attempt_id'],'task_key':row['task_key'],
             **({'stop_details':stop_details} if stop_details else {}),
+            **({'trusted_prefix':prefix,'original_goal_completed':False} if prefix else {}),
             'sample_id':row['sample_id'],'save_receipt':receipt,'result_location':str(sample), 'scope_id':row['scope_id']})
     if len(found)>1: raise ValueError('More than one saved result for candidate claim; reconciliation required')
     return found[0] if found else None
@@ -233,6 +301,7 @@ def verified_saved(claim):
 def finish_or_reconcile(pool, claim, *, reconciliation=False):
     """Expired token never commits; explicit reconciler derives facts from original stores."""
     original=pool.get_claim(claim['claim_id'])
+    research=bool(pool.research_claim(original))
     with pool.pool.connect() as con:
         latest=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1',(claim['candidate_id'],)).fetchone()
     if latest[0]!=claim['claim_id']:
@@ -243,7 +312,8 @@ def finish_or_reconcile(pool, claim, *, reconciliation=False):
         if reconciliation and original['state']=='consuming' and original['expires']<=time.time():
             with pool.transaction() as con:
                 con.execute("UPDATE candidate_claims SET state='reconcile',reason='lease_expired',updated=? WHERE claim_id=? AND state='consuming'",(time.time(),claim['claim_id']))
-                con.execute("UPDATE data_candidates SET state='reconcile' WHERE candidate_id=?",(claim['candidate_id'],))
+                if not research:
+                    con.execute("UPDATE data_candidates SET state='reconcile' WHERE candidate_id=?",(claim['candidate_id'],))
                 pool.event(con,claim['candidate_id'],claim['claim_id'],'lease_expired',{})
             original=pool.get_claim(claim['claim_id'])
         return {'state':original['state'],'saved':False,'reason':'No committed complete save; inspect original model/visit/runtime ledgers; no resend'}
@@ -251,7 +321,7 @@ def finish_or_reconcile(pool, claim, *, reconciliation=False):
         latest=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1',(claim['candidate_id'],)).fetchone()
         own_result=con.execute('SELECT effective FROM candidate_results WHERE candidate_id=? AND claim_id=?',
                                (claim['candidate_id'],claim['claim_id'])).fetchone()
-        if latest[0]!=claim['claim_id'] or own_result and not own_result[0]:
+        if latest[0]!=claim['claim_id'] or own_result and not own_result[0] and not research:
             raise ValueError('Retired claim cannot replace an explicit retry')
         if not reconciliation and original['state']!='succeeded':
             pool._fence(con,claim)
@@ -260,16 +330,17 @@ def finish_or_reconcile(pool, claim, *, reconciliation=False):
         elif original['state'] not in ('consuming','reconcile','succeeded','failed'):
             raise ValueError('Not reconcilable')
         previous=con.execute('SELECT record FROM candidate_results WHERE candidate_id=? AND effective=1',(claim['candidate_id'],)).fetchone()
-        if previous and previous[0]!=canonical(result): raise ValueError('One effective result per candidate; old result retained')
-        con.execute('INSERT OR IGNORE INTO candidate_results VALUES(?,?,?,?,?,NULL,1)',
-            (claim['candidate_id'],claim['claim_id'],result['sample_id'],canonical(result),'pending_review'))
+        if previous and previous[0]!=canonical(result) and not research: raise ValueError('One effective result per candidate; old result retained')
+        con.execute('INSERT OR IGNORE INTO candidate_results VALUES(?,?,?,?,?,NULL,?)',
+            (claim['candidate_id'],claim['claim_id'],result['sample_id'],canonical(result),'pending_review',0 if research else 1))
         con.execute("UPDATE candidate_claims SET state='succeeded',stage='saved',updated=? WHERE claim_id=?",(time.time(),claim['claim_id']))
-        con.execute("UPDATE data_candidates SET state='succeeded' WHERE candidate_id=?",(claim['candidate_id'],))
+        if not research:
+            con.execute("UPDATE data_candidates SET state='succeeded' WHERE candidate_id=?",(claim['candidate_id'],))
         pool.event(con,claim['candidate_id'],claim['claim_id'],'saved_reconciled' if reconciliation else 'saved',result)
     from .site_pool_sync import sync_candidate_qc
     sync_candidate_qc(pool.path,result['registry'])
     with pool.pool.connect() as con:
-        qc = con.execute('SELECT qc_state FROM candidate_results WHERE candidate_id=? AND claim_id=? AND effective=1',
+        qc = con.execute('SELECT qc_state FROM candidate_results WHERE candidate_id=? AND claim_id=?',
             (claim['candidate_id'], claim['claim_id'])).fetchone()
     return {'state':'succeeded','saved':True,'result':result,'QC':qc['qc_state']}
 
@@ -501,6 +572,9 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     if session_objective is not None:
         from .session_objective import bind
         objective_binding=bind(session_objective,claim)
+    research=pool.research_claim(current)
+    if research and session_objective!=research['objective']:
+        raise ValueError('Research must use frozen original objective reference')
     isolated_unknown = guard_candidate_dispatch(ledger, claim['snapshot']['entry_url'], candidate_id=claim['candidate_id'])
     root = Path(output)/claim['claim_id']
     # The transaction elects the sole executor before directories or external IO.
@@ -614,6 +688,13 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
             if reconciled.get('saved') and not isinstance(error, asyncio.CancelledError): return reconciled
             state='reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError)) else 'failed'
             pool.finish(claim,state=state,stage=stage,reason=type(error).__name__+': '+str(error))
+            from .navigation import NavigationHTTPError
+            if stage=='observation' and isinstance(error,NavigationHTTPError) and error.status==403:
+                failure=root/'first-observation-failure.json'
+                pool.record_disposition(pool.get_claim(claim['claim_id']),disposition='abandon',
+                    reason='entry_http_403',stage='entry_availability',
+                    evidence=[claim_ref,{'path':str(failure),'sha256':file_sha(failure)}],
+                    policy_version='candidate-entry-403-user-rule-20261105')
         except Exception:
             pass  # A lost lease stays fenced; the explicit reconciler handles it.
         raise
@@ -783,7 +864,9 @@ def retry(pool, candidate_id, *, reason, recovery=None):
         if list(unverified_original_actions(row)):
             raise OutcomeUnknown('Original dispatched action has no verified after observation; no retry or replacement attempt')
         if row['status'] in ('reserved','running','interrupted') or row.get('failure_class') in ('unknown','interrupted'):
-            raise ValueError('Original runtime attempt unresolved; no retry')
+            from .request_quarantine import accounted_rejected_focus
+            if not accounted_rejected_focus(binding['registry'],row['attempt_id']):
+                raise ValueError('Original runtime attempt unresolved; no retry')
     if binding.get('ledger'):
         with closing(sqlite3.connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
             config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
@@ -826,13 +909,17 @@ def retry(pool, candidate_id, *, reason, recovery=None):
 
 
 def statistics(pool):
-    counts=pool.stats(); attempts={}; saved=set()
+    counts=pool.stats(); attempts={}; saved=set();research_attempts={};research_saved=set()
     with pool.pool.connect() as con:
         claims=[pool._claim(r) for r in con.execute('SELECT * FROM candidate_claims')]
     for claim in claims:
         for row,task in _original_attempts(claim):
-            attempts[row['attempt_id']]=row
-            if row['status']=='collected_pending_review': saved.add(row['sample_id'])
+            if pool.research_claim(claim):
+                research_attempts[row['attempt_id']]=row
+                if row['status']=='collected_pending_review':research_saved.add(row['sample_id'])
+            else:
+                attempts[row['attempt_id']]=row
+                if row['status']=='collected_pending_review': saved.add(row['sample_id'])
     targets={}
     for claim in claims:
         binding=claim.get('binding') or {}
@@ -842,6 +929,7 @@ def statistics(pool):
                 active=con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',(policy['campaign_id'],)).fetchone()
                 if active: targets[policy['campaign_id']]=json.loads(active[0])['target_total']
     counts.update(formal_attempts=len(attempts),collected=len(saved),qualified_targets=targets,
+        research_formal_attempts=len(research_attempts),research_collected=len(research_saved),research_production_counted=False,
         pending_review=counts['QC'].get('pending_review',0),
         QC_accepted=counts['QC'].get('accepted',0)+counts['QC'].get('published',0),
         published=counts['QC'].get('published',0))

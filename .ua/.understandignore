@@ -42,3 +42,7 @@
 /verify_results/
 /.ua/
 !/projects/prd/工作总结与下一步安排-20261103.md
+!/projects/quality-inspector/quality_inspector/contract-authority.json
+!/projects/quality-inspector/quality_inspector/delivery.json
+!/request/consumer-baselines/zh-wikipedia-reading.json
+!/request/consumer-baselines/muxtly-square-footage.json

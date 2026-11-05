@@ -475,7 +475,7 @@ class FragmentController:
             if not c or c['actions'][action]['status'] != PROVEN:
                 raise ValueError('INSUFFICIENT: current target action is not proved')
             op.update(selector=c['binding']['selector'], index=c['binding'].get('index', 0))
-            op['evidence'].update(anchor_element_id=cid, target_label=c['readable_labels'][0]['text'])
+            op['evidence'].update(anchor_element_id=cid, target_label=c['readable_labels'][0]['text'] if c['readable_labels'] else '')
         sources = self.context.get('actual_feedback', self.context)
         for failure in sources.get('avoid', []):
             old = failure.get('operation', {})

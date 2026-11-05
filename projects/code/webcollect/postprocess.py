@@ -33,7 +33,7 @@ def _observation_capture(record, observation_id):
     return load_json(entry['evidence']['capture']['path'])
 
 
-def session_record(raw_root):
+def session_record(raw_root, *, allow_unknown_for_prefix=False):
     """Load and verify the immutable raw journal of one react execution."""
     raw_root = Path(raw_root)
     boundary = load_json(raw_root / 'boundary.json')
@@ -53,7 +53,7 @@ def session_record(raw_root):
     for name in ('boundary.json', 'terminal.json', 'trajectory.jsonl'):
         if name not in files or files[name] != expected.get(name):
             raise ValueError('原始执行关键文件缺失或字节改变：' + name)
-    if terminal.get('unknown'):
+    if terminal.get('unknown') and not allow_unknown_for_prefix:
         raise ValueError('UNKNOWN 原始终态不能进入交付加工；先按原账核对')
     observations = {}
     for path in sorted(raw_root.glob('observation-*.json')):
@@ -94,6 +94,9 @@ def session_record(raw_root):
 def natural_instruction(task, record, effective):
     """Describe executed stages; retain requested/working intent in evidence."""
     app = task['app_name']
+    if record.get('trusted_prefix'):
+        from .trusted_prefix import natural_instruction as prefix_instruction
+        return prefix_instruction(record)
     actual = list(dict.fromkeys(row.get('semantic_goal') or row.get('goal') or '' for row in record['trajectory']))
     focus = '、'.join(g for g in actual if g)
     if focus:
@@ -114,22 +117,27 @@ def completion_evidence(record):
             'executed_stages': list(dict.fromkeys(r.get('semantic_goal') or r.get('goal') for r in record['trajectory'])),
             'final_observation_id': final_id, 'final_evidence': record['observations'][final_id]['evidence'],
             'visible_text': state.get('visible_text', ''),
+            'dynamic_region_evidence':{oid:{'contract':__import__('webcollect.dynamic_regions',fromlist=['summary']).summary(_observation_state(record,oid)),
+                'original_evidence':deepcopy(row['evidence'])} for oid,row in record['observations'].items()
+                if 'dynamic_region_contract' in _observation_state(record,oid)},
             'host_stop_reason': terminal.get('stop_reason'), 'agent_summary': terminal.get('stop_summary'),
             'business_completion': 'NOT_CLAIMED',
             **({'goal_evidence':deepcopy(terminal['goal_evidence'])} if terminal.get('goal_evidence') else {}),
             **({'collection_ending':deepcopy(terminal['collection_ending'])} if terminal.get('collection_ending') else {}),
+            **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
             'ending_evidence': ending(len(record['trajectory']),state),
             'actual_effects': [effect_feedback(row) for row in record['trajectory']],
             'page_hosts': {key: urlsplit(_observation_state(record,key)['url']).hostname
                            for key in record['observations']},
             'planning_intents':deepcopy(terminal.get('planning_intents',[])),
+            'continuity_proofs':deepcopy(record.get('continuity_proofs',[])),
             'actual_task_types': classify(record),
             'source_metadata': deepcopy((record['task'].get('candidate_binding') or {}).get('sources', []))}
 
 
 def _same_view(before, after):
-    return all(before.get(key) == after.get(key) for key in
-               ('url', 'scroll', 'values', 'elements', 'visible_text'))
+    from .reading_progress import same_view
+    return same_view(before,after)
 
 
 def _delayed_bridge(record, previous, before_id, after_id):
@@ -152,14 +160,45 @@ def _delayed_bridge(record, previous, before_id, after_id):
     return None
 
 
-def effective_trajectory(record):
+def _scoped_continuity(record, previous, row, raw):
+    """Explain only adjacent same-document drift using the next action's receipt."""
+    from .action_stability import FOLLOWUP_VERSION, POST_VERSION, pair
+    if record['task']['fragment'].get('action_stability_protocol') not in (FOLLOWUP_VERSION,POST_VERSION):return False
+    capture=raw.get('capture') or {}
+    accepted=[a for a in capture.get('attempts',[]) if (a.get('stability') or {}).get('accepted') and (a.get('final_stability') or {}).get('accepted')]
+    pair_receipt=accepted[-1] if accepted else capture
+    scope=(pair_receipt.get('stability') or {}).get('action_scope')
+    if not scope:
+        # Capture wraps the accepted pair in its synchronized capture proof.
+        scope=(pair_receipt.get('final_stability') or {}).get('action_scope')
+    if not scope:return False
+    before_id=previous['after_observation_id'];after_id=row['before_observation_id']
+    a,b=record['observations'][before_id],record['observations'][after_id]
+    try:
+        proof=pair(_observation_state(record,before_id),_observation_state(record,after_id),
+                   Path(a['evidence']['image']['path']).read_bytes(),Path(b['evidence']['image']['path']).read_bytes(),scope)
+    except (ValueError,KeyError):return False
+    if proof['accepted']:
+        record.setdefault('continuity_proofs',[]).append({'previous_operation_id':previous['operation_id'],
+            'next_operation_id':row['operation_id'],'before_observation_id':before_id,'after_observation_id':after_id,
+            'proof':proof,'no_action_replayed':True})
+    return proof['accepted']
+
+
+def flow_classification(effective):
+    """Classify only the effective business actions in the saved range."""
+    short = 0 < effective < 5
+    return short, (f'最终保存轨迹包含 {effective} 个有效业务操作，少于 5 步，自动标记为短流程。' if short else None)
+
+
+def effective_trajectory(record, *, _audit_cancelled=False):
     """Recount native atomic dispatches from sealed evidence, never model labels.
 
     A gap, unknown dispatch or ineffective operation rejects the whole chain;
     it cannot be dropped to join otherwise disconnected pieces.
     """
     if record['task']['fragment'].get('decision_protocol') not in NATIVE_VERSIONS:
-        return record['trajectory']
+        return [r for r in record['trajectory'] if r['action'] not in ('observe','inspect','wait','finish','complete')]
     rows, seen = [], {}
     for row_index,row in enumerate(record['trajectory']):
         dispatch_key = row['dispatch']['sha256']
@@ -198,7 +237,7 @@ def effective_trajectory(record):
                                rule_version=record['task']['fragment'].get('effective_action_rule', RULE_VERSION))
         if not effect['verified']:
             raise ValueError('动作对应效果不可核验：' + row['operation_id'])
-        if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before) and not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],row['before_observation_id']):
+        if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before) and not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],row['before_observation_id']) and not _scoped_continuity(record,rows[-1],row,raw):
             raise ValueError('连续轨迹存在未解释的状态缺口')
         if rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
             navigation_return = (record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2'
@@ -233,7 +272,13 @@ def effective_trajectory(record):
             previous_id=row['after_observation_id'];previous_row=row
         verify_path(record['task'],states,operations)
     from .closing_policy import enabled as v2, validate_record as validate_closing
-    if v2(record['task']):
+    if _audit_cancelled:
+        if record['terminal'].get('actual_actions') != len(rows):
+            raise ValueError('Cancelled dispatch count differs from verified effects')
+    elif record.get('trusted_prefix'):
+        from .trusted_prefix import validate_projection
+        validate_projection(record)
+    elif v2(record['task']):
         marker=validate_closing(record)
         if not marker['safe_for_pending_sample']:
             raise ValueError('V2 raw ending is pending reconciliation, not a deliverable sample')
@@ -243,7 +288,118 @@ def effective_trajectory(record):
     if rows and final_id and _observation_state(record,rows[-1]['after_observation_id'])['url'] != _observation_state(record,final_id)['url']:
         if not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],final_id):
             raise ValueError('末帧导航缺少原点击与延迟落地绑定')
+    from .direct_article import verify_record
+    verify_record(record)
     return rows
+
+
+def cancelled_dispatch_audit(raw_root):
+    """Account a host cancellation between fully observed actions, never deliver it.
+
+    The original UNKNOWN remains sealed. This proof only distinguishes an
+    undispatched next operation from an actually unknown browser side effect.
+    """
+    raw_root = Path(raw_root).resolve()
+    record = session_record(raw_root, allow_unknown_for_prefix=True)
+    terminal = record['terminal']; ending = terminal.get('collection_ending') or {}
+    if (terminal.get('unknown') is not True or terminal.get('failure_class') != 'interrupted'
+            or ending.get('reason') != '会话被取消，保留已执行内容'
+            or ending.get('finish_origin') != 'host' or ending.get('unverified_tail_dispatches') != 0):
+        raise ValueError('Only sealed host cancellation without an unverified tail is auditable')
+    actual = {p.relative_to(raw_root).as_posix() for p in raw_root.rglob('*') if p.is_file()}
+    expected = set(record['receipt']['files_sha256']) | {'raw-receipt.json'}
+    if actual != expected:
+        raise ValueError('Cancelled raw has unsealed additional files')
+    rows = effective_trajectory(record, _audit_cancelled=True)
+    if not rows or len(rows) != terminal.get('effective_steps') or len(rows) != ending.get('actual_atomic_dispatches'):
+        raise ValueError('Every cancelled dispatch must have a verified atomic effect')
+    intents = {str(p.resolve()) for p in raw_root.glob('*-dispatch-intent.json')}
+    steps = {str(p.resolve()) for p in (raw_root.parent/'action-attempts').glob('*.json')}
+    if (intents != {r['dispatch']['path'] for r in rows}
+            or steps != {r['raw_step']['path'] for r in rows}
+            or len(intents) != len(rows) or terminal['final_observation_id'] != rows[-1]['after_observation_id']):
+        raise ValueError('Cancelled execution has an unmatched dispatch, raw step or final observation')
+    attempts = [load_json(p) for p in raw_root.glob('*-business-attempt.json')]
+    if (len(attempts) != ending.get('business_attempts')
+            or any(a.get('outcome') != 'VERIFIED' for a in attempts)
+            or sum(a.get('actual_dispatches_delta', 0) for a in attempts) != len(rows)):
+        raise ValueError('Cancelled business attempts are not completely verified')
+    failure_path = raw_root.parent/'failure.json'
+    failure = load_json(failure_path)
+    attempt_id = record['boundary'].get('attempt_id') or failure.get('attempt_id')
+    if not attempt_id or failure.get('attempt_id') != attempt_id or failure.get('failure_class') != 'interrupted':
+        raise ValueError('Cancelled primary failure and boundary identity differ')
+    return {'schema_version':'webcollect-cancelled-dispatch-audit-1',
+            'raw_receipt':{'path':str(raw_root/'raw-receipt.json'),'sha256':file_sha(raw_root/'raw-receipt.json')},
+            'original_failure':{'path':str(failure_path),'sha256':file_sha(failure_path)},
+            'attempt_id':attempt_id, 'verified_dispatches':len(rows),
+            'dispatches':[r['dispatch'] for r in rows], 'raw_steps':[r['raw_step'] for r in rows],
+            'final_observation_id':terminal['final_observation_id'],
+            'source_unknown_retained':True, 'operation_unknown':False,
+            'deliverable':False, 'goal_completion':'NOT_CLAIMED'}
+
+
+def rejected_focus_dispatch_audit(raw_root):
+    """Account one focus click from sealed rejected PNG/DOM pairs, never deliver.
+
+    This is deliberately separate from an accepted capture or cancellation:
+    the original capture rejection and UNKNOWN remain unchanged.
+    """
+    import base64
+    from .action_stability import post_observation_scope, pair, projection, searchable
+    raw_root=Path(raw_root).resolve();record=session_record(raw_root,allow_unknown_for_prefix=True)
+    terminal=record['terminal'];ending=terminal.get('collection_ending') or {}
+    if (terminal.get('unknown') is not True or terminal.get('failure_class')!='interrupted'
+            or terminal.get('actual_actions')!=1 or terminal.get('effective_steps')!=0
+            or record['trajectory'] or not ending.get('reason','').startswith('CAPTURE_AFTER_ACTION_UNVERIFIED:')):
+        raise ValueError('Only one originally rejected focus dispatch is auditable')
+    actual={p.relative_to(raw_root).as_posix() for p in raw_root.rglob('*') if p.is_file()}
+    if actual!=set(record['receipt']['files_sha256'])|{'raw-receipt.json'}:
+        raise ValueError('Rejected raw contains unsealed files')
+    intents=list(raw_root.glob('*-dispatch-intent.json'));steps=list((raw_root.parent/'action-attempts').glob('*.json'))
+    businesses=list(raw_root.glob('*-business-attempt.json'));rejections=list(raw_root.glob('*-capture-rejected.json'))
+    if any(len(rows)!=1 for rows in (intents,steps,businesses,rejections)):
+        raise ValueError('Rejected focus audit requires exactly one complete original dispatch')
+    def ref(path):return {'path':str(path),'sha256':file_sha(path)}
+    intent=load_json(intents[0]);step=load_json(steps[0]);business=load_json(businesses[0]);rejection=load_json(rejections[0])
+    if (business.get('raw_steps')!=[ref(steps[0])] or business.get('outcome')!='EFFECT_UNKNOWN'
+            or business.get('actual_dispatches_delta')!=1 or business.get('effective_steps_delta')!=0
+            or step.get('controller_dispatch')!=ref(intents[0]) or step.get('operation')!=intent['operation']
+            or step.get('dispatched') is not True or step.get('action_executed') is not True
+            or step.get('phase')!='post_dispatch' or step.get('execution_error')
+            or rejection.get('after_dispatch') is not True):
+        raise ValueError('Original dispatch accounting differs')
+    operation=intent['operation'];source=step['state'];node=operation.get('evidence',{}).get('anchor_element_id')
+    before_id=step.get('react',{}).get('before_observation_id')
+    if (operation.get('action_type')!='click' or before_id not in record['observations']
+            or source!=_observation_state(record,before_id)
+            or projection(source,node)['value'].get('focused') is not False
+            or not searchable(projection(source,node))):
+        raise ValueError('Rejected audit is only an originally observed unfocused search input')
+    verify_evidence([rejection['evidence'],intent['formal_frame']])
+    if Path(rejection['evidence']['path']).parent!=raw_root:
+        raise ValueError('Rejected diagnostic must belong to this sealed raw')
+    scope=post_observation_scope(source,operation);proofs=[]
+    for attempt in load_json(rejection['evidence']['path']).get('diagnostic',{}).get('attempts',[]):
+        try:
+            states=[attempt[k] for k in ('snapshot_before','snapshot_after','snapshot_final')]
+            png=base64.b64decode(attempt['original_png_base64'],validate=True)
+            other=base64.b64decode(attempt['comparison_png_base64'],validate=True)
+            checks=[pair(states[0],state,png,other,scope) for state in states[1:]]
+            if all(check['accepted'] for check in checks):
+                proofs.append({'attempt':attempt['attempt'],'pairs':checks})
+        except (ValueError,KeyError,TypeError):continue
+    if not proofs:raise ValueError('No sealed synchronous pair proves the actual focus effect')
+    failure_path=raw_root.parent/'failure.json';failure=load_json(failure_path)
+    if (not failure.get('attempt_id') or record['boundary'].get('attempt_id',failure['attempt_id'])!=failure['attempt_id']
+            or failure.get('failure_class')!='interrupted' or 'CAPTURE_AFTER_ACTION_UNVERIFIED:' not in failure.get('error','')):
+        raise ValueError('Rejected focus primary failure identity differs')
+    return {'schema_version':'webcollect-rejected-focus-dispatch-audit-1','attempt_id':failure['attempt_id'],
+            'raw_receipt':ref(raw_root/'raw-receipt.json'),'original_failure':ref(failure_path),
+            'dispatch':ref(intents[0]),'raw_step':ref(steps[0]),'rejected_capture':rejection['evidence'],
+            'proofs':proofs,'accounted_dispatches':1,'operation_unknown':False,
+            'original_capture_accepted':False,'source_unknown_retained':True,
+            'deliverable':False,'goal_completion':'NOT_CLAIMED'}
 
 
 def terminal_outcome(task, record, final_state):
@@ -254,7 +410,21 @@ def terminal_outcome(task, record, final_state):
     # Quote only observed rendered content, never a planned second stage or a
     # model finish claim. Full text/intent/stop remain in completion evidence.
     lines = list(dict.fromkeys(s.strip() for s in (final_state.get('visible_text') or '').splitlines() if s.strip()))
-    if lines:
+    from .direct_completion import enabled as direct_completion_enabled
+    scoped_passage = None
+    if direct_completion_enabled(task):
+        from .direct_article import body
+        objective = record['terminal'].get('goal_evidence', {}).get('session_objective', {})
+        selected = objective.get('selected_passage') or {}
+        matches = [p for p in body(final_state) if p['quote'] == selected.get('quote')]
+        if objective.get('status') == 'VERIFIED' and len(matches) == 1:
+            scoped_passage = matches[0]['quote']
+    if scoped_passage:
+        # The whole viewport (including source-code examples and navigation)
+        # remains in the raw observation. The delivery narrative describes the
+        # independently rechecked, currently visible reading passage only.
+        description = '当前正文可见「' + scoped_passage + '」'
+    elif lines:
         description += '；末帧可见文字「' + '；'.join(lines)[:1200] + '」'
     title = (final_state.get('title') or '').strip().casefold()
     visible = (final_state.get('visible_text') or '').strip().casefold()
@@ -266,6 +436,8 @@ def terminal_outcome(task, record, final_state):
                or title in challenge or first_line in challenge
                or ('samwaf' in title + ' ' + visible and any(phrase in visible for phrase in denial)))
     terminal = record['terminal']
+    if record.get('trusted_prefix') and lines and not blocked:
+        return 'success', '本段历史边界已验证；' + description
     if task['fragment'].get('ending_policy') and not lines:
         return 'failed', description
     from .closing_policy import enabled as v2
@@ -301,19 +473,8 @@ def derive(task, record, delivery, ids, manifest):
     if not trajectory:
         return {'status': 'no_actions', 'effective_steps': 0}
     effective = len(trajectory)
-    short = effective < 5 if native else bool(record['terminal'].get('short_flow'))
-    reason = record['terminal'].get('short_flow_reason')
-    if native and short:
-        terminal = record['terminal']
-        final_id = terminal.get('final_observation_id') or trajectory[-1]['after_observation_id']
-        final_state = _observation_state(record, final_id)
-        reason = (f'实际完成{effective}个有效操作；' +
-                  {'ready': '当前连续片段结束', 'budget': '宿主预算耗尽',
-                   'no_path': '当前无可行路径', 'blocked': '当前路径受阻'}.get(terminal.get('stop_reason'), '会话停止') +
-                  '；' + terminal_outcome(task, record, final_state)[1])
-        if not (terminal.get('stop_summary') or '').strip():
-            reason = None
-    length_qualified = effective >= 5 or (short and bool((reason or '').strip()))
+    short, reason = flow_classification(effective)
+    length_qualified = effective > 0
     result = {'status': 'length_unqualified' if not length_qualified else 'deriving',
               'effective_steps': effective, 'short_flow': short,
               'short_flow_reason': reason if short else None,
@@ -433,6 +594,17 @@ def derive(task, record, delivery, ids, manifest):
                   'exception_evidence': []})
     if record['terminal'].get('goal_evidence'):
         steps[-1]['tool_result']['return_value']['goal_evidence']=deepcopy(record['terminal']['goal_evidence'])
+    from .dynamic_regions import enabled as dynamic_enabled, summary as dynamic_summary
+    used_observations={oid for row in record['trajectory'] for oid in
+        (row.get('before_observation_id'),row.get('after_observation_id')) if oid}
+    used_observations.add(record['terminal'].get('final_observation_id'))
+    dynamic_evidence={oid:{'contract':dynamic_summary(_observation_state(record,oid)),
+        'original_evidence':deepcopy(record['observations'][oid]['evidence'])}
+        for oid in sorted(used_observations-{None}) if dynamic_enabled(_observation_state(record,oid))}
+    if dynamic_evidence:
+        evidence=steps[-1]['tool_result']['return_value'].setdefault('goal_evidence',
+            {'protocol':'webcollect-plan-facts-1','is_ai_review':False,'checks':[],'business_goal_status':'NOT_SPECIFIED'})
+        evidence['dynamic_region_evidence']=dynamic_evidence
     if record['terminal'].get('collection_ending'):
         marker=deepcopy(record['terminal']['collection_ending'])
         steps[-1]['tool_result']['return_value']['collection_ending']=marker
@@ -510,7 +682,7 @@ def _write_terminal_step(evidence, record, ids):
     return raw
 
 
-def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, validators=()):
+def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, validators=(), prefix_end_step=None):
     """Derive, validate, record and seal; reprocessing appends, never re-collects.
 
     `validators` are deterministic delivery checks (capture audit, producer
@@ -519,15 +691,32 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     """
     evidence_root = Path(evidence_root)
     raw_root = evidence_root / 'raw'
-    record = session_record(raw_root)
+    record = session_record(raw_root, allow_unknown_for_prefix=prefix_end_step is not None)
+    if prefix_end_step is not None:
+        from .trusted_prefix import project_prefix
+        record = project_prefix(record, raw_root, prefix_end_step, ids)
     task = record['task']
     derivations_path = evidence_root / 'derivations.jsonl'
     prior = []
     if derivations_path.is_file():
         prior = [json.loads(line) for line in derivations_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    if prefix_end_step is not None and any(row.get('status') == 'derived_saved' for row in prior):
+        saved = load_json(evidence_root / 'saved_sample.json')
+        binding = saved.get('raw_execution', {}).get('trusted_prefix')
+        actual = {p.relative_to(delivery_root).as_posix(): file_sha(p) for p in Path(delivery_root).rglob('*') if p.is_file()}
+        excluded={'saved_sample.json','context_cleanup_error.json','derivations.jsonl','planning-feedback-collected_pending_review.json'}
+        captures={p.relative_to(evidence_root).as_posix():file_sha(p) for p in evidence_root.rglob('*') if p.is_file() and p.name not in excluded}
+        if (binding != record['trusted_prefix'] or saved.get('sample_id') != ids['sample_id']
+                or actual != saved.get('sample_files_sha256') or captures!=saved.get('capture_files_sha256')):
+            raise ValueError('Existing prefix differs from immutable interval or saved sample')
+        return {'schema_version': VERSION, 'status': 'derived_saved', 'idempotent_reuse': True,
+                'effective_steps': prefix_end_step, 'saved_sample': str((evidence_root/'saved_sample.json').resolve()),
+                'trusted_prefix': binding, 'browser_calls': 0, 'model_calls': 0}
     if any(row.get('status') == 'derived_saved' for row in prior):
         raise ValueError('本原始执行已有当前有效交付版本；本轮一条原始执行最多一个有效交付样本')
     version = (derivation or len(prior) + 1)
+    projection_root=evidence_root/f'trusted-prefix-{version:02}' if prefix_end_step is not None else evidence_root
+    prefix_projection=None
     browser_calls = 0
     model_calls = 0
     try:
@@ -559,19 +748,23 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     # session; the terminal complete record is projected here), identity and
     # the sealed delivery receipt.
     from .closing_policy import enabled as v2
-    if v2(task):
+    projection_root.mkdir(parents=True, exist_ok=True)
+    if prefix_end_step is not None:
+        prefix_projection=exclusive(evidence_root/f'trusted-prefix-projection-{version:02}.json',
+            {'protocol':record['trusted_prefix']['protocol'],'directory':projection_root.name,'binding':record['trusted_prefix']})
+    if v2(task) or prefix_end_step is not None:
         # Project verified prefix copies only. Failed/unverified tail files stay
         # in action-attempts and remain bound by the raw attempt journal.
         for number,row in enumerate(record['trajectory'],1):
-            with (evidence_root/f'step_{number:03}.json').open('xb') as stream:
+            with (projection_root/f'step_{number:03}.json').open('xb') as stream:
                 stream.write(Path(row['raw_step']['path']).read_bytes())
-    final_raw = _write_terminal_step(evidence_root, record, ids)
+    final_raw = _write_terminal_step(projection_root, record, ids)
     # The capture audit re-derives the per-step target ground truth from the
     # same raw steps and compares it to this manifest; write it from those
     # identical sources so the delivered sample carries the original truth.
     ground_truth = []
     for number in range(1, final_raw['step_id'] + 1):
-        step_path = evidence_root / f'step_{number:03}.json'
+        step_path = projection_root / f'step_{number:03}.json'
         if not step_path.exists():
             continue
         step_raw = load_json(step_path)
@@ -579,7 +772,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         if target:
             ground_truth.append({'step_id': step_raw['step_id'], 'element_id': target['element_id'],
                                  'text': target['text'], 'bbox': target['bbox']})
-    write_json_file(evidence_root / 'ground_truth.json', ground_truth)
+    write_json_file(projection_root / 'ground_truth.json', ground_truth)
     validation_errors = []
     for validate in validators:
         validation_errors.extend(validate(delivery_root) or [])
@@ -599,7 +792,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
             target = raw['target_element']
             ground_truth.append({'step_id': index, 'element_id': target['element_id'],
                                  'text': target['text'], 'bbox': target['bbox']})
-    write_json_file(evidence_root / 'ground_truth.json', ground_truth)
+    write_json_file(projection_root / 'ground_truth.json', ground_truth)
     language = {key: derived[key] for key in ('minimum_chinese_character_ratio',
         'chinese_ratio_diagnostic_only', 'language_policy', 'language_review')}
     write_json_file(evidence_root / 'capture_summary.json',
@@ -648,6 +841,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
              'sample_files_sha256': sample_files, 'capture_files_sha256': capture_files,
              'semantic_review': 'REVIEW_REQUIRED',
              'raw_execution': {'protocol': REACT_VERSION,
+                               **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
                                **({'goal_evidence':deepcopy(record['terminal']['goal_evidence'])} if record['terminal'].get('goal_evidence') else {}),
                                **({'collection_ending':deepcopy(record['terminal']['collection_ending'])} if record['terminal'].get('collection_ending') else {}),
                                **({'stop_details':record['terminal']['stop_details']} if 'stop_details' in record['terminal'] else {}),
@@ -656,6 +850,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                                'effective_steps': derived['effective_steps'],
                                'not_a_delivery_sample_by_itself': True},
              'derivation': {'version': version, 'record': derived_ref,
+                            **({'prefix_projection':prefix_projection} if prefix_projection else {}),
                             'source_mapping_sha256': object_sha256(derived['source_mapping'])}}
     write_json_file(evidence_root / 'saved_sample.json', saved)
     _append_derivation(derivations_path, {'schema_version': VERSION, 'derivation': version,
@@ -667,6 +862,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
             **language,
             'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
             'stop_reason': record['terminal'].get('stop_reason'),
+            **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
             'browser_calls': 0, 'model_calls': 0,
             'saved_sample': str((evidence_root / 'saved_sample.json').resolve())}
 

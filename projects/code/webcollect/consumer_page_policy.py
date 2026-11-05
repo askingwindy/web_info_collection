@@ -45,13 +45,20 @@ def full_image(state):
 
 
 def boundary(state):
-    """Login/download destination or dialog, never a public page's nav button."""
+    """An observed access error, login/download destination or dialog."""
     elements = state.get('elements', [])
     visible = [e for e in elements if e.get('visible') is True]
     path = urlsplit(state.get('url', '')).path.lower()
     auth_url = bool(re.fullmatch(r'/(?:user/|account/|accounts/)?(?:login|signin|sign-in)(?:\.aspx|\.html|\.php|/)?', path))
     titles = [(state.get('title') or '').strip().casefold()]
     titles += [(e.get('text') or '').strip().casefold() for e in visible if e.get('native_role') == 'h1']
+    text_visible=(state.get('visible_text') or '').strip().casefold()
+    denied=('forbidden','access denied','禁止访问','拒绝访问','访问被拒绝','存取被拒')
+    response=state.get('navigation_response') or {}
+    if response.get('status')==403 and response.get('url','').split('#')[0]==state.get('url','').split('#')[0]:
+        return {'kind':'http_403','policy':VERSION,'basis':'native_navigation_response_403','goal_completed':False}
+    if any(re.fullmatch(r'(?:(?:http|error)\s*)?403(?:\s*[-:：]?\s*(?:forbidden|access denied|禁止访问|拒绝访问))?',t) for t in titles) and any(t in text_visible for t in denied):
+        return {'kind':'http_403','policy':VERSION,'basis':'visible_403_status_page','goal_completed':False}
     dialogs = [e for e in visible if e.get('native_role') in ('dialog','alertdialog')]
     def dialog_text(root):
         ids = {root['element_id']}
@@ -79,6 +86,7 @@ def exit_ids(state):
 
 
 def allowed_exit(state, action, control_id=None):
+    if (boundary(state) or {}).get('kind')=='http_403':return action=='back'
     return action == 'back' or (action == 'click' and control_id in exit_ids(state))
 
 
@@ -103,6 +111,7 @@ def ending_evidence(task, rows, states, final_id):
     returned = states[exit['after_observation_id']]
     if not same_view(states[entry['after_observation_id']], middle): return None
     proof = returned_pair(origin, middle, returned, entry, exit)
+    if proof and proof['kind']=='http_403':return None  # Recovery resumes the original goal.
     if not proof or not same_view(returned, states[final_id]): return None
     return {**proof, 'entry_operation_id':entry['operation_id'], 'exit_operation_id':exit['operation_id'],
             'origin_observation_id':entry['before_observation_id'],

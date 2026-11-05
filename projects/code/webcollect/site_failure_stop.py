@@ -290,9 +290,9 @@ class SiteFailureStore:
                     holds['tasks'] += int(own_key)
                     # A plain URL is a read-only request. Executing a task supplies
                     # its stable candidate ID, including when claiming it again.
-                    if candidate_id == owner['candidate_id'] or (
+                    if not owner.get('focus_effect_accounted') and (candidate_id == owner['candidate_id'] or (
                             isinstance(application, dict) and not candidate_id and
-                            (application.get('task_id') == owner['task_id'] or same_page)):
+                            (application.get('task_id') == owner['task_id'] or same_page))):
                         holds['matching_tasks'].append(fact[0])
                 else:
                     holds['pages'] += int(own_key)
@@ -714,6 +714,12 @@ class SiteFailureStore:
             app = application_key(json.loads(task)); key = 'formal:' + identity
             if key in existing:
                 old = existing[key]
+                from .request_quarantine import accounted_rejected_focus
+                if (failure_class=='interrupted' and status=='rejected'
+                        and (old['application_key'],old['stage'],old['state'],old['reason'])==(app,'formal',state,reason or status)
+                        and set(old['evidence_sha256']) <= {r['sha256'] for r in json.loads(evidence) if isinstance(r,dict) and 'sha256' in r}
+                        and accounted_rejected_focus(registry,identity)):
+                    continue  # Keep the original site fact and its original evidence binding.
                 if ((old['application_key'], old['stage'], old['state'], old['reason']) != (app, 'formal', state, reason or status)
                         or json.loads(evidence) and old['evidence_binding_sha256'] != object_sha256(json.loads(evidence))):
                     raise ValueError('Imported formal execution cannot be reclassified on this machine')

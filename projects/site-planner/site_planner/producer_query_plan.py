@@ -51,15 +51,19 @@ def next_query(pool, ledger, run, key, categories, state, failures, root, *, ind
             payload['instruction']+=(' 目标是无需登录即可浏览具体功能的开源演示。考虑组件交互示例、可视化示例库、'
                 '工作流或管理界面功能展示等不同领域，避免反复搜索泛称后台管理系统。')
         if purpose_grounded:
-            if purpose_protocol=='entry-tools-11':from .producer_task_value import QUERY_SYSTEM as SYSTEM,VERSION
+            if purpose_protocol=='entry-tools-13':from .producer_business_content import QUERY_SYSTEM as SYSTEM,VERSION
+            elif purpose_protocol=='entry-tools-12':from .producer_business_value import QUERY_SYSTEM as SYSTEM,VERSION
+            elif purpose_protocol=='entry-tools-11':from .producer_task_value import QUERY_SYSTEM as SYSTEM,VERSION
             elif purpose_protocol=='entry-tools-10':from .page_purpose_v6 import QUERY_SYSTEM as SYSTEM,VERSION
-            elif purpose_protocol in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11'):from .page_purpose_v5 import QUERY_SYSTEM as SYSTEM,VERSION
+            elif purpose_protocol in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):from .page_purpose_v5 import QUERY_SYSTEM as SYSTEM,VERSION
             elif purpose_protocol=='entry-tools-7':from .page_purpose_v4 import QUERY_SYSTEM as SYSTEM,VERSION
             else:from .page_purpose import SYSTEM,VERSION
             payload['purpose_policy']=VERSION
             payload['goal']='寻找有第一方证据的公开业务入口和不同操作；网页库存数量与业务场景分别验收。'
             payload['instruction']+=' '+SYSTEM
-            if '企业后台与开源演示站' in categories:
+            if purpose_protocol in ('entry-tools-12','entry-tools-13'):
+                payload['goal']='寻找有第一方证据、基本公开业务内容且与目标站点主类一致的入口。'
+            elif '企业后台与开源演示站' in categories:
                 payload['goal']='寻找一个新应用的三种不同匿名后台业务入口：表格交互、表单编辑、仪表盘筛选；三个URI或产品说明不算通过。'
                 payload['instruction']+=' 优先具体公开实例画廊、匿名表格/表单/仪表盘；遇产品营销、帮助文档、登录墙应换检索方向。第一站不通过就记录缺额，不扩第二站。'
         # Freeze before model dispatch; interruption resumes this exact input.

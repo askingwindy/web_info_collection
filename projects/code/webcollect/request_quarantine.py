@@ -44,8 +44,43 @@ def attempt_owner(guard, registry, attempt_id, *, job_ledger=None):
                 WHERE a.attempt_id=? AND a.campaign_id=? AND a.campaign_id=t.campaign_id""",
                           (attempt_id, scope['chain_id'])).fetchone()
     if row and row[4]:
-        return dict(zip(('status','failure_class','task_id','candidate_id','uri','site_uri'), row))
+        return {**dict(zip(('status','failure_class','task_id','candidate_id','uri','site_uri'), row)),
+                'focus_effect_accounted':accounted_rejected_focus(path,attempt_id)}
     return None
+
+
+def accounted_rejected_focus(registry, attempt_id):
+    """Read the appended original settlement; never infer from harmless intent."""
+    from .batch_core import load_json
+    from .planning import verify_evidence
+    from .postprocess import rejected_focus_dispatch_audit
+    with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+        con.row_factory=sqlite3.Row
+        row=con.execute('SELECT status,failure_class,root_cause,evidence_json FROM m4_attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
+        if not row or row['status']!='rejected' or row['failure_class']!='interrupted':return False
+        events=[json.loads(r[0]) for r in con.execute("SELECT payload_json FROM m4_events WHERE event_type='rejected_focus_effect_accounted' AND attempt_id=?",(attempt_id,))]
+    for event in events:
+        audit_ref=event.get('rejected_focus_audit')
+        if not audit_ref or audit_ref not in json.loads(row['evidence_json']):continue
+        verify_evidence([audit_ref,event['original_failure'],event['process_exit'],event['raw_receipt']])
+        audit=load_json(audit_ref['path']);failure=load_json(event['original_failure']['path'])
+        closed=load_json(event['process_exit']['path'])
+        if (audit.get('attempt_id')!=attempt_id or audit.get('original_failure')!=event['original_failure']
+                or audit.get('raw_receipt')!=event['raw_receipt'] or failure.get('error')!=row['root_cause']
+                or closed.get('attempt_id')!=attempt_id or closed.get('browser_closed') is not True):continue
+        if audit!=rejected_focus_dispatch_audit(Path(event['raw_receipt']['path']).parent):continue
+        # Settled original model requests are checked again; their account is
+        # not replaced by this browser-effect audit.
+        raw=Path(event['raw_receipt']['path']).parent
+        binding=load_json(raw/'boundary.json')['task']['candidate_binding']
+        from site_planner.candidate_pool import CandidatePool
+        frozen=load_json(binding['claim_reference']['path']);claim=CandidatePool(frozen['pool']).get_claim(binding['claim_id'])
+        owner=claim.get('binding') or {}
+        if owner.get('attempt_id')!=attempt_id or Path(owner.get('registry','')).resolve()!=Path(registry).resolve():continue
+        with closing(sqlite3.connect(Path(owner['ledger']).as_uri()+'?mode=ro',uri=True)) as con:
+            requests=list(con.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?",(attempt_id,)))
+        if requests and {r[0] for r in requests}==set(event['settled_request_ids']) and all(r[1]=='succeeded' for r in requests):return True
+    return False
 
 
 def job_conflicts(ledger, uri, candidate_id, payload, *, running, registry=None, dispatched_attempt=None):

@@ -114,7 +114,7 @@ async def capture_before_action(page, evidence, selector=None, index=0, **option
                 try:observation=await capture(page,selector,index,timeout=remaining(),**options)
                 finally:attempt['capture_seconds']=time.monotonic()-phase
                 timing['stage']='verify_execution_state';phase=time.monotonic()
-                try:await verify_execution_state(page,observation['state'],selector,index,timeout=remaining(),**options)
+                try:observation['action_state_preflight']=await verify_execution_state(page,observation['state'],selector,index,timeout=remaining(),**options)
                 finally:attempt['verification_seconds']=time.monotonic()-phase
                 return observation
             except EvidenceStale as error:
@@ -140,6 +140,7 @@ async def capture_before_action(page, evidence, selector=None, index=0, **option
         raise
     timing.update(elapsed_seconds=time.monotonic()-started,accepted=True,stage='complete')
     observation['action_refresh']=timing
+    observation['action_deadline_monotonic']=started+budget
     return observation
 
 

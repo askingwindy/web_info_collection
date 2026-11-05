@@ -1,9 +1,104 @@
 {
-  "lastAnalyzedAt": "2026-11-04T18:05:52+08:00",
-  "gitCommitHash": "8efeb29b28af91c4572dcaed3b2045e529869458",
+  "lastAnalyzedAt": "2026-11-04T22:52:33+08:00",
+  "gitCommitHash": "d3964f87c605c6f33f0defae14ac3dd24c596345",
   "version": "1.0.0",
-  "analyzedFiles": 511,
-  "sourceContentDigest": "9b6dac81ca94471842ff54e688ddfa27b101174b47064f007b473af723d5c49d",
+  "analyzedFiles": 533,
+  "sourceContentDigest": "e494be91aff984a050922317ebb36614864c6819bded2c9157f6990663fd03a9",
   "workingTreeSnapshot": true,
-  "scope": "显式范围内的代码和工程文档，含指定的11月3日日结。跳过凭据和生产、验证产物。"
+  "sourceSnapshotAt": "2026-11-04T22:34:18+08:00",
+  "scope": "显式范围内的源码、测试、配置及工程文档。单独列出本地补充文档。",
+  "supplementalFilesAtSnapshot": [
+    "docs/生产消费QC整体优化共识与下一步规划-20261104.md",
+    "projects/prd/工作总结与下一步安排-20261103.md"
+  ],
+  "previousSnapshot": {
+    "at": "2026-11-04T18:05:52+08:00",
+    "sourceContentDigest": "9b6dac81ca94471842ff54e688ddfa27b101174b47064f007b473af723d5c49d",
+    "files": 511,
+    "modified": 38,
+    "added": 22,
+    "removed": 0
+  },
+  "sessionWindow": {
+    "from": "2026-11-04T12:00:00+08:00",
+    "through": "2026-11-04T22:33:24+08:00",
+    "timezone": "Asia/Shanghai",
+    "sources": [
+      {
+        "threadId": "01a1a6a9-8eaf-7023-81d8-2636586febe7",
+        "title": "消费者 R09 · 两处执行修复与双基线实采验收",
+        "turnIds": [
+          "01a1a6ed-57db-7273-8b7c-83ec79cdf3a3",
+          "01a1a6f4-9302-7bb2-b365-5225e6fe3fb9"
+        ],
+        "lastReviewedTurnAt": "2026-11-04T22:33:24+08:00"
+      },
+      {
+        "threadId": "01a1a188-e5c2-7341-9d46-f2a822b0eb5b",
+        "title": "总结今日工作并列出下一步",
+        "turnIds": [
+          "01a1a49a-ed40-7d53-9142-ee376a9931e5",
+          "01a1a4e6-4baf-77d0-a059-36bd587ac103",
+          "01a1a4f4-7efd-7b22-a53f-3d0aa21ee5a3",
+          "01a1a51e-c9fc-7a31-b398-58bd9cca16c3",
+          "01a1a53a-fddd-76b2-ae48-358422f2c0d2",
+          "01a1a582-d507-71a3-9047-574ab77ca2f2",
+          "01a1a5a7-99de-7900-8387-5a296b19d2ab",
+          "01a1a5ac-c46e-7e63-bdcb-3fcc1a80dd49",
+          "01a1a5fb-3d3a-7111-a5c9-6ccf850a14ea",
+          "01a1a670-877d-73d1-99f2-39c5e3d28eac",
+          "01a1a672-3dca-76b0-a1fc-c5e9deb173d2",
+          "01a1a697-2cb0-7b20-ba37-f6af91be65c1",
+          "01a1a6a7-5828-7921-a6af-7a54150a696a",
+          "01a1a6ed-5791-7792-b091-32f90a5fd053"
+        ],
+        "lastReviewedTurnAt": "2026-11-04T22:25:25+08:00"
+      },
+      {
+        "threadId": "01a1a434-1b80-7dc0-912f-c468c86dc3ce",
+        "title": "生产者工程与Agent优化：规则兜底模型及100网页实测",
+        "turnIds": [
+          "01a1a4be-d6a9-71b0-9aca-d5b4b47e4cbf",
+          "01a1a511-7079-70a1-ac97-2230b07c31e3",
+          "01a1a540-2840-7842-9a4d-f0a66a43f923",
+          "01a1a547-c82a-7780-90d3-df4f8fc850f1",
+          "01a1a5fb-a124-7d00-bfd8-f1911fe4aabe",
+          "01a1a66d-c838-7621-9475-bc12ad91cb52",
+          "01a1a671-c175-7ff2-8b04-37b238e79dfe",
+          "01a1a688-2889-7992-9f5d-820e6be0d186"
+        ],
+        "lastReviewedTurnAt": "2026-11-04T21:22:12+08:00"
+      },
+      {
+        "threadId": "01a1a5a8-e0ae-7950-b812-58dc33457e03",
+        "title": "安装 understanding-anything 技能",
+        "turnIds": [
+          "01a1a5a8-e3d3-7112-855a-4269aba6c27b",
+          "01a1a5fb-23d3-7173-a4c6-7f0897d3f4b0",
+          "01a1a670-0770-7171-a553-76c16080594a",
+          "01a1a680-55f8-7142-a424-57395c3a679e",
+          "01a1a688-b228-7380-84b7-b297051fc5c5"
+        ],
+        "lastReviewedTurnAt": "2026-11-04T20:52:50+08:00"
+      },
+      {
+        "threadId": "01a1a68b-48e6-7e01-9694-9339a79e66d8",
+        "title": "WebCollect QC 需求对齐、最终类目覆盖与离线验收",
+        "turnIds": [
+          "01a1a68b-4980-7ba1-94f7-4a0d06a4204f",
+          "01a1a6a8-8eb3-7960-a7d9-1e7f6f815a2f"
+        ],
+        "lastReviewedTurnAt": "2026-11-04T21:21:32+08:00"
+      },
+      {
+        "threadId": "01a1a436-71a4-71c2-8a2b-303fa66dc4fc",
+        "title": "消费者首轮规划修复、双基线与原序小批实采",
+        "turnIds": [
+          "01a1a49c-9e14-7c63-8bb8-f740fdb44ce0",
+          "01a1a4d4-8bec-7073-83e9-7f2bd98d64ab"
+        ],
+        "lastReviewedTurnAt": "2026-11-04T12:45:13+08:00"
+      }
+    ]
+  }
 }

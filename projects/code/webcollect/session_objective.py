@@ -21,6 +21,10 @@ def bind(reference,claim):
 def apply(task,binding):
     spec=task['workflow_proposal']['spec'];spec['session_objective']=deepcopy(binding)
     task['fragment']['session_objective']=deepcopy(binding)
+    from .direct_article import enabled as direct
+    if direct(task):
+        from .direct_completion import VERSION as COMPLETION
+        spec['direct_completion_protocol']=task['fragment']['direct_completion_protocol']=COMPLETION
     instruction=binding['objective']['description']
     spec['goal']['instruction']=instruction
     for field in ('instruction','final_result','completion_judgement'):task[field]=instruction

@@ -94,6 +94,23 @@ class ContractedGoal(unittest.TestCase):
             final['controls']['a']['binding']['selector']='main > a-different-input'
             self.assertEqual(progress(s,'start',self.calc)['status'],'UNVERIFIED')
 
+    def test_scroll_can_hide_only_label_while_original_input_value_remains_visible(self):
+        self.view('start','form',self.calculation(['2','5']))
+        self.view('edit1','form',self.calculation(['11','5']))
+        self.view('edit2','form',self.calculation(['11','7']))
+        final=self.view('scrolled','form',self.calculation(['11','7']),y=360)
+        final['controls']['a']['element']['text']=''
+        steps=[self.operation('o1','type','start','edit1','a'),self.operation('o2','type','edit1','edit2','b'),
+               self.operation('o3','scroll','edit2','scrolled')]
+        s=self.session('scrolled',steps)
+        with patch('webcollect.template_learning.result_evidence',return_value=[{'quotes':['本次总量 18 升']}]):
+            self.assertEqual(progress(s,'start',self.calc)['status'],'VERIFIED')
+            final['controls']['a']['binding']['selector']='replacement'
+            self.assertEqual(progress(s,'start',self.calc)['status'],'UNVERIFIED')
+        final['controls']['a']['binding']['selector']='main:nth-of-type(1) > input:nth-of-type(1)'
+        with patch('webcollect.template_learning.result_evidence',return_value=[]):
+            self.assertEqual(progress(s,'start',self.calc)['status'],'UNVERIFIED')
+
     def test_reading_requires_result_lineage_new_passage_and_bound_model_selection(self):
         form=('q','input','站内搜索','',None)
         button=('send','button','搜索',None,None)

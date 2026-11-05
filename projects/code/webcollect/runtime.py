@@ -541,7 +541,82 @@ class RuntimeStore:
         next_at = current + policy['task_interval_seconds']
         con.execute('INSERT INTO m4_domains VALUES(?,?) ON CONFLICT(domain_key) DO UPDATE SET next_start_at=MAX(next_start_at,excluded.next_start_at)', (row['domain_key'], next_at))
 
-    def finish_attempt(self, attempt_id, worker_id, lease_token, outcome, *, failure_class=None, root_cause=None, evidence=None, exact_images=None, now=None):
+    def _derived_recovery(self, con, row, recovery, evidence):
+        """Validate an offline successor derivation, never resume an execution."""
+        from .batch_core import load_json, file_sha
+        from .postprocess import session_record, effective_trajectory
+        from .direct_article import verify_record
+        from .candidate_contract import validate_task_binding
+        from site_planner.candidate_pool import CandidatePool
+        refs = [recovery[k] for k in ('raw_receipt', 'failure', 'process_exit')]
+        verify_evidence(refs)
+        raw = Path(recovery['raw_receipt']['path']).resolve().parent
+        record = session_record(raw)
+        stored_task = json.loads(row['task_json'])
+        # collect_m4 supplies these two execution-context fields after loading
+        # the frozen task; neither changes the business target or task binding.
+        plan = json.loads(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=? AND plan_sha256=?',
+                                     (row['scope_id'], row['plan_sha256'])).fetchone()[0])
+        execution_task = {**stored_task, '_plan_schema_version': plan['schema_version'],
+                          'require_public_origin': True}
+        primary = load_json(recovery['failure']['path'])
+        closed = load_json(recovery['process_exit']['path'])
+        if (row['status'] != 'rejected' or row['failure_class'] != 'program'
+                or not row['root_cause'].startswith('derivation_processing_failed:')
+                or primary.get('attempt_id') != row['attempt_id']
+                or primary.get('failure_class') != row['failure_class']
+                or primary.get('error') != row['root_cause']
+                or record['boundary']['attempt_id'] != row['attempt_id']
+                or record['task'] != execution_task
+                or record['terminal'].get('stop_reason') != 'ready'
+                or record['terminal'].get('unknown') is not False
+                or len(effective_trajectory(record)) != record['terminal'].get('actual_actions')):
+            raise ValueError('Only a known sealed ready execution with a failed derivation can recover')
+        verify_record(record)
+        binding = validate_task_binding(record['task'])
+        original = load_json(binding['claim_reference']['path'])
+        pool = CandidatePool(original['pool'])
+        claim = pool.get_claim(binding['claim_id'])
+        cb = claim.get('binding') or {}
+        if (cb.get('attempt_id') != row['attempt_id'] or Path(cb['registry']).resolve() != self.registry
+                or Path(cb['ledger']).resolve() != Path(recovery['model_ledger']).resolve()
+                or raw != Path(cb['output'])/'execution/capture/evidence'/row['sample_id']/'raw'
+                or closed.get('claim_id') != claim['claim_id'] or closed.get('returned_normally') is not True):
+            raise ValueError('Recovery differs from original claim, closed process, model account or raw')
+        with pool.pool.connect() as db:
+            latest = db.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1', (claim['candidate_id'],)).fetchone()
+        if not latest or latest[0] != claim['claim_id']:
+            raise ValueError('A newer claim prevents historical derivation recovery')
+        with sqlite3.connect(Path(recovery['model_ledger']).resolve().as_uri()+'?mode=ro', uri=True) as db:
+            requests = db.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (row['attempt_id'],)).fetchall()
+        if not requests or any(state not in ('succeeded', 'invalid_response') for _, state in requests):
+            raise ValueError('Unsettled original model request prevents derivation recovery')
+        if con.execute('SELECT 1 FROM m4_attempts WHERE task_key=? AND attempt_id<>? AND created_at>=?', (row['task_key'], row['attempt_id'], row['created_at'])).fetchone():
+            raise ValueError('A successor attempt prevents historical derivation recovery')
+        receipts = [r for r in evidence if Path(r['path']).name == 'saved_sample.json']
+        if len(receipts) != 1: raise ValueError('One saved derivation receipt required')
+        saved = load_json(receipts[0]['path'])
+        if (saved.get('attempt_id') != row['attempt_id'] or saved.get('sample_id') != row['sample_id']
+                or saved.get('derivation', {}).get('version', 0) < 2
+                or saved.get('raw_execution', {}).get('receipt') != record['receipt']['terminal']):
+            raise ValueError('Successor derivation must bind the identical raw attempt and sample')
+        root = raw.parent; sample = root.parent.parent/'samples'/row['sample_id']
+        for base, key in ((root, 'capture_files_sha256'), (sample, 'sample_files_sha256')):
+            if not saved.get(key): raise ValueError('Complete saved bytes required')
+            for name, digest in saved[key].items():
+                path = base/name
+                if path.is_symlink() or not path.resolve().is_relative_to(base.resolve()) or file_sha(path) != digest:
+                    raise ValueError('Saved derivation bytes differ')
+        failures = [json.loads(line) for line in (root/'derivations.jsonl').read_text().splitlines()]
+        if not any(r.get('status') == 'processing_failed' and r.get('derivation', 0) < saved['derivation']['version'] for r in failures):
+            raise ValueError('Original failed derivation must remain in its append-only ledger')
+        return {'schema_version':'webcollect-offline-derivation-recovery-1',
+                'original_attempt':dict(row), 'original_failure':recovery['failure'],
+                'raw_receipt':recovery['raw_receipt'], 'closed_process':recovery['process_exit'],
+                'successor_save':receipts[0], 'settled_requests':requests,
+                'browser_calls':0, 'model_calls':0, 'new_attempts':0}
+
+    def finish_attempt(self, attempt_id, worker_id, lease_token, outcome, *, failure_class=None, root_cause=None, evidence=None, exact_images=None, now=None, derivation_recovery=None):
         if outcome not in ('collected_pending_review', 'rejected'):
             raise ValueError('生产只能保存待审或拒绝，不授予QC/客户PASS')
         evidence = evidence or []
@@ -555,7 +630,12 @@ class RuntimeStore:
         current = timestamp(now)
         with self._transaction() as con:
             row = self._owned(con, attempt_id, worker_id, lease_token, current, terminal_ok=True)
-            if row['status'] not in ACTIVE:
+            recovery_proof = None
+            if derivation_recovery is not None:
+                if outcome != 'collected_pending_review' or exact_images is None:
+                    raise ValueError('Offline derivation recovery only commits a complete pending sample')
+                recovery_proof = self._derived_recovery(con, row, derivation_recovery, evidence)
+            if row['status'] not in ACTIVE and recovery_proof is None:
                 if (row['status'], row['failure_class'], row['root_cause'], row['evidence_json']) != (outcome, failure_class, root_cause, canonical(evidence)):
                     raise ValueError('已终结attempt不可覆盖为另一结果')
                 return self._view(row)
@@ -579,7 +659,14 @@ class RuntimeStore:
                         conflicts.append({'sha256': digest, 'current_image': path,
                                           'other_image': other['path'], 'other_sample_id': other['sample_id']})
                 if conflicts:
-                    raise ImageCommitConflict(conflicts)
+                    from .candidate_contract import research_duplicate_basis
+                    research = research_duplicate_basis(json.loads(row['task_json']), self.registry)
+                    blocked = [item for item in conflicts if not research
+                               or item['other_sample_id'] != research['original_sample_id']]
+                    if blocked:
+                        raise ImageCommitConflict(blocked)
+                    self._event(con, 'research_original_image_overlap', current,
+                                {'basis': research, 'exact_conflicts': conflicts}, row['task_key'], attempt_id)
                 for path, digest in checked.items():
                     previous = con.execute('SELECT digest,sample_id FROM m4_exact_images WHERE path=?', (path,)).fetchone()
                     if previous and tuple(previous) != (digest, row['sample_id']):
@@ -587,6 +674,10 @@ class RuntimeStore:
                     con.execute('INSERT OR IGNORE INTO m4_exact_images VALUES(?,?,?,?,?)',
                                 (path, digest, row['sample_id'], attempt_id, current))
             policy = self._policy(con)
+            if recovery_proof is not None:
+                # The original terminal row is retained verbatim in an append-only
+                # event. Only its current projection advances; no new allocation.
+                self._event(con, 'attempt_derivation_recovered', current, recovery_proof, row['task_key'], attempt_id)
             con.execute('UPDATE m4_attempts SET status=?,finished_at=?,failure_class=?,root_cause=?,evidence_json=? WHERE attempt_id=?',
                         (outcome, current, failure_class, root_cause, canonical(evidence), attempt_id))
             saved = self._attempt(con, attempt_id)
@@ -601,7 +692,7 @@ class RuntimeStore:
             self._event(con, 'attempt_finished', current, {'outcome': outcome, 'failure_class': failure_class, 'root_cause': root_cause, 'evidence': evidence, **transition}, row['task_key'], attempt_id)
             return self._view(saved)
 
-    def reconcile_sealed_rejection(self, attempt_id, *, raw_receipt, failure, process_exit, model_ledger, now=None):
+    def reconcile_sealed_rejection(self, attempt_id, *, raw_receipt, failure, process_exit, model_ledger, cancellation_audit=None, rejected_focus_audit=None, now=None):
         """Close an expired orphan only from its known, sealed failed execution.
 
         Never saves a sample, resumes a trajectory, clears UNKNOWN or replaces
@@ -616,16 +707,35 @@ class RuntimeStore:
         if (Path(raw_receipt['path']).name != 'raw-receipt.json'
                 or Path(failure['path']).resolve() != raw.parent/'failure.json'):
             raise ValueError('Original raw-receipt and primary failure paths required')
-        record = session_record(raw)  # UNKNOWN and changed raw bytes reject.
+        if cancellation_audit and rejected_focus_audit:
+            raise ValueError('Choose exactly one original dispatch audit')
+        if rejected_focus_audit:
+            from .postprocess import rejected_focus_dispatch_audit
+            verify_evidence([rejected_focus_audit])
+            audit=rejected_focus_dispatch_audit(raw)
+            if load_json(rejected_focus_audit['path'])!=audit or audit['attempt_id']!=attempt_id:
+                raise ValueError('Rejected focus audit differs from original sealed evidence')
+        if cancellation_audit:
+            from .postprocess import cancelled_dispatch_audit
+            verify_evidence([cancellation_audit])
+            audit = cancelled_dispatch_audit(raw)
+            if load_json(cancellation_audit['path']) != audit or audit['attempt_id'] != attempt_id:
+                raise ValueError('Cancellation audit differs from sealed original dispatches')
+        audited=bool(cancellation_audit or rejected_focus_audit)
+        record = session_record(raw, allow_unknown_for_prefix=audited)
         primary = load_json(failure['path'])
-        exit_code = load_json(process_exit['path']).get('returncode')
+        closed = load_json(process_exit['path']); exit_code = closed.get('returncode')
         if (type(exit_code) is not int
                 or primary.get('attempt_id') != attempt_id
-                or primary.get('failure_class') in ('interrupted','unknown')
+                or (primary.get('failure_class') in ('interrupted','unknown') and not audited)
                 or primary.get('failure_class') not in FAILURES
                 or not primary.get('error')):
             raise ValueError('Definite original closed-process and rejection evidence required')
-        if len(effective_trajectory(record)) != record['terminal'].get('actual_actions'):
+        if audited and (primary['failure_class'] != 'interrupted'
+                or closed.get('attempt_id') != attempt_id or closed.get('browser_closed') is not True):
+            raise ValueError('Cancelled execution requires its closed browser/process receipt')
+        accounted=audit['accounted_dispatches'] if rejected_focus_audit else len(effective_trajectory(record, _audit_cancelled=bool(cancellation_audit)))
+        if accounted != record['terminal'].get('actual_actions'):
             raise ValueError('Original dispatched effects are not fully accounted')
         binding = validate_task_binding(record['task'])
         original_claim = load_json(binding['claim_reference']['path'])
@@ -640,10 +750,12 @@ class RuntimeStore:
         if not requests or any(r['state'] != 'succeeded' for r in requests):
             raise ValueError('Original model requests are unresolved; no rejection reconciliation')
         current = timestamp(now)
-        refs = [raw_receipt, failure, process_exit]
+        refs = [raw_receipt, failure, process_exit] + ([cancellation_audit] if cancellation_audit else []) + ([rejected_focus_audit] if rejected_focus_audit else [])
         with self._transaction() as con:
             row = self._attempt(con, attempt_id)
-            if row['status'] not in ACTIVE or row['started_at'] is None or row['lease_expires_at'] > current:
+            already_closed=bool(rejected_focus_audit and row['status']=='rejected'
+                and row['failure_class']==primary['failure_class'] and row['root_cause']==primary['error'])
+            if (row['status'] not in ACTIVE and not already_closed) or row['started_at'] is None or row['lease_expires_at'] > current:
                 raise ValueError('Only an expired, started orphan can be reconciled')
             original_task = json.loads(row['task_json'])
             executed_task = deepcopy(record['task'])
@@ -658,15 +770,25 @@ class RuntimeStore:
                 raise ValueError('Original runtime task/sample differs from sealed raw')
             existing = json.loads(row['evidence_json'] or '[]')
             refs = existing + [ref for ref in refs if ref not in existing]
+            if already_closed:
+                con.execute('UPDATE m4_attempts SET evidence_json=? WHERE attempt_id=?',(canonical(refs),attempt_id))
+                self._event(con,'rejected_focus_effect_accounted',current,
+                    {'original_failure':failure,'raw_receipt':raw_receipt,'process_exit':process_exit,
+                     'rejected_focus_audit':rejected_focus_audit,'settled_request_ids':[r['id'] for r in requests],
+                     'original_outcome_fields_retained':True},row['task_key'],attempt_id)
+                return self._view(self._attempt(con,attempt_id))
             con.execute("UPDATE m4_attempts SET status='rejected',finished_at=?,failure_class=?,root_cause=?,evidence_json=? WHERE attempt_id=?",
-                (current, primary['failure_class'], primary['error'], canonical(refs), attempt_id))
+                (current, 'program' if audited else primary['failure_class'],
+                 'rejected_focus_effect_audited' if rejected_focus_audit else 'host_cancelled_between_verified_actions' if cancellation_audit else primary['error'], canonical(refs), attempt_id))
             saved = self._attempt(con, attempt_id)
             policy = self._policy(con)
             transition = self._failure_transition(con, saved, current, policy)
             self._domain_finished(con, saved, current, policy)
             self._event(con, 'sealed_rejection_reconciled', current,
                 {'prior_status':row['status'], 'original_failure':failure, 'raw_receipt':raw_receipt,
-                 'process_exit':process_exit, 'settled_request_ids':[r['id'] for r in requests], **transition},
+                 'process_exit':process_exit, 'cancellation_audit':cancellation_audit,
+                 'rejected_focus_audit':rejected_focus_audit,
+                 'settled_request_ids':[r['id'] for r in requests], **transition},
                 row['task_key'], attempt_id)
             return self._view(saved)
 

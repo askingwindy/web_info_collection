@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "gitCommitHash": "8efeb29b28af91c4572dcaed3b2045e529869458",
-  "generatedAt": "2026-11-04T10:06:00.104Z",
+  "gitCommitHash": "d3964f87c605c6f33f0defae14ac3dd24c596345",
+  "generatedAt": "2026-11-04T14:52:43.785Z",
   "files": {
     "AGENTS.md": {
       "filePath": "AGENTS.md",
@@ -15,12 +15,12 @@
     },
     "README.md": {
       "filePath": "README.md",
-      "contentHash": "0a31fc290819017e586ec4c1b11a769ae558a483b4f0fc609ea8abe29dc4522e",
+      "contentHash": "73faaac339a06128724ba55d496952920812637ed764da3ec52139c3c5a3f40a",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 306,
+      "totalLines": 321,
       "hasStructuralAnalysis": false
     },
     "docs/20万条快速采集量产方案-20261030.md": {
@@ -71,6 +71,16 @@
       "imports": [],
       "exports": [],
       "totalLines": 128,
+      "hasStructuralAnalysis": false
+    },
+    "docs/QC需求依据与最终类目覆盖对齐实施计划-20261104.md": {
+      "filePath": "docs/QC需求依据与最终类目覆盖对齐实施计划-20261104.md",
+      "contentHash": "f4a8e48415f4068dcc61c69de11530075d1b5e01af36b430627041d58d3274b0",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 46,
       "hasStructuralAnalysis": false
     },
     "docs/WebCollect统一优化方案-20261029.md": {
@@ -145,12 +155,12 @@
     },
     "docs/工程说明.md": {
       "filePath": "docs/工程说明.md",
-      "contentHash": "69f9b4a777b19c6b19901ca511331759f3be110b75c850308713b89262ca0d55",
+      "contentHash": "e52de9b4268b07e54a28641095e6b66d4b88b0c6e1859b5f9956ac47364139ca",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 672,
+      "totalLines": 709,
       "hasStructuralAnalysis": false
     },
     "docs/批量消费与规划Agent优化执行计划-20261101.md": {
@@ -211,6 +221,26 @@
       "imports": [],
       "exports": [],
       "totalLines": 127,
+      "hasStructuralAnalysis": false
+    },
+    "docs/消费者R09选项重规划与取证时限修复-20261104.md": {
+      "filePath": "docs/消费者R09选项重规划与取证时限修复-20261104.md",
+      "contentHash": "6713903cfd7c0c0fd28a1953bef57f3e99a4a508d594f6224af1c6ccf5f4894e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 30,
+      "hasStructuralAnalysis": false
+    },
+    "docs/消费者V8原件派发与剩余计划修复-20261104.md": {
+      "filePath": "docs/消费者V8原件派发与剩余计划修复-20261104.md",
+      "contentHash": "b7212eb923b6ad6104527888b19ac20f161f4bb191c2fdf4b4a6cf8f75de393d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 34,
       "hasStructuralAnalysis": false
     },
     "docs/消费者工程代码优化计划-单条正常多步样本-20261102.md": {
@@ -283,6 +313,16 @@
       "totalLines": 82,
       "hasStructuralAnalysis": false
     },
+    "docs/生产消费QC整体优化共识与下一步规划-20261104.md": {
+      "filePath": "docs/生产消费QC整体优化共识与下一步规划-20261104.md",
+      "contentHash": "1deba459a575e1b5100353016d21df24cfb1af1232fc483a91895418eefa2023",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 160,
+      "hasStructuralAnalysis": false
+    },
     "docs/生产者UNKNOWN与匿名后台复盘及优化方案-20261104.md": {
       "filePath": "docs/生产者UNKNOWN与匿名后台复盘及优化方案-20261104.md",
       "contentHash": "ce6b13485df0a5bfd47342bf3bfc5ad3c484c595090937527fe4f66d1c783001",
@@ -291,6 +331,26 @@
       "imports": [],
       "exports": [],
       "totalLines": 97,
+      "hasStructuralAnalysis": false
+    },
+    "docs/生产者V10结构引用修复与新100页复盘-20261104.md": {
+      "filePath": "docs/生产者V10结构引用修复与新100页复盘-20261104.md",
+      "contentHash": "4638521aec979101a71737c77248b0f39f2f7258b8308fcd667090f8771554b7",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 50,
+      "hasStructuralAnalysis": false
+    },
+    "docs/生产者V11新100页业务与自然任务独立验收-20261104.md": {
+      "filePath": "docs/生产者V11新100页业务与自然任务独立验收-20261104.md",
+      "contentHash": "cc4cca33e1bf75d9b864421a129c5bcd7a7dad13318c79955720337b94b4ddbb",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 50,
       "hasStructuralAnalysis": false
     },
     "docs/生产者V9新挖掘100页与性能归因-20261104.md": {
@@ -311,6 +371,16 @@
       "imports": [],
       "exports": [],
       "totalLines": 63,
+      "hasStructuralAnalysis": false
+    },
+    "docs/生产者业务价值与自然任务优先-20261104.md": {
+      "filePath": "docs/生产者业务价值与自然任务优先-20261104.md",
+      "contentHash": "a741897025e243bc6aba377f31c83db6390203ae672419d0da5cb4beaace2c47",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 36,
       "hasStructuralAnalysis": false
     },
     "docs/生产者业务选链修复与Table2并发约束-20261104.md": {
@@ -515,12 +585,12 @@
     },
     "docs/设计说明.md": {
       "filePath": "docs/设计说明.md",
-      "contentHash": "5125c77453a3f8e3c509ef1395e916c6f4d28c234e826b3cc38161bc79d0a173",
+      "contentHash": "ec8a1cc2bf184aaa9978ba0b9146308765c959eb91c5cbea2c9378b6a76197d4",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 494,
+      "totalLines": 523,
       "hasStructuralAnalysis": false
     },
     "docs/采集修复与效率优化规划-20261029.md": {
@@ -7935,7 +8005,7 @@
     },
     "projects/code/tests/test_complete_refresh.py": {
       "filePath": "projects/code/tests/test_complete_refresh.py",
-      "contentHash": "9c8bce8fe51363822f1851e96dd64730d30dbd4bf2726a7aa387bcfb4ced0596",
+      "contentHash": "565b726874c6f3812dabdac9e08b92f01784f39157fc2fd49e249c8e51735e7c",
       "functions": [
         {
           "name": "frame",
@@ -8032,7 +8102,8 @@
         {
           "source": "webcollect.browser",
           "specifiers": [
-            "fingerprint"
+            "fingerprint",
+            "EvidenceStale"
           ]
         }
       ],
@@ -9224,7 +9295,7 @@
     },
     "projects/code/tests/test_contract_source_isolation.py": {
       "filePath": "projects/code/tests/test_contract_source_isolation.py",
-      "contentHash": "91939dadd0542fb02adce6c551d9392977477e287fdf154fd7750fa98901219d",
+      "contentHash": "8d645685896c4efad4c21793e4791134590e56f6ddc390be803a75a76e87a5a5",
       "functions": [],
       "classes": [
         {
@@ -9925,7 +9996,7 @@
     },
     "projects/code/tests/test_delivery_release_binding.py": {
       "filePath": "projects/code/tests/test_delivery_release_binding.py",
-      "contentHash": "f4e158a846df77c9a30367028c969b50b925bf8e0276b9ba9d9977a66b9e57d3",
+      "contentHash": "c45b5d0de496e4fba60eb494c4d0af4d632ace7d47b98e61962978e3dddc0ce6",
       "functions": [],
       "classes": [
         {
@@ -9937,11 +10008,16 @@
             "test_release_output_cannot_mutate_any_other_declared_input_package",
             "prepare_actual_final",
             "test_cached_true_payload_and_final_reports_reject_a_changed_relevant_rule",
-            "test_engineering_source_hash_changes_do_not_expire_unchanged_semantic_report"
+            "test_engineering_source_hash_changes_do_not_expire_unchanged_semantic_report",
+            "test_normal_formal_missing_category_report_blocks_finalize_and_archive",
+            "test_old_statistics_other_set_and_stale_contract_cannot_seal_current_member",
+            "test_payload_and_final_reports_must_keep_current_requirement_identity",
+            "test_single_package_profile_changes_cannot_borrow_old_payload_or_final_pass",
+            "test_cached_profile_configuration_and_missing_profile_are_rejected_at_both_stages"
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 107
+          "lineCount": 201
         }
       ],
       "imports": [
@@ -10025,6 +10101,12 @@
           ]
         },
         {
+          "source": "quality_inspector.__main__",
+          "specifiers": [
+            "qc_main"
+          ]
+        },
+        {
           "source": "webcollect.client_reports",
           "specifiers": [
             "finalize_client_package",
@@ -10035,7 +10117,7 @@
       "exports": [
         "DeliveryReleaseBindingTests"
       ],
-      "totalLines": 132,
+      "totalLines": 227,
       "hasStructuralAnalysis": true
     },
     "projects/code/tests/test_delivery_sampling.py": {
@@ -15523,7 +15605,7 @@
     },
     "projects/code/tests/test_p0_production.py": {
       "filePath": "projects/code/tests/test_p0_production.py",
-      "contentHash": "db462b02d4f027601d6e5f67ef68803f7974bf4702fea930d7ccf7b39e4122c5",
+      "contentHash": "fe62b55b9a5ba059bae71fba297059cebe6a6a2415c0625413707ecf6003e613",
       "functions": [
         {
           "name": "seed_captures",
@@ -15577,7 +15659,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 68
+          "lineCount": 70
         },
         {
           "name": "LocalFragmentCapture",
@@ -15679,7 +15761,7 @@
         "ProductionCallbackContracts",
         "LocalFragmentCapture"
       ],
-      "totalLines": 376,
+      "totalLines": 378,
       "hasStructuralAnalysis": true
     },
     "projects/code/tests/test_p0_workflows.py": {
@@ -16596,7 +16678,7 @@
     },
     "projects/code/tests/test_plan_evidence.py": {
       "filePath": "projects/code/tests/test_plan_evidence.py",
-      "contentHash": "11e0b43bba085f28550206f783e67d005cf2bc931ff4f7d4e71e432220017c67",
+      "contentHash": "9882fe9ff9a88f20850c4e77a5ef9ba1f1acb01f7395dc9e720fc8aa70d7e405",
       "functions": [],
       "classes": [
         {
@@ -16613,7 +16695,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 83
+          "lineCount": 84
         },
         {
           "name": "FormalFactsTests",
@@ -16722,7 +16804,251 @@
         "FormalFactsTests",
         "ProtocolAlignmentTests"
       ],
-      "totalLines": 164,
+      "totalLines": 165,
+      "hasStructuralAnalysis": true
+    },
+    "projects/code/tests/test_plan_recovery.py": {
+      "filePath": "projects/code/tests/test_plan_recovery.py",
+      "contentHash": "ed8c5ebfa637b9940106aae3cddac4c5886fb51bdfd6bbe97c36a9f5c966c63e",
+      "functions": [
+        {
+          "name": "load_tests",
+          "params": [
+            "loader",
+            "tests",
+            "pattern"
+          ],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "Recovery",
+          "methods": [
+            "test_numeric_expected_condition_keeps_raw_and_exports_chinese_narrative",
+            "test_rejected_host_finish_stops_instead_of_reobserving_forever",
+            "test_disproven_selection_returns_values_and_preserves_seven_steps"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 37
+        },
+        {
+          "name": "EvidenceDeadline",
+          "methods": [
+            "test_slow_frame_uses_caller_budget_and_verification_only_remaining",
+            "test_capture_and_verify_timeouts_preserve_stage_no_action"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "asyncio",
+          "specifiers": [
+            "asyncio"
+          ]
+        },
+        {
+          "source": "copy",
+          "specifiers": [
+            "deepcopy"
+          ]
+        },
+        {
+          "source": "tempfile",
+          "specifiers": [
+            "TemporaryDirectory"
+          ]
+        },
+        {
+          "source": "unittest.mock",
+          "specifiers": [
+            "AsyncMock",
+            "patch"
+          ]
+        },
+        {
+          "source": "unittest",
+          "specifiers": [
+            "unittest"
+          ]
+        },
+        {
+          "source": "webcollect",
+          "specifiers": [
+            "collect"
+          ]
+        },
+        {
+          "source": "webcollect.agent_controller",
+          "specifiers": [
+            "compile_step",
+            "SelectionValueMismatch"
+          ]
+        },
+        {
+          "source": "test_banded_plan",
+          "specifiers": [
+            "BandedSessionTests",
+            "plan_for"
+          ]
+        }
+      ],
+      "exports": [
+        "Recovery",
+        "EvidenceDeadline",
+        "load_tests"
+      ],
+      "totalLines": 71,
+      "hasStructuralAnalysis": true
+    },
+    "projects/code/tests/test_plan_v8.py": {
+      "filePath": "projects/code/tests/test_plan_v8.py",
+      "contentHash": "e0104341bb5420c24a2c8ab258d059e1f2e946593dfa96a0732c94607235c9b2",
+      "functions": [
+        {
+          "name": "load_tests",
+          "params": [
+            "loader",
+            "tests",
+            "pattern"
+          ],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "Grounding",
+          "methods": [
+            "test_extra_prose_only_relaxes_unique_proven_reference",
+            "test_minimum_is_an_integer_compatible_with_frozen_band",
+            "test_citation_survives_real_later_scroll_only_in_v8_same_document"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 56
+        },
+        {
+          "name": "ControllerTests",
+          "methods": [
+            "test_boundary_hash_matches_actual_initial_v8_tools_and_system",
+            "test_focus_pinned_in_bounded_request_and_unmodified_reply_dispatches",
+            "test_replan_one_remaining_inherits_long_without_short_reason_or_repeated_fields",
+            "test_continuation_requires_preplanned_reading_scroll_below_explicit_minimum"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "Schemas",
+          "methods": [
+            "test_partial_remaining_schema_is_versioned",
+            "test_pending_goal_checks_from_wire_are_not_observed_facts"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "BoundaryIntegrity",
+          "methods": [
+            "test_boundary_marker_cannot_switch_frozen_plan_version"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "imports": [
+        {
+          "source": "copy",
+          "specifiers": [
+            "deepcopy"
+          ]
+        },
+        {
+          "source": "unittest",
+          "specifiers": [
+            "unittest"
+          ]
+        },
+        {
+          "source": "types",
+          "specifiers": [
+            "SimpleNamespace"
+          ]
+        },
+        {
+          "source": "unittest.mock",
+          "specifiers": [
+            "patch"
+          ]
+        },
+        {
+          "source": "jsonschema",
+          "specifiers": [
+            "Draft202012Validator"
+          ]
+        },
+        {
+          "source": "webcollect.banded_plan",
+          "specifiers": [
+            "VERSION",
+            "V7_VERSION",
+            "Controller",
+            "bind_target",
+            "choice_schema",
+            "initial_projection",
+            "validate_plan",
+            "system_for"
+          ]
+        },
+        {
+          "source": "webcollect.agent_controller",
+          "specifiers": [
+            "exclusive"
+          ]
+        },
+        {
+          "source": "webcollect.session_objective",
+          "specifiers": [
+            "bind"
+          ]
+        },
+        {
+          "source": "test_contracted_goal",
+          "specifiers": [
+            "ContractedGoal"
+          ]
+        },
+        {
+          "source": "test_banded_plan",
+          "specifiers": [
+            "BandedSessionTests",
+            "plan_for"
+          ]
+        },
+        {
+          "source": "test_consumer_page_policy",
+          "specifiers": [
+            "BoundarySessionTests"
+          ]
+        }
+      ],
+      "exports": [
+        "Grounding",
+        "ControllerTests",
+        "Schemas",
+        "BoundaryIntegrity",
+        "load_tests"
+      ],
+      "totalLines": 166,
       "hasStructuralAnalysis": true
     },
     "projects/code/tests/test_planner_repair.py": {
@@ -18614,6 +18940,108 @@
       "totalLines": 140,
       "hasStructuralAnalysis": true
     },
+    "projects/code/tests/test_producer_task_value.py": {
+      "filePath": "projects/code/tests/test_producer_task_value.py",
+      "contentHash": "13723c0096636381e2f8ad70070180b6641747d88b8d9351c9b316e44ef2c5d6",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TaskValue",
+          "methods": [
+            "setUp",
+            "original",
+            "prepared",
+            "decision",
+            "provider",
+            "run_decision",
+            "test_missing_auxiliary_type_keeps_business_candidate",
+            "test_bad_auxiliary_type_and_quotes_cannot_hold_valid_core",
+            "test_known_supported_type_remains_auxiliary",
+            "test_type_structure_failure_does_not_hold_button_only_tool",
+            "test_known_type_does_not_replace_missing_task",
+            "test_business_mismatch_or_unknown_does_not_enter_for_a_known_type",
+            "test_short_real_task_kept_at_low_priority_without_five_step_claim",
+            "test_legal_title_cannot_be_promoted_by_task_hint",
+            "test_missing_core_stays_unresolved",
+            "test_same_paid_unknown_purpose_reused_in_another_chunk",
+            "test_invalid_auxiliary_paid_reply_is_read_only_projected_and_cached",
+            "test_invalid_core_paid_reply_is_cached_without_retry",
+            "test_unknown_original_request_is_not_redispatched_or_reidentified",
+            "test_no_original_document_never_fetches_or_sends_empty_material",
+            "test_cached_request_unsettled_keeps_original_hold",
+            "test_model_input_has_short_local_quotes_no_structure_or_purpose_request",
+            "test_low_priority_task_follows_supported_task_in_same_batch",
+            "test_formal_v11_publishes_unknown_task_hint_without_extra_get_or_goal"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 229
+        }
+      ],
+      "imports": [
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "unittest",
+          "specifiers": [
+            "unittest"
+          ]
+        },
+        {
+          "source": "copy",
+          "specifiers": [
+            "deepcopy"
+          ]
+        },
+        {
+          "source": "unittest.mock",
+          "specifiers": [
+            "patch"
+          ]
+        },
+        {
+          "source": "test_producer_v10",
+          "specifiers": [
+            "fixture"
+          ]
+        },
+        {
+          "source": "site_planner",
+          "specifiers": [
+            "value"
+          ]
+        },
+        {
+          "source": "site_planner",
+          "specifiers": [
+            "old",
+            "observed"
+          ]
+        },
+        {
+          "source": "webcollect.batch_core",
+          "specifiers": [
+            "OutcomeUnknown",
+            "load_json"
+          ]
+        }
+      ],
+      "exports": [
+        "TaskValue"
+      ],
+      "totalLines": 247,
+      "hasStructuralAnalysis": true
+    },
     "projects/code/tests/test_producer_tools.py": {
       "filePath": "projects/code/tests/test_producer_tools.py",
       "contentHash": "d50dd432a437f9a01631f6bf4ccbf092b8f9608e4e24a5f9e799747e20996957",
@@ -18787,7 +19215,7 @@
     },
     "projects/code/tests/test_producer_v10.py": {
       "filePath": "projects/code/tests/test_producer_v10.py",
-      "contentHash": "3837acf417d6105a18fbac15c2a66ae3f0b10809d8d2ad563bb0f67e15350fe8",
+      "contentHash": "d8a2620f9d45ea0e35476d9029b337055fdf1ae9812180aa7f2767c4041a8df6",
       "functions": [],
       "classes": [
         {
@@ -18804,17 +19232,20 @@
             "test_article_related_cards_do_not_override_narrative",
             "test_api_document_global_search_does_not_prove_tool",
             "test_named_calculator_form_is_a_tool",
+            "test_tool_explanation_length_alone_does_not_remove_real_inputs",
             "test_nested_layout_keeps_main_scope_and_excludes_chrome",
             "test_wrong_page_quote_or_structure_never_passes",
             "test_same_observation_supplies_dom_and_publication_without_get",
             "test_corrupt_document_or_job_proof_does_not_fall_back_to_new_get",
             "test_cached_screen_does_not_start_chrome",
             "test_formal_v10_uses_one_get_and_same_batch_replay_zero_dispatch",
-            "test_exact_purpose_cache_reuses_paid_reply_in_different_chunk"
+            "test_exact_purpose_cache_reuses_paid_reply_in_different_chunk",
+            "test_shared_batch_opens_one_browser_and_keeps_page_contexts_fresh",
+            "test_browser_capture_keeps_response_and_dom_in_one_original_visit"
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 102
+          "lineCount": 159
         }
       ],
       "imports": [
@@ -18905,7 +19336,7 @@
       "exports": [
         "ProducerV10"
       ],
-      "totalLines": 118,
+      "totalLines": 175,
       "hasStructuralAnalysis": true
     },
     "projects/code/tests/test_production_facts.py": {
@@ -26573,7 +27004,7 @@
     },
     "projects/code/webcollect/agent_controller.py": {
       "filePath": "projects/code/webcollect/agent_controller.py",
-      "contentHash": "7bc61497829e98e77b6730b2f7dd271dedc6b3d0ad5c6633ff762d98e15dc2de",
+      "contentHash": "814f49befb967e27e0a0ab281caca3bc0f4f2c7c23f6647f599b7e0064cba523",
       "functions": [
         {
           "name": "is_controlled",
@@ -26724,6 +27155,13 @@
           "properties": [],
           "exported": true,
           "lineCount": 406
+        },
+        {
+          "name": "SelectionValueMismatch",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 2
         }
       ],
       "imports": [
@@ -26798,12 +27236,13 @@
         "projection_change",
         "_input_driven_labels",
         "FragmentController",
+        "SelectionValueMismatch",
         "compile_step",
         "_job_request_count",
         "model_chooser",
         "verify_ledger_binding"
       ],
-      "totalLines": 742,
+      "totalLines": 746,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/agent_feedback.py": {
@@ -27280,7 +27719,7 @@
     },
     "projects/code/webcollect/banded_plan.py": {
       "filePath": "projects/code/webcollect/banded_plan.py",
-      "contentHash": "cbeabf4c4869d8acfb8fc46c08a5f75308885ad106f21241da895df988fa7e50",
+      "contentHash": "0eafc59a6d13cdf6e68d034f56c27f70747a7b586dfc506721d9aaf15469d404",
       "functions": [
         {
           "name": "system_for",
@@ -27288,7 +27727,7 @@
             "task"
           ],
           "exported": true,
-          "lineCount": 21
+          "lineCount": 33
         },
         {
           "name": "obj",
@@ -27311,15 +27750,17 @@
           "name": "plan_schema",
           "params": [
             "grounded",
-            "wire"
+            "wire",
+            "pending_checks"
           ],
           "exported": true,
-          "lineCount": 24
+          "lineCount": 28
         },
         {
           "name": "tools",
           "params": [
-            "grounded"
+            "grounded",
+            "pending_checks"
           ],
           "exported": true,
           "lineCount": 3
@@ -27327,10 +27768,11 @@
         {
           "name": "choice_schema",
           "params": [
-            "grounded"
+            "grounded",
+            "inherited"
           ],
           "exported": true,
-          "lineCount": 10
+          "lineCount": 13
         },
         {
           "name": "bind_reply_scope",
@@ -27367,10 +27809,12 @@
             "allowed",
             "remaining",
             "recovery",
-            "grounded"
+            "grounded",
+            "inherited_band",
+            "pending_checks"
           ],
           "exported": true,
-          "lineCount": 22
+          "lineCount": 28
         },
         {
           "name": "rendered_dom",
@@ -27386,10 +27830,21 @@
             "observation",
             "target",
             "observations",
-            "carriers"
+            "carriers",
+            "advisory"
           ],
           "exported": true,
-          "lineCount": 43
+          "lineCount": 49
+        },
+        {
+          "name": "advisory_target",
+          "params": [
+            "observation",
+            "target",
+            "semantic"
+          ],
+          "exported": true,
+          "lineCount": 27
         },
         {
           "name": "region_evidence",
@@ -27416,7 +27871,8 @@
           "params": [
             "observation",
             "limit",
-            "goal"
+            "goal",
+            "pinned"
           ],
           "exported": true,
           "lineCount": 29
@@ -27452,6 +27908,7 @@
             "proved",
             "endpoint_basis",
             "visual_option",
+            "continue_reading",
             "targets",
             "request",
             "fact_summary",
@@ -27462,7 +27919,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 481
+          "lineCount": 538
         }
       ],
       "imports": [
@@ -27512,6 +27969,7 @@
         "validate_plan",
         "rendered_dom",
         "bind_target",
+        "advisory_target",
         "region_evidence",
         "proves",
         "initial_projection",
@@ -27519,7 +27977,7 @@
         "distribution",
         "Controller"
       ],
-      "totalLines": 857,
+      "totalLines": 975,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/batch.py": {
@@ -30498,7 +30956,7 @@
     },
     "projects/code/webcollect/client_reports.py": {
       "filePath": "projects/code/webcollect/client_reports.py",
-      "contentHash": "d5390bc08d832b3be6915f8b94e5a5caade684fac3b181f4d2eb63473690d954",
+      "contentHash": "f2c7296d121dcf3dc4885669dbefeec12d3729e4b6dc0c9f4821156d8caeac5a",
       "functions": [
         {
           "name": "_file_hashes",
@@ -30543,6 +31001,14 @@
           "lineCount": 36
         },
         {
+          "name": "_delivery_report_bindings",
+          "params": [
+            "report"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
           "name": "_source_population",
           "params": [
             "report"
@@ -30573,7 +31039,7 @@
             "cross_package_report"
           ],
           "exported": true,
-          "lineCount": 53
+          "lineCount": 54
         },
         {
           "name": "archive_client_package",
@@ -30585,7 +31051,7 @@
             "cross_package_report"
           ],
           "exported": true,
-          "lineCount": 33
+          "lineCount": 34
         }
       ],
       "classes": [
@@ -30669,17 +31135,18 @@
         "StaleSemanticRules",
         "validate_report_semantic_rules",
         "_bound_report",
+        "_delivery_report_bindings",
         "_source_population",
         "_render_summary",
         "finalize_client_package",
         "archive_client_package"
       ],
-      "totalLines": 354,
+      "totalLines": 378,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/closing_policy.py": {
       "filePath": "projects/code/webcollect/closing_policy.py",
-      "contentHash": "d24fe245f8d458291e67039471043f12765f6ab7cc76a5be8239e6e1ce14aec2",
+      "contentHash": "f448dc198adcd0bde015ab6fd74144b8b59186b6780159bfd19b532af35ca917",
       "functions": [
         {
           "name": "enabled",
@@ -30712,7 +31179,7 @@
             "record"
           ],
           "exported": true,
-          "lineCount": 113
+          "lineCount": 114
         },
         {
           "name": "annotation_errors",
@@ -30752,12 +31219,12 @@
         "validate_record",
         "annotation_errors"
       ],
-      "totalLines": 182,
+      "totalLines": 183,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/collect.py": {
       "filePath": "projects/code/webcollect/collect.py",
-      "contentHash": "9193ea951973bf7d67cb970e9d91ab75a0823615159494b0ea4adbdbb743669f",
+      "contentHash": "5b2676afef77be3b0d09dbc55cd20175af055baaea9a00a11031bdaf736c5fce",
       "functions": [
         {
           "name": "now",
@@ -30788,7 +31255,7 @@
             "**options"
           ],
           "exported": true,
-          "lineCount": 23
+          "lineCount": 44
         },
         {
           "name": "chinese_ratio",
@@ -31199,7 +31666,7 @@
         "dynamic_controller_ledger",
         "collect_plan"
       ],
-      "totalLines": 1485,
+      "totalLines": 1506,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/collect_runtime.py": {
@@ -31568,7 +32035,7 @@
     },
     "projects/code/webcollect/consumer_page_policy.py": {
       "filePath": "projects/code/webcollect/consumer_page_policy.py",
-      "contentHash": "684bd92c5fefbf84b0b1a8a8416bd921a79cf5736b03c12b5a870241c09f3a8c",
+      "contentHash": "562c66f8eb60a3396ad7ee6d6321df0855ef633527336f82ed422b5a1edcea17",
       "functions": [
         {
           "name": "enabled",
@@ -33010,7 +33477,7 @@
     },
     "projects/code/webcollect/goal_evidence.py": {
       "filePath": "projects/code/webcollect/goal_evidence.py",
-      "contentHash": "844c45327f12862a58fc1f8aba05343ee25c50c1672c3f925b1f9d2ce1a02a6b",
+      "contentHash": "7e2994733ef514caf08420f1c395631eeb1a73ba16836860731a2869c5661d1b",
       "functions": [
         {
           "name": "contract_for",
@@ -33132,7 +33599,7 @@
             "contract"
           ],
           "exported": true,
-          "lineCount": 83
+          "lineCount": 99
         },
         {
           "name": "progress",
@@ -33216,7 +33683,7 @@
         "reading_evidence",
         "progress"
       ],
-      "totalLines": 328,
+      "totalLines": 344,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/history_business.py": {
@@ -35343,7 +35810,7 @@
     },
     "projects/code/webcollect/plan_evidence.py": {
       "filePath": "projects/code/webcollect/plan_evidence.py",
-      "contentHash": "d6ecc9daad0ee6a9f2d8018fffaa1d9dbb8607ef5781a811017d7e6ee2cd1c86",
+      "contentHash": "34381914f82de7b32ba2e20f9fd1770bcb944340ea3ae54ba9713b3a470f3122",
       "functions": [
         {
           "name": "same_url",
@@ -35372,7 +35839,7 @@
             "page_urls"
           ],
           "exported": true,
-          "lineCount": 39
+          "lineCount": 42
         },
         {
           "name": "expected_navigation",
@@ -35418,7 +35885,7 @@
         "expected_navigation",
         "verify_popup"
       ],
-      "totalLines": 146,
+      "totalLines": 149,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/plan_queue.py": {
@@ -35669,7 +36136,7 @@
     },
     "projects/code/webcollect/postprocess.py": {
       "filePath": "projects/code/webcollect/postprocess.py",
-      "contentHash": "89362295c65e1e3eb43fbf3c32143c94680cd3feada2c30b819846366c5188c2",
+      "contentHash": "69a6a5f7061b7af53c2f9ef55eb7df7e78b376f44f148f3dab5229332bb54f49",
       "functions": [
         {
           "name": "_observation_state",
@@ -35763,7 +36230,7 @@
             "manifest"
           ],
           "exported": true,
-          "lineCount": 191
+          "lineCount": 192
         },
         {
           "name": "terminal_fallback_timestamp",
@@ -35855,6 +36322,12 @@
           ]
         },
         {
+          "source": "re",
+          "specifiers": [
+            "re"
+          ]
+        },
+        {
           "source": "pathlib",
           "specifiers": [
             "Path"
@@ -35930,7 +36403,7 @@
         "write_json_file",
         "revise"
       ],
-      "totalLines": 733,
+      "totalLines": 735,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/preflight.py": {
@@ -36523,7 +36996,7 @@
     },
     "projects/code/webcollect/production_quality.py": {
       "filePath": "projects/code/webcollect/production_quality.py",
-      "contentHash": "abdeff6250fba7b1648f185fc3869cc7f7caab7941f5fd8dd5b07514a711cdb8",
+      "contentHash": "8b5199dce5eb0a07ea0fdb4df56aaf7bac98fd2fa5d1d0f7656be5145d4ed752",
       "functions": [
         {
           "name": "sha",
@@ -36556,7 +37029,7 @@
             "repo"
           ],
           "exported": true,
-          "lineCount": 21
+          "lineCount": 24
         },
         {
           "name": "require_public_task_state",
@@ -36628,7 +37101,7 @@
         "contract_identity",
         "require_public_task_state"
       ],
-      "totalLines": 189,
+      "totalLines": 192,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/provider_recovery.py": {
@@ -37187,7 +37660,7 @@
     },
     "projects/code/webcollect/react_session.py": {
       "filePath": "projects/code/webcollect/react_session.py",
-      "contentHash": "48d380c9fd9466bcdaf326081748739be1d778edcd0e3bdf797cc09dd688ac59",
+      "contentHash": "f7e26d8e077c81dfc499af83f78f062b80be076198de577a4ff127bd1ff923a6",
       "functions": [
         {
           "name": "obj",
@@ -37402,7 +37875,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 1601
+          "lineCount": 1609
         }
       ],
       "imports": [
@@ -37522,7 +37995,7 @@
         "_legacy_chooser",
         "_native_chooser"
       ],
-      "totalLines": 2336,
+      "totalLines": 2344,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/reading_progress.py": {
@@ -38321,7 +38794,7 @@
     },
     "projects/code/webcollect/session_objective.py": {
       "filePath": "projects/code/webcollect/session_objective.py",
-      "contentHash": "29076fec0bb64553b72c0dcce275b0003263d2abc77ad385ea6008d690c38d6e",
+      "contentHash": "5bbad7b1f7965567ffa70eaf34f226b7fa8b058e94f077c9fff5a6552647c1d1",
       "functions": [
         {
           "name": "bind",
@@ -38330,7 +38803,7 @@
             "claim"
           ],
           "exported": true,
-          "lineCount": 10
+          "lineCount": 12
         },
         {
           "name": "apply",
@@ -38378,7 +38851,7 @@
         "apply",
         "progress"
       ],
-      "totalLines": 110,
+      "totalLines": 112,
       "hasStructuralAnalysis": true
     },
     "projects/code/webcollect/single_record.py": {
@@ -41702,12 +42175,12 @@
     },
     "projects/prd/三程序计划执行入口.md": {
       "filePath": "projects/prd/三程序计划执行入口.md",
-      "contentHash": "94ef60d452a40efcded801f0a1bbf1c95a8eaf4834e46c9664a058181196a8e7",
+      "contentHash": "dbbd0054c0d2faba31b0dd2711c7d0623df2e7f1256a3bd7350ee02cbb9f5af8",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 68,
+      "totalLines": 77,
       "hasStructuralAnalysis": false
     },
     "projects/prd/工作总结与下一步安排-20261103.md": {
@@ -41732,12 +42205,12 @@
     },
     "projects/quality-inspector/README.md": {
       "filePath": "projects/quality-inspector/README.md",
-      "contentHash": "1e4543d29d3c8b7bc297f833a9de77dd28aa1f53751e7edb10d2cec02357210c",
+      "contentHash": "44c96be8bcf22c06ff587a6180dd37bba1dcd8cafccac49c3eceae2634e68d43",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 332,
+      "totalLines": 338,
       "hasStructuralAnalysis": false
     },
     "projects/quality-inspector/ai_worker.py": {
@@ -42351,6 +42824,36 @@
       "totalLines": 44,
       "hasStructuralAnalysis": true
     },
+    "projects/quality-inspector/quality_inspector/authority/QC抽检与批次合格计数方案-20261030.md": {
+      "filePath": "projects/quality-inspector/quality_inspector/authority/QC抽检与批次合格计数方案-20261030.md",
+      "contentHash": "8b3b527e582ec5e11f6afa7e988becc921e8d84f110a6978be83d4cfd4ad697a",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 128,
+      "hasStructuralAnalysis": false
+    },
+    "projects/quality-inspector/quality_inspector/authority/站点分类与轨迹采集口径-20261102.md": {
+      "filePath": "projects/quality-inspector/quality_inspector/authority/站点分类与轨迹采集口径-20261102.md",
+      "contentHash": "aa9a20f7f50c2e8b75505be39c63bd999538d3aa4c8a0251b97e1ac8c5578f55",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 12,
+      "hasStructuralAnalysis": false
+    },
+    "projects/quality-inspector/quality_inspector/authority/轨迹采集口径补充-20261030.md": {
+      "filePath": "projects/quality-inspector/quality_inspector/authority/轨迹采集口径补充-20261030.md",
+      "contentHash": "e28365c7f500c6b3cc07a6e439337108f7fd6fb770ac723f061e1208ca0dd71e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 103,
+      "hasStructuralAnalysis": false
+    },
     "projects/quality-inspector/quality_inspector/authority/附件A-字段说明.md": {
       "filePath": "projects/quality-inspector/quality_inspector/authority/附件A-字段说明.md",
       "contentHash": "0c3fe9b2050f55c25cec8ef5145ed3ad0d569aa0d0022f0293c21c4406857639",
@@ -42383,12 +42886,12 @@
     },
     "projects/quality-inspector/quality_inspector/authority/需求澄清记录.md": {
       "filePath": "projects/quality-inspector/quality_inspector/authority/需求澄清记录.md",
-      "contentHash": "2a3c63de4f1f68efbaf54f0d7d7185eb3f80d3b6647b95b92efe38cef3a575f6",
+      "contentHash": "e881da48372120e9a20b6d19533c805722fe685eae18416b204fc9aa3afa5a84",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 20,
+      "totalLines": 81,
       "hasStructuralAnalysis": false
     },
     "projects/quality-inspector/quality_inspector/batch_decision.py": {
@@ -42794,6 +43297,44 @@
         "write_workspace"
       ],
       "totalLines": 175,
+      "hasStructuralAnalysis": true
+    },
+    "projects/quality-inspector/quality_inspector/category_coverage.py": {
+      "filePath": "projects/quality-inspector/quality_inspector/category_coverage.py",
+      "contentHash": "09fa76a0cf161e1ebff2036ac54b7b3e73c9e6dcf23e5da34ab6b5c13ab9a3fc",
+      "functions": [
+        {
+          "name": "parent_category",
+          "params": [
+            "value"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "category_coverage",
+          "params": [
+            "categories",
+            "configuration"
+          ],
+          "exported": true,
+          "lineCount": 16
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "collections",
+          "specifiers": [
+            "Counter"
+          ]
+        }
+      ],
+      "exports": [
+        "parent_category",
+        "category_coverage"
+      ],
+      "totalLines": 55,
       "hasStructuralAnalysis": true
     },
     "projects/quality-inspector/quality_inspector/checksums.py": {
@@ -43237,9 +43778,19 @@
       "totalLines": 670,
       "hasStructuralAnalysis": true
     },
+    "projects/quality-inspector/quality_inspector/contract-authority.json": {
+      "filePath": "projects/quality-inspector/quality_inspector/contract-authority.json",
+      "contentHash": "2480ffacbcec1faa3907c9f86cd987e561e18ab3bba3608bb5453f75a6b582e1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 66,
+      "hasStructuralAnalysis": false
+    },
     "projects/quality-inspector/quality_inspector/contract.py": {
       "filePath": "projects/quality-inspector/quality_inspector/contract.py",
-      "contentHash": "df91b9d1365b8b6f01d35c1d16a78e59efa9cab61daaad0e8935061b2c22cf66",
+      "contentHash": "db041a39677e8554d740a7794aa29bf812d6f329d2e2a58903bb2d43fc25b126",
       "functions": [
         {
           "name": "digest",
@@ -43253,13 +43804,13 @@
           "name": "authority",
           "params": [],
           "exported": true,
-          "lineCount": 8
+          "lineCount": 17
         },
         {
           "name": "installed_contract",
           "params": [],
           "exported": true,
-          "lineCount": 22
+          "lineCount": 24
         },
         {
           "name": "fingerprint",
@@ -43295,12 +43846,12 @@
         "installed_contract",
         "fingerprint"
       ],
-      "totalLines": 53,
+      "totalLines": 64,
       "hasStructuralAnalysis": true
     },
     "projects/quality-inspector/quality_inspector/cumulative.py": {
       "filePath": "projects/quality-inspector/quality_inspector/cumulative.py",
-      "contentHash": "74fd81b81a5e30af229bd1f1dd432e5f811cc4ed7b86318c0830de5233e01fb5",
+      "contentHash": "c995afd43fe2695717c62e6007f54dcc01332e9e24c886df6fab365fdba689e6",
       "functions": [
         {
           "name": "_quality_batch_ids",
@@ -43342,7 +43893,7 @@
             "verify_exhaustive"
           ],
           "exported": true,
-          "lineCount": 198
+          "lineCount": 208
         }
       ],
       "classes": [],
@@ -43391,6 +43942,13 @@
           ]
         },
         {
+          "source": ".category_coverage",
+          "specifiers": [
+            "parent_category",
+            "category_coverage"
+          ]
+        },
+        {
           "source": ".duplicates",
           "specifiers": [
             "analyze_inputs",
@@ -43432,7 +43990,7 @@
         "_check_quality_batch",
         "inspect_set"
       ],
-      "totalLines": 276,
+      "totalLines": 287,
       "hasStructuralAnalysis": true
     },
     "projects/quality-inspector/quality_inspector/date_validator.py": {
@@ -43626,6 +44184,16 @@
       ],
       "totalLines": 226,
       "hasStructuralAnalysis": true
+    },
+    "projects/quality-inspector/quality_inspector/delivery.json": {
+      "filePath": "projects/quality-inspector/quality_inspector/delivery.json",
+      "contentHash": "4c67cac000d417547c6e32aecb59c502c86c66a66be090eab4f121872da02242",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 51,
+      "hasStructuralAnalysis": false
     },
     "projects/quality-inspector/quality_inspector/delivery_pipeline.py": {
       "filePath": "projects/quality-inspector/quality_inspector/delivery_pipeline.py",
@@ -45863,7 +46431,7 @@
     },
     "projects/quality-inspector/quality_inspector/engine.py": {
       "filePath": "projects/quality-inspector/quality_inspector/engine.py",
-      "contentHash": "3454755ffdb61cab4ec60209f2d1a378c30fa668b6f8075746927d6c799ec00c",
+      "contentHash": "f4f69a397d7a1af98b04ae23f44468e6d39e841aaf5ffe973c087883be1275af",
       "functions": [
         {
           "name": "sha",
@@ -46010,7 +46578,7 @@
             "profile"
           ],
           "exported": true,
-          "lineCount": 91
+          "lineCount": 92
         },
         {
           "name": "_verify_delivery_qc_report",
@@ -46146,7 +46714,7 @@
         "_verify_delivery_qc_report",
         "_inspect_delivery"
       ],
-      "totalLines": 750,
+      "totalLines": 751,
       "hasStructuralAnalysis": true
     },
     "projects/quality-inspector/quality_inspector/external_evidence.py": {
@@ -48753,6 +49321,125 @@
       "totalLines": 57,
       "hasStructuralAnalysis": true
     },
+    "projects/quality-inspector/tests/test_category_coverage.py": {
+      "filePath": "projects/quality-inspector/tests/test_category_coverage.py",
+      "contentHash": "cc58cb3513632853d64c0c10adaa62bfbb51f59cca0f7c822d9423fb1db7340a",
+      "functions": [],
+      "classes": [
+        {
+          "name": "CoverageDistributionTests",
+          "methods": [
+            "test_five_equal_categories_meet_share_but_miss_nine_required_parents",
+            "test_all_fourteen_pass_without_requiring_engineering_category",
+            "test_aliases_count_once_and_unknown_or_empty_never_fill_a_parent",
+            "test_trailing_enumeration_word_is_free_text_not_a_finance_alias",
+            "test_scope_is_explicit_formal_only",
+            "test_quality_batch_5000_share_short_and_unique_near_duplicate_limits",
+            "test_aliases_cannot_split_quality_batch_twenty_percent_quota"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 80
+        },
+        {
+          "name": "EffectiveCoverageTests",
+          "methods": [
+            "setUp",
+            "package",
+            "profile",
+            "test_normal_inspect_set_all_classes_pass_coverage_but_other_gates_still_fail",
+            "test_normal_inspect_set_missing_categories_is_locatable_and_member_scope_is_isolated",
+            "test_unresolved_versions_and_unmapped_metadata_cannot_supply_a_class",
+            "test_10000_member_profile_and_20x10000_formal_totals_remain_separate",
+            "test_same_site_alias_across_packages_merges_parent_but_keeps_local_source_binding",
+            "test_single_package_qc_enforces_parent_share_without_splitting_aliases",
+            "test_alias_labels_do_not_collapse_different_raw_source_versions"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 149
+        }
+      ],
+      "imports": [
+        {
+          "source": "collections",
+          "specifiers": [
+            "Counter"
+          ]
+        },
+        {
+          "source": "csv",
+          "specifiers": [
+            "csv"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "tempfile",
+          "specifiers": [
+            "tempfile"
+          ]
+        },
+        {
+          "source": "unittest",
+          "specifiers": [
+            "unittest"
+          ]
+        },
+        {
+          "source": "test_customer_layout",
+          "specifiers": [
+            "fixture",
+            "put"
+          ]
+        },
+        {
+          "source": "quality_inspector.category_coverage",
+          "specifiers": [
+            "category_coverage"
+          ]
+        },
+        {
+          "source": "quality_inspector.checksums",
+          "specifiers": [
+            "write_manifest"
+          ]
+        },
+        {
+          "source": "quality_inspector.cumulative",
+          "specifiers": [
+            "build_set_manifest",
+            "inspect_set",
+            "_check_quality_batch"
+          ]
+        },
+        {
+          "source": "quality_inspector.profiles",
+          "specifiers": [
+            "DEFAULT_DELIVERY_PROFILE",
+            "load",
+            "release_errors"
+          ]
+        }
+      ],
+      "exports": [
+        "CoverageDistributionTests",
+        "EffectiveCoverageTests"
+      ],
+      "totalLines": 254,
+      "hasStructuralAnalysis": true
+    },
     "projects/quality-inspector/tests/test_checksums.py": {
       "filePath": "projects/quality-inspector/tests/test_checksums.py",
       "contentHash": "8f3ce17bb1134469b965c3ecabb6b2f831f72bda0cdafce64b77546b9c05473d",
@@ -50424,6 +51111,114 @@
       "totalLines": 211,
       "hasStructuralAnalysis": true
     },
+    "projects/quality-inspector/tests/test_installed_authority.py": {
+      "filePath": "projects/quality-inspector/tests/test_installed_authority.py",
+      "contentHash": "fdf2e6651dc45a44e4362dc926d87e49cc6d4ff41f35a06ebb2fbe45727c2924",
+      "functions": [],
+      "classes": [
+        {
+          "name": "InstalledAuthorityTests",
+          "methods": [
+            "setUp",
+            "test_source_resource_and_manifest_match_byte_for_byte",
+            "test_missing_or_tampered_resource_fails_outside_repository",
+            "test_wheel_contains_and_loads_authority_from_unrelated_cwd",
+            "test_authority_refresh_changes_contract_but_preserves_all_five_review_decisions",
+            "test_coverage_policy_is_bound_without_changing_sample_semantics",
+            "test_modern_intake_reuses_same_evidence_after_authority_refresh_without_resigning"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 88
+        }
+      ],
+      "imports": [
+        {
+          "source": "copy",
+          "specifiers": [
+            "deepcopy"
+          ]
+        },
+        {
+          "source": "hashlib",
+          "specifiers": [
+            "hashlib"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "shutil",
+          "specifiers": [
+            "shutil"
+          ]
+        },
+        {
+          "source": "subprocess",
+          "specifiers": [
+            "subprocess"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "tempfile",
+          "specifiers": [
+            "tempfile"
+          ]
+        },
+        {
+          "source": "unittest",
+          "specifiers": [
+            "unittest"
+          ]
+        },
+        {
+          "source": "unittest.mock",
+          "specifiers": [
+            "patch"
+          ]
+        },
+        {
+          "source": "zipfile",
+          "specifiers": [
+            "zipfile"
+          ]
+        },
+        {
+          "source": "quality_inspector",
+          "specifiers": [
+            "contract",
+            "semantic"
+          ]
+        }
+      ],
+      "exports": [
+        "InstalledAuthorityTests"
+      ],
+      "totalLines": 111,
+      "hasStructuralAnalysis": true
+    },
     "projects/quality-inspector/tests/test_lineage_authority.py": {
       "filePath": "projects/quality-inspector/tests/test_lineage_authority.py",
       "contentHash": "627179180f14c2ddcd9e6d74dbec6a3208010c15251ed35bd83b0190e56d63d7",
@@ -50462,7 +51257,7 @@
     },
     "projects/quality-inspector/tests/test_m4_contract.py": {
       "filePath": "projects/quality-inspector/tests/test_m4_contract.py",
-      "contentHash": "b17aebead0b7abe751dee09bd12756638b085c7d74d3af02fa56e2b58ad2fd41",
+      "contentHash": "0a516a71a15976f63f4344a7bade8dac54b6c44bc0f9170e5fdf97101bb272c9",
       "functions": [],
       "classes": [
         {
@@ -50497,7 +51292,7 @@
             "test_known_machine_prose_and_original_quoted_names",
             "test_empty_hotkey_member_is_rejected",
             "test_absolute_open_url_without_new_scheme_whitelist",
-            "test_four_authorities_and_rule_changes_are_bound"
+            "test_installed_authorities_and_rule_changes_are_bound"
           ],
           "properties": [],
           "exported": true,
@@ -50691,7 +51486,7 @@
     },
     "projects/quality-inspector/tests/test_profiles.py": {
       "filePath": "projects/quality-inspector/tests/test_profiles.py",
-      "contentHash": "56a5b606fbbfd0684d9b09ed608e9ffd3eed656aaeb7bfa302b449d175662df7",
+      "contentHash": "4dfca58f2210d98ff1b08f0e5e6b6a4047aded610e63b2fea27f1da5d83f0b0a",
       "functions": [
         {
           "name": "manifests",
@@ -50734,7 +51529,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 213
+          "lineCount": 221
         }
       ],
       "imports": [
@@ -50831,7 +51626,112 @@
         "manifests",
         "LocalProfiles"
       ],
-      "totalLines": 247,
+      "totalLines": 255,
+      "hasStructuralAnalysis": true
+    },
+    "projects/quality-inspector/tests/test_qc_current_semantics.py": {
+      "filePath": "projects/quality-inspector/tests/test_qc_current_semantics.py",
+      "contentHash": "59f4ddb49a5e4337d7c9d91df72c06470d22108869b34db43aad743e91fd22b3",
+      "functions": [],
+      "classes": [
+        {
+          "name": "CurrentSemanticsTests",
+          "methods": [
+            "setUp",
+            "test_same_site_different_goals_and_technical_words_are_not_automatic_rejection",
+            "test_wait_and_complete_do_not_pad_five_and_short_flow_needs_reason"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 59
+        }
+      ],
+      "imports": [
+        {
+          "source": "csv",
+          "specifiers": [
+            "csv"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "random",
+          "specifiers": [
+            "random"
+          ]
+        },
+        {
+          "source": "shutil",
+          "specifiers": [
+            "shutil"
+          ]
+        },
+        {
+          "source": "tempfile",
+          "specifiers": [
+            "tempfile"
+          ]
+        },
+        {
+          "source": "unittest",
+          "specifiers": [
+            "unittest"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "test_customer_layout",
+          "specifiers": [
+            "fixture",
+            "put"
+          ]
+        },
+        {
+          "source": "quality_inspector.checksums",
+          "specifiers": [
+            "write_manifest"
+          ]
+        },
+        {
+          "source": "quality_inspector.cumulative",
+          "specifiers": [
+            "build_set_manifest",
+            "inspect_set"
+          ]
+        },
+        {
+          "source": "quality_inspector.format_checks",
+          "specifiers": [
+            "sample_check"
+          ]
+        },
+        {
+          "source": "quality_inspector.profiles",
+          "specifiers": [
+            "DEFAULT_DELIVERY_PROFILE"
+          ]
+        }
+      ],
+      "exports": [
+        "CurrentSemanticsTests"
+      ],
+      "totalLines": 77,
       "hasStructuralAnalysis": true
     },
     "projects/quality-inspector/tests/test_reference_authority.py": {
@@ -51321,12 +52221,12 @@
     },
     "projects/site-planner/README.md": {
       "filePath": "projects/site-planner/README.md",
-      "contentHash": "3703882d3412b711a0c0d5a124c65a50dba2ab53fe0c7c24eb6793f04acd2466",
+      "contentHash": "53c9bc35a9df0ab4834dfc7f033e1b89d8e4d0da47648e5cad21643bd7b4e690",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 120,
+      "totalLines": 129,
       "hasStructuralAnalysis": false
     },
     "projects/site-planner/planner.py": {
@@ -51655,7 +52555,7 @@
     },
     "projects/site-planner/site_planner/candidate_discovery.py": {
       "filePath": "projects/site-planner/site_planner/candidate_discovery.py",
-      "contentHash": "d771847a9b6e39596e86d2cf9045826c41191844d6705735d371cbf287468c49",
+      "contentHash": "ba3ba83bb22c5fe1a213ca21f74aa84820991311b1692afe6f069608b625b53c",
       "functions": [
         {
           "name": "normalize_candidate",
@@ -51858,7 +52758,7 @@
             "application_id"
           ],
           "exported": true,
-          "lineCount": 50
+          "lineCount": 52
         },
         {
           "name": "produce_entries",
@@ -52087,7 +52987,7 @@
         "produce_entries",
         "main"
       ],
-      "totalLines": 1412,
+      "totalLines": 1414,
       "hasStructuralAnalysis": true
     },
     "projects/site-planner/site_planner/candidate_handoff.py": {
@@ -53120,7 +54020,7 @@
     },
     "projects/site-planner/site_planner/discovery_tools.py": {
       "filePath": "projects/site-planner/site_planner/discovery_tools.py",
-      "contentHash": "9184095c864854e4efc59d5177ee586ec616263260189fa05e3cf10ce84a30ad",
+      "contentHash": "9f556c937cdca0b4161520bd9b08a3fbe1fa2d8533af2f589815b64d4979c0ca",
       "functions": [
         {
           "name": "search_channel_hold",
@@ -53169,7 +54069,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 179
+          "lineCount": 181
         }
       ],
       "imports": [
@@ -53263,7 +54163,7 @@
         "glm_search",
         "DiscoveryBrowser"
       ],
-      "totalLines": 332,
+      "totalLines": 334,
       "hasStructuralAnalysis": true
     },
     "projects/site-planner/site_planner/entry_access.py": {
@@ -53660,7 +54560,7 @@
     },
     "projects/site-planner/site_planner/grounded_entries.py": {
       "filePath": "projects/site-planner/site_planner/grounded_entries.py",
-      "contentHash": "c683137d9f1f2b7f8f4d8f7c33a4219d195d065658db47e90cd6aee6340946de",
+      "contentHash": "10e3e0ac340d2ae1c2305bc2def6cbc799094b3288e32a527a09a76dcbe45301",
       "functions": [
         {
           "name": "extract_links",
@@ -53845,7 +54745,7 @@
             "dispatch_holds"
           ],
           "exported": true,
-          "lineCount": 577
+          "lineCount": 591
         }
       ],
       "classes": [
@@ -53991,7 +54891,7 @@
         "index_settled_landings",
         "produce"
       ],
-      "totalLines": 1031,
+      "totalLines": 1045,
       "hasStructuralAnalysis": true
     },
     "projects/site-planner/site_planner/image_screen.js": {
@@ -54006,7 +54906,7 @@
     },
     "projects/site-planner/site_planner/page_consumption.py": {
       "filePath": "projects/site-planner/site_planner/page_consumption.py",
-      "contentHash": "1f68dd9b5aa02f52d5e4dff1104c1e5cb305f08e769de67ff8228156b654e6fa",
+      "contentHash": "4524b0e077d886f07368bb226e5edd16f402f55656a74cf563432da6ca03607a",
       "functions": [
         {
           "name": "key",
@@ -55578,7 +56478,7 @@
     },
     "projects/site-planner/site_planner/producer_observation.py": {
       "filePath": "projects/site-planner/site_planner/producer_observation.py",
-      "contentHash": "fd77bba32c0f638f42462acdebeb883e9394e6c7c1c6ac6e82913a2c211eca2a",
+      "contentHash": "5c6e2ad577ad62308e23f7b65b57e6fa0419fbea3bbdca8353de92e5347d5021",
       "functions": [
         {
           "name": "screen",
@@ -55599,7 +56499,7 @@
             "uri"
           ],
           "exported": true,
-          "lineCount": 27
+          "lineCount": 29
         },
         {
           "name": "entry_receipt",
@@ -55679,12 +56579,12 @@
         "from_pool",
         "entry_receipt"
       ],
-      "totalLines": 72,
+      "totalLines": 74,
       "hasStructuralAnalysis": true
     },
     "projects/site-planner/site_planner/producer_query_plan.py": {
       "filePath": "projects/site-planner/site_planner/producer_query_plan.py",
-      "contentHash": "689a676ee7322b30a8db5be22768551ec1ba0339c80187498b7256ff39b6cdc4",
+      "contentHash": "64ca8f68acbc533596a8e585845595a08c3ada840c34cf60c36cf1b8a2ab29cf",
       "functions": [
         {
           "name": "next_query",
@@ -55703,7 +56603,7 @@
             "purpose_protocol"
           ],
           "exported": true,
-          "lineCount": 89
+          "lineCount": 90
         }
       ],
       "classes": [],
@@ -55758,12 +56658,152 @@
       "exports": [
         "next_query"
       ],
-      "totalLines": 104,
+      "totalLines": 105,
+      "hasStructuralAnalysis": true
+    },
+    "projects/site-planner/site_planner/producer_task_value.py": {
+      "filePath": "projects/site-planner/site_planner/producer_task_value.py",
+      "contentHash": "8b4197b41078d32fc17f06f2311217d1bc2470e7bbac1ad0d0ec7653bd127fa6",
+      "functions": [
+        {
+          "name": "evidence_for",
+          "params": [
+            "pool",
+            "ledger",
+            "link"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "prepare",
+          "params": [
+            "link",
+            "evidence",
+            "model"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "quotes_valid",
+          "params": [
+            "ids",
+            "menu"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "assess",
+          "params": [
+            "proposal",
+            "evidence"
+          ],
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "_cache",
+          "params": [
+            "pool",
+            "ledger",
+            "binding"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "classify",
+          "params": [
+            "ledger",
+            "links",
+            "scope",
+            "root",
+            "pool"
+          ],
+          "exported": true,
+          "lineCount": 83
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "re",
+          "specifiers": [
+            "re"
+          ]
+        },
+        {
+          "source": "jsonschema",
+          "specifiers": [
+            "Draft202012Validator"
+          ]
+        },
+        {
+          "source": "webcollect.batch_core",
+          "specifiers": [
+            "OutcomeUnknown"
+          ]
+        },
+        {
+          "source": "webcollect.model_gateway",
+          "specifiers": [
+            "ModelGateway"
+          ]
+        },
+        {
+          "source": "webcollect.planning",
+          "specifiers": [
+            "object_sha256",
+            "verify_evidence"
+          ]
+        },
+        {
+          "source": ".",
+          "specifiers": [
+            "previous"
+          ]
+        },
+        {
+          "source": ".",
+          "specifiers": [
+            "producer_observation"
+          ]
+        },
+        {
+          "source": ".discovery_agent",
+          "specifiers": [
+            "model_tool_decision"
+          ]
+        },
+        {
+          "source": ".entry_selection",
+          "specifiers": [
+            "PAGE_TYPES"
+          ]
+        }
+      ],
+      "exports": [
+        "evidence_for",
+        "prepare",
+        "quotes_valid",
+        "assess",
+        "_cache",
+        "classify"
+      ],
+      "totalLines": 239,
       "hasStructuralAnalysis": true
     },
     "projects/site-planner/site_planner/purpose_structure.py": {
       "filePath": "projects/site-planner/site_planner/purpose_structure.py",
-      "contentHash": "f5e8025ae6ee33418c82181d7741a1c1e65a7f40ee346e4895b8735c46d96789",
+      "contentHash": "53139cdae91f42446943d842a3478ef958c05e6850b6cef37b2f6201777e8785",
       "functions": [
         {
           "name": "parse",
@@ -55779,7 +56819,7 @@
             "evidence"
           ],
           "exported": true,
-          "lineCount": 35
+          "lineCount": 36
         },
         {
           "name": "accepts",
@@ -55808,7 +56848,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 85
+          "lineCount": 86
         }
       ],
       "imports": [
@@ -55849,7 +56889,7 @@
         "facts",
         "accepts"
       ],
-      "totalLines": 151,
+      "totalLines": 153,
       "hasStructuralAnalysis": true
     },
     "projects/site-planner/site_planner/qualification.py": {
@@ -56375,14 +57415,34 @@
       "totalLines": 107,
       "hasStructuralAnalysis": true
     },
-    "request/需求澄清记录.md": {
-      "filePath": "request/需求澄清记录.md",
-      "contentHash": "265600bca9dabf631e297d9ab8da5e9d4c2bb2768878ddf833a43394e7cf769a",
+    "request/consumer-baselines/muxtly-square-footage.json": {
+      "filePath": "request/consumer-baselines/muxtly-square-footage.json",
+      "contentHash": "7e13dfd46a964561273d9448725278d54a0b65634a1ff6f6830fa41edbacc0ab",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 78,
+      "totalLines": 64,
+      "hasStructuralAnalysis": false
+    },
+    "request/consumer-baselines/zh-wikipedia-reading.json": {
+      "filePath": "request/consumer-baselines/zh-wikipedia-reading.json",
+      "contentHash": "0cc70220e94bdeff6e7dc5496c298adef3789a3fae08cfe4b93a26f9a779b963",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 56,
+      "hasStructuralAnalysis": false
+    },
+    "request/需求澄清记录.md": {
+      "filePath": "request/需求澄清记录.md",
+      "contentHash": "3dfd385dbcadde063eb6ca3b02ab0fdde0aa6b2afacea12888813afc2aa39f1d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 84,
       "hasStructuralAnalysis": false
     }
   }

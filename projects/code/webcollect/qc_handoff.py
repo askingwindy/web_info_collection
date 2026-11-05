@@ -125,7 +125,9 @@ def _attempts(scope, dataset, sample_ids):
                 expected['annotation.json'] = row['export_annotation_sha256']
                 if actual_sample != expected:
                     raise ValueError('Customer export sample files changed: ' + sample_id)
-            rows.append({**attempt, 'saved_sample': saved[0]})
+            prefix=receipt.get('raw_execution',{}).get('trusted_prefix')
+            rows.append({**attempt, 'saved_sample': saved[0],
+                **({'trusted_prefix':prefix} if prefix else {})})
     return rows
 
 
@@ -162,6 +164,8 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     if len(sample_ids) != len(set(sample_ids)):
         raise ValueError('Candidate sample IDs must be unique')
     attempts = _attempts(scope, dataset, sample_ids)
+    needs_checks=collection_checks is not None or any(row.get('trusted_prefix') for row in attempts)
+    if collection_checks is None:checks={'checks':[]}
     production_context = None
     if production_sampling:
         from .sampling_context import production_context as capture_context
@@ -203,17 +207,17 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
                 'human_percent': human_percent, 'external_model_calls': 0,
                 'production_registry_writes': 0, 'QC_approval': False,
                 'collection_checks': ({'path': str(bound_checks), 'sha256': file_sha(bound_checks)}
-                                      if collection_checks is not None else None),
+                                      if needs_checks else None),
                 'distribution_thresholds_unchanged': True}
     if output.exists():
         receipt = json.loads((output / 'receipt.json').read_text())
         expected_files = {'receipt.json', 'sampling-plan.json', 'effective-set.json'}
-        if collection_checks is not None: expected_files.add('collection-checks.json')
+        if needs_checks: expected_files.add('collection-checks.json')
         if (set(package_files(output)) != expected_files
                 or receipt.get('request') != request
                 or file_sha(output / 'sampling-plan.json') != receipt.get('sampling_plan_sha256')
                 or file_sha(output / 'effective-set.json') != receipt.get('effective_set_sha256')
-                or collection_checks is not None and file_sha(output / 'collection-checks.json') != receipt.get('bound_checks_sha256')):
+                or needs_checks and file_sha(output / 'collection-checks.json') != receipt.get('bound_checks_sha256')):
             raise ValueError('Existing QC handoff differs from its immutable request or artifacts')
         from quality_inspector.delivery_sampling import verify
         verify(output / 'sampling-plan.json', dataset)
@@ -225,11 +229,17 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
                       human_percent=human_percent, seed=seed, stratify=stratify,risk_selected=risk_selected,
                       production_context=production_context)
         save_json(staged / 'effective-set.json', manifest)
-        if collection_checks is not None:
+        if needs_checks:
             bindings = [{key: row[key] for key in ('sample_id', 'task_id', 'task_version', 'task_key')}
                         for row in attempts]
+            for row,binding in zip(attempts,bindings):
+                if row.get('trusted_prefix'):
+                    binding['trusted_prefix']={'saved_sample':row['saved_sample'],'binding':row['trusted_prefix'],
+                        'candidate_sample':{'sample_id':row['sample_id'],
+                            'files_sha256':package_files(dataset/'samples'/row['sample_id'])}}
             save_json(staged / 'collection-checks.json', {
                 'schema_version': 'webcollect-qc-collection-checks-1', 'source': collection_checks,
+                **({'prefix_only':True} if collection_checks is None else {}),
                 'sample_bindings': bindings, 'checks': checks['checks'],
                 'QC_approval': False, 'requires_independent_QC': True})
         if (package_files(dataset) != original or read_chain_history(history_set) != (records, scope)
@@ -240,7 +250,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
             assert_current_evidence(scope, collection_checks)
         receipt = {'schema_version': 'webcollect-qc-handoff-1', 'chain_id': scope['chain_id'],
             'request': request, 'collection_checks': collection_checks,
-            'bound_checks_sha256': file_sha(staged / 'collection-checks.json') if collection_checks is not None else None,
+            'bound_checks_sha256': file_sha(staged / 'collection-checks.json') if needs_checks else None,
             'history_scope': scope, 'dataset': str(dataset), 'attempts': attempts,
             'candidate_files_sha256': original, 'sampling_plan_sha256': file_sha(staged / 'sampling-plan.json'),
             'effective_set_sha256': file_sha(staged / 'effective-set.json'),

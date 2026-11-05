@@ -10,7 +10,7 @@ from .browser import STABILITY_RULES, _native_animation_window
 
 MEDIA_JS=files('webcollect').joinpath('media_preflight.js').read_text(encoding='utf-8')
 OBSERVER_SHA256=hashlib.sha256(MEDIA_JS.encode()).hexdigest()
-ALGORITHM_VERSION='media-preflight-3-related-images'
+ALGORITHM_VERSION='media-preflight-4-dynamic-regions'
 ROUTES={'NORMAL_M1','PREPARE_RECHECK','DYNAMIC_CONTENT_TRACK','REVIEW_REQUIRED'}
 
 
@@ -72,6 +72,11 @@ def _accepted_image_only_proof(proof):
 def _bounded_image_change(change,regions,probes):
     """Do not weaken routing from a flag alone or from aggregate bbox overlap."""
     proof=change.get('related_stability');pairs=change.get('diagnostic_pair_stability')
+    from .dynamic_regions import STABILITY as dynamic_rule
+    if isinstance(proof,dict) and proof.get('schema_version')==dynamic_rule:
+        return bool(proof.get('accepted') and proof.get('loading_complete') and proof.get('allowed_dynamic_regions')
+            and proof.get('pixel_change',{}).get('outside_allowed_pixels')==0
+            and isinstance(pairs,list) and len(pairs)==2 and all(p.get('schema_version')==dynamic_rule and p.get('accepted') for p in pairs))
     if (not _accepted_image_only_proof(proof) or not isinstance(pairs,list) or len(pairs)!=2
             or not all(_accepted_image_only_proof(pair) and pair['schema_version']==proof['schema_version']
                        for pair in pairs)):
@@ -146,7 +151,11 @@ def summarize_preflight(probes,assessments,pixel_changes=None):
                                 'critical_geometry_overlap':any(_overlap(box,r['bbox']) for r in regions),
                                 'bounded_irrelevant_image_change':bounded,
                                 'related_stability':change.get('related_stability')})
-            if bounded:reasons.append('Exact pixel differences are confined to proved unrelated noninteractive IMG regions; original frames and full states remain evidence.')
+            if bounded:reasons.append('Exact pixel differences are confined to proved allowed dynamic regions; task targets and business evidence remain protected; original frames and full states remain evidence.')
+    proven_dynamic=[r for change in (pixel_changes or []) if _bounded_image_change(change,regions,probes)
+        for r in (change.get('related_stability') or {}).get('allowed_dynamic_regions',[])]
+    def within_dynamic(box):
+        return bool(box and any(r['bbox'][0]<=box[0] and r['bbox'][1]<=box[1] and r['bbox'][2]>=box[2] and r['bbox'][3]>=box[3] for r in proven_dynamic))
     for (kind,selector),observations in groups.items():
         last=observations[-1][1];context=last.get('context',{});markers=context.get('explicit_ad_markers',[])
         role='promotional_candidate' if markers else 'editorial_candidate' if context.get('article_region_selector') and (context.get('heading') or context.get('caption')) else 'unknown'
@@ -154,11 +163,12 @@ def summarize_preflight(probes,assessments,pixel_changes=None):
         covers=[r for r in last.get('task_relations',[]) if r.get('dom_hit_covers_target_point')]
         target_content=[r for r in last.get('task_relations',[]) if r.get('contains_target') or r.get('inside_target')]
         related=bool(overlaps or target_content or covers)
+        bounded_dynamic=within_dynamic(box)
         row={'kind':kind,'selector':selector,'observed_probe_indices':[i for i,_ in observations],'observation_count':len(observations),
              'media_role':role,'role_is_context_candidate_not_ground_truth':True,'context_evidence':context,
              'bbox':box,'critical_geometry_overlaps':overlaps,'geometry_overlap_does_not_prove_occlusion':True,
              'task_dom_hit_coverage':covers,'task_content_relations':target_content,
-             'task_or_body_geometry_related':related,'observed_time_progress':None,
+             'task_or_body_geometry_related':related,'shared_allowed_dynamic_region':bounded_dynamic,'observed_time_progress':None,
              'time_progress_scope':'video_current_time_only','observations':[]}
         if covers:review.append('Media wins DOM hit samples over a planned target: '+str(selector))
         if kind=='video':
@@ -171,22 +181,22 @@ def summarize_preflight(probes,assessments,pixel_changes=None):
             row.update(observed_time_progress=advanced,playing_state_observed=playing,
                        timeline_source_consistent=continuity,element_identity_across_probes='NOT_PROVEN_BY_SELECTOR',
                        paused=last.get('paused'),ready_state=last.get('ready_state'),autoplay=last.get('autoplay'))
-            if not continuity:review.append('Video source changed or media time reversed; do not join timelines: '+str(selector))
+            if not continuity and not bounded_dynamic:review.append('Video source changed or media time reversed; do not join timelines: '+str(selector))
             if advanced or playing:
                 capture_risks.append('Playing/video time progress can change pixels: '+str(selector))
-                if related or role=='editorial_candidate':dynamic.append('Preserve '+role+' video; playback/time progress needs the dynamic-content track: '+str(selector))
+                if not bounded_dynamic and (related or role=='editorial_candidate'):dynamic.append('Preserve '+role+' video; playback/time progress needs the dynamic-content track: '+str(selector))
             row['observations']=[{'probe_index':i,**{k:x.get(k) for k in ['paused','current_time','ready_state','autoplay','ended','current_src','source_attribute','source_object_id','source_object_tracks','poster']}} for i,x in observations]
         elif kind=='iframe':
             row.update(internal_content='UNKNOWN_NOT_INSPECTED',cross_origin=last.get('cross_origin'))
-            review.append('Visible iframe internals are uninspected; never infer editorial/ad content or stability: '+str(selector))
+            if not bounded_dynamic:review.append('Visible iframe internals are uninspected; never infer editorial/ad content or stability: '+str(selector))
         elif kind in ['canvas','svg_image','image_candidate']:
             local_clues=[c for c in pixel_clues if _overlap(c['bbox'],box)]
             row.update(pixel_change_clues=local_clues,pixel_bbox_is_aggregate_weak_clue=True,
                        rendered_animation='UNKNOWN_WITHOUT_DECODED_CONTENT_INSPECTION',gif_url_candidate=last.get('gif_url_candidate',False))
             if local_clues:capture_risks.append('Aggregate changed-pixel bbox overlaps media; this does not prove that media itself changed: '+str(selector))
-            if target_content and (kind in ['canvas','svg_image'] or last.get('gif_url_candidate')):
+            if target_content and not (local_clues and all(c['bounded_irrelevant_image_change'] for c in local_clues)) and (kind in ['canvas','svg_image'] or last.get('gif_url_candidate')):
                 review.append('Task targets opaque rendered content whose semantics are uninspected: '+str(selector))
-            elif related and any(not (kind=='image_candidate' and clue['bounded_irrelevant_image_change']) for clue in local_clues):
+            elif related and any(not clue['bounded_irrelevant_image_change'] for clue in local_clues):
                 dynamic.append('Aggregate pixel-change geometry overlaps relevant opaque media; cause is unverified: '+str(selector))
         else:
             row['observations']=[{'probe_index':i,'play_state':x.get('play_state'),'current_time':x.get('current_time')} for i,x in observations]
@@ -194,12 +204,12 @@ def summarize_preflight(probes,assessments,pixel_changes=None):
     native=latest.get('native_animations',[])
     native_advice=_native_animation_window({'visible_animations':native},8000,1000)
     running_native=any(a.get('play_state')=='running' or a.get('pending') for a in native)
-    if running_native and native_advice['status'] in ['unsupported','no_common_window_within_budget']:
+    if running_native and not (pixel_clues and all(c['bounded_irrelevant_image_change'] for c in pixel_clues)) and native_advice['status'] in ['unsupported','no_common_window_within_budget']:
         capture_risks.append('Visible native motion has no jointly proved long hold within the existing capture wait budget.')
-        if any(row['kind']=='native_animation' and row['task_or_body_geometry_related'] for row in evidence):
+        if any(row['kind']=='native_animation' and row['task_or_body_geometry_related'] and not row.get('shared_allowed_dynamic_region') for row in evidence):
             dynamic.append('Native motion intersects task/content geometry and has no jointly proved long hold within the existing capture wait budget.')
         else:reasons.append('Native motion is outside observed task/content geometry; normal M1 remains subject to strict capture checks.')
-    elif running_native:reasons.append('Native timing offers only a predicted hold; existing exact capture fingerprints remain mandatory.')
+    elif running_native:reasons.append('Native timing is advisory; versioned region comparison and independent target/business evidence remain mandatory, with original fingerprints retained.')
     if any(c['critical_geometry_overlap'] and not c['bounded_irrelevant_image_change'] for c in pixel_clues) and not dynamic:
         dynamic.append('Temporal pixel changes intersect task/content geometry; cause and advertising role remain unknown.')
     if review:routing='REVIEW_REQUIRED';reasons+=review

@@ -25,7 +25,15 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
     import shutil
     packaged_root = evidence.parent.parent / ('samples' if outcome == 'collected_pending_review' else 'rejected')
     steps = []
-    for path in sorted(evidence.glob('step_*.json')):
+    from .trusted_prefix import projection_index
+    projection=projection_index(evidence)
+    step_root=evidence
+    if projection is not None and outcome=='collected_pending_review':
+        binding=load_json(projection)
+        if binding.get('protocol')!='webcollect-trusted-prefix-1' or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',binding.get('directory','')):
+            raise ValueError('Unrecognized prefix feedback projection')
+        step_root=evidence/binding['directory']
+    for path in sorted(step_root.glob('step_*.json')):
         if not path.stem[5:].isdigit():
             continue
         raw = load_json(path)
@@ -58,6 +66,7 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
     return exclusive(path, {'schema_version': VERSION,
         'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id'], 'task_id': attempt['task_id'],
         'outcome': outcome, 'error': error, 'steps': steps, 'diagnostics': diagnostics,
+        **({'trusted_prefix':binding['binding']} if step_root!=evidence else {}),
         'semantic_review': 'REVIEW_REQUIRED', 'QC_approval': False})
 
 
@@ -154,6 +163,11 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                             quality_groups.append([json.loads(admitted[0])])
                     result['executions'].append(entry)
                     unresolved = row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
+                    if unresolved and scoped:
+                        from .request_quarantine import accounted_rejected_focus
+                        if accounted_rejected_focus(registry,row['attempt_id']):
+                            entry['focus_effect_accounted']=True
+                            unresolved=False
                     if unresolved and (not owner_id or owner_id == candidate_id):
                         result['unresolved'].append(entry)
     if model_ledger is not None:

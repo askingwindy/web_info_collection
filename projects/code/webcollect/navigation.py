@@ -18,6 +18,12 @@ class NavigationTimeoutError(TimeoutError):
                          f'({purpose}): {uri}')
 
 
+class NavigationHTTPError(ValueError):
+    def __init__(self, uri, status):
+        self.uri, self.status = uri, status
+        super().__init__('Initial navigation HTTP status ' + str(status))
+
+
 class BatchNavigation:
     def __init__(self, ledger, job):
         self.ledger, self.job = ledger, job
@@ -79,7 +85,7 @@ class BatchNavigation:
             except asyncio.TimeoutError as error:
                 raise NavigationTimeoutError(uri, purpose, visit['timeout_seconds']) from error
             if response is not None and response.status >= 400:
-                raise ValueError('Initial navigation HTTP status ' + str(response.status))
+                raise NavigationHTTPError(uri, response.status)
         except BaseException as error:
             self.ledger.settle_visit(visit,
                 state='unknown' if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)) else 'failed',

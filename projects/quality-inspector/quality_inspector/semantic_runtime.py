@@ -47,7 +47,10 @@ def names(kind):
 def rules(kind, payload):
     if kind == 'ai-documents':
         return {'documents': payload['prompt_version']}
-    return payload.get('semantic_rule_ids', {})
+    current=dict(payload.get('semantic_rule_ids', {}))
+    if kind=='ai-visual' and payload.get('trusted_prefix') and 'terminal_semantics' in current:
+        current['terminal_semantics']+=':'+digest(payload['trusted_prefix'])
+    return current
 
 
 @contextmanager
@@ -75,8 +78,10 @@ def lookup(ledger, job):
             "SELECT detail FROM batch_events WHERE event='semantic_result_bound'") for value in [json.loads(raw)]}
     for row in rows:
         old = json.loads(row['payload'])
+        same_prompt=old.get('prompt_version')==payload.get('prompt_version')
+        compatible_unaffected={old.get('prompt_version'),payload.get('prompt_version')}=={'independent-all-frame-review-4-whole-sample-length','independent-all-frame-review-5-dynamic-regions'}
         if (old.get('model') != payload.get('model') or old.get('mode') != payload.get('mode')
-                or old.get('prompt_version') != payload.get('prompt_version')):
+                or not (same_prompt or compatible_unaffected)):
             continue
         try:
             if subject(kind, old) != expected:
@@ -84,7 +89,8 @@ def lookup(ledger, job):
         except (KeyError, TypeError):
             continue  # Legacy jobs lack explicit sample/rule identity.
         matches = [name for name in names(kind) if name in current_rules
-                   and rules(kind, old).get(name) == current_rules[name]]
+                   and rules(kind, old).get(name) == current_rules[name]
+                   and (same_prompt or name in ('language','privacy'))]
         if not matches:
             continue
         if row['id'] != digest({'kind': kind, 'payload': old}):

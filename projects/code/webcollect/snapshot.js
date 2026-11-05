@@ -349,6 +349,104 @@
     // compare the closest endpoints, never the favorable quantized samples.
     return a[1]<b[0]?(b[0]+.05)/(a[1]+.05):b[1]<a[0]?(a[0]+.05)/(b[1]+.05):1;
   };
+  const disjointPseudoProofs=new Map();
+  const boundedPseudoPaint = (owner,which,pseudo) => {
+    // A conservative paint envelope, never a special case for a site/class.
+    // Native computed px geometry is usable only for these two empty boxes.
+    const px=value=>/^-?(?:\d+(?:\.\d*)?|\.\d+)px$/.test(value)?parseFloat(value):null;
+    const zero=value=>px(value)===0;
+    if(clean(pseudo.content.replace(/^(['"])([\s\S]*)\1$/,'$2'))||pseudo.display!=='block'||
+       pseudo.transform!=='none'||pseudo.rotate!=='none'||pseudo.scale!=='none'||pseudo.translate!=='none'||
+       pseudo.boxShadow!=='none'||pseudo.textShadow!=='none'||pseudo.filter!=='none'||pseudo.backdropFilter!=='none'||
+       pseudo.maskImage!=='none'||pseudo.webkitMaskImage!=='none'||pseudo.mixBlendMode!=='normal'||
+       pseudo.offsetPath!=='none'||pseudo.float!=='none'||(pseudo.outlineStyle!=='none'&&parseFloat(pseudo.outlineWidth)!==0)||pseudo.animationName!=='none'||
+       pseudo.transitionDuration.split(',').some(v=>parseFloat(v)!==0)||
+       ['Top','Right','Bottom','Left'].some(side=>!zero(pseudo['margin'+side])||!zero(pseudo['padding'+side])||!zero(pseudo['border'+side+'Width'])))return null;
+    for(let p=owner;p;p=p.parentElement) {
+      const c=getComputedStyle(p);
+      if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||
+         parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;
+    }
+    const scale=axisScale(owner);if(scale.a!==1||scale.d!==1||scale.b!==0||scale.c!==0)return null;
+    const style=getComputedStyle(owner),r=owner.getBoundingClientRect(),w=px(pseudo.width),h=px(pseudo.height);
+    if(w===null||h===null||w<=0||h<=0||owner.getClientRects().length!==1||
+       ['Top','Right','Bottom','Left'].some(side=>!zero(style['padding'+side])||!zero(style['border'+side+'Width']))||
+       !['auto','1'].includes(style.columnCount)||style.columnWidth!=='auto')return null;
+    let box,kind;
+    if(pseudo.position==='absolute'&&style.position!=='static'&&!style.display.startsWith('inline')) {
+      const left=px(pseudo.left),top=px(pseudo.top);
+      if(left===null||top===null)return null;
+      box={left:r.left+left-owner.scrollLeft,top:r.top+top-owner.scrollTop,
+           right:r.left+left-owner.scrollLeft+w,bottom:r.top+top-owner.scrollTop+h};
+      kind='absolute-native-px-empty-box';
+    } else if(which==='::after'&&pseudo.position==='sticky'&&pseudo.top==='auto'&&zero(pseudo.bottom)&&
+              zero(pseudo.left)&&zero(pseudo.right)&&['block','flow-root'].includes(style.display)&&
+              /^(auto|scroll|hidden)$/.test(style.overflowY)&&Math.abs(w-r.width)<.01) {
+      // Last in-flow block: a bottom-sticky empty tail cannot paint above
+      // either the preceding block's bottom or scrollport.bottom-height.
+      if([...owner.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent)))return null;
+      const children=[...owner.children].filter(n=>getComputedStyle(n).display!=='none');
+      if(!children.length)return null;
+      for(const child of children) {
+        const c=getComputedStyle(child);
+        if(!['block','flow-root','list-item'].includes(c.display)||!['static','relative'].includes(c.position)||
+           c.float!=='none'||c.transform!=='none'||c.translate!=='none'||c.rotate!=='none'||c.scale!=='none'||
+           parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb'||
+           !['auto','0px'].includes(c.top)||!['auto','0px'].includes(c.bottom)||
+           px(c.marginTop)===null||px(c.marginBottom)===null||px(c.marginTop)<0||px(c.marginBottom)<0||child.getClientRects().length!==1)return null;
+      }
+      const last=children.at(-1).getBoundingClientRect();
+      box={left:r.left,top:Math.min(last.bottom,r.bottom-h),right:r.right,bottom:r.bottom};
+      kind='bottom-sticky-final-empty-block-envelope';
+    } else return null;
+    // Used CSS numbers can serialize with rounded decimals; protect a whole
+    // extra CSS pixel rather than permit an edge/rounding overlap with ink.
+    return {kind,bbox:[box.left-1,box.top-1,box.right+1,box.bottom+1],
+      native:{position:pseudo.position,width:pseudo.width,height:pseudo.height,top:pseudo.top,bottom:pseudo.bottom,left:pseudo.left,right:pseudo.right},
+      owner_bbox:[r.left,r.top,r.right,r.bottom],pseudo:which};
+  };
+  const boundedGraphicPseudo=(owner,which)=>{
+    const p=getComputedStyle(owner,which),s=getComputedStyle(owner),px=v=>/^-?(?:\d+(?:\.\d*)?|\.\d+)px$/.test(v)?parseFloat(v):null;
+    if(['none','normal'].includes(p.content)||clean(p.content.replace(/^(['"])([\s\S]*)\1$/,'$2'))||p.position!=='absolute'||p.display!=='block'||s.position==='static'||owner.getClientRects().length!==1)return null;
+    if([p,s].some(c=>c.boxShadow!=='none'||c.textShadow!=='none'||c.filter!=='none'||c.backdropFilter!=='none'||c.perspective!=='none'||c.offsetPath!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.mixBlendMode!=='normal'||c.maskImage!=='none'||c.clipPath!=='none'||c.outlineStyle!=='none'&&parseFloat(c.outlineWidth)>0))return null;
+    for(let n=owner;n;n=n.parentElement){const c=getComputedStyle(n);if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;}
+    if(['Top','Right','Bottom','Left'].some(k=>px(p['padding'+k])!==0||px(p['border'+k+'Width'])!==0||px(s['padding'+k])!==0||px(s['border'+k+'Width'])!==0))return null;
+    const w=px(p.width),h=px(p.height),left=px(p.left),top=px(p.top),ml=px(p.marginLeft),mt=px(p.marginTop),origin=p.transformOrigin.split(' ').map(px);
+    if([w,h,left,top,ml,mt,...origin].some(v=>v===null)||w<=0||h<=0||origin.length!==2)return null;
+    const animations=document.getAnimations().filter(a=>a.effect&&a.effect.target===owner&&a.effect.pseudoElement===which);
+    if(p.animationName!=='none'&&!animations.length||p.transitionDuration.split(',').some(v=>parseFloat(v)!==0))return null;
+    const boundedEase=e=>['linear','ease','ease-in','ease-out','ease-in-out','step-start','step-end'].includes(e)||/^steps\(\d+(?:, (?:start|end|jump-start|jump-end|jump-none|jump-both))?\)$/.test(e)||(()=>{const m=e.match(/^cubic-bezier\(([^)]+)\)$/);return !!m&&m[1].split(',').map(Number).length===4&&m[1].split(',').map(Number).every(v=>Number.isFinite(v)&&v>=0&&v<=1);})();
+    const transforms=animations.length?['none']:[p.transform],animationProof=[];
+    for(const a of animations){const e=a.effect,t=e.getTiming(),frames=e.getKeyframes();if(!boundedEase(t.easing)||e.composite!=='replace'||!(e.iterationComposite==='replace'||e.iterationComposite==null&&a instanceof CSSAnimation&&p.animationComposition.split(',').every(v=>v.trim()==='replace')))return null;
+      if(frames.some(f=>!['auto','replace'].includes(f.composite)||!boundedEase(f.easing)||Object.keys(f).some(k=>!['offset','computedOffset','easing','composite','transform','opacity'].includes(k))))return null;
+      if(frames.some(f=>f.transform&&!/^(?:none|matrix\([^)]*\)|scale(?:X|Y)?\([^)]*\)|translate(?:X|Y)?\([^)]*\))$/.test(f.transform)))return null;
+      transforms.push(...frames.map(f=>f.transform||'none'));animationProof.push({frames,timing:{duration:t.duration,easing:t.easing,direction:t.direction},composite:e.composite,iteration_composite:e.iterationComposite??'css-replace-no-iteration-accumulation'});
+    }
+    const matrices=[];for(const value of transforms){let m;try{m=value==='none'?new DOMMatrix():new DOMMatrix(value);}catch{return null;}if(!m.is2D||m.b!==0||m.c!==0||m.a<0||m.d<0||![m.a,m.d,m.e,m.f].every(Number.isFinite))return null;matrices.push([m.a,m.d,m.e,m.f]);}
+    const r=owner.getBoundingClientRect(),x=r.left+left+ml-owner.scrollLeft,y=r.top+top+mt-owner.scrollTop,points=[];
+    for(const [a,d,e,f] of matrices)for(const xx of [0,w])for(const yy of [0,h])points.push([x+origin[0]+a*(xx-origin[0])+e,y+origin[1]+d*(yy-origin[1])+f]);
+    let box=[Math.min(...points.map(v=>v[0]))-1,Math.min(...points.map(v=>v[1]))-1,Math.max(...points.map(v=>v[0]))+1,Math.max(...points.map(v=>v[1]))+1];const clip=clipFor(owner);
+    box=[Math.max(0,box[0],clip.left),Math.max(0,box[1],clip.top),Math.min(width,box[2],clip.right),Math.min(height,box[3],clip.bottom)];
+    if(['hidden','clip'].includes(s.overflowX)){box[0]=Math.max(box[0],r.left);box[2]=Math.min(box[2],r.right);}if(['hidden','clip'].includes(s.overflowY)){box[1]=Math.max(box[1],r.top);box[3]=Math.min(box[3],r.bottom);}
+    box=[Math.floor(box[0]),Math.floor(box[1]),Math.ceil(box[2]),Math.ceil(box[3])];if(box[0]>=box[2]||box[1]>=box[3])return null;
+    return {kind:'empty-native-pseudo-graphic-1',pseudo:which,bbox:box,owner_bbox:[r.left,r.top,r.right,r.bottom],native:{left,top,margin_left:ml,margin_top:mt,width:w,height:h,transform_origin:origin},matrices,animations:animationProof,visible_text:'',leaf:true};
+  };
+  const pseudoDisjointFromText = (label,owner,which,pseudo) => {
+    const proof=boundedPseudoPaint(owner,which,pseudo)||boundedGraphicPseudo(owner,which);if(!proof)return false;
+    const walker=document.createTreeWalker(label,NodeFilter.SHOW_TEXT),rects=[];
+    while(walker.nextNode()) {
+      const text=walker.currentNode;if(!clean(text.textContent))continue;
+      const range=document.createRange();range.selectNodeContents(text);
+      for(const r of range.getClientRects())if(r.width>0&&r.height>0) {
+        const ink=inkRect(r,text.textContent,getComputedStyle(text.parentElement));
+        rects.push([ink.left,ink.top,ink.right,ink.bottom]);
+      }
+    }
+    if(!rects.length||rects.some(r=>Math.min(r[2],proof.bbox[2])>Math.max(r[0],proof.bbox[0])&&
+                                   Math.min(r[3],proof.bbox[3])>Math.max(r[1],proof.bbox[1])))return false;
+    const row={...proof,text_protection:rects,relation:'native empty pseudo paint envelope disjoint from all original text ranges'};
+    disjointPseudoProofs.set(JSON.stringify(row),row);return true;
+  };
   const frameworkLabelPaint = (label,foregroundStyle=null,minContrast=3) => {
     const style=foregroundStyle||getComputedStyle(label),fill=frameworkColor(style.webkitTextFillColor);
     if(!fill||fill[3]===0||style.textShadow!=='none'||style.backgroundClip==='text')return false;
@@ -368,10 +466,11 @@
            pseudo.visibility!=='visible'||Number(pseudo.opacity)===0)continue;
         const own=clean(pseudo.content.replace(/^(['"])([\s\S]*)\1$/,'$2'));
         const color=frameworkColor(pseudo.backgroundColor);
-        if(own||!color||color[3]>0||pseudo.backgroundImage!=='none'||pseudo.boxShadow!=='none'||
+        const painted=own||!color||color[3]>0||pseudo.backgroundImage!=='none'||pseudo.boxShadow!=='none'||
            pseudo.filter!=='none'||pseudo.backdropFilter!=='none'||
            ['Top','Right','Bottom','Left'].some(side=>parseFloat(pseudo['border'+side+'Width'])>0&&
-             (frameworkColor(pseudo['border'+side+'Color'])?.[3]??1)>0))return false;
+             (frameworkColor(pseudo['border'+side+'Color'])?.[3]??1)>0);
+        if(painted&&!pseudoDisjointFromText(label,owner,which,pseudo))return false;
       }
       if(!background) {
         const color=frameworkColor(paint.backgroundColor);
@@ -451,6 +550,9 @@
     frameworkLabelCache.set(label,value);return value;
   };
   const name = element => {
+    // A semantic heading may contain only inline descendants. Keep their
+    // proved visible words, never aria/title metadata or hidden DOM text.
+    if(element.matches('h1,h2,h3,h4,h5,h6'))return clean(visibleText(element));
     // Image names describe accessible DOM attributes, not pixels/visible prose.
     // Keep empty names empty; never infer a large news image's subject.
     if(element.tagName==='IMG')return clean(element.getAttribute('alt')||element.getAttribute('title'));
@@ -1209,9 +1311,99 @@
     return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,target:node.localName==='a'?(node.getAttribute('target')||''):null,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
       options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:clean(o.label),disabled:o.disabled})):[]};
   });
-  return {url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
+  // Shared semantic regions: original DOM/pixels remain intact. No arbitrary
+  // data-* or model assertion can declare a business result ignorable.
+  const dynamicVersion='webcollect-dynamic-regions-1';
+  const selectorOf=n=>{const parts=[];for(;n&&n.nodeType===1;n=n.parentElement){const sib=n.parentElement?[...n.parentElement.children].filter(x=>x.localName===n.localName):[n];parts.unshift(n.localName+':nth-of-type('+(sib.indexOf(n)+1)+')');}return parts.join(' > ');};
+  const regionAttributes=n=>Object.fromEntries(['id','class','role','aria-label','aria-roledescription','title'].map(k=>[k,n.getAttribute(k)]));
+  const nativeImagePaint=n=>{const c=getComputedStyle(n);return n.children.length===0&&!clean(n.textContent)&&(c.backgroundImage!=='none'||c.maskImage!=='none')?{leaf:true,visible_text:'',background_image:c.backgroundImage,mask_image:c.maskImage}:null;};
+  const categoryOf=n=>{
+    const a=regionAttributes(n),words=Object.values(a).filter(Boolean).join(' ').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase();
+    if(/(?:^|[\s_-])(?:ad|ads|advert|advertisement|advertising|sponsored)(?:$|[\s_-])|广告|廣告/.test(words))return 'advertisement';
+    if(/(?:^|[\s_-])(?:notice|announcement|announcements)(?:$|[\s_-])|公告/.test(words))return 'announcement';
+    if(n.localName==='img'||nativeImagePaint(n))return 'dynamic_image';
+    return null;
+  };
+  const businessSemantic=x=>{
+    const words=[...Object.values(regionAttributes(x)),x.getAttribute('alt')].filter(Boolean).join(' ').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase();
+    return /(?:^|[\s_-])(?:result|answer|total|captcha|chart|graph)(?:$|[\s_-])|结果|結果|答案|验证码|驗證碼|图表|圖表/.test(words)
+      ||/(?:^|\s)output(?:$|\s)/.test(words)
+      ||/(?:calculation|calculator|calculated|computed|computation|conversion|converted|validation|form|tool)[\s_-]+output|output[\s_-]+(?:calculation|calculated|computed|conversion|validation|result)/.test(words);
+  };
+  const candidates=[...document.querySelectorAll('*')].filter(n=>n!==document.body&&n!==document.documentElement&&categoryOf(n)&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
+  const dynamicRegions=[];const allowedRoots=[];
+  for(const n of candidates){
+    if(unrelatedTransforms.has(n))continue; // Preserve the existing bounded transformed-decoration proof.
+    if(allowedRoots.some(p=>p!==n&&p.contains(n)))continue;
+    const raw=rawBox(n),clip=clipFor(n),members=[n,...n.querySelectorAll('*')],memberSet=new Set(members);
+    // A normal-flow descendant can extend its owner's box (e.g. a close
+    // button). Bound its native paint box explicitly, never silently crop it.
+    const boundedBoxes=members.filter(x=>x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).map(x=>{const r=rawBox(x),c=clipFor(x);return [Math.max(r[0],c.left),Math.max(r[1],c.top),Math.min(r[2],c.right),Math.min(r[3],c.bottom)];}).filter(r=>r[0]<r[2]&&r[1]<r[3]);
+    const paintBox=[Math.min(raw[0],...boundedBoxes.map(r=>r[0])),Math.min(raw[1],...boundedBoxes.map(r=>r[1])),Math.max(raw[2],...boundedBoxes.map(r=>r[2])),Math.max(raw[3],...boundedBoxes.map(r=>r[3]))];
+    const box=[Math.max(0,Math.floor(paintBox[0])),Math.max(0,Math.floor(paintBox[1])),Math.min(width,Math.ceil(paintBox[2])),Math.min(height,Math.ceil(paintBox[3]))];
+    if(box[0]>=box[2]||box[1]>=box[3])continue;
+    const reasons=[],category=categoryOf(n);
+    const clippedInside=(x,own=false)=>{for(let a=own?x:x.parentElement;a&&n.contains(a);a=a.parentElement){const c=getComputedStyle(a),r=rawBox(a);if((/(?:^| )paint(?: |$)/.test(c.contain)||['hidden','clip'].includes(c.overflowX)&&['hidden','clip'].includes(c.overflowY))&&r[0]>=paintBox[0]&&r[1]>=paintBox[1]&&r[2]<=paintBox[2]&&r[3]<=paintBox[3])return true;}return false;};
+    // Native clipping bounds transformed/animated descendants, including SVG.
+    for(const x of members){const st=getComputedStyle(x),r=rawBox(x);if(!x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+      if(!clippedInside(x)&&(st.transform!=='none'||st.filter!=='none'||st.boxShadow!=='none'||st.textShadow!=='none'||st.clipPath!=='none'||st.maskImage!=='none'&&!nativeImagePaint(x)||st.mixBlendMode!=='normal'||st.outlineStyle!=='none'&&parseFloat(st.outlineWidth)>0||x instanceof SVGElement||x.shadowRoot))reasons.push('unbounded_paint');
+      if(!clippedInside(x)&&(r[0]<paintBox[0]||r[1]<paintBox[1]||r[2]>paintBox[2]||r[3]>paintBox[3]))reasons.push('descendant_paint_outside_region');
+      for(const ps of ['::before','::after']){const stp=getComputedStyle(x,ps);if(!clippedInside(x,true)&&!['none','normal'].includes(stp.content))reasons.push('unbounded_pseudo_paint');}
+    }
+    const intrinsic=[...n.querySelectorAll('input,textarea,select,output,[contenteditable=true]')];
+    if(n.matches('input,textarea,select,output,[contenteditable=true]'))intrinsic.push(n);
+    if(intrinsic.length)reasons.push('input_or_business_result');
+    const semanticOwners=members.filter(x=>businessSemantic(x)||(x!==n&&x.matches('[role=status],[role=alert],[aria-live]')));
+    const relatedOwners=[...document.querySelectorAll('button,input,select,textarea,[role=button]')].filter(c=>['aria-controls','aria-describedby','aria-details'].some(k=>(c.getAttribute(k)||'').split(/\s+/).some(id=>id&&members.some(x=>x.id===id))));
+    if(semanticOwners.length||relatedOwners.length||n.matches('[role=status],[role=alert],[aria-live]')&&n.closest('form'))reasons.push('business_result_semantics');
+    const assertionNodes=[...assertions.filter(c=>c.selector).map(c=>document.querySelectorAll(c.selector)[c.index||0]),...protected_selectors.flatMap(s=>[...document.querySelectorAll(s)])].filter(Boolean);
+    if(assertionNodes.some(x=>x===n||n.contains(x)||!x.contains(n)&&intersects(box,rawBox(x))))reasons.push('explicit_semantic_evidence');
+    const businessOutside=[...document.querySelectorAll('input,textarea,select,output,[contenteditable=true],[id],[class],[aria-label]')].filter(x=>!memberSet.has(x)&&!x.contains(n)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).filter(x=>x.matches('input,textarea,select,output,[contenteditable=true]')||businessSemantic(x));
+    if(businessOutside.some(x=>intersects(box,rawBox(x))))reasons.push('overlaps_business_evidence');
+    const externalText=[];const tw=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    while(tw.nextNode()){const t=tw.currentNode,p=t.parentElement;if(!p||memberSet.has(p)||!clean(t.textContent)||p.closest('script,style,noscript,template')||!p.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;const r=document.createRange();r.selectNodeContents(t);for(const q of r.getClientRects())if(q.width&&q.height&&intersects(box,[q.left,q.top,q.right,q.bottom]))externalText.push([q.left,q.top,q.right,q.bottom]);}
+    // Background text overlap is recorded, not a whole-main exclusion.
+    // Actual action/assertion and intrinsic business evidence are protected below.
+    const externalControls=nodes.filter((x,i)=>!memberSet.has(x)&&!x.contains(n)&&(records[i].clickable||records[i].inputable||records[i].element_type==='image'||records[i].element_type==='window')&&intersects(box,records[i].bbox));
+    // Unselected controls remain visible inventory; overlap alone is not task relevance.
+    const externalPaint=[...document.querySelectorAll('*')].filter(x=>!memberSet.has(x)&&!x.contains(n)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&intersects(box,rawBox(x))).filter(x=>{const c=getComputedStyle(x);return c.backgroundImage!=='none'||!['rgba(0, 0, 0, 0)','transparent'].includes(c.backgroundColor)||c.maskImage!=='none'||c.filter!=='none'||x instanceof SVGElement||x.shadowRoot;});
+    // Unrelated painted backgrounds are not business evidence. Preserve their
+    // overlap for audit; actual target/result/assertion guards above remain.
+    if(target&&!memberSet.has(target)&&!target.contains(n)&&intersects(box,rawBox(target)))reasons.push('overlaps_action_target');
+    const ids=members.map(x=>{if(!observer.ids.has(x))observer.ids.set(x,`e_${observer.next++}`);return observer.ids.get(x);});
+    const row={schema_version:dynamicVersion,category,tag:n.localName,native_image_paint:nativeImagePaint(n),attributes:regionAttributes(n),selector:selectorOf(n),element_id:observer.ids.get(n),bbox:box,raw_bbox:raw,native_paint_bbox:paintBox,clip_bbox:[clip.left,clip.top,clip.right,clip.bottom],member_ids:ids,member_selectors:members.map(selectorOf),eligible:reasons.length===0,reasons:[...new Set(reasons)],external_text_overlaps:externalText,external_paint_overlaps:externalPaint.map(x=>({selector:selectorOf(x),bbox:rawBox(x)})),external_control_ids:externalControls.map(x=>observer.ids.get(x)),target_inside:!!target&&memberSet.has(target)};
+    dynamicRegions.push(row);if(row.eligible)allowedRoots.push(n);
+  }
+  // Empty native CSS graphics have a separate paint envelope. Their owner,
+  // labels, values and targets remain in the complete semantic projection.
+  for(const owner of document.querySelectorAll('*')){
+    if(!owner.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||allowedRoots.some(r=>r===owner||r.contains(owner)))continue;
+    for(const which of ['::before','::after']){const proof=boundedGraphicPseudo(owner,which);if(!proof)continue;
+      const box=proof.bbox,reasons=[];
+      if(businessSemantic(owner)||owner.closest('form,output,[contenteditable=true]'))reasons.push('business_result_semantics');
+      const protectedNodesHere=[...assertions.filter(c=>c.selector).map(c=>document.querySelectorAll(c.selector)[c.index||0]),...protected_selectors.flatMap(s=>[...document.querySelectorAll(s)])].filter(Boolean);
+      if(protectedNodesHere.some(x=>intersects(box,rawBox(x))))reasons.push('explicit_semantic_evidence');
+      if([...document.querySelectorAll('input,textarea,select,output,[contenteditable=true],[id],[class],[aria-label]')].some(x=>x!==owner&&!x.contains(owner)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&(x.matches('input,textarea,select,output,[contenteditable=true]')||businessSemantic(x))&&intersects(box,rawBox(x))))reasons.push('overlaps_business_evidence');
+      if(target&&target!==owner&&!owner.contains(target)&&intersects(box,rawBox(target)))reasons.push('overlaps_action_target');
+      if(!observer.ids.has(owner))observer.ids.set(owner,`e_${observer.next++}`);const id=observer.ids.get(owner)+which,selector=selectorOf(owner)+which;
+      dynamicRegions.push({schema_version:dynamicVersion,category:'dynamic_image',tag:which,native_image_paint:proof,attributes:regionAttributes(owner),element_id:id,selector,bbox:box,raw_bbox:proof.owner_bbox,native_paint_bbox:box,clip_bbox:box,member_ids:[id],member_selectors:[selector],eligible:reasons.length===0,reasons:[...new Set(reasons)],external_text_overlaps:[],external_control_ids:[],target_inside:false,semantic_owner_retained:true});
+    }
+  }
+  const isDynamic=n=>allowedRoots.some(root=>root===n||root.contains(n));
+  const stablePieces=[];const sw=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+  while(sw.nextNode()){const t=sw.currentNode,p=t.parentElement;if(!p||isDynamic(p)||p.closest('script,style,noscript,template')||!p.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;const v=clean(visibleText(t));if(v)stablePieces.push(v);}
+  for(const n of nodes)if(!isDynamic(n)&&n.matches('input,textarea')&&n.type!=='password'&&nativeValueVisible(n)){const v=n.value||n.placeholder;if(v)stablePieces.push(v);}
+  const ancestorText={};
+  for(let i=0;i<nodes.length;i++){const n=nodes[i];if(isDynamic(n)||!allowedRoots.some(r=>n.contains(r)))continue;
+    const w=document.createTreeWalker(n,NodeFilter.SHOW_TEXT);const parts=[];while(w.nextNode())if(!isDynamic(w.currentNode.parentElement)){const t=clean(visibleText(w.currentNode));if(t)parts.push(t);}ancestorText[records[i].element_id]=clean(parts.join(' '));}
+
+  const navigationTiming=performance.getEntriesByType('navigation')[0];
+  const navigationResponse=navigationTiming && navigationTiming.name.split('#')[0]===location.href.split('#')[0] && Number.isInteger(navigationTiming.responseStatus) && navigationTiming.responseStatus>0 ? {url:navigationTiming.name,status:navigationTiming.responseStatus,basis:'native_navigation_timing'} : null;
+  return {navigation_response:navigationResponse,url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
+    dynamic_region_contract:{schema_version:dynamicVersion,regions:dynamicRegions,visible_text_outside:stablePieces.join('\n'),ancestor_text_outside:ancestorText},
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
+    disjoint_pseudo_paint_proofs:[...disjointPseudoProofs.values()],
     unrelated_transform_proofs:transformProofs, capture_images:captureImages,capture_media:captureMedia,paint_borders:paintBorders,capture_controls:captureControls,
     geometry_witnesses:nodes.map((node,i)=>{const b=records[i].bbox;
       const samples=[];for(const x of [b[0]+.5,(b[0]+b[2])/2,b[2]-.5])for(const y of [b[1]+.5,(b[1]+b[3])/2,b[3]-.5]){

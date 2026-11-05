@@ -72,7 +72,7 @@ def source_identity():
              'action_normalization.py', 'task_generation.py', 'task_admission.py', 'site_scheduler.py', 'observed_workflow.py',
              'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
              'workflow_proposal.py', 'fragment_workflow.py', 'agent_controller.py', 'agent_observation.py', 'agent_audit.py', 'agent_feedback.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py',
-             'react_session.py', 'react_context.py', 'collection_context.py', 'postprocess.py', 'request_quarantine.py','closing_policy.py']
+             'react_session.py', 'react_context.py', 'collection_context.py', 'postprocess.py', 'request_quarantine.py','closing_policy.py','trusted_prefix.py','action_stability.py','goal_evidence.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -388,7 +388,29 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return {'status': 'rejected', 'failure_class': failure_class,
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, **stop_data}
     ending=summary.get('collection_ending')
-    if ending and not ending.get('safe_for_pending_sample'):
+    prefix_end=None
+    from .trusted_prefix import VERSION as PREFIX_VERSION, candidate_end, project_prefix
+    prefix_requested=(task['fragment'].get('trusted_prefix_protocol')==PREFIX_VERSION and
+        (summary['unknown'] or summary.get('host_failure') or
+         (ending and ending.get('flagged')) or summary.get('stop_reason') in ('blocked','no_path','budget')))
+    if prefix_requested:
+        try:
+            from .postprocess import session_record
+            prefix_end=candidate_end(evidence/'raw')
+            if prefix_end is not None:
+                project_prefix(session_record(evidence/'raw',allow_unknown_for_prefix=True),evidence/'raw',prefix_end,ids)
+                write_json(evidence/'prefix-source-closeout.json',{'protocol':PREFIX_VERSION,
+                    'attempt_id':attempt['attempt_id'],'raw_receipt':raw_receipt,
+                    'original_stop_reason':summary['stop_reason'],'original_unknown':summary['unknown'],
+                    'original_failure_class':summary['failure_class'],
+                    'original_host_failure':summary.get('host_failure'),
+                    'original_collection_ending':ending,'original_goal_completed':False,
+                    'original_request_ledger_unchanged':True})
+        except (ValueError,KeyError,TypeError,OSError) as prefix_error:
+            prefix_end=None
+            write_json(evidence/'prefix-ineligible.json',{'protocol':PREFIX_VERSION,
+                'error':str(prefix_error),'raw_receipt':raw_receipt,'normal_sample_saved':False})
+    if ending and not ending.get('safe_for_pending_sample') and prefix_end is None:
         pending=evidence/'raw-ending-pending.json'
         write_json(pending,{'schema_version':'webcollect-raw-ending-pending-2',
             'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
@@ -397,12 +419,12 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             'react_raw_ending_pending:'+ending['reason'],_evidence(pending))
         return {**result,'raw_preservation_status':'saved_pending_reconciliation','collection_ending':ending,
                 'pending_receipt':str(pending),'QC_status':'NOT_RUN'}
-    if summary['unknown'] or summary['failure_class'] == 'interrupted':
+    if (summary['unknown'] or summary['failure_class'] == 'interrupted') and prefix_end is None:
         react_close_event(store, attempt, 'react_raw_unknown', _event_now(),
             {'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, 'unknown': True})
         return finish_failure('interrupted',
                               'react_unknown:' + str(summary['stop_summary'] or summary['stop_reason']))
-    if summary.get('host_failure'):
+    if summary.get('host_failure') and prefix_end is None:
         react_close_event(store, attempt, 'react_raw_rejected', _event_now(),
             {'stop_reason':summary['stop_reason'],'raw_receipt':raw_receipt,'primary_failure':summary['stop_summary']})
         return finish_failure(summary['failure_class'], 'react_' + str(summary['stop_summary'] or summary['stop_reason']))
@@ -415,14 +437,19 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return []
     def dedup_validator(delivery_root):
         conflicts = index.conflicts(delivery_root)
+        from .candidate_contract import research_duplicate_basis
+        research = research_duplicate_basis(task, store.registry)
+        blocked = [item for item in conflicts if not research
+                   or Path(item['other_sample']).name != research['original_sample_id']]
         write_json(evidence / 'producer_dedup.json', {'exact_conflicts': conflicts,
+            'research_original_overlap': research, 'blocking_conflicts': blocked,
             'other_routes': 'independent_QC_required', 'not_qualified': True})
-        return ['producer_exact_dedup: ' + str(conflicts)[:400]] if conflicts else []
+        return ['producer_exact_dedup: ' + str(blocked)[:400]] if blocked else []
     # The structural check validates a runtime-manifest shape: inherit the
     # real manifest (schema_version pins rule_version=m4-1) with this sample.
     delivery_manifest = {**manifest, 'samples': list(manifest.get('samples') or []) + [ids['sample_id']]}
     derived = postprocess_derivation(evidence, sample, ids, delivery_manifest,
-                                     validators=(audit_validator, dedup_validator))
+                                     validators=(audit_validator, dedup_validator), prefix_end_step=prefix_end)
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})
@@ -457,6 +484,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     index.add_sample(sample)
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             **({'collection_ending':ending} if ending else {}),
+            **({'trusted_prefix':derived['trusted_prefix'],'original_goal_completed':False} if derived.get('trusted_prefix') else {}),
             'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
             'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve()), **stop_data}
 

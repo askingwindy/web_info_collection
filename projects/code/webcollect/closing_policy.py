@@ -75,6 +75,15 @@ def validate_record(record):
             safe=same_view(before,after) and same_view(after,state(record,final))
     if safe:
         safe=same_view(state(record,prefix[-1]['after_observation_id']),state(record,final))
+        bridge=marker.get('direct_terminal_bridge')
+        if bridge:
+            from .direct_completion import enabled as explicit,bridge_evidence
+            if not explicit(record['task']) or len(dispatched)!=len(verified) or marker.get('kind')!='HOST_PLAN_ENDPOINT':
+                raise ValueError('Direct terminal bridge cannot cover unknown/tail/other closure')
+            actual=bridge_evidence(record['task'],record['observations'][prefix[-1]['after_observation_id']]['evidence'],
+                record['observations'][final]['evidence'],target_ids=[(r.get('target') or {}).get('control_id') for r in prefix])
+            if actual!=bridge:raise ValueError('Direct terminal bridge differs from original frames')
+            safe=safe or actual['proof']['accepted'] is True
     if marker['safe_for_pending_sample'] and not safe:
         raise ValueError('V2 closure cannot prove a safe continuous prefix and terminal')
     if marker.get('kind')=='HOST_BOUNDARY_RETURN':
@@ -109,6 +118,16 @@ def validate_record(record):
                 session.attempt_id = record['boundary']['attempt_id']
                 session.binding = record['receipt']['boundary']
                 session.answer_citation = (basis.get('session_objective_evidence') or {}).get('citation_event')
+                from .direct_completion import enabled as explicit
+                if explicit(session.task):
+                    plans=sorted(Path(session.binding['path']).parent.glob('*-conditional-plan.json'))
+                    from types import SimpleNamespace
+                    session.plan_controller=SimpleNamespace(frozen_plan=load_json(plans[0])['plan'])
+                    session.reading_completion=((basis.get('session_objective_evidence') or {}).get('completion') or {}).get('decision')
+                    if session.reading_completion:
+                        p=Path(session.reading_completion['path'])
+                        if p.parent!=Path(session.binding['path']).parent or record['receipt']['files_sha256'].get(p.name)!=session.reading_completion['sha256']:
+                            raise ValueError('Direct completion is outside the sealed attempt')
                 if session.answer_citation:
                     path = Path(session.answer_citation['path'])
                     if (path.parent != Path(session.binding['path']).parent or

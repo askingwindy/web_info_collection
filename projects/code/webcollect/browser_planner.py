@@ -354,7 +354,8 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                     transitions.append({'before': before_ref, 'operation': operation,
                                         'execution': {'path': str(execution_path), 'sha256': file_sha(execution_path)}, 'after': after_ref})
                     history.append({**operation, 'actual_visible_text': after['state']['visible_text']})
-                    fp = fingerprint({k: v for k, v in after['state'].items() if k not in ('target', 'assertion_targets')})
+                    from .dynamic_regions import projection
+                    fp = fingerprint({k: v for k, v in projection(after['state']).items() if k not in ('target', 'assertion_targets')})
                     if len(fingerprints) >= 2 and fp == fingerprints[-2]:
                         raise ValueError('Two-action return to the same state; reject round trip')
                     fingerprints.append(fp)

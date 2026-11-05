@@ -2,10 +2,54 @@
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 import json
+from pathlib import Path
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence, validate_capability
 
 VERSION = 'webcollect-candidate-consumption-1'
+
+
+def research_duplicate_basis(task, registry):
+    """Only the original saved sample may overlap an authorized research replay.
+
+    A task field alone grants nothing: frozen claim, live pool event, original
+    effective result, objective and registry must all describe the same replay.
+    """
+    if not task.get('candidate_binding'):
+        return None
+    binding = validate_task_binding(task)
+    frozen = load_json(binding['claim_reference']['path'])
+    descriptor = (frozen.get('binding') or {}).get('research_replay')
+    if descriptor is None:
+        return None
+    from site_planner.candidate_pool import CandidatePool
+    pool = CandidatePool(frozen['pool'])
+    live = pool.get_claim(binding['claim_id'])
+    if ((live.get('binding') or {}).get('research_replay') != descriptor
+            or live['candidate_id'] != binding['candidate_id'] or live['version'] != binding['version']):
+        raise ValueError('Research duplicate exception lacks its original pool binding')
+    from .current_chain import read_chain_scope, assert_current_evidence
+    scope = read_chain_scope(live['binding']['history_set'])
+    assert_current_evidence(scope, descriptor)
+    with pool.pool.connect() as con:
+        original = con.execute('SELECT * FROM candidate_claims WHERE claim_id=? AND candidate_id=? AND version=?',
+            (descriptor['original_claim_id'], binding['candidate_id'], binding['version'])).fetchone()
+        result = con.execute('SELECT * FROM candidate_results WHERE claim_id=? AND effective=1',
+            (descriptor['original_claim_id'],)).fetchone()
+        events = [json.loads(r[0]) for r in con.execute("SELECT record FROM candidate_events WHERE claim_id=? AND kind='research_claimed'", (binding['claim_id'],))]
+    if (not original or original['state'] != 'succeeded' or not result
+            or not any(all(event.get(k)==v for k,v in descriptor.items()) for event in events)):
+        raise ValueError('Research duplicate exception lacks original saved authorization')
+    original_binding = json.loads(original['binding'])
+    if (Path(original_binding['registry']).resolve() != Path(registry).resolve()
+            or Path(live['binding']['registry']).resolve() != Path(registry).resolve()
+            or load_json(Path(original_binding['output'])/'session-objective.json') != load_json(descriptor['objective']['path'])):
+        raise ValueError('Research duplicate exception changes the registry or original goal')
+    saved = json.loads(result['record'])
+    return {'schema_version':'candidate-research-duplicate-1', 'research_claim_id':binding['claim_id'],
+            'original_claim_id':descriptor['original_claim_id'], 'original_sample_id':saved['sample_id'],
+            'claim_reference':binding['claim_reference'], 'authorization':descriptor['authorization'],
+            'production_counted':False, 'production_duplicate_acceptance':False}
 
 
 def instruction(candidate):

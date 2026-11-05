@@ -306,8 +306,15 @@ def related_projection(state):
     return result
 
 
-def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True):
+def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True, action_scope=None):
     """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
+    from .dynamic_regions import STABILITY as dynamic_rule, enabled as dynamic_enabled, pair as dynamic_pair
+    if rule_version==dynamic_rule or (rule_version is None and dynamic_enabled(before) and dynamic_enabled(after)):
+        return dynamic_pair(before,after,png_before,png_after,action_scope=action_scope)
+    from .action_stability import VERSIONS as focus_versions, pair as focus_pair
+    if action_scope is not None or rule_version in focus_versions:
+        if action_scope is None:raise ValueError('Scoped proof requires its frozen action scope')
+        return focus_pair(before,after,png_before,png_after,action_scope)
     full=fingerprint(before)==fingerprint(after)
     rule_version=rule_version or STABILITY_VERSION
     if rule_version not in STABILITY_RULES:raise ValueError('Unknown stability rule')
@@ -471,8 +478,8 @@ def validate_capture_receipt(state,receipt,png):
     other=base64.b64decode(attempt['comparison_png_base64'],validate=True)
     if attempt.get('snapshot_before')!=state or base64.b64decode(attempt['original_png_base64'],validate=True)!=png:
         raise ValueError('完整原图/原状态与capture证明不同')
-    first_proof=stability_pair(state,middle,png,other,rule_version=attempt['stability']['schema_version'],allow_border=attempt['stability'].get('border_enabled',False))
-    last_proof=stability_pair(state,final,png,other,rule_version=attempt['final_stability']['schema_version'],allow_border=attempt['final_stability'].get('border_enabled',False))
+    first_proof=stability_pair(state,middle,png,other,rule_version=attempt['stability']['schema_version'],allow_border=attempt['stability'].get('border_enabled',False),action_scope=attempt['stability'].get('action_scope'))
+    last_proof=stability_pair(state,final,png,other,rule_version=attempt['final_stability']['schema_version'],allow_border=attempt['final_stability'].get('border_enabled',False),action_scope=attempt['final_stability'].get('action_scope'))
     if (not first_proof['accepted'] or not last_proof['accepted'] or attempt.get('stability')!=first_proof
             or attempt.get('final_stability')!=last_proof or attempt.get('before_fingerprint')!=fingerprint(state)
             or attempt.get('after_fingerprint')!=fingerprint(final)
@@ -525,8 +532,8 @@ async def viewport_png(page):
 
 
 async def _capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
-                   timeout=15):
-    """Capture full evidence; only proved unrelated decorative IMG pixels may vary.
+                   timeout=15, action_scope=None):
+    """Capture full original evidence with shared bounded dynamic-region comparison.
 
     retries remains the total number of attempts, including when explicitly
     supplied. The backoff requests at most eight seconds of sleep in total;
@@ -543,13 +550,9 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
             await asyncio.sleep(delay_before)
             observed_wait+=time.monotonic()-wait_started
             requested_wait+=delay_before
-        native_window=await _wait_for_native_window(page,max(0.0,(_CAPTURE_WAIT_BUDGET-requested_wait)*1000),
-                                                   max(1000.0,recent_capture_ms+250.0))
-        requested_wait+=native_window['requested_wait_ms']/1000
-        observed_wait+=native_window['observed_wait_ms']/1000
-        native = next((v['native'] for v in reversed(native_window['observations'])), {})
-        pulse = (any(a.get('pseudo_element') in ('::before','::after') for a in native.get('visible_animations',[]))
-                 and _native_animation_window(native,8000,150,png_phase=True)['status']=='native_window_predicted')
+        # Classification-based comparison replaces waiting for a global still window.
+        native_window={'status':'dynamic_region_comparison','requested_wait_ms':0,'observed_wait_ms':0,'observations':[]}
+        pulse=False
         png_waits=[]
         async def timed_png():
             nonlocal requested_wait, observed_wait
@@ -571,8 +574,8 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
         if v2:
             comparison,comparison_method=await timed_png()
             final=await observe(page,selector,index,**options)
-            stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0)
-            final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0)
+            stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
+            final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
             extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
                    'original_png_base64':base64.b64encode(png).decode('ascii'),
                    'comparison_png_base64':base64.b64encode(comparison).decode('ascii'),
@@ -602,7 +605,7 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
             with Image.open(BytesIO(png)) as im:
                 if list(im.size)!=before['screen_resolution']:
                     raise ValueError('截图像素分辨率与 DOM 坐标系不一致')
-            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png,'border_enabled':attempt_index>0,'png_phase':pulse}
+            if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png,'border_enabled':attempt_index>0,'png_phase':pulse,'action_scope':action_scope}
             return {'state':before,'png':png,'capture':{**({'schema_version':CAPTURE_VERSION} if v2 else {}),
                     'attempts':attempts,'screenshot_sha256':hashlib.sha256(png).hexdigest(),
                     'natural_wait_requested_ms':round(requested_wait*1000),
@@ -625,9 +628,9 @@ class SnapshotFault(ValueError):
 
 
 async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
-                  timeout=15):
+                  timeout=15, action_scope=None):
     try:
-        return await _capture(page, selector, index, retries, assertions, protected_selectors, timeout=timeout)
+        return await _capture(page, selector, index, retries, assertions, protected_selectors, timeout=timeout, action_scope=action_scope)
     except Exception as error:
         # Preserve the exact comparison on EvidenceStale. A script exception may
         # precede any tree; retain the available PNG without claiming synchrony.
@@ -653,7 +656,7 @@ _PREVERIFY_RETRY_DELAYS=(0.25,0.5)
 
 
 async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None,
-                                 timeout=15):
+                                 timeout=15, action_scope=None):
     """Reject any changed captured state before dispatch, including non-control actions.
 
     Nothing has been dispatched here, so a transient paint mismatch may be
@@ -669,6 +672,8 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
     if 'capture_readiness' in state:
         captured=_CAPTURE_FRAMES.get(page)
         if not captured or captured['state']!=state:raise ValueError('派发缺少本次原始capture像素绑定')
+        if captured.get('action_scope') != action_scope:
+            raise ValueError('Scoped action proof was lost or changed before dispatch')
         rejections=[]
         delays=iter(_PREVERIFY_RETRY_DELAYS)
         phase_budget_ms=3000
@@ -680,8 +685,8 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
             png,method=await asyncio.wait_for(viewport_png(page),timeout=25)
             final=await observe(page,selector,index,**options)
             allow_border=captured.get('border_enabled',False) or bool(rejections)
-            proof=stability_pair(state,live,captured['png'],png,allow_border=allow_border)
-            final_proof=stability_pair(state,final,captured['png'],png,allow_border=allow_border)
+            proof=stability_pair(state,live,captured['png'],png,allow_border=allow_border,action_scope=action_scope)
+            final_proof=stability_pair(state,final,captured['png'],png,allow_border=allow_border,action_scope=action_scope)
             if proof['accepted'] and final_proof['accepted']:
                 return {'matched':True,'full_state_matched':proof['full_dom_stable'] and final_proof['full_dom_stable'],
                         'state_fingerprint':fingerprint(state),'live_state_fingerprint':fingerprint(live),

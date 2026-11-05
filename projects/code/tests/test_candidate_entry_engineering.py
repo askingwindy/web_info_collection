@@ -37,6 +37,61 @@ def scripted_native_arguments(decision, prompt, tools):
 
 
 class EntryEngineering(legacy.Consumption):
+    async def test_entry_cancelled_between_verified_actions_is_audited_without_changing_unknown(self):
+        from webcollect.runtime import RuntimeStore
+        from webcollect.collect_runtime import runtime_scope
+        from webcollect.postprocess import cancelled_dispatch_audit, session_record
+        from webcollect.candidate_consumer import unverified_original_actions
+        def cancel(_):raise asyncio.CancelledError()
+        self.decisions=self.decisions[:2]+[cancel]
+        real_finish=RuntimeStore.finish_attempt
+        def expired_finish(store,*args,**kwargs):
+            if kwargs.get('failure_class')=='interrupted':raise ValueError('controlled expired owner')
+            return real_finish(store,*args,**kwargs)
+        with patch.object(RuntimeStore,'finish_attempt',expired_finish):
+            try:await self.invoke_cli()
+            except (asyncio.CancelledError,ValueError):pass
+        claim=self.pool.get_claim(self.claim['claim_id']);binding=claim['binding']
+        output=Path(binding['output'])/'execution/capture';store=RuntimeStore(self.registry,runtime_scope(output))
+        raw=next(output.glob('evidence/*/raw'))
+        audit=cancelled_dispatch_audit(raw)
+        self.assertTrue(audit['source_unknown_retained']);self.assertFalse(audit['deliverable'])
+        with self.assertRaisesRegex(ValueError,'UNKNOWN'):session_record(raw)
+        terminal_path=raw/'terminal.json';original_terminal=terminal_path.read_bytes()
+        terminal_path.write_bytes(original_terminal+b' ')
+        with self.assertRaisesRegex(ValueError,'字节改变'):cancelled_dispatch_audit(raw)
+        terminal_path.write_bytes(original_terminal)
+        after=next(raw.glob('observation-*.png'));original_image=after.read_bytes();after.unlink()
+        with self.assertRaisesRegex(ValueError,'缺失'):cancelled_dispatch_audit(raw)
+        after.write_bytes(original_image)
+        extra=raw.parent/'action-attempts/extra.json';save_json(extra,{'dispatched':True})
+        with self.assertRaisesRegex(ValueError,'unmatched'):cancelled_dispatch_audit(raw)
+        extra.unlink()  # disposable negative fixture only
+        intent=raw/'9999-dispatch-intent.json';save_json(intent,{'operation':{'action_type':'type'}})
+        with self.assertRaisesRegex(ValueError,'unsealed'):cancelled_dispatch_audit(raw)
+        intent.unlink()
+        attempt=next(a for a in store.attempt_ledger()['attempts'] if a['attempt_id']==binding['attempt_id'])
+        audit_ref=exclusive(self.root/'cancelled-audit.json',audit)
+        exit_ref=exclusive(self.root/'closed.json',{'returncode':1,'attempt_id':attempt['attempt_id'],'browser_closed':True})
+        kw=dict(raw_receipt=reference(raw/'raw-receipt.json'),failure=reference(raw.parent/'failure.json'),
+                process_exit=exit_ref,model_ledger=self.ledger,cancellation_audit=audit_ref)
+        open_ref=exclusive(self.root/'not-closed.json',{'returncode':1,'attempt_id':attempt['attempt_id'],'browser_closed':False})
+        with self.assertRaisesRegex(ValueError,'closed browser'):
+            store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']+1,**{**kw,'process_exit':open_ref})
+        with self.assertRaisesRegex(ValueError,'expired'):store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']-1,**kw)
+        with self.ledger.transaction() as con:
+            rid=con.execute('SELECT id FROM model_requests LIMIT 1').fetchone()[0]
+            con.execute("UPDATE model_requests SET state='unknown' WHERE id=?",(rid,))
+        with self.assertRaisesRegex(ValueError,'unresolved'):store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']+1,**kw)
+        with self.ledger.transaction() as con:con.execute("UPDATE model_requests SET state='succeeded' WHERE id=?",(rid,))
+        before={str(p):file_sha(p) for p in raw.rglob('*') if p.is_file()}
+        result=store.reconcile_sealed_rejection(attempt['attempt_id'],now=attempt['lease_expires_at']+1,**kw)
+        self.assertEqual(result['root_cause'],'host_cancelled_between_verified_actions')
+        self.assertEqual(before,{str(p):file_sha(p) for p in raw.rglob('*') if p.is_file()})
+        self.assertTrue(load_json(raw/'terminal.json')['unknown'])
+        row=next(a for a in store.attempt_ledger()['attempts'] if a['attempt_id']==attempt['attempt_id'])
+        self.assertEqual(list(unverified_original_actions(row)),[])
+
     async def test_sealed_known_failure_reconciliation_preserves_raw_and_blocks_unknown(self):
         from webcollect.runtime import RuntimeStore
         from webcollect.collect_runtime import runtime_scope, quarantine_interrupted
@@ -118,6 +173,7 @@ class EntryEngineering(legacy.Consumption):
             def native_task(**kwargs):
                 # The scripted transport below returns the historical four-tool protocol.
                 kwargs.pop('plan_protocol', None)
+                kwargs.pop('action_stability_protocol', None)
                 return build_url_task(**kwargs)
 
             stack.enter_context(patch('webcollect.react_session.build_url_task', side_effect=native_task))

@@ -78,6 +78,22 @@ class SemanticReuseTests(unittest.TestCase):
             self.assertEqual(visual['result']['semantic_check_sources'][name],old['id'])
         self.assertEqual(self.ledger.get(old['id']),original)
 
+    def test_dynamic_prompt_change_reuses_only_unaffected_language_and_privacy(self):
+        old_rules={'visual_alignment':'all-original-frames-actions-trees-1',
+            'terminal_semantics':'truthful-fragment-five-eight-historical-trusted-prefix-5',
+            'substantive_difference':'actual-trajectories-bound-pair-coverage-and-terminal-images-3'}
+        with patch.object(ai_worker,'PROMPT_VERSION','independent-all-frame-review-4-whole-sample-length'),patch.dict(semantic.RULE_VERSIONS,old_rules):
+            first=self.prepare_run('before-dynamic')
+        original=deepcopy(self.ledger.get(first['jobs'][0]['visual_job']))
+        second=self.prepare_run('after-dynamic')
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(set(self.calls[-1][1]['properties']['checks']['required']),{'visual_alignment','terminal_semantics'})
+        new=self.ledger.get(second['jobs'][0]['visual_job'])
+        for name in ('language','privacy'):self.assertEqual(new['result']['semantic_check_sources'][name],original['id'])
+        self.assertEqual(self.ledger.get(original['id']),original)
+        with self.assertRaisesRegex(ValueError,'prompt changed'):
+            ai_worker._semantic_dispatch(self.ledger,self.stub(self.ledger),original)
+
     def test_changed_evidence_and_different_sample_cannot_borrow_review(self):
         self.prepare_run('qc1')
         from PIL import Image

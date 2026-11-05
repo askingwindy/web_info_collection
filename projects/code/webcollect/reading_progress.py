@@ -6,11 +6,14 @@ END_POLICY = 'webcollect-five-effective-visible-ending-1'
 
 
 def lines(state):
+    from .dynamic_regions import projection
+    state=projection(state)
     return list(dict.fromkeys(s.strip() for s in (state.get('visible_text') or '').splitlines() if s.strip()))
 
 
 def same_view(before, after):
-    return all(before.get(k) == after.get(k) for k in ('url','scroll','values','elements','visible_text'))
+    from .dynamic_regions import same_view as content_equivalent
+    return content_equivalent(before,after)
 
 
 def control_return(origin, middle, returned, next_operation):

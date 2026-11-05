@@ -37,6 +37,15 @@ def validate_contract(contract):
     def text(value):
         return isinstance(value, str) and 0 < len(value.strip()) <= 120
 
+    from .direct_article import VERSION as DIRECT_VERSION
+    if isinstance(contract,dict) and contract.get('version')==DIRECT_VERSION:
+        titles=contract.get('titles');entry=contract.get('entry_url')
+        if (set(contract)!={'version','kind','entry_url','titles'} or contract.get('kind')!='reading'
+                or not isinstance(entry,str) or urlsplit(entry).scheme not in ('http','https') or not urlsplit(entry).netloc
+                or not isinstance(titles,list) or not 1<=len(titles)<=4 or not all(map(text,titles))
+                or len({norm(t) for t in titles})!=len(titles)):
+            raise ValueError('Invalid direct article identity contract')
+        return
     if not isinstance(contract, dict) or contract.get('version') not in (LEGACY_VERSION, VERSION):
         raise ValueError('Unknown explicit goal evidence version')
     kind = contract.get('kind')
@@ -114,7 +123,7 @@ def calc_evidence(s, start, contract):
                     binding = current.get('binding') or {}
                     prior_scroll, final_scroll = state(after).get('scroll'), state(s.current).get('scroll')
                     if (contract['version'] != VERSION or latest_id or cid != first_id
-                            or final_value.get('value_visible') is not False
+                            or type(final_value.get('value_visible')) is not bool
                             or not previous_binding.get('selector') or binding.get('selector') != previous_binding['selector']
                             or binding.get('input_type') != previous_binding.get('input_type')
                             or number(final_value.get('value')) != desired
@@ -188,13 +197,13 @@ def search_field(observation, cid):
     return fields == [cid] and any(search_button(c) for c in siblings.values())
 
 
-def search_focus_target(ob):
+def search_focus_target(ob, *, allow_combobox=False):
     """Identify a single visible search input for a scoped first click."""
     if not ob.get('capture_verified'):
         return None
     matches = [(cid, c) for cid, c in ob['controls'].items()
                if c['element'].get('visible') and c['element'].get('inputable')
-               and c['element'].get('native_role') == 'input'
+               and c['element'].get('native_role') in (('input','combobox') if allow_combobox else ('input',))
                and c['binding'].get('input_type') in ('text','search') and search_field(ob, cid)]
     if len(matches) != 1:
         return None
@@ -232,6 +241,7 @@ def reading_evidence(s, start, contract):
     typed, sources, opened, passages = [], [], [], []
     subject, aspects = contract['subject'], contract['aspects']
     landing_doc = None
+    downward_reading=[]
     for step in s.trajectory:
         before, after = (s.observation_records[step[k]] for k in ('before_observation_id', 'after_observation_id'))
         if not (before.get('capture_verified') and after.get('capture_verified')):
@@ -246,6 +256,7 @@ def reading_evidence(s, start, contract):
                 typed.append({'operation_id': step['operation_id'], 'query': query, 'field':cid,
                               'document_identity': after['document_identity']})
                 sources, opened, passages, landing_doc = [], [], [], None
+                downward_reading=[]
                 if result_links(after, start, subject):
                     sources.append(after['document_identity'])
         elif step['action'] in ('click','hotkey') and typed:
@@ -257,10 +268,19 @@ def reading_evidence(s, start, contract):
             input_form = before['controls'].get(entry['field'], {}).get('binding', {}).get('form_index')
             submit_control = (step['action'] == 'click' and search_button(control) and
                               (input_form is None or control['binding'].get('form_index') == input_form))
-            if (before['document_identity'] == entry['document_identity'] and field.get('value') == entry['query']
-                    and (submit_key or submit_control) and urlsplit(before['url']).netloc == urlsplit(after['url']).netloc
-                    and result_links(after, start, subject) and after['document_identity'] not in sources):
+            submitted=(before['document_identity'] == entry['document_identity'] and field.get('value') == entry['query']
+                    and (submit_key or submit_control) and urlsplit(before['url']).netloc == urlsplit(after['url']).netloc)
+            if submitted and result_links(after, start, subject) and after['document_identity'] not in sources:
                 sources.append(after['document_identity'])
+            article=state(after)
+            headings=[e for e in article.get('elements',[]) if e.get('visible') and e.get('native_role')=='h1' and norm(e.get('text',''))==norm(subject)]
+            if submitted and before['document_identity']!=after['document_identity'] and len(headings)==1 and any(
+                    e.get('visible') and len((e.get('text') or '').strip())>=12 and e.get('native_role') not in ('a','input','button','h1','h2','h3')
+                    and region_matches(article,e['element_id'],'正文') for e in article.get('elements',[])):
+                landing_doc=after['document_identity'];passages=[]
+                sources.append(landing_doc)
+                opened.append({'text':headings[0]['text'],'href':after['url'],'landing':after['url'],
+                               'operation_id':step['operation_id'],'source':'verified_search_submission_direct_article'})
             # Delayed same-document suggestions can appear after the input capture.
             suggestions = (before['document_identity'] == entry['document_identity']
                            and field.get('value') == entry['query'] and bool(result_links(before,start,subject)))
@@ -276,6 +296,12 @@ def reading_evidence(s, start, contract):
             if not old.get('scroll') or old.get('scroll') == new.get('scroll'):
                 continue
             seen = {e.get('text') for e in old.get('elements', []) if e.get('visible')}
+            fresh_body=[e for e in new.get('elements',[]) if e.get('visible') and e.get('text') not in seen
+                        and len((e.get('text') or '').strip())>=12 and e.get('native_role') not in ('a','input','button','h1','h2','h3')
+                        and region_matches(new,e['element_id'],'正文')]
+            if new.get('scroll',[0,0])[1]>old.get('scroll',[0,0])[1] and fresh_body:
+                downward_reading.append({'operation_id':step['operation_id'],'observation_id':after['observation_id'],
+                                         'visible_new_body':[{'node':e['element_id'],'quote':e['text']} for e in fresh_body]})
             for e in new.get('elements', []):
                 quote = e.get('text') or ''
                 if (e.get('visible') and quote not in seen and len(quote.strip()) >= 12
@@ -284,6 +310,14 @@ def reading_evidence(s, start, contract):
                         and region_matches(new, e['element_id'], '正文')):
                     passages.append({'node': e['element_id'], 'quote': quote, 'url': after['url'],
                                      'observation_id': after['observation_id'], 'operation_id': step['operation_id']})
+        if landing_doc is not None and after['document_identity']==landing_doc and before['document_identity']!=landing_doc:
+            page=state(after)
+            for e in page.get('elements',[]):
+                quote=e.get('text') or ''
+                if (e.get('visible') and len(quote.strip())>=12 and all(norm(a) in norm(quote) for a in aspects)
+                        and e.get('native_role') not in ('a','input','button','h1','h2','h3') and region_matches(page,e['element_id'],'正文')):
+                    passages.append({'node':e['element_id'],'quote':quote,'url':after['url'],
+                                     'observation_id':after['observation_id'],'operation_id':step['operation_id']})
     now = state(s.current)
     visible = {(e['element_id'], e.get('text')) for e in now.get('elements', []) if e.get('visible')}
     candidates = [p for p in passages if (p['node'], p['quote']) in visible and same_url(p['url'], s.current['url'])
@@ -323,7 +357,14 @@ def reading_evidence(s, start, contract):
     if typed and not current_source and s.current['document_identity'] == typed[-1]['document_identity']:
         field = s.current['controls'].get(typed[-1]['field'], {}).get('value') or {}
         current_source = bool(field.get('value') == typed[-1]['query'] and result_links(s.current,start,subject))
-    return {'status': 'VERIFIED' if selected else 'PASSAGE_AVAILABLE' if candidates else 'UNVERIFIED',
+    fragment=getattr(s,'task',{}).get('fragment',{})
+    objective_binding=fragment.get('session_objective',{})
+    description=(objective_binding.get('objective') or {}).get('description','')
+    requested_scroll=re.search(r'(?:往下|向下)(?:滚动)?阅读|(?:往下|向下)滚动|scroll\s+down',description,re.I)
+    requires_reading=bool(fragment.get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4') and requested_scroll)
+    reading_met=not requires_reading or bool(downward_reading)
+    return {'status': ('VERIFIED' if reading_met else 'READING_REQUIRED') if selected else 'PASSAGE_AVAILABLE' if candidates else 'UNVERIFIED',
+            'required_downward_reading':requires_reading,'reading_requirement_basis':({'reference':objective_binding.get('reference'),'clause':requested_scroll.group(0),'start':requested_scroll.start()} if requires_reading else None),'downward_reading_satisfied':reading_met,'downward_reading':downward_reading,
             'search_inputs': typed, 'opened_results': opened, 'passages': candidates,
             'result_page_current': current_source,
             'selected_passage': selected, 'citation_event': ref if selected else None}
@@ -334,7 +375,8 @@ def progress(s, initial_id, contract):
     base = {'kind': contract['kind'], 'required': True, 'is_AI_review': False, 'version': contract['version']}
     if not start or not start.get('capture_verified') or not s.current.get('capture_verified'):
         return {**base, 'status': 'UNVERIFIED'}
-    evaluate = calc_evidence if contract['kind'] == 'calculation' else reading_evidence
+    from .direct_article import VERSION as DIRECT_VERSION, progress as direct_progress
+    evaluate = direct_progress if contract['version']==DIRECT_VERSION else calc_evidence if contract['kind'] == 'calculation' else reading_evidence
     result = evaluate(s, start, contract)
     if contract['version'] == LEGACY_VERSION and contract['kind'] == 'reading':
         # Preserve the evidence shape of already sealed experimental receipts.

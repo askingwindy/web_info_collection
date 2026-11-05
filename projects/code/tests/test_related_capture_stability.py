@@ -233,7 +233,7 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
             manifest={'batch_id':ids['batch_id'],'sample_kind':'real','program_version':'offline','rule_version':'1.0.0',
                 'sites':[{'site_id':ids['site_id'],'uri':home,'site_category':task['site_category']}],'samples':[sid]}
             derived=process(evidence,root/'delivery'/sid,ids,manifest)
-            self.assertEqual(derived['status'],'derived_saved',derived)
+            self.assertEqual(derived['status'],'derived_saved',{**derived,'record':json.loads(Path(derived['record_ref']['path']).read_text()) if derived.get('record_ref') else None})
             annotation=json.loads((root/'delivery'/sid/'annotation.json').read_text())
             self.assertEqual({step['tool_call']['context'] for step in annotation['steps']},
                 {'Web / navigation.invalid','Web / branch.invalid'})
@@ -348,14 +348,18 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
             write(capture_path,broken['capture']);frame['capture']=reference(capture_path)
             with self.assertRaises(ValueError):_frame(frame,'real')
 
-    async def test_result_image_unknown_image_and_interactive_image_are_rejected(self):
+    async def test_result_images_stay_protected_but_interactive_image_motion_is_allowed(self):
         for attrs,style,protected in (('alt="有意义的结果"','pointer-events:none',[]),
                                       ('alt="" aria-hidden="true" role="presentation"','cursor:pointer',[]),
                                       ('alt="" aria-hidden="true" role="presentation"','pointer-events:none',['#decoration'])):
             with self.subTest(attrs=attrs,protected=protected):
                 await self.prepare(attrs,style)
-                with self.assertRaisesRegex(ValueError,'拒绝保存'):
-                    await self.changing_capture(protected_selectors=protected)
+                if style=='cursor:pointer':
+                    frame=await self.changing_capture(protected_selectors=protected)
+                    self.assertTrue(browser.validate_capture_receipt(frame['state'],frame['capture'],frame['png']))
+                else:
+                    with self.assertRaisesRegex(ValueError,'拒绝保存'):
+                        await self.changing_capture(protected_selectors=protected)
 
     async def test_actual_gif_pixels_may_advance_without_faking_dom_change(self):
         await self.prepare()
@@ -387,14 +391,16 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
             pending.append(route)
         await self.page.route('https://must-never-load.invalid/image.png', hold)
         await self.page.locator('img').evaluate('(image)=>{image.src="https://must-never-load.invalid/image.png"}')
-        with self.assertRaisesRegex(ValueError,'拒绝保存'):await browser.capture(self.page,'#go',retries=1)
+        frame=await browser.capture(self.page,'#go',retries=1)
+        self.assertFalse(frame['state']['capture_readiness']['images_ready'])
+        self.assertTrue(browser.validate_capture_receipt(frame['state'],frame['capture'],frame['png']))
         self.assertEqual(len(pending),1)
         await pending[0].abort()
         await self.prepare();captured=await browser.capture(self.page,'#go',retries=1)
         await self.page.evaluate('''()=>{const cover=document.createElement('div');cover.style='position:absolute;left:0;top:130px;width:200px;height:100px;background:black';document.body.append(cover)}''')
         with self.assertRaises(ValueError):await browser.verify_execution_state(self.page,captured['state'],'#go')
 
-    async def test_pointer_transparent_canvas_and_blank_overlay_are_unknown_not_image_pixels(self):
+    async def test_overlay_pixels_inside_allowed_image_do_not_require_cause_attribution(self):
         for tag in ('canvas','div'):
             with self.subTest(tag=tag):
                 await self.prepare()
@@ -411,13 +417,12 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
                     if shots==1:await page.locator('#unknown').evaluate('(node)=>node.style.background="purple"')
                     return result
                 with patch('webcollect.browser.viewport_png',side_effect=changing_overlay_pixels):
-                    with self.assertRaisesRegex(ValueError,'拒绝保存') as caught:
-                        await browser.capture(self.page,'#go',retries=1)
-                attempt=caught.exception.capture['attempts'][-1]
+                    captured=await browser.capture(self.page,'#go',retries=1)
+                attempt=captured['capture']['attempts'][-1]
                 self.assertTrue(attempt['dom_stable'])
-                self.assertGreater(attempt['stability']['pixel_change']['outside_allowed_pixels'],0)
+                self.assertEqual(attempt['stability']['pixel_change']['outside_allowed_pixels'],0)
 
-    async def test_external_shadow_and_pseudo_paint_cannot_borrow_an_image_mask(self):
+    async def test_changes_within_allowed_image_region_do_not_require_image_source_causality(self):
         for kind in ('shadow','pseudo'):
             with self.subTest(kind=kind):
                 await self.prepare()
@@ -439,7 +444,42 @@ class NativeRelatedCapture(unittest.IsolatedAsyncioTestCase):
                         else:await page.add_style_tag(content='#spill::after{background:purple}')
                     return result
                 with patch('webcollect.browser.viewport_png',side_effect=changing_spill_pixels):
-                    with self.assertRaisesRegex(ValueError,'拒绝保存'):await browser.capture(self.page,'#go',retries=1)
+                    frame=await browser.capture(self.page,'#go',retries=1)
+                self.assertTrue(browser.validate_capture_receipt(frame['state'],frame['capture'],frame['png']))
+
+
+
+    async def test_native_empty_pseudo_graphic_envelope_and_semantic_negatives(self):
+        await self.page.set_content("""<style>body{font:18px Arial}#graphic{position:relative;margin:80px;width:32px;height:32px;padding:0;border:0}#graphic a{position:relative;top:-24px}#graphic::before{content:'';position:absolute;left:-18px;top:-18px;margin-left:16px;margin-top:32px;width:36px;height:36px;border-radius:50%;background:blue;animation:pulse .24s ease-out infinite}@keyframes pulse{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:.5}}#target{position:absolute;left:350px;top:80px}</style><div id=graphic><a href='#next'>存</a></div><button id=target>操作目标</button><p id=next>正文事实保持原样</p>""")
+        try:first=await browser.capture(self.page,retries=1)
+        except browser.EvidenceStale as error:
+            from webcollect.dynamic_regions import projection
+            attempt=error.capture['attempts'][0];left=projection(attempt['snapshot_before']);right=projection(attempt['snapshot_after'])
+            self.fail(json.dumps({'proof':{k:attempt['stability'][k] for k in ('accepted','related_dom_stable','pixel_change','target_protection')},'different':{k:[left.get(k),right.get(k)] for k in left if left.get(k)!=right.get(k)}},ensure_ascii=False))
+        proofs=[r for r in first['state']['dynamic_region_contract']['regions'] if r.get('native_image_paint',{}).get('kind')=='empty-native-pseudo-graphic-1']
+        self.assertEqual(len(proofs),1);self.assertTrue(proofs[0]['eligible']);self.assertTrue(proofs[0]['semantic_owner_retained'])
+        await self.page.wait_for_timeout(75);second=await browser.capture(self.page,retries=1)
+        self.assertTrue(browser.stability_pair(first['state'],second['state'],first['png'],second['png'])['accepted'])
+        for css in ["#graphic::before{animation-timing-function:cubic-bezier(.5,2,.5,2)}","#graphic::before{content:'业务文字'}","#graphic::before{filter:blur(4px)}"]:
+            style=await self.page.add_style_tag(content=css);state=await browser.observe(self.page)
+            self.assertFalse(any(r.get('native_image_paint',{}).get('kind')=='empty-native-pseudo-graphic-1' for r in state['dynamic_region_contract']['regions']))
+            await style.evaluate('(n)=>n.remove()')
+        await self.page.add_style_tag(content='#target{left:80px;top:108px}')
+        state=await browser.observe(self.page,'#target')
+        self.assertTrue(any('overlaps_action_target' in r['reasons'] for r in state['dynamic_region_contract']['regions']))
+
+    async def test_rejected_mixed_notice_still_allows_independent_ad_child_and_css_leaf(self):
+        await self.page.set_content("""<style>.notice{margin:40px;width:400px}.advertisement{width:60px;height:40px;overflow:hidden;animation:colors .15s linear infinite}@keyframes colors{from{background:red}to{background:blue}}.graphic{width:30px;height:30px;background-image:linear-gradient(red,blue)}.hero{background-image:linear-gradient(white,gray)}</style><main><div class=notice><span class=calculation-output>106.25</span><div class=advertisement>广告</div></div><div class=graphic></div><p class=hero>真实正文仍须保留</p></main>""")
+        first=await browser.capture(self.page,retries=1);regions=first['state']['dynamic_region_contract']['regions']
+        self.assertTrue(any(r['category']=='announcement' and not r['eligible'] for r in regions))
+        self.assertTrue(any(r['category']=='advertisement' and r['eligible'] for r in regions))
+        self.assertTrue(any(r['category']=='dynamic_image' and r['tag']=='div' and r['eligible'] for r in regions))
+        self.assertFalse(any(r['attributes'].get('class')=='hero' for r in regions))
+        await self.page.wait_for_timeout(60);second=await browser.capture(self.page,retries=1)
+        self.assertTrue(browser.stability_pair(first['state'],second['state'],first['png'],second['png'])['accepted'])
+        await self.page.locator('.calculation-output').evaluate("n=>n.textContent='999.99'")
+        third=await browser.capture(self.page,retries=1)
+        self.assertFalse(browser.stability_pair(second['state'],third['state'],second['png'],third['png'])['accepted'])
 
 
 class CompactRepaintNoiseTests(unittest.TestCase):

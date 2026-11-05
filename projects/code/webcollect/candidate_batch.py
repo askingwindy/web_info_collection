@@ -130,7 +130,9 @@ def english_quiz_reason(state):
 
 def first_frame_disposition(state):
     """Route direct first-frame facts; this does not certify later frames."""
-    from .consumer_page_policy import full_image
+    from .consumer_page_policy import full_image, boundary
+    if (boundary(state) or {}).get('kind')=='http_403':
+        return 'abandon','entry_http_403'
     if full_image(state):
         return 'abandon', 'first_frame_image_fills_viewport'
     title = (state.get('title') or '').strip().casefold()

@@ -160,7 +160,7 @@ def read_chain_history(manifest_path):
     with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True)) as con:
         stored = list(con.execute('SELECT sample_id,annotation_path,annotation_sha256,site_uri,task_key '
                                   'FROM current_chain_results ORDER BY sample_id'))
-        records, references = [], []
+        records, references, research_references = [], [], []
         for sample_id, annotation_path, digest, site_uri, task_key in stored:
             path = assert_current_result_path(scope, annotation_path)
             _require(_ref(path)['sha256'] == digest, 'current result annotation changed')
@@ -170,6 +170,14 @@ def read_chain_history(manifest_path):
             _require(con.execute('SELECT 1 FROM m4_attempts WHERE sample_id=? AND task_key=?',
                                  (sample_id, task_key)).fetchone() is not None,
                      'result is not an actual attempt in the dedicated registry')
+            task_row = con.execute('SELECT task_json FROM m4_tasks WHERE task_key=?', (task_key,)).fetchone()
+            if task_row:
+                from .candidate_contract import research_duplicate_basis
+                research = research_duplicate_basis(json.loads(task_row[0]), scope['registry'])
+                if research:
+                    research_references.append({'sample_id':sample_id,'annotation':{'path':str(path),'sha256':digest},
+                                                'claim_id':research['research_claim_id'],'production_counted':False})
+                    continue
             uri = urlsplit(site_uri)
             _require(uri.scheme in ('http', 'https') and uri.hostname and not uri.username and not uri.password,
                      'public current result site identity required')
@@ -183,6 +191,7 @@ def read_chain_history(manifest_path):
                             'semantic_signature': semantic_signature({'site_uri': site_uri,
                                 'deterministic_strategy': {'id': strategy}}) if strategy else None})
     scope.update(current_results_refs=references, customer_samples=len(records), package_count=0, packages=[],
+                 research_results_refs=research_references, research_samples=len(research_references),
                  known_strategy_samples=sum(r['strategy_id'] is not None for r in records),
                  unknown_strategy_samples=sum(r['strategy_id'] is None for r in records),
                  coverage='current-chain-only; initial population may be empty')
@@ -342,6 +351,21 @@ def assert_current_evidence(scope, value):
             for entry in item:
                 walk(entry)
         elif isinstance(item, dict):
+            if item.get('schema_version')=='candidate-research-replay-1':
+                _require(set(item)=={'schema_version','original_claim_id','objective','authorization','production_counted'}
+                         and item['production_counted'] is False and bool(item['original_claim_id']), 'invalid research input metadata')
+                _require(all(_ref(Path(item[k]['path']))==item[k] for k in ('objective','authorization')), 'research input metadata changed')
+                objective=load_json(item['objective']['path']);authorization=load_json(item['authorization']['path'])
+                _require(objective.get('schema_version')=='webcollect-session-objective-1'
+                         and authorization.get('candidate_id')==objective.get('candidate_id')
+                         and authorization.get('version')==objective.get('version')
+                         and authorization.get('objective')==item['objective']
+                         and authorization.get('scope')=='original-two-baselines-only'
+                         and authorization.get('production_counted') is False, 'research authorization and original objective differ')
+                # These two files are explicit task inputs. They confer no page,
+                # model-answer or action-evidence status and are never traversed
+                # as observations; every other reference still uses current roots.
+                return
             if item.get('schema_version') in ('webcollect-task-history-scope-1', 'qc-cumulative-set-1'):
                 raise ValueError('CURRENT_CHAIN: historical population reference rejected')
             if set(item) == {'path', 'sha256'}:

@@ -345,7 +345,23 @@ class BatchLedger:
             if not row:
                 return None
             attempt_cap = self.config['budget'].get('max_job_attempts')
-            if attempt_cap is not None and row['attempts'] >= attempt_cap:
+            continued_claim=False
+            if kind=='ai-difference' and attempt_cap is not None and row['attempts']>=attempt_cap:
+                # Explicit continuation owns one additional claim of the exact
+                # original job. It never changes the configured retry cap or
+                # permits dispatch of the original unresolved pair requests.
+                events=con.execute("SELECT detail FROM batch_events WHERE event='qc_unreviewed_pairs_resumed' AND json_extract(detail,'$.job_id')=?",(row['id'],)).fetchall()
+                for event in events:
+                    decision=json.loads(event[0])
+                    if decision.get('authorized_claim_attempt')!=row['attempts']+1:continue
+                    from .planning import verify_evidence
+                    verify_evidence([decision['authorization']]);auth=load_json(decision['authorization']['path'])
+                    continued_claim=(auth.get('action')=='continue_unreviewed_pairs' and auth.get('job_id')==row['id']
+                        and auth.get('preserve_unknown') is True and bool(decision.get('remaining_dispatchable_pairs'))
+                        and decision.get('payload_sha256')==object_sha256(json.loads(row['payload']))
+                        and not con.execute("SELECT 1 FROM model_requests WHERE job_id=? AND state='reserved'",(row['id'],)).fetchone())
+                    if continued_claim:break
+            if attempt_cap is not None and row['attempts'] >= attempt_cap and not continued_claim:
                 con.execute("UPDATE jobs SET state='review_required',error=?,updated=? WHERE id=?",
                             ('max_job_attempts reached; original attempts retained', time.time(), row['id']))
                 self.event(con, 'job_attempt_limit', {'job_id': row['id'], 'attempts': row['attempts'], 'limit': attempt_cap})
@@ -405,6 +421,15 @@ class BatchLedger:
             con.execute('UPDATE jobs SET state=?,result=?,error=?,owner=NULL,lease=NULL,updated=? WHERE id=?',
                         (state, canonical(result) if result is not None else None, error, time.time(), job['id']))
             self.event(con, 'job_finished', {'job_id': job['id'], 'state': state})
+
+    def request_window(self, job, timeout, *, cleanup_seconds=5):
+        """Check current ownership and leave synchronous settlement inside lease."""
+        with self.connect() as con:
+            row = self._owned(con, job)
+            remaining = row['lease'] - time.time() - cleanup_seconds
+        if remaining <= 0:
+            raise ValueError('Insufficient owned lease for request and cleanup')
+        return min(timeout, remaining)
 
     def get(self, job_id):
         with self.connect() as con:

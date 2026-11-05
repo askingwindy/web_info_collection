@@ -8,11 +8,11 @@ import hashlib
 import json
 
 RULE_VERSIONS = {
-    'visual_alignment': 'all-original-frames-actions-trees-1',
-    'terminal_semantics': 'truthful-fragment-five-eight-and-verified-login-download-return-4',
+    'visual_alignment': 'all-original-frames-actions-trees-dynamic-regions-2',
+    'terminal_semantics': 'truthful-fragment-five-eight-dynamic-regions-6',
     'language': 'page-control-language-consistency-and-chinese-narratives-2',
     'privacy': 'all-original-frames-sensitive-content-1',
-    'substantive_difference': 'actual-trajectories-bound-pair-coverage-and-terminal-images-3',
+    'substantive_difference': 'actual-trajectories-bound-pair-dynamic-regions-4',
 }
 
 

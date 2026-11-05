@@ -13,11 +13,132 @@ import time
 import urllib.error
 import urllib.request
 import socket
+import http.client
+import threading
+import multiprocessing
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 
 from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, _integer, validate_config, file_sha
 from .planning import object_sha256
+
+
+QC_TRANSPORT_POLICY = 'qc-wall-deadline-1'
+QC_KINDS = ('ai-visual', 'ai-difference', 'ai-documents')
+
+
+def _qc_resolve_child(channel, host, port):
+    # The resolver process has no ledger or HTTP dispatch path. It is joined
+    # before any parent settlement, including when libc resolution blocks.
+    try: channel.send((True, socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)))
+    except Exception as error: channel.send((False, type(error).__name__))
+    finally: channel.close()
+
+
+def _qc_addresses(host, port, deadline):
+    context = multiprocessing.get_context('fork' if 'fork' in multiprocessing.get_all_start_methods() else 'spawn')
+    receiver, sender = context.Pipe(duplex=False)
+    resolver = context.Process(target=_qc_resolve_child,args=(sender,host,port),daemon=True)
+    try:
+        resolver.start()
+        sender.close()
+        if not receiver.poll(max(0,deadline-time.monotonic())):
+            raise TimeoutError('QC wall deadline during DNS')
+        ok, value = receiver.recv()
+        if not ok: raise OSError('QC DNS resolution failed: '+value)
+        return value
+    finally:
+        receiver.close();sender.close()
+        if resolver.pid is not None:
+            if resolver.is_alive():resolver.terminate()
+            resolver.join(.05)
+            if resolver.is_alive():resolver.kill();resolver.join(.05)
+
+
+def _read_qc_body(request, timeout, timing, before_send):
+    """Synchronous bounded HTTP; the watchdog only shuts down I/O, never settles.
+
+    Socket inactivity timeouts cannot bound a trickling response. Shutdown also
+    interrupts getresponse/read; joining the watchdog precedes all ledger writes.
+    No redirect is followed and no provider error body is read after the deadline.
+    """
+    endpoint = urlsplit(request.full_url)
+    started = time.monotonic()
+    deadline = started + timeout
+    timing.update(policy=QC_TRANSPORT_POLICY, timeout_seconds=timeout,
+                  dns_ms=None, connection_ms=None, headers_ms=None, body_ms=None,
+                  body_read_returned=False, http_dispatched=False)
+    connection_type = http.client.HTTPSConnection if endpoint.scheme == 'https' else http.client.HTTPConnection
+    connection = connection_type(endpoint.hostname, endpoint.port, timeout=timeout)
+    sockets = []
+    expired = threading.Event()
+    def abort():
+        expired.set()
+        sock = connection.sock or (sockets[0] if sockets else None)
+        if sock is not None:
+            try: sock.shutdown(socket.SHUT_RDWR)
+            except OSError: pass
+            sock.close()
+        connection.close()
+    timer = threading.Timer(timeout, abort)
+    timer.daemon = True
+    timer.start()
+    try:
+        addresses = _qc_addresses(endpoint.hostname,endpoint.port or (443 if endpoint.scheme=='https' else 80),deadline)
+        timing['dns_ms'] = round((time.monotonic()-started)*1000)
+        def connect_resolved(address, timeout=None, source_address=None):
+            last_error=None
+            for family,kind,protocol,_,sockaddr in addresses:
+                if time.monotonic() >= deadline:raise TimeoutError('QC wall deadline during connect')
+                sock=socket.socket(family,kind,protocol);sockets[:]=[sock]
+                try:
+                    sock.settimeout(max(.001,deadline-time.monotonic()))
+                    if source_address:sock.bind(source_address)
+                    sock.connect(sockaddr)
+                    return sock
+                except OSError as error:
+                    last_error=error;sock.close()
+            if last_error:raise last_error
+            raise OSError('QC DNS returned no addresses')
+        connection._create_connection=connect_resolved
+        connection.connect()
+        sockets[:]=[connection.sock]
+        timing['connection_ms'] = round((time.monotonic()-started)*1000)
+        before_send()
+        if expired.is_set() or time.monotonic() >= deadline:
+            raise TimeoutError('QC wall deadline before send')
+        connection.sock.settimeout(max(.001, deadline-time.monotonic()))
+        timing['http_dispatched'] = True
+        connection.request(request.get_method(), endpoint.path + ('?'+endpoint.query if endpoint.query else ''),
+                           body=request.data, headers=dict(request.header_items()))
+        response = connection.getresponse()
+        headers_at = time.monotonic()
+        timing['headers_ms'] = round((headers_at-started)*1000)
+        if response.status >= 300:
+            raise urllib.error.HTTPError(request.full_url, response.status, 'provider_http_error', {}, None)
+        expected = response.length
+        timing['declared_body_bytes'] = expected
+        body = response.read(16_000_001)
+        timing['received_body_bytes'] = len(body)
+        timing['body_ms'] = round((time.monotonic()-headers_at)*1000)
+        if expired.is_set() or time.monotonic() >= deadline:
+            raise TimeoutError('QC wall deadline')
+        if expected is not None and len(body) != expected:
+            raise http.client.IncompleteRead(body, max(0,expected-len(body)))
+        # A Content-Length early close is not a complete provider response.
+        if len(body) > 16_000_000: raise ValueError('Provider response exceeds bounded bytes')
+        timing['body_read_returned'] = True
+        return body
+    except Exception as error:
+        if expired.is_set(): raise TimeoutError('QC wall deadline') from error
+        raise
+    finally:
+        timer.cancel()
+        timer.join()
+        connection.close()
+        timing['deadline_expired'] = expired.is_set() or time.monotonic() >= deadline
+        timing['elapsed_ms'] = round((time.monotonic()-started)*1000)
 
 
 def _read_first_plan_body(opener, request, timeout, timing):
@@ -105,8 +226,158 @@ def strict_plan_content(message, declared):
         raise ValueError('Content plan requires the sole declared submit_plan and no tool calls')
     arguments=json.loads(message.get('content') or '')
     if not isinstance(arguments,dict):raise ValueError('Content plan must be an object')
+    if 'evidence_kind' in declared['submit_plan'].get('properties',{}).get('checks',{}).get('items',{}).get('properties',{}):
+        arguments=executable_plan(arguments)
     Draft202012Validator(declared['submit_plan']).validate(arguments)
     return arguments
+
+
+def executable_plan(plan):
+    """Keep the existing executor fields; source annotations stay in raw replies."""
+    from .banded_plan import PLAN,TARGET,PREDICATE
+    out={k:deepcopy(v) for k,v in plan.items() if k in PLAN['properties'] or k=='notes'}
+    fields={'click':{'target'},'type':{'target','value'},'select':{'target','value'},
+        'hotkey':{'keys'},'scroll':{'direction'},'open_url':{'page_id'},'back':set(),
+        'finish_reading':set()}
+    if not isinstance(out.get('steps'),list):return out
+    for i,step in enumerate(out['steps']):
+        if not isinstance(step,dict):continue
+        if step.get('action') in fields:
+            step={k:v for k,v in step.items() if k in {'action','purpose','expected'}|fields[step['action']]}
+            out['steps'][i]=step
+        target=step.get('target')
+        if isinstance(target,dict):
+            if 'label' in target:
+                if 'text' in target and target['text']!=target['label']:raise ValueError('Conflicting target label/text')
+                target['text']=target.pop('label')
+            step['target']={k:v for k,v in target.items() if k in TARGET['properties']}
+        if isinstance(step.get('expected'),dict):
+            step['expected']={k:v for k,v in step['expected'].items() if k in PREDICATE['properties']}
+        if step.get('action')=='hotkey' and isinstance(step.get('keys'),str):step['keys']=[step['keys']]
+    if out['steps'] and out['steps'][-1].get('action')=='finish_reading' and out.get('finish_when',{}).get('kind')=='goal_evidence':
+        out['steps'].pop()
+        out['notes']=(out.get('notes','')+' Planned finish_reading is a non-business completion marker; an explicit evidenced answer is still required.').strip()
+    return out
+
+
+def parse_decision_content(content, envelope):
+    """Keep one complete decision; prose is not executable decision data."""
+    normalized=False
+    if envelope in ('single-json-fence-1','single-json-commentary-1'):
+        match=re.fullmatch(r'\s*```json[ \t]*\r?\n(.*?)\r?\n```\s*',content,re.DOTALL)
+        if match and '```' not in match.group(1):content=match.group(1);normalized=True
+    if envelope=='single-json-commentary-1':
+        value,end=json.JSONDecoder().raw_decode(content.lstrip())
+        tail=content.lstrip()[end:].strip()
+        if not isinstance(value,dict) or any(token in tail for token in ('{','}','[',']','```')):
+            raise ValueError('Decision must contain one JSON object without another structured payload')
+        normalized=normalized or bool(tail)
+        if isinstance(value.get('response_shape'),dict) and set(value)<= {'response_shape','plan'}:
+            inner=value['response_shape']
+            if 'plan' in inner and 'plan' in value and inner['plan']!=value['plan']:
+                raise ValueError('Conflicting wrapped decision plan')
+            value={**inner,**{k:v for k,v in value.items() if k!='response_shape'}};normalized=True
+        if value.get('choice')=='continue_plan' and isinstance(value.get('plan'),dict):
+            # Supplying a remaining route is the already supported replan
+            # form, distinct from simply continuing without a route.
+            value={**value,'choice':'replan'};normalized=True
+        if isinstance(value.get('choice'),str):
+            # Execute only the explicitly selected operation. Draft plans and
+            # explanations attached to another choice remain in the raw reply.
+            used={'attempt_id','observation_id','choice'}|{
+                'replan':{'plan','citations'},'continue_plan':{'citations'},'finish_reading':{'reading_answer'},
+                'visual_yes':{'visual_evidence'}}.get(value['choice'],set())
+            kept={k:v for k,v in value.items() if k in used}
+            normalized=normalized or kept!=value;value=kept
+        plan=value.get('plan')
+        if isinstance(plan,dict):
+            clean=executable_plan(plan)
+            normalized=normalized or clean!=plan;value={**value,'plan':clean}
+        return value,normalized
+    return json.loads(content),normalized
+
+
+def branch_wire_schema(schema, prompt):
+    """Expose the existing selected-choice contract once, without inherited plan fields."""
+    value=deepcopy(schema.get('oneOf',[schema])[0])
+    props=value.get('properties',{})
+    choices=[o['choice'] for o in prompt.get('options',[])]
+    if 'choice' in props and choices:props['choice']={'enum':choices}
+    plan=props.get('plan',{})
+    for alternative in plan.get('anyOf',[]):
+        if alternative.get('type')=='object' and alternative.get('required')==['steps']:
+            alternative['properties']={'steps':alternative['properties']['steps']}
+    return value
+
+
+def normalize_branch(value, prompt):
+    """Resolve only exact source references and an inherited non-action end marker."""
+    value=deepcopy(value)
+    if not value.get('choice') and 'action' in value:
+        raise ValueError('BRANCH_CHOICE_REQUIRED: return choice=continue_plan to execute current_step unchanged; to change the next action return choice=replan with plan.steps and each step.expected. A top-level action/options is not a branch choice.')
+    if value.get('citations'):
+        catalog=prompt.get('reading_evidence_catalog',[]);bound=[]
+        for citation in value['citations']:
+            if not isinstance(citation,dict) or 'nodes' not in citation:
+                bound.append(citation);continue
+            nodes=citation['nodes']
+            if not isinstance(nodes,list) or not nodes or any(not isinstance(n,str) for n in nodes):
+                raise ValueError('CITATION_NODES_REQUIRED: use node IDs from reading_evidence_catalog')
+            if set(citation)-{'nodes','observation_id'}:
+                raise ValueError('CITATION_NODE_GROUP_CONFLICT: use separate passage entries for extra metadata')
+            for node in nodes:
+                matches=[r for r in catalog if r.get('node')==node and
+                    ('observation_id' not in citation or r.get('observation_id')==citation['observation_id'])]
+                if len(matches)!=1:raise ValueError('CITATION_SOURCE_NOT_UNIQUE: '+node)
+                bound.append(deepcopy(matches[0]))
+        value['citations']=bound
+    plan=value.get('plan')
+    if isinstance(plan,dict):
+        ending=plan.get('finish_when',prompt.get('replan_contract',{}).get('inherited_finish_when',{}))
+        steps=plan.get('steps')
+        if isinstance(steps,list) and steps and steps[-1].get('action')=='finish_reading' and ending.get('kind')=='goal_evidence':
+            steps.pop()
+            plan['notes']=(plan.get('notes','')+' Non-business finish_reading marker removed; explicit evidenced answer still required.').strip()
+    return value
+
+
+def validate_branch(value, schema):
+    # A choice reply and a bare remaining plan are alternatives, not cumulative
+    # requirements. Report only the selected branch's concrete missing fields.
+    selected=schema
+    if isinstance(value,dict) and 'oneOf' in schema:
+        if 'choice' in value:selected=schema['oneOf'][0]
+        elif 'steps' in value:selected=schema['oneOf'][1]
+    Draft202012Validator(selected).validate(value)
+
+
+def schema_error_feedback(error):
+    """Report field errors, never a whole plan dump from a oneOf parent."""
+    from jsonschema.exceptions import best_match, ValidationError
+    if not isinstance(error,ValidationError):
+        return [{'field_path':[], 'detail':str(error).splitlines()[0][:350]}]
+    current = best_match([error])
+    leaves = []
+    def visit(e):
+        if e.context:
+            for child in e.context: visit(child)
+        else:
+            path=list(e.absolute_path)
+            if e.validator=='const': return
+            # An action union has irrelevant branches; keep the declared action.
+            schema=e.schema if isinstance(e.schema,dict) else {}
+            instance=e.instance
+            action=(schema.get('properties',{}).get('action') or {}).get('const')
+            if action and isinstance(instance,dict) and instance.get('action')!=action:return
+            if e.validator=='required':
+                missing=[k for k in e.validator_value if isinstance(instance,dict) and k not in instance]
+                if missing:path=path+[missing[0]]
+            if e.validator=='additionalProperties' and isinstance(instance,dict):
+                extras=sorted(set(instance)-set(schema.get('properties',{})))
+                if extras:path=path+[extras[0]]
+            leaves.append({'field_path':path,'detail':e.message[:350]})
+    visit(current)
+    return leaves[:6] or [{'field_path':list(getattr(error,'absolute_path',())), 'detail':getattr(error,'message',str(error).splitlines()[0])[:350]}]
 
 
 class ModelGateway:
@@ -120,6 +391,19 @@ class ModelGateway:
     def _account_id(self):
         from .model_credentials import account_id
         return account_id(self._credential) if self._credential is not None else 'synthetic'
+
+    def _settle_failure(self, job, rid, *, state, usage=None, response=None, error=None):
+        try:
+            self.ledger.settle_request(rid,state=state,usage=usage,response=response,error=error)
+        except ValueError as cleanup:
+            if job['kind'] not in QC_KINDS:raise
+            # Recovery may have already marked the original reserved request
+            # UNKNOWN. Never overwrite that settlement or lose the first I/O
+            # error to its later lease/settlement error.
+            with self.ledger.transaction() as con:
+                self.ledger.event(con,'qc_request_cleanup_failed',{'job_id':job['id'],
+                    'request_id':rid,'first_error':error,'cleanup_error':type(cleanup).__name__,
+                    'attempted_state':state,'observed_usage':usage,'response_evidence':response})
 
     def call_tool(self, job, purpose, text, tools, *, system, history=(), images=(),
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
@@ -223,8 +507,12 @@ class ModelGateway:
         if (attempts not in ((1,2) if grounded_choice else (1,))
                 or not isinstance(system,str) or not system.strip()):
             raise ValueError('Text decision has one strict parse attempt')
-        if content_envelope not in (None,'single-json-fence-1'):raise ValueError('Unknown text envelope protocol')
-        adapter_version='banded-plain-json-2' if content_envelope else 'banded-plain-json-1'
+        if content_envelope not in (None,'single-json-fence-1','single-json-commentary-1'):raise ValueError('Unknown text envelope protocol')
+        if grounded_choice:
+            prompt=json.loads(text)
+            system += '\n本轮输出协议（字段只在这里定义一次）：\n'+json.dumps(branch_wire_schema(schema,prompt),ensure_ascii=False,separators=(',',':'))
+            system += '\ncontinue_plan 只执行 current_step 及原剩余计划；更改下一动作必须 replan。每个业务步骤必须给 action、purpose、expected 及动作参数。citations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}。finish_reading 是含 reading_answer 的分支决定，不是业务步骤。'
+        adapter_version=('banded-plain-json-3' if content_envelope=='single-json-commentary-1' else 'banded-plain-json-2') if content_envelope else 'banded-plain-json-1'
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
                    'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,
                    'max_requests':max_requests,'declared':{},'plain_json':True,'inference_images':True,
@@ -243,6 +531,7 @@ class ModelGateway:
     def _call(self, job, purpose, text, schema, *, images=(), synthetic_response=None,
               attempts=2, output_limit=None, tools=None, tool_choice=None, native_context=None):
         model = self.config['model']
+        qc_transport = job['kind'] in QC_KINDS
         if output_limit is not None:
             if type(output_limit) is not int or not 1<=output_limit<=model['max_completion_tokens']:
                 raise ValueError('Stage output limit may only tighten the original reservation')
@@ -314,6 +603,8 @@ class ModelGateway:
             with self.ledger.transaction() as con:
                 self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':settled[-1]['id']})
             return json.loads(settled[-1]['response'])['result']
+        if qc_transport and any(row['state']=='invalid_response' for row in original_requests):
+            raise ValueError('Original QC protocol failure retained; no automatic replacement request')
         with self.ledger.connect() as con:
             if any(row['state'] == 'reserved' or (row['state'] == 'unknown'
                     and not self.ledger.timeout_retry_answered(con, row['id'])) for row in original_requests):
@@ -332,11 +623,18 @@ class ModelGateway:
                 self._credential = self.ledger.bind_model_session(session_id)
                 self._session_id = session_id
         correction = None
+        qc_binding = {}
+        if qc_transport:
+            try: material = json.loads(text)
+            except (ValueError, TypeError): material = {}
+            if isinstance(material, dict):
+                qc_binding = {name:material[name] for name in ('pair_id','focal_sample_id','neighbor_sample_id')
+                              if isinstance(material.get(name), str)}
         timeout_retry = {}
         timeout_retries = invalid_attempts = 0
         for attempt in range(attempts + 3):
             dispatch_policy = (native_context or {}).get('dispatch_policy')
-            if model['provider']!='synthetic':
+            if model['provider']!='synthetic' and not qc_transport:
                 # DNS resolution is provably before HTTP dispatch. Do not turn
                 # a local resolution failure into a sent/chargeable UNKNOWN;
                 # cached or unresolved original identities never run this IO.
@@ -356,13 +654,19 @@ class ModelGateway:
                         raise ValueError('Local provider DNS preflight failed before reservation/HTTP dispatch') from None
             while True:
                 try:
-                    if dispatch_policy == 'patient-first-plan-1':
+                    if qc_transport:
+                        self.ledger.heartbeat(job)
+                    elif dispatch_policy == 'patient-first-plan-1':
                         self.ledger.heartbeat(job, request_timeout=native_context['timeout_seconds'])
                     elif dispatch_policy == 'grounded-choice-1':
                         self.ledger.heartbeat(job)
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
                         'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
                         'accounting_mode':'tokens-1', **timeout_retry,
+                        **({'transport_policy':QC_TRANSPORT_POLICY,
+                            'focal_sample_id':job['payload'].get('candidate',{}).get('sample_id'),
+                            'comparison_version':job['payload'].get('comparison_version'),
+                            **qc_binding} if qc_transport else {}),
                         **({'dispatch_policy':dispatch_policy} if dispatch_policy else {}),
                         'schema':schema,'images':[{'path':str(Path(p).resolve()),'sha256':file_sha(p)} for p in images],
                         'provider':model['provider'],'model':model['model'],'prompt_identity':purpose,
@@ -462,7 +766,13 @@ class ModelGateway:
                             return None
                     timeout = (native_context or {}).get('timeout_seconds') or model['timeout_seconds']
                     opener = urllib.request.build_opener(NoRedirect)
-                    if trace_first_plan:
+                    if qc_transport:
+                        timeout = self.ledger.request_window(job, timeout)
+                        timing = {'client_request_id':rid}
+                        transport_receipt['http_timing'] = timing
+                        body = _read_qc_body(req, timeout, timing,
+                            lambda: self.ledger.request_window(job, timeout))
+                    elif trace_first_plan:
                         timing = {'client_request_id': rid}
                         transport_receipt['http_timing'] = timing
                         body = _read_first_plan_body(opener, req, timeout, timing)
@@ -501,7 +811,10 @@ class ModelGateway:
                         arguments = json.loads(function.get('arguments') or '')
                         if not isinstance(arguments, dict):
                             raise ValueError('Tool arguments must be an object')
-                        Draft202012Validator(native_context['declared'][name]).validate(arguments)
+                        declared=native_context['declared'][name]
+                        if name=='submit_plan' and 'evidence_kind' in declared.get('properties',{}).get('checks',{}).get('items',{}).get('properties',{}):
+                            arguments=executable_plan(arguments)
+                        Draft202012Validator(declared).validate(arguments)
                         parsed = {'name':name, 'arguments':arguments, 'tool_call_id':cid,
                                   'assistant_message':{**deepcopy(choice['message']), 'role':'assistant'},
                                   'user_message':deepcopy(user_message), 'request_id':rid}
@@ -509,12 +822,14 @@ class ModelGateway:
                 elif native_context and native_context.get('plain_json'):
                     if tool_calls:
                         raise ValueError('Plain decision must not contain provider tool calls')
-                    content=choice['message']['content']; normalized=False
-                    if native_context.get('content_envelope')=='single-json-fence-1':
-                        match=re.fullmatch(r'\s*```json[ \t]*\r?\n(.*?)\r?\n```\s*',content,re.DOTALL)
-                        if match and '```' not in match.group(1):content=match.group(1);normalized=True
-                    parsed=json.loads(content)
-                    Draft202012Validator(schema).validate(parsed)
+                    parsed,normalized=parse_decision_content(choice['message']['content'],native_context.get('content_envelope'))
+                    if native_context.get('dispatch_policy')=='grounded-choice-1':
+                        original_parsed=parsed
+                        parsed=normalize_branch(parsed,json.loads(text))
+                        normalized=normalized or parsed!=original_parsed
+                        validate_branch(parsed,schema)
+                    else:
+                        Draft202012Validator(schema).validate(parsed)
                 elif tool_calls:
                     first = (tool_calls[0] or {}).get('function') or {}
                     tool_name = first.get('name')
@@ -525,6 +840,7 @@ class ModelGateway:
                     parsed, normalized = parse_content(choice['message']['content'], model['provider'])
                 if not native_context:
                     Draft202012Validator(schema).validate(parsed)
+                if qc_transport: self.ledger.request_window(job, 0, cleanup_seconds=0)
                 self.ledger.settle_request(rid, state='succeeded', usage=usage,
                     response={'result': parsed, 'provider_response': raw, **transport_receipt,
                               'content_envelope_normalized': normalized,
@@ -535,7 +851,7 @@ class ModelGateway:
                 # echoed credentials, or the provider's arbitrary error prose.
                 detail = {'http_status': error.code, 'reason': 'provider_http_error'}
                 try:
-                    body = json.loads(error.read(65536))
+                    body = {} if qc_transport else json.loads(error.read(65536))
                     code = (body.get('error') or {}).get('code') if isinstance(body, dict) else None
                     if isinstance(code, (int, str)) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', str(code)):
                         detail['provider_code'] = str(code)
@@ -545,20 +861,20 @@ class ModelGateway:
                             and retry_after.isdigit() and len(retry_after) <= 8 else 60)
                 except (ValueError, OSError, AttributeError, TypeError):
                     pass
-                self.ledger.settle_request(rid, state='unknown', error='HTTPError:' + str(error.code),
+                self._settle_failure(job,rid, state='unknown', error='HTTPError:' + str(error.code),
                                            response={'provider_error': detail, **transport_receipt})
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
+            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 # Retain each timeout as UNKNOWN; retry only within this active call.
                 root=error.reason if isinstance(error,urllib.error.URLError) else error
                 detail={'error_type':type(error).__name__,'reason_type':type(root).__name__}
                 for key in ('errno','verify_code'):
                     value=getattr(root,key,None)
                     if type(value) is int:detail[key]=value
-                self.ledger.settle_request(rid, state='unknown', error=type(error).__name__,
+                self._settle_failure(job,rid, state='unknown', error=type(error).__name__,
                                            response={'transport_error': detail, **transport_receipt})
                 producer_discovery = job['kind'] in ('ai-search-plan','ai-application-site-classification-1','ai-grounded-entry-ids-1')
-                retry_allowed = (isinstance(root, TimeoutError) and timeout_retries < 3
+                retry_allowed = (not qc_transport and isinstance(root, TimeoutError) and timeout_retries < 3
                                  and not producer_discovery and not dispatch_policy)
                 if retry_allowed and native_context:
                     with self.ledger.connect() as con:
@@ -586,18 +902,18 @@ class ModelGateway:
                 # or invalid, keep its full reservation and do not retry automatically.
                 valid_usage = usage is not None and all(type(usage.get(k)) is int and usage[k]>=0
                     for k in ('input_tokens', 'output_tokens', 'cached_input_tokens')) and usage['cached_input_tokens']<=usage['input_tokens']
-                self.ledger.settle_request(rid, state='invalid_response' if valid_usage else 'unknown',
+                self._settle_failure(job,rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
                                            response={'result': parsed, 'provider_response': raw, **transport_receipt}, error=type(error).__name__)
                 if not valid_usage:
                     raise OutcomeUnknown('Missing provider usage; reservation retained') from None
                 invalid_attempts += 1
                 timeout_retry = {}
-                if invalid_attempts >= attempts:
+                if qc_transport or invalid_attempts >= attempts:
                     break
                 if native_context:
                     path = list(getattr(error, 'absolute_path', ()))
                     correction = json.dumps({'protocol_error':type(error).__name__,
-                        'field_path':path, 'detail':str(error).splitlines()[0][:1200],
+                        'errors':schema_error_feedback(error),
                         'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
         raise ValueError('Bounded model attempts exhausted; semantic review remains pending')

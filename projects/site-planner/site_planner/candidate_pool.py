@@ -559,6 +559,58 @@ class CandidatePool:
         value['sources'] = json.loads(value['sources']) if value.get('sources') else None
         return value
 
+    def claim_research(self, worker_id, request_id, *, candidate_id, version, original_claim_id,
+                       objective, authorization, lease_seconds=300):
+        """Explicit same-target development replay; never replaces production output."""
+        if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
+            raise ValueError('Worker, request and bounded lease required')
+        verify_evidence([objective, authorization])
+        from webcollect.session_objective import bind
+        with self.transaction() as con:
+            row=con.execute('SELECT * FROM data_candidates WHERE candidate_id=?',(candidate_id,)).fetchone()
+            original=con.execute('SELECT * FROM candidate_claims WHERE claim_id=? AND candidate_id=?',
+                                 (original_claim_id,candidate_id)).fetchone()
+            if not row or not original or row['version']!=version or original['version']!=version:
+                raise ValueError('Research requires original candidate version')
+            saved=con.execute('SELECT * FROM candidate_results WHERE candidate_id=? AND claim_id=? AND effective=1',
+                              (candidate_id,original_claim_id)).fetchone()
+            if not saved or original['state']!='succeeded':
+                raise ValueError('Research requires a settled original saved execution')
+            old_binding=json.loads(original['binding'] or '{}')
+            original_objective=load_json(__import__('pathlib').Path(old_binding['output'])/'session-objective.json')
+            if load_json(objective['path'])!=original_objective:
+                raise ValueError('Research cannot change the original objective')
+            descriptor={'schema_version':'candidate-research-replay-1','original_claim_id':original_claim_id,
+                        'objective':objective,'authorization':authorization,'production_counted':False}
+            prior=con.execute('SELECT * FROM candidate_claims WHERE request_id=?',(request_id,)).fetchone()
+            if prior:
+                if prior['worker_id']!=worker_id or prior['candidate_id']!=candidate_id or json.loads(prior['binding'] or '{}').get('research_replay')!=descriptor:
+                    raise ValueError('Research request identity conflict')
+                return self._claim(prior)
+            settled_history=[]
+            for unresolved in con.execute("SELECT * FROM candidate_claims WHERE candidate_id=? AND state IN ('consuming','reconcile')",(candidate_id,)):
+                if unresolved['state']=='consuming' or unresolved['created']>=original['created'] or unresolved['expires']>time.time():
+                    raise ValueError('Original collection unresolved; no research dispatch')
+                from webcollect.candidate_consumer import known_unstarted_historical_claim
+                proof=known_unstarted_historical_claim(self._claim(unresolved),old_binding)
+                if not proof:raise ValueError('Original collection unresolved; no research dispatch')
+                settled_history.append(proof)
+            body=json.loads(row['body']);sources=[json.loads(r[0]) for r in con.execute('SELECT source FROM candidate_sources WHERE candidate_id=?',(candidate_id,))]
+            for source in sources:verify_evidence(source['references'])
+            bind(objective,{'candidate_id':candidate_id,'version':version,'snapshot':body})
+            now=time.time();cid=str(uuid.uuid4())
+            con.execute('INSERT INTO candidate_claims(claim_id,candidate_id,version,snapshot,worker_id,request_id,token,expires,state,stage,binding,reason,created,updated,sources) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (cid,candidate_id,version,canonical(body),worker_id,request_id,str(uuid.uuid4()),now+lease_seconds,
+                         'consuming','claimed',canonical({'research_replay':descriptor}),None,now,now,canonical(sources)))
+            self.event(con,candidate_id,cid,'research_claimed',{**descriptor,'settled_history':settled_history})
+            return self._claim(con.execute('SELECT * FROM candidate_claims WHERE claim_id=?',(cid,)).fetchone())
+
+    @staticmethod
+    def research_claim(row):
+        binding=row['binding'] or {}
+        if isinstance(binding,str):binding=json.loads(binding)
+        return binding.get('research_replay')
+
     def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, protocols=None, producer_batch=None, recovery_version=None, frozen_row=None):
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, unique request and bounded lease required')
@@ -587,7 +639,8 @@ class CandidatePool:
             now = time.time()
             for old in con.execute("SELECT * FROM candidate_claims WHERE state='consuming' AND expires<=?", (now,)).fetchall():
                 con.execute("UPDATE candidate_claims SET state='reconcile',reason='lease_expired',updated=? WHERE claim_id=?", (now,old['claim_id']))
-                con.execute("UPDATE data_candidates SET state='reconcile' WHERE candidate_id=?", (old['candidate_id'],))
+                if not self.research_claim(old):
+                    con.execute("UPDATE data_candidates SET state='reconcile' WHERE candidate_id=?", (old['candidate_id'],))
                 self.event(con,old['candidate_id'],old['claim_id'],'lease_expired',{})
             empty=con.execute('SELECT worker_id FROM candidate_empty_requests WHERE request_id=?',(request_id,)).fetchone()
             if empty:
@@ -692,7 +745,8 @@ class CandidatePool:
         with self.transaction() as con:
             row = self._fence(con,claim)
             con.execute('UPDATE candidate_claims SET state=?,stage=?,reason=?,updated=? WHERE claim_id=?', (state,stage,reason,time.time(),claim['claim_id']))
-            con.execute('UPDATE data_candidates SET state=? WHERE candidate_id=?', (state,row['candidate_id']))
+            if not self.research_claim(row):
+                con.execute('UPDATE data_candidates SET state=? WHERE candidate_id=?', (state,row['candidate_id']))
             self.event(con,row['candidate_id'],row['claim_id'],state,{'stage':stage,'reason':reason})
 
     def get_claim(self, claim_id):
@@ -710,4 +764,5 @@ class CandidatePool:
             qc = {r[0]:r[1] for r in con.execute('SELECT qc_state,COUNT(*) FROM candidate_results WHERE effective=1 GROUP BY qc_state')}
             return {'candidate_total':sum(counts.values()), **{k:counts.get(k,0) for k in ('pending','consuming','succeeded','failed','reconcile')},
                     'by_protocol':by_protocol,
-                    'consumption_attempts':con.execute('SELECT COUNT(*) FROM candidate_claims').fetchone()[0], 'QC':qc}
+                    'consumption_attempts':con.execute("SELECT COUNT(*) FROM candidate_claims WHERE json_extract(binding,'$.research_replay') IS NULL").fetchone()[0],
+                    'research_consumption_attempts':con.execute("SELECT COUNT(*) FROM candidate_claims WHERE json_extract(binding,'$.research_replay') IS NOT NULL").fetchone()[0], 'QC':qc}

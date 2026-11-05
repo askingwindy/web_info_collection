@@ -270,7 +270,13 @@ def _discover(source):
             safe_name(site_id)
             if not re.match(r'^https?://[^\s/]+', site['uri']):
                 raise ValueError('Invalid source site URI')
-            truths = [p for p in (batch / 'ground_truth' / (sid + '.json'), batch / 'evidence' / sid / 'ground_truth.json') if p.exists()]
+            from .trusted_prefix import projection_index
+            prefix_index=projection_index(batch/'evidence'/sid)
+            if prefix_index is not None:
+                projection=read_json(prefix_index)
+                truths=[batch/'evidence'/sid/projection['directory']/'ground_truth.json']
+            else:
+                truths = [p for p in (batch / 'ground_truth' / (sid + '.json'), batch / 'evidence' / sid / 'ground_truth.json') if p.exists()]
             if not truths:
                 raise ValueError('Missing original capture ground truth for ' + sid)
             for truth in truths:

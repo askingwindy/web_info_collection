@@ -133,6 +133,16 @@ def validate_identity(task, *, observed_states=None):
         _require((navigation_page_allowed(task,observed_states[-1]['url']) if 'candidate_binding' in task else page_url(observed_states[-1]['url']) in (aliases | shared_urls | earned if is_fragment(task) or is_react_task(task) else aliases)), 'actual result page cannot be excluded as shared')
         corroborated = any(page_url(row['url']) in aliases and state_key(row, page['kind']) == state_key(state, page['kind'])
                            for row in observed_states)
+        # Content equivalence may ignore native, versioned allowed-change
+        # regions; the original anchor/hash/content_key remains untouched.
+        if not corroborated and page['kind']=='content' and 'candidate_binding' in task:
+            from .dynamic_regions import enabled, projection
+            if enabled(state) and state.get('document_identity'):
+                basis=state_key(projection(state),page['kind'])
+                corroborated=any(enabled(row) and row.get('url')==state.get('url')
+                    and row.get('document_identity')==state['document_identity']
+                    and row.get('title')==state.get('title')
+                    and state_key(projection(row),page['kind'])==basis for row in observed_states)
         # A hydrated navigation bar may add controls without replacing the
         # article. New candidate ReAct tasks can corroborate the complete
         # original visible content in the very same browser document.
@@ -145,6 +155,19 @@ def validate_identity(task, *, observed_states=None):
                 and row.get('document_identity') == state['document_identity']
                 and _normalized(row.get('title', '')) == _normalized(state.get('title', ''))
                 and original in _normalized(row.get('visible_text', '')) for row in observed_states)
+        if (not corroborated and page['kind']=='content' and 'candidate_binding' in task
+                and task.get('fragment',{}).get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4')):
+            from .action_stability import reading_projection
+            mains=[e for e in state.get('elements',[]) if e.get('native_role')=='main' and e.get('visible')]
+            if len(mains)==1:
+                try:
+                    basis=reading_projection(state,mains[0]['element_id'])
+                    for row in observed_states:
+                        if page_url(row['url']) not in aliases:continue
+                        try:corroborated=reading_projection(row,mains[0]['element_id'])==basis
+                        except ValueError:continue
+                        if corroborated:break
+                except ValueError:pass
         _require(corroborated, 'actual task page does not corroborate original content/function anchor')
     return {'binding_sha256': object_sha256(value), 'application_uri': app['canonical_uri'],
             'application_key': page_url(app['canonical_uri']), 'task_page_urls': sorted(aliases),
@@ -341,11 +364,19 @@ def verify_saved(task, sample_id, evidence):
             _require(not Path(relative).is_absolute() and path.resolve().is_relative_to(base.resolve())
                      and not path.is_symlink() and file_sha(path) == digest, 'pilot saved sample/capture bytes changed')
     _require('pilot_identity.json' in saved['capture_files_sha256'], 'pilot actual identity receipt missing')
-    raw_paths = sorted(receipt.parent.glob('step_[0-9][0-9][0-9].json'))
+    step_root=receipt.parent
+    if saved.get('raw_execution',{}).get('trusted_prefix'):
+        from .trusted_prefix import projection_index
+        ref=projection_index(receipt.parent)
+        _require(ref is not None,'saved prefix projection missing')
+        index=load_json(ref)
+        _require(index.get('binding')==saved['raw_execution']['trusted_prefix'],'prefix identity binding changed')
+        step_root=receipt.parent/index['directory']
+    raw_paths = sorted(step_root.glob('step_[0-9][0-9][0-9].json'))
     _require('annotation.json' in saved['sample_files_sha256']
              and raw_paths and [path.name for path in raw_paths] ==
                  ['step_' + str(i).zfill(3) + '.json' for i in range(1, len(raw_paths) + 1)]
-             and all(path.name in saved['capture_files_sha256'] for path in raw_paths),
+             and all(path.relative_to(receipt.parent).as_posix() in saved['capture_files_sha256'] for path in raw_paths),
              'every consecutive original raw step must be bound by the saved receipt')
     raw = [load_json(path) for path in raw_paths]
     _require(all(row.get('ended_at') and not row.get('execution_error') for row in raw)

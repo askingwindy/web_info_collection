@@ -16,6 +16,21 @@ from webcollect.task_generation import read_customer_history, bind_formal_histor
 
 
 class CurrentChainTests(unittest.TestCase):
+    def test_research_inputs_do_not_adopt_historical_observations(self):
+        objective=self.root/'old-objective.json';authorization=self.root/'authorization.json'
+        save_json(objective,{'schema_version':'webcollect-session-objective-1','candidate_id':'c','version':1})
+        save_json(authorization,{'scope':'original-two-baselines-only','candidate_id':'c','version':1,
+                               'objective':reference(objective),'production_counted':False})
+        descriptor={'schema_version':'candidate-research-replay-1','original_claim_id':'original',
+                    'objective':reference(objective),'authorization':reference(authorization),'production_counted':False}
+        assert_current_evidence(self.scope,descriptor)
+        with self.assertRaisesRegex(ValueError,'out-of-chain'):
+            assert_current_evidence(self.scope,{'research_replay':descriptor,'observation':reference(objective)})
+        bad=deepcopy(descriptor);bad['observation']=reference(objective)
+        with self.assertRaisesRegex(ValueError,'invalid research'):assert_current_evidence(self.scope,bad)
+        authorization.write_text(json.dumps({'candidate_id':'wrong'}))  # disposable tamper fixture
+        with self.assertRaisesRegex(ValueError,'changed'):assert_current_evidence(self.scope,descriptor)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()

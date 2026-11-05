@@ -38,7 +38,13 @@ def action_availability(state, element, binding, value, probe, action):
     if probe.get('hit_valid') is not True:
         return result(INSUFFICIENT, 'MISSING_HIT_EVIDENCE')
     labels = readable_labels(probe)
-    if not labels:
+    pointer_bound=(action in ('click','double_click','right_click') and element.get('clickable') is True
+        and isinstance(binding,dict) and bool(binding.get('selector'))
+        and binding.get('element_id')==element['element_id'] and probe.get('bbox')==box
+        and isinstance(box,list) and len(box)==4 and isinstance(probe.get('coordinate'),list)
+        and len(probe['coordinate'])==2 and box[0]<=probe['coordinate'][0]<box[2]
+        and box[1]<=probe['coordinate'][1]<box[3])
+    if not labels and not pointer_bound:
         return result(INSUFFICIENT, 'MISSING_READABLE_LABEL_EVIDENCE')
     if action in ('type', 'set_value'):
         if not element.get('inputable') or value.get('readonly') is True:
@@ -103,6 +109,10 @@ def project(state, evidence):
         'page_actions': sorted(ACTIONS - CONTROL_ACTIONS),
         'supplemental_observation': {'kind': 'capture_target', 'control_ids': list(controls),
             'read_only': True, 'state_changing_requests_must_be_actions': True}}
+    if 'dynamic_region_contract' in state:
+        from .dynamic_regions import summary as dynamic_summary
+        result['dynamic_region_contract']=deepcopy(state['dynamic_region_contract'])
+        result['dynamic_region_summary']=dynamic_summary(state)
     result['observation_id'] = object_sha256(result)
     return result
 
@@ -128,7 +138,8 @@ def require_action(state, operation):
         status = action_availability(state, element, binding, value, target, operation['action_type'])
         if status['status'] != PROVEN:
             raise ValueError(status['status'] + ': ' + status['reason'])
-        if evidence.get('target_label') not in [r['text'] for r in readable_labels(target)]:
+        if evidence.get('target_label') not in [r['text'] for r in readable_labels(target)] and not (
+                operation['action_type'] in ('click','double_click','right_click') and evidence.get('target_label')==''):
             raise ValueError('MISSING_CURRENT_READABLE_LABEL')
         if 'replace_selected_number' in evidence:
             if (operation['action_type'] != 'type' or value.get('input_type') != 'number'

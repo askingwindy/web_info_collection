@@ -45,7 +45,7 @@ def generation_source_identity():
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py', 'request_quarantine.py',
-        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py','banded_plan.py','band_budget.py','inference_image.py','session_objective.py','goal_evidence.py','plan_evidence.py','consumer_page_policy.py')
+        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py','banded_plan.py','band_budget.py','inference_image.py','session_objective.py','goal_evidence.py','plan_evidence.py','consumer_page_policy.py','trusted_prefix.py','action_stability.py','direct_article.py','direct_completion.py','dynamic_regions.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -845,8 +845,11 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     else:
         from .closing_policy import VERSION as CLOSE_POLICY
         from .banded_plan import VERSION as PLAN_PROTOCOL
+        from .action_stability import POST_VERSION as FOCUS_PROTOCOL
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
-                              **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL} if react_candidate is not None else {}),
+                              **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL,
+                                  'action_stability_protocol':FOCUS_PROTOCOL,
+                                  'trusted_prefix_protocol':'webcollect-trusted-prefix-1'} if react_candidate is not None else {}),
                               app_name=app_name, registration=react_task_version,
                               skip_wechat_articles=(react_candidate or {}).get('skip_wechat_articles',False),
                               pilot_identity=identities['pages'].get(url))

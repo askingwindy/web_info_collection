@@ -13,10 +13,25 @@ def audit_capture(batch, sample_id):
     def fail(step_id,message):issues.append({'step_id':step_id,'message':message})
     try:
         data=read_json(sample/'annotation.json')
+        from .trusted_prefix import projection_index
+        projection=projection_index(evidence)
+        source_evidence=evidence
+        if projection is not None:
+            from .trusted_prefix import VERSION, project_prefix
+            from .postprocess import session_record
+            index=read_json(projection)
+            binding=index.get('binding')
+            if index.get('protocol')!=VERSION or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',index.get('directory','')):
+                raise ValueError('Prefix capture projection differs from delivered interval')
+            source=session_record(evidence/'raw',allow_unknown_for_prefix=True)
+            actual=project_prefix(source,evidence/'raw',binding['source_interval']['end_step'],
+                {'attempt_id':binding['source_attempt_id']})['trusted_prefix']
+            if actual!=binding:raise ValueError('Prefix capture projection source changed')
+            evidence=evidence/index['directory']
         # A fragment sample ends mid-business by contract: its complete step
         # truthfully records the final state without business assertions.
-        contract_path=evidence/'task_contract.json'
-        fragment_unclaimed=False
+        contract_path=source_evidence/'task_contract.json'
+        fragment_unclaimed=projection is not None
         if contract_path.exists():
             contract=read_json(contract_path)
             fragment_unclaimed=(contract.get('business_completion')=='NOT_CLAIMED' or 'fragment' in contract)

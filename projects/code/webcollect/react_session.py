@@ -30,7 +30,7 @@ LEGACY_SYSTEM_PROMPT = """你是 WebCollect 的网页轨迹采集 Agent。使用
 
 GOAL
 从给定 URL 出发，在授权范围与有限预算内，综合 HTML/DOM、截图和控件运行时属性，采集连续、合法、可验证的真实网页操作，保存完整原始执行，供后续生成交付样本。
-优先形成有效操作 ≥5 的轨迹；实际短流程可以声明 short_flow 并给具体原因，后续仍须验证。不要凑步，不要求完成整项业务，不声称保存即合格。
+自然完成即可结束，不为长度补动作。short_flow 和原因由宿主按最终有效操作数生成；目标、保存与质量分别判断。
 最终验收取决于实际加工样本符合需求并通过独立 QC。你的 finish 只关闭采集记录，后续由程序加工和独立审核，不能自行授予 PASS。
 
 目标与输入
@@ -48,7 +48,7 @@ working_goal 是当前页面上要推进的简短执行方向。它为空时，�
 
 证据与工具
 observe、inspect、act、finish 的用途和参数以提供的工具定义为准。
-只使用真实返回的观察、控件和页面引用。整页观察不含控件探针：要操作某控件，先用 observe 的 focus_control_id 做一次定向观察；每个控件在同一文档下只做一次，重复 focus 会被拒绝。若定向观察后动作仍为 INSUFFICIENT，读其 reason：MISSING_READABLE_LABEL_EVIDENCE 表示该控件没有渲染文本标签，继续 focus 不会有新证据，应改用带标签的相邻控件、inspect(kind="html") 找关联线索或换路径。隐藏 HTML 可提供结构线索，不能直接证明用户看到了某段内容。
+只使用真实返回的观察、控件和页面引用。整页观察不含控件探针：要操作某控件，先用 observe 的 focus_control_id 做一次定向观察；每个控件在同一文档下只做一次，重复 focus 会被拒绝。若定向观察后动作仍为 INSUFFICIENT，读其 reason：MISSING_READABLE_LABEL_EVIDENCE 表示该输入/选择操作缺少渲染标签，继续 focus 不会有新证据；点击控件可由当前唯一节点、原生绑定、边界及命中证明，无文字不等于不能点击。隐藏 HTML 可提供结构线索，不能直接证明用户看到了某段内容。
 expected 是预期，工具返回才是执行事实。派发前过期时重新 observe；不要使用失效引用继续 act。
 已派发动作若无可观察变化，将立即整体终止本次会话（NO_EFFECTIVE_ACTION）：不确定是否生效的捷径（例如用回车代替点击搜索按钮）一旦站点不支持就是零效果、满盘皆输。宁可多花一轮定向观察再点击已证明的控件，也不要押注未证实的快捷键行为。
 对于执行结果未知、模型请求 UNKNOWN 或原账阻断，不重复派发。已有失败不得通过更新工作目标抹去。
@@ -56,10 +56,10 @@ expected 是预期，工具返回才是执行事实。派发前过期时重新 o
 
 继续与结束
 达到 5 步不强制结束，超过 10 步不自动切段。根据真实进展、下一步可行性和剩余预算选择继续或结束。
-长度规则：≥5 个有效操作即可正常交付；不足 5 步只能走 short_flow 声明，且后续程序按累计占比（≤2%）限制短流程样本，小批量下几乎必然不合格。某条路径被阻断（如安全拦截页）只代表该分支结束：若预算尚存且页面上还有其他可操作的真实业务路径（返回后点击站内词条/导航链接继续浏览），应继续累积有效操作到 ≥5 步，而不是提前结束。
+自然完成即可结束，不为长度补动作。short_flow 和原因由宿主按最终有效操作数生成；目标、保存与质量分别判断。
 页面级动作不需要控件探针，各只花一轮：被拦截/死路页可直接 act(back) 返回上一可操作页面，再 act(scroll) 浏览内容（视口真实移动即计有效操作）。3 个搜索操作 + back + scroll 即可达 5 步，无需为每步重新定向观察。
 工具查询、静态阅读、wait、complete 不计有效步数，复合动作由宿主按实际操作计数。
-不足 5 步时可以结束并保留原件；若声明 short_flow，必须给具体原因，不能谎报步数。短流程累计占比上限为 2%，由后续程序检查，单条声明不授予合格资格。
+自然完成即可结束，不为长度补动作。short_flow 和原因由宿主按最终有效操作数生成；目标、保存与质量分别判断。
 截图相同可以提示重复路径，不得仅凭公共起始图否定整个站点；不以重复动作凑步。
 结束时只描述实际已执行内容和可见终态，未执行条件不能声称满足，不自行声明 QC PASS、发布或客户验收。"""
 
@@ -118,7 +118,7 @@ def tool_definitions(allowed_actions):
     return {
         'observe': {'签名': 'observe(focus_control_id: string|null)',
             '用途': '同一会话只读读取当前页面，保存当前 HTML/DOM、截图与运行时属性；不点击、不导航、不计有效步数。',
-            '关键用法': 'controls 中某控件的动作为 INSUFFICIENT/MISSING_TARGET_PROBE 时，用 focus_control_id 指向该控件做一次定向观察以取得可执行性证明；整页观察不提供控件探针。每个控件在同一文档下最多一次：若定向后仍 INSUFFICIENT，看 reason——MISSING_READABLE_LABEL_EVIDENCE 表示无渲染标签，focus 无用，改用带标签的相邻控件或 inspect(kind="html") 找结构线索；重复 focus 会被直接拒绝。',
+            '关键用法': 'controls 中某控件的动作为 INSUFFICIENT/MISSING_TARGET_PROBE 时，用 focus_control_id 指向该控件做一次定向观察以取得可执行性证明；整页观察不提供控件探针。每个控件在同一文档下最多一次：若定向后仍 INSUFFICIENT，看 reason——MISSING_READABLE_LABEL_EVIDENCE 表示输入/选择缺渲染标签；点击可由当前节点/绑定/边界/命中证明，无文字不等于不能点击；重复 focus 会被直接拒绝。',
             '返回': '新 observation_id、页面摘要/HTML片段、控件三态与真实值、图片引用与覆盖说明。新观察使旧动作绑定失效。'},
         'inspect': {'签名': 'inspect(kind: "html"|"control"|"history"|"feedback", observation_id: string|null, '
                           'target_id: string|null, query: string|null, offset: integer>=0, limit_chars: integer>0)',
@@ -134,9 +134,9 @@ def tool_definitions(allowed_actions):
             '用途': '校验当前观察、目标、权限与预算后，把一个语义动作交给原执行器；按真实原子操作取证计数，动作后返回新观察或结构化错误。'
                     '旧观察不可派发；复合动作按实际原子操作分别计数。'},
         'finish': {'签名': 'finish(observation_id: string, stop_reason: "ready"|"no_path"|"budget"|"blocked", '
-                         'summary: string, short_flow: boolean, short_flow_reason: string|null)',
+                         'summary: string)',
             '用途': '核对当前状态并关闭本次原始执行，保存收据。ready 只代表申请结束并进入加工，不代表业务完成或 QC PASS。',
-            '说明': '少于 5 步仍可结束；申请 short_flow 时原因必须非空；≥5 步时不得申请 short_flow。'},
+            '说明': '短流程及原因由宿主按有效操作数生成，无需声明；自然完成即结束，不凑步。'},
     }
 
 
@@ -188,7 +188,8 @@ def describe_goal(goal):
 def build_url_task(*, url, task_version, site_category=None, app_name=None, task_family='navigation-reading',
                    allowed_actions=None, instruction=None, site_uri=None, budgets=None, pilot_identity=None,
                    registration='1', decision_protocol=NATIVE_VERSION, allow_controlled_exception=False, skip_wechat_articles=False,
-                   reference_protocol=REFERENCE_PROTOCOL, ending_policy=None, plan_protocol=None):
+                   reference_protocol=REFERENCE_PROTOCOL, ending_policy=None, plan_protocol=None, action_stability_protocol=None,
+                   trusted_prefix_protocol=None):
     """Host-built identity for a URL-only entry; no model call, no frozen plan.
 
     `registration` is the explicit re-registration version: it enters the
@@ -269,6 +270,17 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         if decision_protocol != NATIVE_VERSION or plan_protocol not in VERSIONS:
             raise ValueError('Unknown conditional plan protocol')
         for part in (spec, task['fragment']): part['plan_protocol'] = plan_protocol
+    if action_stability_protocol is not None:
+        from .action_stability import VERSIONS as focus_versions
+        if action_stability_protocol not in focus_versions or plan_protocol is None:
+            raise ValueError('Unknown action stability protocol')
+        for part in (spec, task['fragment']): part['action_stability_protocol'] = action_stability_protocol
+    if plan_protocol is not None:
+        task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
+    if trusted_prefix_protocol is not None:
+        if trusted_prefix_protocol != 'webcollect-trusted-prefix-1':
+            raise ValueError('Unknown trusted prefix protocol')
+        for part in (spec, task['fragment']): part['trusted_prefix_protocol'] = trusted_prefix_protocol
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
     if pilot_identity is not None:
         task['pilot_identity'] = deepcopy(pilot_identity)
@@ -291,8 +303,10 @@ def build_candidate_task(capability, task_version, budgets=None):
         raise ValueError('Candidate capability supports none of the react actions')
     from .closing_policy import VERSION as CLOSE_POLICY
     from .banded_plan import VERSION as PLAN_PROTOCOL
+    from .action_stability import POST_VERSION as FOCUS_PROTOCOL
     task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
-        plan_protocol=PLAN_PROTOCOL,
+        plan_protocol=PLAN_PROTOCOL, action_stability_protocol=FOCUS_PROTOCOL,
+        trusted_prefix_protocol='webcollect-trusted-prefix-1',
         site_category=capability['site_category'],
         app_name=candidate_name,
         task_family=(capability.get('task_families') or ['navigation-reading'])[0],
@@ -373,7 +387,7 @@ def validate_task(task):
     if not isinstance(actions, list) or not actions or any(action not in ALLOWED_TOOL_ACTIONS for action in actions):
         raise ValueError('React task needs a nonempty supported action whitelist')
     spec = (task.get('workflow_proposal') or {}).get('spec') or {}
-    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective'):
+    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol'):
         if spec.get(extension) != fragment.get(extension):
             raise ValueError('Mismatched frozen React extension: ' + extension)
     if fragment.get('session_objective'):
@@ -388,6 +402,11 @@ def validate_task(task):
     from .banded_plan import VERSIONS
     if fragment.get('plan_protocol') not in (None, *VERSIONS) or (fragment.get('plan_protocol') and fragment.get('decision_protocol') != NATIVE_VERSION):
         raise ValueError('Invalid frozen plan protocol')
+    from .action_stability import VERSIONS as focus_versions
+    if fragment.get('action_stability_protocol') not in (None, *focus_versions):
+        raise ValueError('Unknown frozen action stability protocol')
+    if fragment.get('trusted_prefix_protocol') not in (None, 'webcollect-trusted-prefix-1'):
+        raise ValueError('Unknown frozen trusted prefix protocol')
     if fragment.get('plan_protocol') and fragment.get('ending_policy')!='webcollect-five-eight-attempt-ending-2':
         raise ValueError('Conditional plans require the frozen V2 atomic ending policy')
     from .reading_progress import END_POLICY
@@ -501,6 +520,7 @@ class ReactSession:
         self.task = deepcopy(task)
         self.native = self.task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
         from .banded_plan import enabled, Controller, SYSTEM as PLAN_SYSTEM, VERSION as PLAN_VERSION, tools as plan_tools, system_for
+        from .direct_article import protocol_schema
         from .goal_evidence import contract_for
         contracted = bool(contract_for(task))
         self.plan_controller = Controller() if enabled(self.task) else None
@@ -565,7 +585,7 @@ class ReactSession:
              **({'attempt_id': self.attempt_id, 'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort','low')} if contracted else {}),
              **({'first_plan_timeout_seconds': choose.first_plan_timeout_seconds}
                 if getattr(choose,'first_plan_timeout_seconds',None) else {}),
-             **({'tool_schema_sha256': object_sha256(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol')==PLAN_VERSION) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
+             **({'tool_schema_sha256': object_sha256(protocol_schema(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol')==PLAN_VERSION),contract_for(self.task)) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
                     self.task['fragment'].get('reference_protocol'))),
                  'effective_action_rule': RULE_VERSION, 'reasoning_effort': 'max',
                  **({'first_plan_reasoning_effort': choose.first_plan_reasoning_effort}
@@ -634,9 +654,19 @@ class ReactSession:
         """
         from .browser import capture
         number = self.used['max_observations']
+        action_scope = None
+        from .action_stability import POST_VERSION, post_observation_scope, reading_scope
+        if self.task['fragment'].get('action_stability_protocol')==POST_VERSION and self.current:
+            trigger=getattr(self,'_navigation_trigger',None)
+            source=(getattr(self,'_navigation_source',None) if trigger else None) or load_json(self.current['evidence']['state']['path'])
+            try:
+                if trigger:action_scope=post_observation_scope(source,trigger)
+                elif self.trajectory:action_scope=reading_scope(source)
+            except ValueError:pass  # A missing narrow proof retains strict capture.
+        options={'action_scope':action_scope} if action_scope else {}
         try:
             try:
-                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
+                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
             except Exception as error:
                 if 'Execution context was destroyed' not in str(error):
                     raise
@@ -645,7 +675,7 @@ class ReactSession:
                      'action_replayed':False})
                 self.event('capture-context-retry',evidence=ref)
                 await self.page.wait_for_load_state('domcontentloaded')
-                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
+                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
         except Exception as error:
             after_dispatch = bool(getattr(self,'_navigation_trigger',None))
             ref=exclusive(self.root/f'capture-rejection-{number:03}.json',
@@ -675,7 +705,7 @@ class ReactSession:
             if (focus_control_id, self._probe_key(self.current)) in self.focus_history:
                 return self._rejected('observe',
                     '重复定向观察被拒绝：该控件在当前文档下已有探针，再 focus 不会产生新证据。'
-                    '若其动作仍为 INSUFFICIENT，按 reason 换路径：MISSING_READABLE_LABEL_EVIDENCE 表示无渲染标签，'
+                    '若其动作仍为 INSUFFICIENT，按 reason 换路径：MISSING_READABLE_LABEL_EVIDENCE 表示输入/选择缺渲染标签，'
                     '改用带标签的相邻控件或 inspect(kind="html")；页面变化后可做整页 observe。')
             selector, index = control['binding'].get('selector'), control['binding'].get('index', 0)
         captured = await self._capture_observation(selector, index)
@@ -929,10 +959,17 @@ class ReactSession:
         final_id=self.current['observation_id'] if self.current else None
         final_state=load_json(self.current['evidence']['state']['path']) if self.current else {}
         safe=bool(self.trajectory and final_state.get('visible_text') and not unknown and not self.unknown and not force_pending)
+        terminal_bridge=None
         if safe:
             from .reading_progress import same_view
             prefix=load_json(self.observation_records[self.trajectory[-1]['after_observation_id']]['evidence']['state']['path'])
             safe=same_view(prefix,final_state)
+            from .direct_completion import enabled as explicit,bridge_evidence
+            if not safe and explicit(self.task) and kind=='HOST_PLAN_ENDPOINT' and not tail_dispatches:
+                terminal_bridge=bridge_evidence(self.task,
+                    self.observation_records[self.trajectory[-1]['after_observation_id']]['evidence'],self.current['evidence'],
+                    target_ids=[(r.get('target') or {}).get('control_id') for r in self.trajectory],unverified_tail=tail_dispatches)
+                safe=terminal_bridge['proof']['accepted'] is True
         if safe and tail_dispatches:
             tail=attempts[-1].get('raw_steps',[]) if attempts else []
             raw=load_json(tail[-1]['path']) if tail else {}
@@ -958,6 +995,7 @@ class ReactSession:
             'external_effect_unknown':unknown,
             'last_model_intent':getattr(self,'_last_model_intent',None),'last_decision':getattr(self,'_last_decision',None),
             'safe_for_pending_sample':bool(safe),'attempt_refs':refs,
+            **({'direct_terminal_bridge':terminal_bridge} if terminal_bridge else {}),
             'final_observation_id':final_id,'final_evidence':deepcopy(self.current['evidence']) if self.current else None,
             'last_attempt':attempts[-1] if attempts else None,
             'raw_only_pending':not safe}
@@ -1039,11 +1077,17 @@ class ReactSession:
                         '{"observation_id":"当前观察id","step":{"action":"...","control_id":"...","value":"...","goal":"...","expected":"..."}}')
             return self._rejected('act', 'act 参数不合法：' + str(error).splitlines()[0] + hint)
         step = arguments['step']
+        from .direct_article import enabled as direct_article, session_trace, before_action
+        if direct_article(self.task):
+            try:
+                proof=session_trace(self)
+                before_action(self.task,load_json(self.current['evidence']['state']['path']),step.get('action'),step,step.get('control_id'),pending=proof['pending_return'])
+            except ValueError as error:return self._rejected('act',str(error))
         from .consumer_page_policy import enabled as page_policy, boundary, allowed_exit
         if page_policy(self.task):
             current_state=load_json(self.current['evidence']['state']['path'])
             if boundary(current_state) and not allowed_exit(current_state,step.get('action'),step.get('control_id')):
-                return self._rejected('act','LOGIN_DOWNLOAD_BOUNDARY: 下一步仅允许真实取消或返回')
+                return self._rejected('act','PAGE_BOUNDARY: 下一步仅允许该边界支持的真实返回或取消')
         try:
             self._validate_step(step)
         except ValueError as error:
@@ -1144,10 +1188,11 @@ class ReactSession:
         require_action(dispatch_state, operation)
         return operation
 
-    async def _dispatch_compiled(self, step, compiled):
+    async def _dispatch_compiled(self, step, compiled, *, _refresh=0, _deadline=None):
         from .browser import EvidenceStale, execute, prepare_action, verify_execution_state
         from .collect import capture_before_action
         from .production_identity import before_action
+        _deadline=_deadline or time.monotonic()+REACT_OBSERVE_TIMEOUT_SECONDS
         executed = []
         prior_raws = []
         for row in compiled:
@@ -1161,9 +1206,60 @@ class ReactSession:
                 if control is None:
                     return self._need_observation('act', f'目标控件 {cid} 不在当前观察中，请重新观察', data=self._deltas(executed))
                 selector, index = control['binding'].get('selector'), control['binding'].get('index', 0)
+            action_scope = None
+            from .action_stability import VERSIONS as focus_versions, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION, scope_for, followup_scope
+            focus_protocol=self.task['fragment'].get('action_stability_protocol')
+            focus = getattr(self, 'preflight_search_focus', None)
+            typing_focus=None
+            if focus_protocol in (TYPING_VERSION,FOLLOWUP_VERSION,POST_VERSION) and cid and row['action']=='type':
+                from .goal_evidence import search_focus_target
+                typing_focus=search_focus_target(self.current,allow_combobox=True)
+            if (focus_protocol in focus_versions
+                    and not focus and not self.trajectory and row['action'] == 'click'):
+                from .goal_evidence import search_focus_target
+                candidate_focus = search_focus_target(self.current)
+                if candidate_focus and candidate_focus['node'] == cid and not (control.get('value') or {}).get('focused'):
+                    focus = candidate_focus
+                    self.event('first-action-observed-focus-basis', target=focus,
+                               observation=self.current['evidence'], action_dispatched=False)
+            if (focus_protocol in focus_versions
+                    and focus and not self.trajectory and row['action'] == 'click' and cid == focus['node']):
+                try:
+                    action_scope = scope_for(load_json(self.current['evidence']['state']['path']), cid, selector, index or 0,
+                                             version=TYPING_VERSION if focus_protocol in (FOLLOWUP_VERSION,POST_VERSION) else focus_protocol)
+                except ValueError as error:
+                    return self._need_observation('act', '首击局部证据不足：' + str(error), data=self._deltas(executed))
+            elif typing_focus and typing_focus['node']==cid:
+                try:
+                    action_scope=scope_for(load_json(self.current['evidence']['state']['path']),cid,selector,index or 0,
+                                           action='type',version=TYPING_VERSION if focus_protocol in (FOLLOWUP_VERSION,POST_VERSION) else focus_protocol)
+                    self.event('focused-type-observed-basis',target=cid,observation=self.current['evidence'],
+                               action_dispatched=False)
+                except ValueError as error:
+                    return self._need_observation('act','输入目标局部证据不足：'+str(error),data=self._deltas(executed))
+            if focus_protocol in (FOLLOWUP_VERSION,POST_VERSION) and not action_scope:
+                followup_node=None
+                if row['action']=='click' and cid and control.get('binding',{}).get('tag')=='a':followup_node=cid
+                elif row['action']=='hotkey' and [str(k).lower() for k in row.get('keys',[])] in (['enter'],['return']):
+                    from .goal_evidence import search_focus_target
+                    focused_search=search_focus_target(self.current,allow_combobox=True)
+                    if focused_search:followup_node=focused_search['node']
+                if followup_node:
+                    try:
+                        action_scope=followup_scope(load_json(self.current['evidence']['state']['path']),followup_node,row['action'])
+                        selector,index=action_scope['selector'],action_scope['index']
+                    except ValueError as error:
+                        return self._need_observation('act','后继动作局部证据不足：'+str(error),data=self._deltas(executed))
+            if focus_protocol in (FOLLOWUP_VERSION,POST_VERSION) and row['action']=='scroll' and self.plan_controller:
+                from .goal_evidence import contract_for,progress
+                contract=contract_for(self.task)
+                if contract and contract['kind']=='reading' and (progress(self,self.plan_controller.frozen_plan['observation_id'],contract).get('opened_results') or __import__('webcollect.direct_article',fromlist=['enabled']).enabled(self.task)):
+                    from .action_stability import reading_scope
+                    try:action_scope=reading_scope(load_json(self.current['evidence']['state']['path']))
+                    except ValueError:pass
             try:
                 observation = await capture_before_action(self.page, self.root, selector, index or 0,
-                                                          timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
+                    timeout=max(.1,_deadline-time.monotonic()), **({'action_scope': action_scope} if action_scope else {}))
             except EvidenceStale as error:
                 self.event('action-evidence-failed',error_type=type(error).__name__,
                     detail=str(error),timing=getattr(error,'action_refresh',None),
@@ -1183,8 +1279,23 @@ class ReactSession:
                 self.url_check(state['url'])
             drift_keys = ('url', 'document_identity', 'scroll', 'values', 'elements', 'visible_text') if self.native else ('url', 'document_identity', 'scroll')
             current_state = load_json(self.current['evidence']['state']['path'])
-            drift = [key for key in drift_keys
-                     if current_state.get(key) != state.get(key)]
+            from .dynamic_regions import enabled as dynamic_enabled,projection as content_projection
+            current_content=content_projection(current_state,protect=[cid]);new_content=content_projection(state,protect=[cid])
+            raw_drift=[key for key in drift_keys if current_state.get(key)!=state.get(key)]
+            drift = [key for key in drift_keys if current_content.get(key)!=new_content.get(key)]
+            if dynamic_enabled(current_state):
+                self.event('dynamic-region-dispatch-drift',raw_changed_fields=raw_drift,related_changed_fields=drift,original_observation=self.current['evidence'])
+            if action_scope or dynamic_enabled(current_state):
+                from .browser import stability_pair
+                proof = stability_pair(current_state, state,
+                    Path(self.current['evidence']['image']['path']).read_bytes(), observation['png'], action_scope=action_scope)
+                self.event('action-local-stability', proof=proof, before=self.current['evidence'],
+                    capture=observation['capture'], action_dispatched=False)
+                if proof['accepted']:
+                    drift=[]
+                    observation['action_scope']=action_scope
+                else:
+                    drift.append('first_focus_target_or_pixels')
             if cid:
                 previous_labels = (current_state.get('target') or {}).get('visible_label_evidence', [])
                 grouped = [label for label in previous_labels if label.get('kind') == 'rendered_grouped_button']
@@ -1199,11 +1310,28 @@ class ReactSession:
                     # it as a new observation instead of trapping the model on
                     # the stale ID/probe. No action is sent on this branch.
                     self._consume('max_observations')
+                    previous_controls=self.current['controls']
                     fresh = self._accept(observation, await self.page.content(), cid)
                     if cid:
                         self.focus_history.add((cid, self._probe_key(fresh)))
                     data.update(refreshed_observation_id=fresh['observation_id'],
                                 drift_fields=drift, observation=self._compact(fresh))
+                    # Recompile only an unchanged, uniquely identified physical target
+                    # against this fresh full capture. No old evidence is dispatched.
+                    refresh_cid=cid
+                    if not refresh_cid and row['action']=='hotkey':
+                        focused=[key for key,c in self.current['controls'].items() if (c.get('value') or {}).get('focused') is True]
+                        if len(focused)==1:refresh_cid=focused[0]
+                    old_control=previous_controls.get(refresh_cid) if refresh_cid else None
+                    new_control=fresh['controls'].get(refresh_cid) if refresh_cid else None
+                    if (_refresh<2 and time.monotonic()<_deadline and len(compiled)==1 and refresh_cid and set(drift)<= {'elements','visible_text'}
+                            and old_control and new_control
+                            and all(old_control.get(k)==new_control.get(k) for k in ('element','binding','value'))
+                            and all(current_state.get(k)==state.get(k) for k in ('url','document_identity','scroll','values'))):
+                        self.event('pre-dispatch-target-refresh',target=cid,refresh=_refresh+1,
+                                   old_observation_state=current_state.get('document_identity'),
+                                   new_observation_id=fresh['observation_id'],action_dispatched=False,drift_fields=drift)
+                        return await self._dispatch_compiled(step,compiled,_refresh=_refresh+1,_deadline=_deadline)
                 return self._need_observation(
                     'act', '页面在派发前发生变化（' + ','.join(drift) + '）；本次零派发，已保存当前取证，请基于新观察重新决策',
                     data=data)
@@ -1287,9 +1415,18 @@ class ReactSession:
         self.dialogs.clear()
         dispatch_started = False
         try:
-            preflight_state = await verify_execution_state(self.page, state,
-                operation.get('selector'), operation.get('index', 0),
-                timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
+            if observation.get('action_scope') and observation['action_scope']['action']!=operation['action_type']:
+                raise EvidenceStale('局部证据动作类型改变；本动作零派发')
+            remaining = min(REACT_OBSERVE_TIMEOUT_SECONDS,
+                observation.get('action_deadline_monotonic', time.monotonic()+REACT_OBSERVE_TIMEOUT_SECONDS)-time.monotonic())
+            if remaining <= 0:
+                raise EvidenceStale('派发前总取证期限已耗尽；本动作零派发')
+            try:
+                preflight_state = await asyncio.wait_for(verify_execution_state(self.page, state,
+                    operation.get('selector'), operation.get('index', 0), timeout=remaining,
+                    **({'action_scope':observation['action_scope']} if observation.get('action_scope') else {})), timeout=remaining)
+            except TimeoutError as error:
+                raise EvidenceStale('最终派发复查超过原总取证期限；本动作零派发') from error
             raw['state_preflight'] = {**preflight_state, 'phase': 'pre_dispatch'}
             pages_before = set(self.page.context.pages)
             dispatch_started = True
@@ -1376,10 +1513,12 @@ class ReactSession:
                 'source_observation_id':before_id, 'page':self.page, 'pages':tuple(getattr(getattr(self.page,'context',None),'pages',[self.page])),
                 'dispatches':self.actual_dispatches}
         self._navigation_trigger = raw['operation']
+        self._navigation_source = before_state
         try:
             await self._observe()
         finally:
             self._navigation_trigger = None
+            self._navigation_source = None
         controller=self.plan_controller
         if controller is not None and controller.plan and controller.position<len(controller.plan['steps']):
             from .banded_plan import proves
@@ -1396,14 +1535,28 @@ class ReactSession:
                     previous_observation_id=self.current['observation_id'],refresh=refresh+1,wait_ms=100,dispatched_again=False)
                 await asyncio.sleep(.1)
                 self._navigation_trigger=raw['operation']
+                self._navigation_source=before_state
                 try:await self._observe()
-                finally:self._navigation_trigger=None
+                finally:
+                    self._navigation_trigger=None
+                    self._navigation_source=None
         after = self.current
         if after['url'] != before_state['url']:
             self._pending_navigation = None
         after_state = load_json(after['evidence']['state']['path'])
+        from .direct_article import enabled as direct_article, session_trace, transition
+        if direct_article(self.task):
+            try:
+                proof=session_trace(self)
+                transition(self.task,before_state,after_state,operation['action_type'],arguments,operation.get('evidence',{}).get('anchor_element_id'),pending=proof['pending_return'])
+            except ValueError as error:
+                raw['react']['after_observation_id']=after['observation_id']
+                raise ReactStop('blocked',str(error),'collector',operation=operation['operation_id']) from error
         keys = ('url', 'document_identity', 'scroll', 'values', 'visible_text', 'elements')
-        changed_fields = [key for key in keys if before_state.get(key) != after_state.get(key)]
+        from .dynamic_regions import projection as content_projection
+        raw_changed_fields=[key for key in keys if before_state.get(key)!=after_state.get(key)]
+        old_content,new_content=content_projection(before_state),content_projection(after_state)
+        changed_fields = [key for key in keys if old_content.get(key) != new_content.get(key)]
         png_changed = _sha(Path(after['evidence']['image']['path'])) != before_image['sha256']
         changed = bool(changed_fields) or png_changed
         effect = atomic_effect(before_state, after_state, operation['action_type'], arguments,
@@ -1442,7 +1595,7 @@ class ReactSession:
                 self.page_urls.append(after['url'])
         cid = operation.get('evidence', {}).get('anchor_element_id')
         control = after['controls'].get(cid) if cid else None
-        observed = {'state_changed': changed, 'changed_fields': changed_fields,
+        observed = {'state_changed': changed, 'changed_fields': changed_fields,'raw_changed_fields':raw_changed_fields,
             'target_after': ({k: (control['value'] or {}).get(k)
                               for k in ('value', 'checked', 'focused')} if control else None),
             'observation': deepcopy(after['evidence']['image'])}
@@ -1518,18 +1671,14 @@ class ReactSession:
         try:
             Draft202012Validator(obj({'observation_id': TEXT,
                 'stop_reason': {'enum': list(STOP_REASONS)}, 'summary': TEXT,
-                'short_flow': {'type': 'boolean'},
-                'short_flow_reason': NULLABLE_TEXT})).validate(arguments)
+                'short_flow': {},
+                'short_flow_reason': {}} , ['observation_id','stop_reason','summary'])).validate(arguments)
         except Exception as error:
             return self._rejected('finish', 'finish 参数不合法：' + str(error).splitlines()[0])
         if arguments['observation_id'] != self.current['observation_id']:
             return self._rejected('finish', 'finish 必须绑定当前观察', data={
                 'current_observation_id': self.current['observation_id']})
         effective = len(self.trajectory)
-        if arguments['short_flow'] and effective >= 5:
-            return self._rejected('finish', '有效操作已 ≥5，不能声明短流程')
-        if arguments['short_flow'] and not (arguments.get('short_flow_reason') or '').strip():
-            return self._rejected('finish', '声明 short_flow 必须给出非空具体原因')
         if self._left('max_observations') >= 1:
             closing = await self._observe()
             final = self.current
@@ -1538,8 +1687,8 @@ class ReactSession:
         self.state = 'finished'
         self.stop_reason = arguments['stop_reason']
         self.stop_summary = arguments['summary']
-        self.short_flow = bool(arguments['short_flow'])
-        self.short_flow_reason = (arguments.get('short_flow_reason') or '').strip() or None
+        from .postprocess import flow_classification
+        self.short_flow, self.short_flow_reason = flow_classification(effective)
         receipt = self._close()
         return self._ok('finish', summary='原始执行已关闭：' + self.stop_reason,
                         data={'raw_receipt': receipt, 'effective_steps': effective,
@@ -1607,11 +1756,8 @@ class ReactSession:
                               'final_observation_id': self.current['observation_id']})
 
     def _short_reason(self):
-        labels = {'ready': '当前连续片段已结束', 'no_path': '当前没有可行路径',
-                  'budget': '宿主预算耗尽', 'blocked': '当前路径被阻断'}
-        title = load_json(self.current['evidence']['state']['path']).get('title') or '当前页面'
-        return (f'实际完成{len(self.trajectory)}个有效操作；{labels.get(self.stop_reason, "会话结束")}；'
-                f'末页为「{title}」。' + (self.stop_summary or ''))
+        from .postprocess import flow_classification
+        return flow_classification(len(self.trajectory))[1]
 
     # ------------------------------------------------------------------ loop
 
@@ -1896,7 +2042,7 @@ class ReactSession:
                 validate_capture_receipt(captured['state'], captured['capture'], captured['png'])
                 if captured['state']['url'] != self.page.url:
                     raise ValueError('Entry observation URL changed')
-                await verify_execution_state(self.page, captured['state'], timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
+                await verify_execution_state(self.page, captured['state'], timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
             except Exception:
                 await self._observe()
             else:
@@ -1923,6 +2069,15 @@ class ReactSession:
     async def _run_preflight(self):
         if self.preflight is not None:
             record = await self.preflight(self.page, self.root / 'preflight')
+            from .action_stability import VERSIONS as focus_versions
+            if self.task['fragment'].get('action_stability_protocol') in focus_versions and not self.trajectory:
+                from .goal_evidence import contract_for, search_focus_target
+                if (contract_for(self.task) or {}).get('kind') == 'reading' and not __import__('webcollect.direct_article',fromlist=['enabled']).enabled(self.task):
+                    target = search_focus_target(self.current)
+                    if target and not (self.current['controls'][target['node']].get('value') or {}).get('focused'):
+                        self.preflight_search_focus = target
+                        self.event('preflight-action-focus-basis', target=target,
+                                   observation=self.current['evidence'], action_dispatched=False)
             if self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
                 for retry in range(1,3):
                     summary=(record or {}).get('summary',{})
@@ -1952,10 +2107,21 @@ class ReactSession:
                             after=after['evidence'],proof=proof,old_diagnostic_route='REVIEW_REQUIRED',
                             same_page=True,no_navigation=True,rule_unchanged=True)
                         if proof['accepted']:return
+                        from .direct_article import enabled as direct_enabled,planning_pair
+                        if direct_enabled(self.task) and record.get('completed_probe_count',0)>=2:
+                            direct_proof=planning_pair(self.task,load_json(before['evidence']['state']['path']),
+                                load_json(after['evidence']['state']['path']),
+                                Path(before['evidence']['image']['path']).read_bytes(),
+                                Path(after['evidence']['image']['path']).read_bytes())
+                            self.event('preflight-direct-reading-observation',pair=retry,before=before['evidence'],
+                                after=after['evidence'],proof=direct_proof,full_page_accepted=False,
+                                observation_only=True,dispatch_permission=False,no_navigation=True)
+                            if direct_proof['accepted']:return
                         if (contract.get('kind') == 'reading' and contract.get('version') == evidence_version
                                 and record.get('completed_probe_count', 0) >= 2):
                             target = search_focus_from_pair(before, after, proof)
-                            if target:
+                            if target and (self.task['fragment'].get('action_stability_protocol') not in focus_versions
+                                           or not (after['controls'][target['node']].get('value') or {}).get('focused')):
                                 self.preflight_search_focus = target
                                 self.event('preflight-scoped-search-focus', target=target, pair=retry,
                                            before=before['evidence'], after=after['evidence'],
@@ -1996,9 +2162,8 @@ class ReactSession:
         if (self.state == 'finished' and self.stop_reason == 'budget' and self.glm_http_requests is not None
                 and self.glm_http_requests >= SessionGLMCallLimit.limit):
             self.stop_details = SessionGLMCallLimit(self.glm_session_id, self.glm_http_requests).details
-        if self.native:
-            self.short_flow = 0 < len(self.trajectory) < 5
-            self.short_flow_reason = self._short_reason() if self.short_flow else None
+        from .postprocess import flow_classification
+        self.short_flow, self.short_flow_reason = flow_classification(len(self.trajectory))
         if self._v2() and not getattr(self,'collection_ending',None):
             original_stop=self.stop_reason
             budget_prefix=(original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
@@ -2301,8 +2466,9 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                         text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
                 else:
                     from .banded_plan import choice_schema
+                    from .direct_article import protocol_schema
                     response = await asyncio.to_thread(gateway.call_message, job, prompt['protocol'],
-                        text_payload, choice_schema(grounded, inherited=prompt['protocol']=='webcollect-banded-conditional-plan-8'), grounded_choice=grounded, content_envelope=('single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
+                        text_payload, protocol_schema(choice_schema(grounded, inherited=prompt['protocol']=='webcollect-banded-conditional-plan-8'),prompt.get('evidence_contract'),completion=prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1'), grounded_choice=grounded, content_envelope=('single-json-commentary-1' if prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1' else 'single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
                 ledger.finish(job, result=response)
                 return response
             response = await asyncio.to_thread(gateway.call_tool, job, protocol,
