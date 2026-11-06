@@ -456,7 +456,19 @@ def terminal_outcome(task, record, final_state):
     return 'success', description
 
 
-def derive(task, record, delivery, ids, manifest):
+def _write_delivery_bytes(path, data):
+    """Create-or-identical binary write; a failed derivation's own bytes may
+    be rewritten only when they are exactly the bytes about to be written."""
+    path = Path(path)
+    if path.exists():
+        if path.read_bytes() == data:
+            return
+        raise ValueError('交付文件已存在且内容不同，不能覆盖：' + path.name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def derive(task, record, delivery, ids, manifest, *, resume=False):
     """Build the complete delivery sample from the raw execution; no IO models."""
     from .collect import chinese_ratio, describe_change, observed_frame_description
     from .task_contract import narrative_evidence, canonical_sha
@@ -487,12 +499,13 @@ def derive(task, record, delivery, ids, manifest):
     if completion_status == 'failed':
         return {**result, 'status': 'terminal_failed', 'completion_status': 'failed',
                 'final_result': final_result}
-    # Require a fresh destination, including on reprocessing after failure.
-    # Raw files and an earlier partial/complete delivery can never be replaced.
-    if native and delivery.exists():
+    # Require a fresh destination on the first derivation. A recorded failed
+    # derivation may continue in place: every write below refuses differing
+    # bytes, so the same sealed raw can only reproduce identical delivery.
+    if native and delivery.exists() and not resume:
         raise FileExistsError('后加工必须使用新目录，不能覆盖原交付或失败派生：' + str(delivery))
-    (delivery / 'images').mkdir(parents=True, exist_ok=not native)
-    (delivery / 'ui_tree').mkdir(exist_ok=not native)
+    (delivery / 'images').mkdir(parents=True, exist_ok=True)
+    (delivery / 'ui_tree').mkdir(parents=True, exist_ok=True)
     instruction = natural_instruction(task, record, effective)
     steps = []
     ratios = []
@@ -515,7 +528,7 @@ def derive(task, record, delivery, ids, manifest):
         # Delivery frames bind the pre-action observation: the state each
         # recorded action actually acted upon (audit_capture semantics).
         image_path = f'images/step_{index:03}.png'
-        (delivery / image_path).write_bytes(
+        _write_delivery_bytes(delivery / image_path,
             Path(record['observations'][row['before_observation_id']]['evidence']['image']['path']).read_bytes())
         ratios.append(chinese_ratio(before.get('visible_text', '')))
         write_json_file(delivery / f'ui_tree/step_{index:03}.json',
@@ -570,7 +583,7 @@ def derive(task, record, delivery, ids, manifest):
     final_timestamp = (datetime.fromtimestamp(final_ns / 1e9, timezone.utc).isoformat()
                        if isinstance(final_ns, int) else terminal_fallback_timestamp(record))
     final_image = f'images/step_{effective + 1:03}.png'
-    (delivery / final_image).write_bytes(
+    _write_delivery_bytes(delivery / final_image,
         Path(record['observations'][final_id]['evidence']['image']['path']).read_bytes())
     write_json_file(delivery / f'ui_tree/step_{effective + 1:03}.json',
                     {'image_path': final_image, 'screen_resolution': final_state['screen_resolution'],
@@ -724,7 +737,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         # terminal complete numbering, capture summaries and sealed receipts.
         # Raw journal bytes and their original order remain unchanged.
         record = {**record, 'trajectory': effective_trajectory(record)}
-        derived = derive(task, record, delivery_root, ids, manifest)
+        derived = derive(task, record, delivery_root, ids, manifest, resume=bool(prior))
     except Exception as error:  # noqa: BLE001 - recorded verbatim, raw stays intact
         failure = {'schema_version': VERSION, 'derivation': version, 'status': 'processing_failed',
                    'error_type': type(error).__name__, 'error': str(error),
@@ -744,127 +757,142 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                                  'sha256': file_sha(evidence_root / f'derived-failed-{version:02}.json')}
         _append_derivation(derivations_path, row)
         return row
-    # Success path: project raw steps (actions already written live by the
-    # session; the terminal complete record is projected here), identity and
-    # the sealed delivery receipt.
-    from .closing_policy import enabled as v2
-    projection_root.mkdir(parents=True, exist_ok=True)
-    if prefix_end_step is not None:
-        prefix_projection=exclusive(evidence_root/f'trusted-prefix-projection-{version:02}.json',
-            {'protocol':record['trusted_prefix']['protocol'],'directory':projection_root.name,'binding':record['trusted_prefix']})
-    if v2(task) or prefix_end_step is not None:
-        # Project verified prefix copies only. Failed/unverified tail files stay
-        # in action-attempts and remain bound by the raw attempt journal.
-        for number,row in enumerate(record['trajectory'],1):
-            with (projection_root/f'step_{number:03}.json').open('xb') as stream:
-                stream.write(Path(row['raw_step']['path']).read_bytes())
-    final_raw = _write_terminal_step(projection_root, record, ids)
-    # The capture audit re-derives the per-step target ground truth from the
-    # same raw steps and compares it to this manifest; write it from those
-    # identical sources so the delivered sample carries the original truth.
-    ground_truth = []
-    for number in range(1, final_raw['step_id'] + 1):
-        step_path = projection_root / f'step_{number:03}.json'
-        if not step_path.exists():
-            continue
-        step_raw = load_json(step_path)
-        target = step_raw.get('target_element')
-        if target:
-            ground_truth.append({'step_id': step_raw['step_id'], 'element_id': target['element_id'],
-                                 'text': target['text'], 'bbox': target['bbox']})
-    write_json_file(projection_root / 'ground_truth.json', ground_truth)
-    validation_errors = []
-    for validate in validators:
-        validation_errors.extend(validate(delivery_root) or [])
-    if validation_errors:
-        row = {'schema_version': VERSION, 'derivation': version, 'status': 'delivery_rejected',
-               'effective_steps': derived['effective_steps'],
-               'errors': validation_errors, 'browser_calls': 0, 'model_calls': 0}
-        exclusive(evidence_root / f'derived-failed-{version:02}.json', row)
-        row = {**row, 'record_ref': {'path': str((evidence_root / f'derived-failed-{version:02}.json').resolve()),
-                                     'sha256': file_sha(evidence_root / f'derived-failed-{version:02}.json')}}
-        _append_derivation(derivations_path, row)
-        return row
-    ground_truth = []
-    for index, row in enumerate(record['trajectory'], 1):
-        raw = load_json(row['raw_step']['path'])
-        if raw.get('target_element'):
-            target = raw['target_element']
-            ground_truth.append({'step_id': index, 'element_id': target['element_id'],
-                                 'text': target['text'], 'bbox': target['bbox']})
-    write_json_file(projection_root / 'ground_truth.json', ground_truth)
-    language = {key: derived[key] for key in ('minimum_chinese_character_ratio',
-        'chinese_ratio_diagnostic_only', 'language_policy', 'language_review')}
-    write_json_file(evidence_root / 'capture_summary.json',
-        {'snapshot_source': 'browser_dom', 'capture_count': len(record['trajectory']) + 1,
-         **language,
-         'human_review': 'pending', 'agent_visual_review': 'pending',
-         'task_id': task['task_id'], 'protocol': REACT_VERSION,
-         'preparation_policy': 'content-preparation-v1', 'preparation_actions': 0,
-         'preparation_scrolls': 0})
-    write_json_file(evidence_root / 'task_contract.json',
-        {'schema_version': 'webcollect-task-contract-evidence-1',
-         'task_id': task['task_id'], 'task_version': task['task_version'],
-         'task_sha256': object_sha256({k: v for k, v in task.items() if not k.startswith('_')}),
-         'machine_status': 'PASS', 'semantic_status': 'REVIEW_REQUIRED',
-         'business_completion': 'NOT_CLAIMED', 'fragment': task['fragment'],
-         'review_binding': {'annotation_sha256': file_sha(delivery_root / 'annotation.json')}})
-    if task.get('pilot_identity') is not None:
-        from .production_identity import actual_proof
-        raws = [load_json(row['raw_step']['path']) for row in record['trajectory']] + [final_raw]
-        write_json_file(evidence_root / 'pilot_identity.json',
-                        {**actual_proof(task, raws),
-                         'annotation_sha256': file_sha(delivery_root / 'annotation.json')})
-    derived_record = {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
-        **language,
-        'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
-        'short_flow_reason': derived.get('short_flow_reason'),
-        'instruction': derived['instruction'], 'final_result': derived['final_result'],
-        'stop_reason': record['terminal'].get('stop_reason'),
-        'source_mapping': derived['source_mapping'],
-        'structural_report': {'structural_pass': derived['structural_report']['structural_pass'],
-                              'rule_version': derived['structural_report']['rule_version']},
-        'browser_calls': 0, 'model_calls': 0}
-    write_json_file(evidence_root / 'completion-evidence.json', completion_evidence(record))
-    derived_ref = exclusive(evidence_root / 'derived.json', derived_record)
-    sample_files = {p.relative_to(delivery_root).as_posix(): file_sha(p)
-                    for p in sorted(delivery_root.rglob('*')) if p.is_file()}
-    # The append-only derivation ledger and the attempt close-out feedback
-    # receipt are written after the seal by design; the frozen capture hash
-    # never covers them.
-    post_seal = ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl',
-                 'planning-feedback-collected_pending_review.json')
-    capture_files = {p.relative_to(evidence_root).as_posix(): file_sha(p)
-                     for p in sorted(evidence_root.rglob('*')) if p.is_file()
-                     and p.name not in post_seal}
-    saved = {'attempt_id': ids.get('attempt_id'), 'sample_id': ids['sample_id'],
-             'sample_files_sha256': sample_files, 'capture_files_sha256': capture_files,
-             'semantic_review': 'REVIEW_REQUIRED',
-             'raw_execution': {'protocol': REACT_VERSION,
-                               **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
-                               **({'goal_evidence':deepcopy(record['terminal']['goal_evidence'])} if record['terminal'].get('goal_evidence') else {}),
-                               **({'collection_ending':deepcopy(record['terminal']['collection_ending'])} if record['terminal'].get('collection_ending') else {}),
-                               **({'stop_details':record['terminal']['stop_details']} if 'stop_details' in record['terminal'] else {}),
-                               'receipt': record['receipt']['terminal'],
-                               'stop_reason': record['terminal'].get('stop_reason'),
-                               'effective_steps': derived['effective_steps'],
-                               'not_a_delivery_sample_by_itself': True},
-             'derivation': {'version': version, 'record': derived_ref,
-                            **({'prefix_projection':prefix_projection} if prefix_projection else {}),
-                            'source_mapping_sha256': object_sha256(derived['source_mapping'])}}
-    write_json_file(evidence_root / 'saved_sample.json', saved)
-    _append_derivation(derivations_path, {'schema_version': VERSION, 'derivation': version,
-        'status': 'derived_saved', 'effective_steps': derived['effective_steps'],
-        'saved_sample': {'path': str((evidence_root / 'saved_sample.json').resolve()),
-                         'sha256': file_sha(evidence_root / 'saved_sample.json')},
-        'record_ref': derived_ref})
-    return {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
+    try:
+        # Success path: project raw steps (actions already written live by the
+        # session; the terminal complete record is projected here), identity and
+        # the sealed delivery receipt.
+        from .closing_policy import enabled as v2
+        projection_root.mkdir(parents=True, exist_ok=True)
+        if prefix_end_step is not None:
+            prefix_projection=exclusive(evidence_root/f'trusted-prefix-projection-{version:02}.json',
+                {'protocol':record['trusted_prefix']['protocol'],'directory':projection_root.name,'binding':record['trusted_prefix']})
+        if v2(task) or prefix_end_step is not None:
+            # Project verified prefix copies only. Failed/unverified tail files stay
+            # in action-attempts and remain bound by the raw attempt journal.
+            for number,row in enumerate(record['trajectory'],1):
+                _write_delivery_bytes(projection_root/f'step_{number:03}.json',
+                    Path(row['raw_step']['path']).read_bytes())
+        final_raw = _write_terminal_step(projection_root, record, ids)
+        # The capture audit re-derives the per-step target ground truth from the
+        # same raw steps and compares it to this manifest; write it from those
+        # identical sources so the delivered sample carries the original truth.
+        ground_truth = []
+        for number in range(1, final_raw['step_id'] + 1):
+            step_path = projection_root / f'step_{number:03}.json'
+            if not step_path.exists():
+                continue
+            step_raw = load_json(step_path)
+            target = step_raw.get('target_element')
+            if target:
+                ground_truth.append({'step_id': step_raw['step_id'], 'element_id': target['element_id'],
+                                     'text': target['text'], 'bbox': target['bbox']})
+        write_json_file(projection_root / 'ground_truth.json', ground_truth)
+        validation_errors = []
+        for validate in validators:
+            validation_errors.extend(validate(delivery_root) or [])
+        if validation_errors:
+            row = {'schema_version': VERSION, 'derivation': version, 'status': 'delivery_rejected',
+                   'effective_steps': derived['effective_steps'],
+                   'errors': validation_errors, 'browser_calls': 0, 'model_calls': 0}
+            exclusive(evidence_root / f'derived-failed-{version:02}.json', row)
+            row = {**row, 'record_ref': {'path': str((evidence_root / f'derived-failed-{version:02}.json').resolve()),
+                                         'sha256': file_sha(evidence_root / f'derived-failed-{version:02}.json')}}
+            _append_derivation(derivations_path, row)
+            return row
+        ground_truth = []
+        for index, row in enumerate(record['trajectory'], 1):
+            raw = load_json(row['raw_step']['path'])
+            if raw.get('target_element'):
+                target = raw['target_element']
+                ground_truth.append({'step_id': index, 'element_id': target['element_id'],
+                                     'text': target['text'], 'bbox': target['bbox']})
+        write_json_file(projection_root / 'ground_truth.json', ground_truth)
+        language = {key: derived[key] for key in ('minimum_chinese_character_ratio',
+            'chinese_ratio_diagnostic_only', 'language_policy', 'language_review')}
+        write_json_file(evidence_root / 'capture_summary.json',
+            {'snapshot_source': 'browser_dom', 'capture_count': len(record['trajectory']) + 1,
+             **language,
+             'human_review': 'pending', 'agent_visual_review': 'pending',
+             'task_id': task['task_id'], 'protocol': REACT_VERSION,
+             'preparation_policy': 'content-preparation-v1', 'preparation_actions': 0,
+             'preparation_scrolls': 0})
+        write_json_file(evidence_root / 'task_contract.json',
+            {'schema_version': 'webcollect-task-contract-evidence-1',
+             'task_id': task['task_id'], 'task_version': task['task_version'],
+             'task_sha256': object_sha256({k: v for k, v in task.items() if not k.startswith('_')}),
+             'machine_status': 'PASS', 'semantic_status': 'REVIEW_REQUIRED',
+             'business_completion': 'NOT_CLAIMED', 'fragment': task['fragment'],
+             'review_binding': {'annotation_sha256': file_sha(delivery_root / 'annotation.json')}})
+        if task.get('pilot_identity') is not None:
+            from .production_identity import actual_proof
+            raws = [load_json(row['raw_step']['path']) for row in record['trajectory']] + [final_raw]
+            write_json_file(evidence_root / 'pilot_identity.json',
+                            {**actual_proof(task, raws),
+                             'annotation_sha256': file_sha(delivery_root / 'annotation.json')})
+        derived_record = {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
             **language,
             'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
+            'short_flow_reason': derived.get('short_flow_reason'),
+            'instruction': derived['instruction'], 'final_result': derived['final_result'],
             'stop_reason': record['terminal'].get('stop_reason'),
-            **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
-            'browser_calls': 0, 'model_calls': 0,
-            'saved_sample': str((evidence_root / 'saved_sample.json').resolve())}
+            'source_mapping': derived['source_mapping'],
+            'structural_report': {'structural_pass': derived['structural_report']['structural_pass'],
+                                  'rule_version': derived['structural_report']['rule_version']},
+            'browser_calls': 0, 'model_calls': 0}
+        write_json_file(evidence_root / 'completion-evidence.json', completion_evidence(record))
+        derived_ref = exclusive(evidence_root / 'derived.json', derived_record)
+        sample_files = {p.relative_to(delivery_root).as_posix(): file_sha(p)
+                        for p in sorted(delivery_root.rglob('*')) if p.is_file()}
+        # The append-only derivation ledger and the attempt close-out feedback
+        # receipt are written after the seal by design; the frozen capture hash
+        # never covers them.
+        post_seal = ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl',
+                     'planning-feedback-collected_pending_review.json')
+        capture_files = {p.relative_to(evidence_root).as_posix(): file_sha(p)
+                         for p in sorted(evidence_root.rglob('*')) if p.is_file()
+                         and p.name not in post_seal}
+        saved = {'attempt_id': ids.get('attempt_id'), 'sample_id': ids['sample_id'],
+                 'sample_files_sha256': sample_files, 'capture_files_sha256': capture_files,
+                 'semantic_review': 'REVIEW_REQUIRED',
+                 'raw_execution': {'protocol': REACT_VERSION,
+                                   **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
+                                   **({'goal_evidence':deepcopy(record['terminal']['goal_evidence'])} if record['terminal'].get('goal_evidence') else {}),
+                                   **({'collection_ending':deepcopy(record['terminal']['collection_ending'])} if record['terminal'].get('collection_ending') else {}),
+                                   **({'stop_details':record['terminal']['stop_details']} if 'stop_details' in record['terminal'] else {}),
+                                   'receipt': record['receipt']['terminal'],
+                                   'stop_reason': record['terminal'].get('stop_reason'),
+                                   'effective_steps': derived['effective_steps'],
+                                   'not_a_delivery_sample_by_itself': True},
+                 'derivation': {'version': version, 'record': derived_ref,
+                                **({'prefix_projection':prefix_projection} if prefix_projection else {}),
+                                'source_mapping_sha256': object_sha256(derived['source_mapping'])}}
+        write_json_file(evidence_root / 'saved_sample.json', saved)
+        _append_derivation(derivations_path, {'schema_version': VERSION, 'derivation': version,
+            'status': 'derived_saved', 'effective_steps': derived['effective_steps'],
+            'saved_sample': {'path': str((evidence_root / 'saved_sample.json').resolve()),
+                             'sha256': file_sha(evidence_root / 'saved_sample.json')},
+            'record_ref': derived_ref})
+        return {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
+                **language,
+                'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
+                'stop_reason': record['terminal'].get('stop_reason'),
+                **({'trusted_prefix':deepcopy(record['trusted_prefix'])} if record.get('trusted_prefix') else {}),
+                'browser_calls': 0, 'model_calls': 0,
+                'saved_sample': str((evidence_root / 'saved_sample.json').resolve())}
+    except Exception as error:  # noqa: BLE001 - recorded verbatim, raw stays intact
+        # The seal (projection, validators, identity proof, receipts) is an
+        # engineering processing stage: its failures append a derivation row
+        # instead of escaping, so the attempt settles recoverably and the
+        # sealed raw keeps every original byte.
+        failure = {'schema_version': VERSION, 'derivation': version, 'status': 'processing_failed',
+                   'error_type': type(error).__name__, 'error': str(error), 'stage': 'seal',
+                   'effective_steps': derived['effective_steps'],
+                   'browser_calls': 0, 'model_calls': 0}
+        exclusive(evidence_root / f'derived-failed-{version:02}.json', failure)
+        row = {**failure, 'record_ref': {'path': str((evidence_root / f'derived-failed-{version:02}.json').resolve()),
+                                         'sha256': file_sha(evidence_root / f'derived-failed-{version:02}.json')}}
+        _append_derivation(derivations_path, row)
+        return row
 
 
 def _append_derivation(path, row):

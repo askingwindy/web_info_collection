@@ -54,12 +54,32 @@ class RecoveryAdapterTests(unittest.TestCase):
                 verify_committed_samples(root, attempts)
 
     def test_quarantine_will_not_overwrite_existing_evidence(self):
+        """A repeated close-out verifies same-attempt bytes and continues; only a
+        real conflict keeps failing without overwriting anything."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'samples' / 'partial').mkdir(parents=True)
-            (root / 'rejected' / 'partial').mkdir(parents=True)
+            source = root / 'samples' / 'partial'
+            (source / 'images').mkdir(parents=True)
+            (source / 'annotation.json').write_text('partial delivery')
+            (source / 'images' / 'step_001.png').write_bytes(b'same-attempt-bytes')
+            destination = root / 'rejected' / 'partial'
+            (destination / 'images').mkdir(parents=True)
+            # The feedback receipt materialized the identical packaging file.
+            (destination / 'images' / 'step_001.png').write_bytes(b'same-attempt-bytes')
+            quarantine_interrupted(root, [{'sample_id': 'partial', 'status': 'rejected'}])
+            self.assertFalse(source.exists())
+            self.assertEqual((destination / 'annotation.json').read_text(), 'partial delivery')
+            self.assertEqual((destination / 'images' / 'step_001.png').read_bytes(), b'same-attempt-bytes')
+            # A same-name file with different bytes is a conflict, not a resume.
+            conflicting = root / 'samples' / 'other'
+            (conflicting / 'images').mkdir(parents=True)
+            (conflicting / 'images' / 'step_001.png').write_bytes(b'different-attempt-bytes')
+            (root / 'rejected' / 'other' / 'images').mkdir(parents=True)
+            (root / 'rejected' / 'other' / 'images' / 'step_001.png').write_bytes(b'original-rejected-bytes')
             with self.assertRaisesRegex(ValueError, '拒绝覆盖'):
-                quarantine_interrupted(root, [{'sample_id': 'partial', 'status': 'rejected'}])
+                quarantine_interrupted(root, [{'sample_id': 'other', 'status': 'rejected'}])
+            self.assertEqual((root / 'rejected' / 'other' / 'images' / 'step_001.png').read_bytes(),
+                             b'original-rejected-bytes')
 
 
 class CollectorIntegrationTests(unittest.IsolatedAsyncioTestCase):

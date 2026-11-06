@@ -256,7 +256,7 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(derived['status'], 'derived', derived)
         annotation = load_json(delivery / 'annotation.json')
         self.assertTrue(annotation['short_flow'])
-        self.assertIn('实际完成3个', annotation['short_flow_reason'])
+        self.assertIn('3 个有效业务操作', annotation['short_flow_reason'])
         self.assertEqual(annotation['completion_status'], 'success')
         self.assertNotIn('opaque-protocol-private', json.dumps(annotation))
         self.assertEqual(len(annotation['steps']), 4)

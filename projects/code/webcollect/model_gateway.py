@@ -283,8 +283,9 @@ def parse_decision_content(content, envelope):
             value={**value,'choice':'replan'};normalized=True
         if isinstance(value.get('choice'),str):
             # Execute only the explicitly selected operation. Draft plans and
-            # explanations attached to another choice remain in the raw reply.
-            used={'attempt_id','observation_id','choice'}|{
+            # explanations attached to another choice remain in the raw reply;
+            # the selected decision's one-sentence summary is protocol data.
+            used={'attempt_id','observation_id','choice','decision_summary'}|{
                 'replan':{'plan','citations'},'continue_plan':{'citations'},'finish_reading':{'reading_answer'},
                 'visual_yes':{'visual_evidence'}}.get(value['choice'],set())
             kept={k:v for k,v in value.items() if k in used}
@@ -298,11 +299,17 @@ def parse_decision_content(content, envelope):
 
 
 def branch_wire_schema(schema, prompt):
-    """Expose the existing selected-choice contract once, without inherited plan fields."""
+    """Expose the existing selected-choice contract once, without inherited plan fields.
+
+    The wire also carries the one-sentence decision_summary the native-tool
+    protocol already defines, so both dispatch paths offer the same field and
+    the same rules generate what the model sees and what the host validates.
+    """
     value=deepcopy(schema.get('oneOf',[schema])[0])
     props=value.get('properties',{})
     choices=[o['choice'] for o in prompt.get('options',[])]
     if 'choice' in props and choices:props['choice']={'enum':choices}
+    props.setdefault('decision_summary',{'type':'string','minLength':1,'maxLength':80})
     plan=props.get('plan',{})
     for alternative in plan.get('anyOf',[]):
         if alternative.get('type')=='object' and alternative.get('required')==['steps']:
@@ -511,7 +518,7 @@ class ModelGateway:
         if grounded_choice:
             prompt=json.loads(text)
             system += '\n本轮输出协议（字段只在这里定义一次）：\n'+json.dumps(branch_wire_schema(schema,prompt),ensure_ascii=False,separators=(',',':'))
-            system += '\ncontinue_plan 只执行 current_step 及原剩余计划；更改下一动作必须 replan。每个业务步骤必须给 action、purpose、expected 及动作参数。citations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}。finish_reading 是含 reading_answer 的分支决定，不是业务步骤。'
+            system += '\ncontinue_plan 只执行 current_step 及原剩余计划；更改下一动作必须 replan。每个业务步骤必须给 action、purpose、expected 及动作参数。citations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}。finish_reading 是含 reading_answer 的分支决定，不是业务步骤。decision_summary 一句话概括本轮决定，不输出推理过程。'
         adapter_version=('banded-plain-json-3' if content_envelope=='single-json-commentary-1' else 'banded-plain-json-2') if content_envelope else 'banded-plain-json-1'
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
                    'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,

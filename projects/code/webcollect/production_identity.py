@@ -57,6 +57,20 @@ def _normalized(value):
     return re.sub(r'\s+', '', value)
 
 
+def _contains_in_order(part, whole):
+    """Ordered containment: client hydration interleaves insertions, not reorder.
+
+    A frozen pre-hydration anchor (header injected before it, navigation or
+    table-of-contents entries inserted mid-sequence) remains present in the
+    hydrated observation in the original order. A replaced body or a different
+    article loses that order and must not corroborate.
+    """
+    if not part or len(part) > len(whole):
+        return False
+    cursor = iter(whole)
+    return all(character in cursor for character in part)
+
+
 def state_key(state, kind):
     """A second, evidence-derived collision route, never a visual verdict."""
     controls = sorted({(str(row.get('native_role', row.get('element_type', ''))),
@@ -139,13 +153,14 @@ def validate_identity(task, *, observed_states=None):
             from .dynamic_regions import enabled, projection
             if enabled(state) and state.get('document_identity'):
                 basis=state_key(projection(state),page['kind'])
-                corroborated=any(enabled(row) and row.get('url')==state.get('url')
+                corroborated=any(enabled(row) and page_url(row.get('url'))==page_url(state.get('url'))
                     and row.get('document_identity')==state['document_identity']
                     and row.get('title')==state.get('title')
                     and state_key(projection(row),page['kind'])==basis for row in observed_states)
         # A hydrated navigation bar may add controls without replacing the
-        # article. New candidate ReAct tasks can corroborate the complete
-        # original visible content in the very same browser document.
+        # article. New candidate ReAct tasks corroborate the complete original
+        # visible content in the very same browser document; hydration may
+        # interleave insertions, so containment is ordered, not contiguous.
         if (not corroborated and page['kind'] == 'content' and 'candidate_binding' in task
                 and task.get('fragment', {}).get('decision_protocol') == 'webcollect-react-native-3'
                 and state.get('document_identity')):
@@ -154,7 +169,8 @@ def validate_identity(task, *, observed_states=None):
                 page_url(row['url']) in aliases
                 and row.get('document_identity') == state['document_identity']
                 and _normalized(row.get('title', '')) == _normalized(state.get('title', ''))
-                and original in _normalized(row.get('visible_text', '')) for row in observed_states)
+                and _contains_in_order(original, _normalized(row.get('visible_text', '')))
+                for row in observed_states)
         if (not corroborated and page['kind']=='content' and 'candidate_binding' in task
                 and task.get('fragment',{}).get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4')):
             from .action_stability import reading_projection

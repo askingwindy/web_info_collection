@@ -104,6 +104,50 @@ async def _wait_visible_readiness(page, timeout=8):
         await asyncio.sleep(min(.1,max(0,timeout-(time.monotonic()-started))))
 
 
+async def wait_hydration_stable(page, *, reference=None, timeout=6.0, interval=0.4):
+    """Bounded client-render (hydration) stability wait before freezing an anchor.
+
+    capture_readiness only covers document/fonts/images; a client-rendered page
+    may still insert its header/navigation after that. Two consecutive equal
+    DOM fingerprints — and, when freezing a captured frame, equality with that
+    reference — prove the frozen anchor is the page the session itself will
+    observe. Expiry is recorded honestly and the caller keeps the snapshot it
+    already holds; nothing waits forever and no entry is retried as a whole.
+    """
+    from .browser import observe as read_state, fingerprint
+    started = time.monotonic()
+    samples = []
+
+    def describe(state, elapsed):
+        return {'elapsed_seconds': round(elapsed, 3), 'dom_fingerprint': fingerprint(state),
+                'elements': len(state.get('elements') or []),
+                'visible_text_chars': len(state.get('visible_text') or '')}
+
+    current = await read_state(page)
+    samples.append(describe(current, time.monotonic() - started))
+    while True:
+        if time.monotonic() - started >= timeout:
+            return {'schema_version': 'webcollect-hydration-stability-wait-1', 'status': 'timeout',
+                    'elapsed_seconds': round(time.monotonic() - started, 3),
+                    'observations': samples, 'reference_match': None,
+                    'meaning': 'No two consecutive equal DOM fingerprints inside the bound; '
+                               'the already captured snapshot is retained as-is.'}
+        await asyncio.sleep(min(interval, max(0.0, timeout - (time.monotonic() - started))))
+        following = await read_state(page)
+        elapsed = time.monotonic() - started
+        stable = fingerprint(following) == fingerprint(current)
+        current = following
+        samples.append(describe(current, elapsed))
+        if stable:
+            matched = None if reference is None else fingerprint(current) == fingerprint(reference)
+            return {'schema_version': 'webcollect-hydration-stability-wait-1',
+                    'status': 'stable' if matched is not False else 'changed_after_capture',
+                    'elapsed_seconds': round(elapsed, 3), 'observations': samples,
+                    'reference_match': matched,
+                    'meaning': 'Two consecutive observations share one DOM fingerprint; '
+                               'reference_match states whether the frozen capture still equals it.'}
+
+
 async def inspect_page(page, task, directory, samples=3, interval_ms=400, url_check=None):
     """Inspect an already loaded page, without clicking, scrolling or playback changes.
 

@@ -86,8 +86,38 @@ def sample_hashes(sample):
             for p in sorted(sample.rglob('*')) if p.is_file()}
 
 
+def _merge_quarantined_sample(sample, destination):
+    """Complete a repeated close-out: verify same-attempt bytes, never overwrite.
+
+    The failure close-out may have materialized packaging files (feedback
+    image copies) under the destination before the move itself ran. Every
+    file present on both sides must be byte-equal; files only in the source
+    move in; any conflict keeps the attempt failed without touching bytes.
+    """
+    sample, destination = Path(sample), Path(destination)
+    for path in sorted(p for p in sample.rglob('*') if p.is_file()):
+        relative = path.relative_to(sample)
+        target = destination / relative
+        if target.exists():
+            if path.read_bytes() != target.read_bytes():
+                raise ValueError('隔离目录已有同名不同内容的文件，拒绝覆盖：' + str(target))
+            path.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(target))
+    for path in sorted((p for p in sample.rglob('*') if p.is_dir()), reverse=True):
+        path.rmdir()
+    sample.rmdir()
+
+
 def quarantine_interrupted(output, attempts):
-    """Move only rejected attempts, keeping finished samples where they belong."""
+    """Move only rejected attempts, keeping finished samples where they belong.
+
+    A destination that already exists is not automatically a conflict: the
+    crashed first close-out (or its feedback receipt) may have created the
+    same attempt's packaging files there. Verify-and-continue only on equal
+    bytes; a real conflict still fails without overwriting anything.
+    """
     output = Path(output)
     for attempt in attempts:
         if attempt['status'] not in ('rejected', 'interrupted'):
@@ -97,8 +127,9 @@ def quarantine_interrupted(output, attempts):
             destination = output / 'rejected' / attempt['sample_id']
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
-                raise ValueError('中断样本的隔离目录已存在，拒绝覆盖：' + str(destination))
-            shutil.move(str(sample), str(destination))
+                _merge_quarantined_sample(sample, destination)
+            else:
+                shutil.move(str(sample), str(destination))
 
 
 def verify_committed_samples(output, attempts):
@@ -805,7 +836,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 write_json(failure, {'error': 'runner cancelled; partial trajectory is not success',
                                     'timestamp': now(), 'attempt_id': attempt['attempt_id'],
                                     'task_id': attempt['task_id'], 'failure_class': 'interrupted'})
-                            quarantine_interrupted(output, [{**attempt, 'status': 'interrupted'}])
+                            # Settle the ledger first: a cleanup failure must not
+                            # mask the primary outcome or strand a running row.
                             try:
                                 store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
                                     'rejected', failure_class='interrupted', root_cause='runner_cancelled',
@@ -816,6 +848,15 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                     raise
                                 # A revoked/expired lease must never be revived
                                 # merely to write a cancellation outcome.
+                            else:
+                                try:
+                                    quarantine_interrupted(output, [{**attempt, 'status': 'interrupted'}])
+                                except Exception as cleanup_error:
+                                    checkpoint_json(evidence / 'closeout-cleanup-error.json',
+                                        {'primary_error': 'runner cancelled; partial trajectory is not success',
+                                         'cleanup_error_type': type(cleanup_error).__name__,
+                                         'cleanup_error': str(cleanup_error), 'ledger_settled': True,
+                                         'not_business_success_evidence': True})
                         raise
                     except Exception as error:
                         # If success already committed, never reinterpret it as a failed attempt.
@@ -831,10 +872,23 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 'failure_class': classify_failure(error)})
                         from .agent_feedback import save_attempt_feedback
                         feedback_ref = save_attempt_feedback(evidence, attempt, 'rejected', str(error))
-                        quarantine_interrupted(output, [{**attempt, 'status': 'rejected'}])
+                        # The attempt ledger settles before any file relocation:
+                        # a later quarantine crash (e.g. a destination already
+                        # materialized by the feedback receipt) must not strand
+                        # this attempt as running. Cleanup errors are recorded
+                        # separately and never mask the primary failure.
                         store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
                             'rejected', failure_class=classify_failure(error), root_cause=_root_cause(error),
                             evidence=_evidence(failure) + [feedback_ref])
+                        try:
+                            quarantine_interrupted(output, [{**attempt, 'status': 'rejected'}])
+                        except Exception as cleanup_error:
+                            checkpoint_json(evidence / 'closeout-cleanup-error.json',
+                                {'primary_error': str(error),
+                                 'primary_failure_class': classify_failure(error),
+                                 'cleanup_error_type': type(cleanup_error).__name__,
+                                 'cleanup_error': str(cleanup_error), 'ledger_settled': True,
+                                 'not_business_success_evidence': True})
                         if classify_failure(error) == 'program':
                             store.set_scope_paused(True, 'Program validation failure; preserve rejected attempt and stop before another allocation')
                 try:

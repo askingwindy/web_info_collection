@@ -111,7 +111,8 @@ PLAN = obj({'attempt_id':text(200),'observation_id':text(200),'band':{'enum':['f
            ['attempt_id','observation_id','band','goal','steps','finish_when','replan_when'])
 VISUAL = obj({'quotes':{'type':'array','minItems':1,'maxItems':3,'items':text(160)},
               'visible_row_count':{'type':'integer','minimum':1,'maximum':100}})
-CHOICE = obj({'attempt_id':text(200),'observation_id':text(200),'choice':text(40),'plan':PLAN,'visual_evidence':VISUAL}, ['attempt_id','observation_id','choice'])
+CHOICE = obj({'attempt_id':text(200),'observation_id':text(200),'choice':text(40),
+              'decision_summary':text(80),'plan':PLAN,'visual_evidence':VISUAL}, ['attempt_id','observation_id','choice'])
 
 
 def plan_schema(grounded=False, *, wire=False, pending_checks=False):

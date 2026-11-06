@@ -578,10 +578,18 @@ class RuntimeStore:
         pool = CandidatePool(original['pool'])
         claim = pool.get_claim(binding['claim_id'])
         cb = claim.get('binding') or {}
-        if (cb.get('attempt_id') != row['attempt_id'] or Path(cb['registry']).resolve() != self.registry
-                or Path(cb['ledger']).resolve() != Path(recovery['model_ledger']).resolve()
+        import time as _time
+        finished_at = closed.get('finished')
+        # The original runner's own return record proves the worker is gone:
+        # either an explicit normal-return receipt or a recorded finish time
+        # that has already passed (the crashed worker cannot still be running).
+        closed_ok = (closed.get('claim_id') == claim['claim_id']
+                     and (closed.get('returned_normally') is True
+                          or (isinstance(finished_at, (int, float)) and finished_at <= _time.time())))
+        if (cb.get('attempt_id') != row['attempt_id'] or Path(cb.get('registry')).resolve() != self.registry
+                or Path(cb.get('ledger')).resolve() != Path(recovery['model_ledger']).resolve()
                 or raw != Path(cb['output'])/'execution/capture/evidence'/row['sample_id']/'raw'
-                or closed.get('claim_id') != claim['claim_id'] or closed.get('returned_normally') is not True):
+                or not closed_ok):
             raise ValueError('Recovery differs from original claim, closed process, model account or raw')
         with pool.pool.connect() as db:
             latest = db.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1', (claim['candidate_id'],)).fetchone()
@@ -690,6 +698,120 @@ class RuntimeStore:
                 register_capture(con, row)
             self._domain_finished(con, row, current, policy)
             self._event(con, 'attempt_finished', current, {'outcome': outcome, 'failure_class': failure_class, 'root_cause': root_cause, 'evidence': evidence, **transition}, row['task_key'], attempt_id)
+            return self._view(saved)
+
+    def settle_crashed_derivation_closeout(self, attempt_id, *, raw_receipt, failure, exception_chain, model_ledger, now=None):
+        """Complete a crashed close-out whose derivation seal failed mid-way.
+
+        The original failure.json, raw files and the crashed worker's receipts
+        stay intact. This records exactly the terminal outcome the crashed
+        close-out would have written (rejected / program /
+        derivation_processing_failed: ...), appends the derivation-ledger row
+        the crash skipped, and never saves a sample: the sealed raw is then
+        re-derived through the normal offline derivation-recovery entry.
+        """
+        from .batch_core import load_json, file_sha
+        from .postprocess import session_record, effective_trajectory, VERSION as DERIVATION_VERSION, _append_derivation
+        from .agent_controller import exclusive
+        from .direct_article import verify_record
+        from .candidate_contract import validate_task_binding
+        from site_planner.candidate_pool import CandidatePool
+        verify_evidence([raw_receipt, failure, exception_chain])
+        raw = Path(raw_receipt['path']).resolve().parent
+        if (Path(raw_receipt['path']).name != 'raw-receipt.json'
+                or Path(failure['path']).resolve() != raw.parent/'failure.json'):
+            raise ValueError('Original raw-receipt and primary failure paths required')
+        record = session_record(raw)
+        primary = load_json(failure['path'])
+        chain = load_json(exception_chain['path'])
+        chain_trace = str(chain.get('traceback') or '')
+        root_cause = 'derivation_processing_failed: ' + str(primary.get('error') or '')
+        # The preserved chain of a crashed close-out carries the primary
+        # derivation error in its traceback and ends on the cleanup error that
+        # actually crashed the close-out; both are recorded, never merged.
+        cleanup_error = str(chain.get('reason') or '') or None
+        if (primary.get('attempt_id') != attempt_id or not primary.get('error')
+                or str(primary['error']) not in chain_trace
+                or 'postprocess.py' not in chain_trace or 'in process' not in chain_trace):
+            raise ValueError('Crashed close-out must be corroborated by its preserved exception chain')
+        current = timestamp(now)
+        con = self._connect(readonly=True)
+        try:
+            row = self._attempt(con, attempt_id)
+            plan = json.loads(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=? AND plan_sha256=?',
+                                          (row['scope_id'], row['plan_sha256'])).fetchone()[0])
+        finally:
+            con.close()
+        execution_task = {**json.loads(row['task_json']), '_plan_schema_version': plan['schema_version'],
+                          'require_public_origin': True}
+        if (row['status'] != 'running' or row['started_at'] is None or row['lease_expires_at'] > current
+                or record['boundary']['attempt_id'] != attempt_id
+                or record['task'] != execution_task
+                or record['terminal'].get('stop_reason') != 'ready'
+                or record['terminal'].get('unknown') is not False):
+            raise ValueError('Only an expired running attempt with a sealed ready execution can settle')
+        effective = effective_trajectory(record)
+        if len(effective) != record['terminal'].get('actual_actions'):
+            raise ValueError('Sealed dispatch count differs from verified effects')
+        verify_record(record)
+        binding = validate_task_binding(record['task'])
+        original_claim = load_json(binding['claim_reference']['path'])
+        claim = CandidatePool(original_claim['pool']).get_claim(binding['claim_id'])
+        cb = claim.get('binding') or {}
+        if (cb.get('attempt_id') != attempt_id or Path(cb.get('registry','')).resolve() != self.registry
+                or Path(cb.get('ledger','')).resolve() != model_ledger.path.resolve()
+                or raw != Path(cb['output'])/'execution/capture/evidence'/row['sample_id']/'raw'):
+            raise ValueError('Original claim, attempt, registry, raw and model ledger must match')
+        with model_ledger.connect() as con:
+            requests = list(con.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (attempt_id,)))
+        if not requests or any(r['state'] not in ('succeeded', 'invalid_response') for r in requests):
+            raise ValueError('Unsettled original model request prevents settlement')
+        evidence_root = raw.parent
+        derivations_path = evidence_root / 'derivations.jsonl'
+        prior = []
+        if derivations_path.is_file():
+            prior = [json.loads(line) for line in derivations_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+        if any(r.get('status') == 'derived_saved' for r in prior):
+            raise ValueError('A sealed delivery already exists; use its own recovery path')
+        version = len(prior) + 1
+        receipt = {'schema_version': DERIVATION_VERSION, 'derivation': version, 'status': 'processing_failed',
+                   'error_type': str(chain.get('type') or 'ValueError'), 'error': str(primary['error']),
+                   'stage': 'seal', 'effective_steps': len(effective),
+                   'browser_calls': 0, 'model_calls': 0,
+                   'materialized_by': 'settle_crashed_derivation_closeout',
+                   'original_failure': failure, 'exception_chain': exception_chain}
+        derived_failed = evidence_root / f'derived-failed-{version:02}.json'
+        receipt_ref = exclusive(derived_failed, receipt)
+        settlement = evidence_root / 'derivation-failure.json'
+        settlement_ref = exclusive(settlement, {'schema_version': 'webcollect-crashed-derivation-settlement-1',
+            'attempt_id': attempt_id, 'failure_class': 'program', 'error': root_cause,
+            'settled_root_cause': root_cause, 'cleanup_error': cleanup_error,
+            'original_failure': failure,
+            'exception_chain': exception_chain, 'materialized_derivation_row': receipt_ref,
+            'settled_requests': [{'id': r['id'], 'state': r['state']} for r in requests],
+            'sample_saved': False})
+        with self._transaction() as con:
+            row = self._attempt(con, attempt_id)
+            if (row['status'] != 'running' or row['lease_expires_at'] > timestamp(now)):
+                raise ValueError('Attempt changed during settlement')
+            if con.execute('SELECT 1 FROM m4_attempts WHERE task_key=? AND attempt_id<>? AND created_at>=?',
+                           (row['task_key'], attempt_id, row['created_at'])).fetchone():
+                raise ValueError('A successor attempt prevents settlement')
+            _append_derivation(derivations_path, {**receipt, 'record_ref': receipt_ref})
+            refs = json.loads(row['evidence_json'] or '[]')
+            refs = refs + [r for r in (raw_receipt, failure, exception_chain, receipt_ref, settlement_ref) if r not in refs]
+            con.execute("UPDATE m4_attempts SET status='rejected',finished_at=?,failure_class='program',root_cause=?,evidence_json=? WHERE attempt_id=?",
+                        (current, root_cause, canonical(refs), attempt_id))
+            saved = self._attempt(con, attempt_id)
+            policy = self._policy(con)
+            transition = self._failure_transition(con, saved, current, policy)
+            self._domain_finished(con, saved, current, policy)
+            self._event(con, 'crashed_derivation_closeout_settled', current,
+                        {'original_failure': failure, 'exception_chain': exception_chain,
+                         'raw_receipt': raw_receipt, 'settled_root_cause': root_cause,
+                         'materialized_derivation_row': receipt_ref, 'settlement': settlement_ref,
+                         'settled_request_ids': [r['id'] for r in requests], **transition},
+                        row['task_key'], attempt_id)
             return self._view(saved)
 
     def reconcile_sealed_rejection(self, attempt_id, *, raw_receipt, failure, process_exit, model_ledger, cancellation_audit=None, rejected_focus_audit=None, now=None):

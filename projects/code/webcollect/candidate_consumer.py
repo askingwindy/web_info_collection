@@ -126,8 +126,11 @@ async def first_observation(ledger, claim, root):
                 context=await browser.new_context(viewport={'width':1280,'height':720},locale='zh-CN',service_workers='block',accept_downloads=False)
                 page=await context.new_page()
                 await BatchNavigation(ledger,job).goto(page,task['site_uri'],purpose='candidate-first-observation')
-                from .preflight import _wait_visible_readiness
+                from .preflight import _wait_visible_readiness, wait_hydration_stable
                 exclusive(root/'first-readiness.json',await _wait_visible_readiness(page))
+                # Same bounded hydration wait as the entry session: the frozen
+                # anchor must be the page this session will actually observe.
+                exclusive(root/'first-hydration.json',await wait_hydration_stable(page))
                 captured=await capture(page)
                 try:
                     layouts=await asyncio.wait_for(page.evaluate('''() => [...document.querySelectorAll('input,textarea,select')].slice(0,32).map(e=>({
@@ -488,11 +491,25 @@ async def entry_session(ledger, pool, claim, root):
                         break
                     try:
                         await verify_execution_state(page, captured['state'])
-                        break
                     except EvidenceStale as error:
                         exclusive(root/(prefix+'-stale.json'), {'reason':str(error), 'capture':getattr(error,'capture',None)})
                         if refresh == 2:
                             raise
+                        continue
+                    # Client hydration may still insert header/navigation after
+                    # capture readiness. Freeze the anchor only once the live
+                    # DOM reproduces it; a bounded timeout keeps the snapshot.
+                    from .preflight import wait_hydration_stable
+                    hydration = await wait_hydration_stable(page, reference=captured['state'])
+                    exclusive(root/(prefix+'-hydration.json'), hydration)
+                    if hydration['status'] == 'stable':
+                        break
+                    if refresh < 2:
+                        continue
+                    exclusive(root/'first-hydration-timeout.json', {
+                        'status': hydration['status'], 'wait_receipt': hydration,
+                        'anchor_retained': True, 'retries_exhausted': True})
+                    break
                 visits = [v['id'] for v in ledger.visits() if v['job_id']==jid]
                 ledger.finish(job, result=anchor)
                 observed = True
