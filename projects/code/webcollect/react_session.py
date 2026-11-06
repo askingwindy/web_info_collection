@@ -185,11 +185,23 @@ def describe_goal(goal):
     return '，'.join(parts) if parts else None
 
 
+EFFORT_LEVELS = ('low', 'high', 'max')
+
+
+def validate_effort_profile(profile):
+    """glm-5.3 cannot disable thinking (provider error 1210); low/high/max are
+    the only dispatch levels, so a frozen profile maps each phase to one."""
+    if (not isinstance(profile, dict) or set(profile) != {'first_plan', 'branch'}
+            or any(profile[key] not in EFFORT_LEVELS for key in ('first_plan', 'branch'))):
+        raise ValueError('reasoning effort profile must map first_plan/branch to low/high/max')
+    return {'first_plan': profile['first_plan'], 'branch': profile['branch']}
+
+
 def build_url_task(*, url, task_version, site_category=None, app_name=None, task_family='navigation-reading',
                    allowed_actions=None, instruction=None, site_uri=None, budgets=None, pilot_identity=None,
                    registration='1', decision_protocol=NATIVE_VERSION, allow_controlled_exception=False, skip_wechat_articles=False,
                    reference_protocol=REFERENCE_PROTOCOL, ending_policy=None, plan_protocol=None, action_stability_protocol=None,
-                   trusted_prefix_protocol=None):
+                   trusted_prefix_protocol=None, effort_profile=None):
     """Host-built identity for a URL-only entry; no model call, no frozen plan.
 
     `registration` is the explicit re-registration version: it enters the
@@ -275,10 +287,16 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         if action_stability_protocol not in focus_versions or plan_protocol is None:
             raise ValueError('Unknown action stability protocol')
         for part in (spec, task['fragment']): part['action_stability_protocol'] = action_stability_protocol
+    if effort_profile is not None:
+        if plan_protocol is None or decision_protocol != NATIVE_VERSION:
+            raise ValueError('reasoning effort profile requires a native conditional-plan task')
+        frozen_profile = validate_effort_profile(effort_profile)
+        for part in (spec, task['fragment']): part['reasoning_effort_profile'] = deepcopy(frozen_profile)
     if plan_protocol is not None:
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
     if trusted_prefix_protocol is not None:
-        if trusted_prefix_protocol != 'webcollect-trusted-prefix-1':
+        from .trusted_prefix import RULES as PREFIX_RULES
+        if trusted_prefix_protocol not in PREFIX_RULES:
             raise ValueError('Unknown trusted prefix protocol')
         for part in (spec, task['fragment']): part['trusted_prefix_protocol'] = trusted_prefix_protocol
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
@@ -304,9 +322,10 @@ def build_candidate_task(capability, task_version, budgets=None):
     from .closing_policy import VERSION as CLOSE_POLICY
     from .banded_plan import VERSION as PLAN_PROTOCOL
     from .action_stability import POST_VERSION as FOCUS_PROTOCOL
+    from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
     task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
         plan_protocol=PLAN_PROTOCOL, action_stability_protocol=FOCUS_PROTOCOL,
-        trusted_prefix_protocol='webcollect-trusted-prefix-1',
+        trusted_prefix_protocol=PREFIX_PROTOCOL,
         site_category=capability['site_category'],
         app_name=candidate_name,
         task_family=(capability.get('task_families') or ['navigation-reading'])[0],
@@ -405,8 +424,13 @@ def validate_task(task):
     from .action_stability import VERSIONS as focus_versions
     if fragment.get('action_stability_protocol') not in (None, *focus_versions):
         raise ValueError('Unknown frozen action stability protocol')
-    if fragment.get('trusted_prefix_protocol') not in (None, 'webcollect-trusted-prefix-1'):
+    if fragment.get('trusted_prefix_protocol') not in (None, 'webcollect-trusted-prefix-1', 'webcollect-trusted-prefix-2'):
         raise ValueError('Unknown frozen trusted prefix protocol')
+    if fragment.get('reasoning_effort_profile') is not None:
+        if not native or not fragment.get('plan_protocol'):
+            raise ValueError('reasoning_effort_profile requires a native conditional-plan task')
+        if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
+            raise ValueError('Invalid frozen reasoning effort profile')
     if fragment.get('plan_protocol') and fragment.get('ending_policy')!='webcollect-five-eight-attempt-ending-2':
         raise ValueError('Conditional plans require the frozen V2 atomic ending policy')
     from .reading_progress import END_POLICY
@@ -580,16 +604,19 @@ class ReactSession:
             {'type': dialog.type, 'message': dialog.message}))
         self.binding = exclusive(self.root / 'boundary.json',
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
-             'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol')==PLAN_VERSION) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
+             'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-8',PLAN_VERSION)) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
              'decision_protocol': self.task['fragment']['decision_protocol'] if self.native else REACT_VERSION,
-             **({'attempt_id': self.attempt_id, 'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort','low')} if contracted else {}),
+             **({'attempt_id': self.attempt_id} if contracted else {}),
+             **({'first_plan_reasoning_effort': getattr(choose,'first_plan_reasoning_effort',None),
+                 'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort',None)} if self.native else {}),
              **({'first_plan_timeout_seconds': choose.first_plan_timeout_seconds}
                 if getattr(choose,'first_plan_timeout_seconds',None) else {}),
              **({'tool_schema_sha256': object_sha256(protocol_schema(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol')==PLAN_VERSION),contract_for(self.task)) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
                     self.task['fragment'].get('reference_protocol'))),
-                 'effective_action_rule': RULE_VERSION, 'reasoning_effort': 'max',
-                 **({'first_plan_reasoning_effort': choose.first_plan_reasoning_effort}
-                    if getattr(choose, 'first_plan_reasoning_effort', 'max') != 'max' else {})} if self.native else {})})
+                 'effective_action_rule': RULE_VERSION,
+                 # The recorded effort is the value actually dispatched, not the
+                 # frozen config default; per-phase values live in the fields above.
+                 'reasoning_effort': getattr(choose,'first_plan_reasoning_effort',None) or 'max'} if self.native else {})})
         # The append-only trajectory ledger exists from the start so the raw
         # receipt can bind it even for a zero-action honest closure.
         (self.root / 'trajectory.jsonl').touch(exist_ok=False)
@@ -970,14 +997,21 @@ class ReactSession:
                     self.observation_records[self.trajectory[-1]['after_observation_id']]['evidence'],self.current['evidence'],
                     target_ids=[(r.get('target') or {}).get('control_id') for r in self.trajectory],unverified_tail=tail_dispatches)
                 safe=terminal_bridge['proof']['accepted'] is True
-        if safe and tail_dispatches:
+        # Tail dispatches fully accounted for by definite attempt outcomes
+        # (known zero effect or definite failure) are not unknown effects;
+        # model-request UNKNOWN and browser-effect UNKNOWN stay separate facts.
+        accounted = sum(a['actual_dispatches_delta'] for a in attempts)
+        tail_known = (bool(attempts) and accounted == self.actual_dispatches
+                      and all(a['outcome'] != 'EFFECT_UNKNOWN' for a in attempts)
+                      and not unknown and not self.unknown)
+        if safe and tail_dispatches and not tail_known:
             tail=attempts[-1].get('raw_steps',[]) if attempts else []
             raw=load_json(tail[-1]['path']) if tail else {}
             safe=(tail_dispatches==1 and raw.get('operation',{}).get('action_type')=='scroll'
                   and raw.get('action_executed') is True
                   and raw.get('react',{}).get('after_observation_id')==final_id
                   and same_view(raw['state'],final_state))
-        unknown=bool(unknown or self.unknown or (tail_dispatches and not safe))
+        unknown=bool(unknown or self.unknown or (tail_dispatches and not safe and not tail_known))
         flagged=kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
         self.collection_ending={'protocol':POLICY,'kind':kind,'flagged':flagged,'reason':reason,
             'business_attempts':len(refs),'actual_atomic_dispatches':self.actual_dispatches,
@@ -1431,13 +1465,29 @@ class ReactSession:
             pages_before = set(self.page.context.pages)
             dispatch_started = True
             self.actual_dispatches += 1
-            await execute(self.page, operation['action_type'], arguments, {})
+            try:
+                await execute(self.page, operation['action_type'], arguments, {})
+            except Exception as error:
+                from playwright.async_api import TimeoutError as PlaywrightTimeout
+                if operation['action_type'] != 'back' or not isinstance(error, PlaywrightTimeout):
+                    raise
+                # go_back exceeded its navigation wait after the dispatch. The
+                # navigation may still have landed; re-observe this live page
+                # instead of guessing an unknown effect. No second back is sent.
+                raw['back_navigation_timeout'] = str(error)
+                self.event('back-navigation-timeout', operation=operation,
+                           error=str(error), dispatch=dispatch, re_dispatch=False)
+                try:
+                    await self.page.wait_for_load_state('domcontentloaded',
+                        timeout=REACT_OBSERVE_TIMEOUT_SECONDS * 1000)
+                except Exception:
+                    pass  # the capture below classifies the observable state honestly
             if self.dialogs:
                 raise ValueError('发生未记录的浏览器原生弹窗：' + str(self.dialogs))
             new_pages = set(self.page.context.pages) - pages_before
             if len(new_pages) > 1:
                 raise ValueError('一次动作打开多个页面，需单独适配并记录')
-            if new_pages and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+            if new_pages and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
                 from .plan_evidence import verify_popup
                 raw['popup_provenance'] = await verify_popup(self.page,next(iter(new_pages)),operation,state)
             elif new_pages and self.task['fragment'].get('decision_protocol') == NATIVE_VERSION:
@@ -1544,6 +1594,10 @@ class ReactSession:
         if after['url'] != before_state['url']:
             self._pending_navigation = None
         after_state = load_json(after['evidence']['state']['path'])
+        effect = atomic_effect(before_state, after_state, operation['action_type'], arguments,
+                               operation.get('evidence', {}).get('anchor_element_id') or
+                               operation.get('evidence', {}).get('focused_element_id'),
+                               rule_version=self.task['fragment'].get('effective_action_rule', RULE_VERSION))
         from .direct_article import enabled as direct_article, session_trace, transition
         if direct_article(self.task):
             try:
@@ -1559,15 +1613,23 @@ class ReactSession:
         changed_fields = [key for key in keys if old_content.get(key) != new_content.get(key)]
         png_changed = _sha(Path(after['evidence']['image']['path'])) != before_image['sha256']
         changed = bool(changed_fields) or png_changed
-        effect = atomic_effect(before_state, after_state, operation['action_type'], arguments,
-                               operation.get('evidence', {}).get('anchor_element_id') or
-                               operation.get('evidence', {}).get('focused_element_id'),
-                               rule_version=self.task['fragment'].get('effective_action_rule', RULE_VERSION))
+        zero_scroll = operation['action_type'] == 'scroll' and before_state.get('scroll') == after_state.get('scroll')
+        if self.plan_controller is not None and (not effect['verified'] or zero_scroll or not changed):
+            # Bind the observed no-effect frame first; the classification stays
+            # definite whether or not the session continues. A known zero-effect
+            # action stays the model's decision: the pending-effect branch offers
+            # replan/original/stop. Zero effective steps, dispatch retained.
+            raw['react'].update(after_observation_id=after['observation_id'], effect_evidence=effect,
+                                zero_effect=True)
+            self.event('action-zero-effect', operation=operation['operation_id'],
+                       action=operation['action_type'], effect_evidence=effect,
+                       after_observation_id=after['observation_id'], session_continues=True)
+            return
         if self.native and not effect['verified']:
             raw['react'].update(after_observation_id=after['observation_id'], effect_evidence=effect)
             raise ReactStop('blocked', 'NO_EFFECTIVE_ACTION: 动作缺少对应的可核验效果', 'collector',
                             operation=operation['operation_id'])
-        if operation['action_type'] == 'scroll' and before_state.get('scroll') == after_state.get('scroll'):
+        if zero_scroll:
             raise ReactStop('blocked', 'NO_EFFECTIVE_ACTION: 滚动未移动当前视口', 'collector',
                             operation=operation['operation_id'])
         if not changed:
@@ -2078,7 +2140,7 @@ class ReactSession:
                         self.preflight_search_focus = target
                         self.event('preflight-action-focus-basis', target=target,
                                    observation=self.current['evidence'], action_dispatched=False)
-            if self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+            if self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
                 for retry in range(1,3):
                     summary=(record or {}).get('summary',{})
                     if summary.get('routing')!='REVIEW_REQUIRED' or not summary.get('related_stability_failures') or record.get('error') or record.get('completed_probe_count',0)<2:break
@@ -2168,8 +2230,16 @@ class ReactSession:
             original_stop=self.stop_reason
             budget_prefix=(original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
                            and 5<=len(getattr(self,'business_attempt_refs',[]))<=8 and bool(self.trajectory))
+            # Every dispatch accounted for by a definite attempt outcome keeps
+            # the closeout definite: a known zero-effect tail never turns the
+            # whole range into an effect UNKNOWN by closure default.
+            refs=getattr(self,'business_attempt_refs',[])
+            definite_tail=(not self.unknown and bool(refs)
+                and sum(load_json(r['path'])['actual_dispatches_delta'] for r in refs)==self.actual_dispatches
+                and all(load_json(r['path'])['outcome']!='EFFECT_UNKNOWN' for r in refs))
             self._range_close('MODEL_BUDGET_LIMIT' if budget_prefix else 'RAW_PENDING',
-                              self.stop_summary or '未获得可保存的可信结束依据',unknown=self.unknown,force_pending=not budget_prefix)
+                              self.stop_summary or '未获得可保存的可信结束依据',unknown=self.unknown,
+                              force_pending=not (budget_prefix or definite_tail))
             self.stop_reason=original_stop
         terminal = {'protocol': REACT_VERSION, 'state': self.state, 'stop_reason': self.stop_reason,
             **({'collection_ending':self.collection_ending} if self._v2() else {}),
@@ -2377,11 +2447,28 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
     from .goal_evidence import contract_for
     gateway = None  # Cached/UNKNOWN paths do not select or read an account.
     protocol = task['fragment']['decision_protocol']
-    first_plan_effort = 'max'
+    plan_protocol = task['fragment'].get('plan_protocol')
+    banded_protocols = ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9')
+    modern_plan = plan_protocol == 'webcollect-banded-conditional-plan-9'
     grounded = bool(contract_for(task))
-    current_plan = task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8')
-    if ledger.real_glm and task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
-        first_plan_effort = 'low' if grounded else ledger.config['model'].get('reasoning_effort', 'max')
+    # V9 dispatches explicit low for the first plan and for ordinary branches;
+    # the choice no longer depends on a special evidence contract. Frozen V7/V8
+    # keep their original effort selection. A frozen per-task reasoning effort
+    # profile overrides both: it is the task's own dispatch contract.
+    first_plan_effort = 'max'
+    branch_effort = 'max'
+    effort_profile = task['fragment'].get('reasoning_effort_profile')
+    if effort_profile:
+        first_plan_effort = effort_profile['first_plan']
+        branch_effort = effort_profile['branch']
+    elif ledger.real_glm and plan_protocol in banded_protocols:
+        if modern_plan:
+            first_plan_effort = 'low'
+            branch_effort = 'low'
+        else:
+            first_plan_effort = 'low' if grounded else ledger.config['model'].get('reasoning_effort', 'max')
+            branch_effort = first_plan_effort if grounded else 'max'
+    current_plan = plan_protocol in banded_protocols
     request_limit = task['fragment']['budgets']['max_model_calls']
     if ledger.real_glm and 'glm_http_call_limit' in task['fragment']:
         request_limit = min(request_limit or SessionGLMCallLimit.limit, SessionGLMCallLimit.limit)
@@ -2435,9 +2522,10 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                 gateway = ModelGateway(ledger)
             user_payload = {key: value for key, value in prompt.items()
                             if key not in ('system', 'tools', '_history', '_images')}
-            if prompt.get('protocol') in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+            if prompt.get('protocol') in banded_protocols + ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6'):
                 user_payload=deepcopy(user_payload)
                 user_payload['observation'].pop('image_ref',None)
+                user_payload['observation'].pop('_node_scope',None)
             history = deepcopy(prompt.get('_history', []))
             if ledger.real_glm:
                 # Keep the current PNG and most recent historical images in this
@@ -2449,26 +2537,35 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                 for image in images[:excess]:
                     image.clear()
                     image.update(type='text', text='该轮截图已保存在原观察记录中，本次请求省略重传。')
-            if prompt.get('protocol') in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+            if prompt.get('protocol') in banded_protocols + ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6'):
                 text_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+                if prompt['phase'] == 'first':
+                    effort = first_plan_effort
+                elif grounded or modern_plan:
+                    effort = branch_effort
+                else:
+                    effort = 'max'
                 common = dict(system=prompt['system'], images=(prompt.get('_images') or [prompt['observation']['image_ref']])[-ledger.config['model']['max_images']:],
-                    attempts=2 if grounded else 1, output_limit=ledger.config['model']['max_completion_tokens'],
-                    reasoning_effort=first_plan_effort if prompt['phase'] == 'first' or grounded else 'max',
+                    attempts=2 if grounded or modern_plan else 1, output_limit=ledger.config['model']['max_completion_tokens'],
+                    reasoning_effort=effort,
                     attempt_id=attempt_id, max_requests=request_limit)
                 if prompt['phase'] == 'first':
                     patient = current_plan and ledger.real_glm
                     first_timeout = None
                     if patient:
                         first_timeout = choose.first_plan_timeout_seconds
-                    elif prompt['protocol'] in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+                    elif prompt['protocol'] in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
                         first_timeout = min(300,ledger.config['budget']['lease_seconds']-10)
                     response = await asyncio.to_thread(gateway.call_tool, job, prompt['protocol'],
-                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
+                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9') else None), **common)
                 else:
                     from .banded_plan import choice_schema
                     from .direct_article import protocol_schema
+                    completion=prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1'
+                    # V9 ordinary branches use the same choice wire protocol as
+                    # grounded branches; V8 and older keep their original form.
                     response = await asyncio.to_thread(gateway.call_message, job, prompt['protocol'],
-                        text_payload, protocol_schema(choice_schema(grounded, inherited=prompt['protocol']=='webcollect-banded-conditional-plan-8'),prompt.get('evidence_contract'),completion=prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1'), grounded_choice=grounded, content_envelope=('single-json-commentary-1' if prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1' else 'single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
+                        text_payload, protocol_schema(choice_schema(grounded, inherited=(prompt['protocol']=='webcollect-banded-conditional-plan-8' or modern_plan),wire=modern_plan),prompt.get('evidence_contract'),completion=completion), grounded_choice=(grounded or modern_plan), content_envelope=('single-json-commentary-1' if completion or modern_plan else 'single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
                 ledger.finish(job, result=response)
                 return response
             response = await asyncio.to_thread(gateway.call_tool, job, protocol,
@@ -2505,5 +2602,5 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
     choose.request_limit = request_limit
     choose.first_plan_reasoning_effort = first_plan_effort
     choose.first_plan_timeout_seconds = 600 if current_plan and ledger.real_glm else None
-    choose.branch_reasoning_effort = first_plan_effort if grounded else 'max'
+    choose.branch_reasoning_effort = branch_effort
     return choose

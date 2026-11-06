@@ -207,6 +207,35 @@ POST_VERSION = 'webcollect-post-action-observation-stability-4'
 VERSIONS = (*VERSIONS, POST_VERSION)
 
 
+def _observed_click_href(source, operation):
+    """The href actually rendered on the dispatched control, from the source
+    state's own capture bindings; never a guessed or arbitrary external URL."""
+    if operation.get('action_type') != 'click':
+        return None
+    node = operation.get('evidence', {}).get('anchor_element_id') or operation.get('evidence', {}).get('focused_element_id')
+    if not node:
+        return None
+    return next((b.get('href') for b in source.get('capture_controls', [])
+                 if b.get('element_id') == node and b.get('href')), None)
+
+
+def _post_state_bound(state, scope):
+    """A post-action document binds to the source host, or -- when navigation
+    was allowed -- to the observed href of the dispatched control. External
+    documents that were never observed stay rejected."""
+    from urllib.parse import urlsplit
+    if urlsplit(state.get('url','')).hostname == urlsplit(scope['source_url']).hostname:
+        return True
+    if not scope.get('allow_navigation'):
+        return state.get('url') == scope['source_url'] and state.get('document_identity') == scope['source_document']
+    href = scope.get('observed_href')
+    if not href:
+        return False
+    landed, target = urlsplit(state.get('url','')), urlsplit(href)
+    return (landed.hostname == target.hostname and landed.path == target.path
+            and landed.query == target.query)
+
+
 def post_observation_scope(source, operation):
     action = operation.get('action_type')
     node = operation.get('evidence', {}).get('anchor_element_id') or operation.get('evidence', {}).get('focused_element_id')
@@ -221,11 +250,13 @@ def post_observation_scope(source, operation):
                             'operation_id':operation['operation_id'],'source':basis,'expected_value':expected}
         except ValueError:
             pass
+    observed_href = _observed_click_href(source, operation)
     from .dynamic_regions import enabled as dynamic_enabled,VERSION as dynamic_version
     if dynamic_enabled(source):
         return {'schema_version':POST_VERSION,'action':'observe','purpose':'shared_dynamic_regions','dynamic_protocol':dynamic_version,
             'operation_id':operation['operation_id'],'source_url':source['url'],'source_document':source['document_identity'],
-            'allow_navigation':action in ('click','hotkey','back','open_url')}
+            'allow_navigation':action in ('click','hotkey','back','open_url'),
+            **({'observed_href':observed_href} if observed_href else {})}
     # The source must already contain a unique primary content region. The new
     # region is then proved within this capture; navigation lineage is separately
     # checked by the ordinary action/goal evidence machinery.
@@ -233,7 +264,8 @@ def post_observation_scope(source, operation):
     return {'schema_version':POST_VERSION,'action':'observe','purpose':'post_primary_content',
             'operation_id':operation['operation_id'],'source_url':source['url'],
             'source_document':source['document_identity'],
-            'allow_navigation':action in ('click','hotkey','back','open_url')}
+            'allow_navigation':action in ('click','hotkey','back','open_url'),
+            **({'observed_href':observed_href} if observed_href else {})}
 
 
 _pre_post_pair = pair
@@ -258,9 +290,7 @@ def _post_pair(before, after, png_before, png_after, scope):
                         action='type',version=TYPING_VERSION)
     elif scope.get('purpose')=='post_primary_content':
         from urllib.parse import urlsplit
-        if (urlsplit(before.get('url','')).hostname!=urlsplit(scope['source_url']).hostname
-                or not scope['allow_navigation'] and (before.get('url')!=scope['source_url']
-                or before.get('document_identity')!=scope['source_document'])):
+        if not _post_state_bound(before, scope):
             raise ValueError('Post-content observation lacks original document/application binding')
         inner=reading_scope(before)
     else:raise ValueError('Unknown post-action observation purpose')
@@ -336,10 +366,8 @@ def validate_dynamic_scope(before,after,scope):
                 if current['value'].get('value')!=scope['expected_value'] or current['binding'].get('input_type')!=source['binding'].get('input_type'):
                     raise ValueError('Post-input actual value differs from dispatched expected value')
         elif purpose in ('post_primary_content','shared_dynamic_regions'):
-            from urllib.parse import urlsplit
             for state in (a,b):
-                if (urlsplit(state.get('url','')).hostname!=urlsplit(scope['source_url']).hostname or
-                    not scope['allow_navigation'] and (state.get('url')!=scope['source_url'] or state.get('document_identity')!=scope['source_document'])):
+                if not _post_state_bound(state, scope):
                     raise ValueError('Post-content original document/application differs')
         else:raise ValueError('Unknown post scope purpose')
     else:raise ValueError('Unknown dynamic comparison action scope')

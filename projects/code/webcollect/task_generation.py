@@ -846,12 +846,14 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         from .closing_policy import VERSION as CLOSE_POLICY
         from .banded_plan import VERSION as PLAN_PROTOCOL
         from .action_stability import POST_VERSION as FOCUS_PROTOCOL
+        from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
                               **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL,
                                   'action_stability_protocol':FOCUS_PROTOCOL,
-                                  'trusted_prefix_protocol':'webcollect-trusted-prefix-1'} if react_candidate is not None else {}),
+                                  'trusted_prefix_protocol':PREFIX_PROTOCOL} if react_candidate is not None else {}),
                               app_name=app_name, registration=react_task_version,
                               skip_wechat_articles=(react_candidate or {}).get('skip_wechat_articles',False),
+                              effort_profile=(react_candidate or {}).get('effort_profile'),
                               pilot_identity=identities['pages'].get(url))
         if supplied is not None:
             task['capability_id'] = supplied['capability_id']

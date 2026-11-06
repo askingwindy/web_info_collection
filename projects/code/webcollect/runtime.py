@@ -548,7 +548,7 @@ class RuntimeStore:
         from .direct_article import verify_record
         from .candidate_contract import validate_task_binding
         from site_planner.candidate_pool import CandidatePool
-        refs = [recovery[k] for k in ('raw_receipt', 'failure', 'process_exit')]
+        refs = [recovery[k] for k in ('raw_receipt', 'failure')]
         verify_evidence(refs)
         raw = Path(recovery['raw_receipt']['path']).resolve().parent
         record = session_record(raw)
@@ -624,6 +624,95 @@ class RuntimeStore:
                 'successor_save':receipts[0], 'settled_requests':requests,
                 'browser_calls':0, 'model_calls':0, 'new_attempts':0}
 
+    def _historical_prefix_recovery(self, con, row, recovery, evidence):
+        """First formal derivation of a complete historical interval.
+
+        The original execution never reached ready (sealed rejected/pending);
+        its nonempty consecutive effective-action prefix is derived offline
+        under webcollect-trusted-prefix-2. Zero browser and model calls; the
+        original failures, model UNKNOWN reservations and re-dispatch isolation
+        all stay untouched.
+        """
+        from .batch_core import load_json, file_sha
+        from .postprocess import session_record
+        from .candidate_contract import validate_task_binding
+        from site_planner.candidate_pool import CandidatePool
+        refs = [recovery[k] for k in ('raw_receipt', 'failure')]
+        verify_evidence(refs)
+        raw = Path(recovery['raw_receipt']['path']).resolve().parent
+        record = session_record(raw, allow_unknown_for_prefix=True)
+        stored_task = json.loads(row['task_json'])
+        plan = json.loads(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=? AND plan_sha256=?',
+                                     (row['scope_id'], row['plan_sha256'])).fetchone()[0])
+        execution_task = {**stored_task, '_plan_schema_version': plan['schema_version'],
+                          'require_public_origin': True}
+        primary = load_json(recovery['failure']['path'])
+        terminal = record['terminal']
+        # The store's own terminal row is the closure proof for already-settled
+        # attempts; no separate process-exit receipt exists or is needed here.
+        if (row['status'] != 'rejected'
+                or row['finished_at'] is None
+                or primary.get('attempt_id') != row['attempt_id']
+                or record['boundary'].get('attempt_id') not in (None, row['attempt_id'])
+                or record['task'] != execution_task
+                or terminal.get('stop_reason') == 'ready'
+                or not record['trajectory']):
+            raise ValueError('Historical prefix recovery needs a sealed unfinished execution with effective actions')
+        binding = validate_task_binding(record['task'])
+        original = load_json(binding['claim_reference']['path'])
+        pool = CandidatePool(original['pool'])
+        claim = pool.get_claim(binding['claim_id'])
+        cb = claim.get('binding') or {}
+        if (cb.get('attempt_id') != row['attempt_id'] or Path(cb.get('registry')).resolve() != self.registry
+                or Path(cb.get('ledger')).resolve() != Path(recovery['model_ledger']).resolve()
+                or raw != Path(cb['output'])/'execution/capture/evidence'/row['sample_id']/'raw'):
+            raise ValueError('Recovery differs from original claim, model account or raw')
+        with pool.pool.connect() as db:
+            latest = db.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1', (claim['candidate_id'],)).fetchone()
+        if not latest or latest[0] != claim['claim_id']:
+            raise ValueError('A newer claim prevents historical derivation recovery')
+        if con.execute('SELECT 1 FROM m4_attempts WHERE task_key=? AND attempt_id<>? AND created_at>=?', (row['task_key'], row['attempt_id'], row['created_at'])).fetchone():
+            raise ValueError('A successor attempt prevents historical derivation recovery')
+        # Model requests stay exactly as ledgered: UNKNOWN reservations are
+        # neither settled nor cleared by this derivation, and their isolation
+        # persists after the interval sample is registered.
+        with sqlite3.connect(Path(recovery['model_ledger']).resolve().as_uri()+'?mode=ro', uri=True) as db:
+            requests = db.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (row['attempt_id'],)).fetchall()
+        receipts = [r for r in evidence if Path(r['path']).name == 'saved_sample.json']
+        if len(receipts) != 1: raise ValueError('One saved derivation receipt required')
+        saved = load_json(receipts[0]['path'])
+        prefix = saved.get('raw_execution', {}).get('trusted_prefix')
+        end_step = (prefix or {}).get('source_interval', {}).get('end_step')
+        if (saved.get('attempt_id') != row['attempt_id'] or saved.get('sample_id') != row['sample_id']
+                or not prefix or prefix.get('protocol') != 'webcollect-trusted-prefix-2'
+                or prefix.get('source_attempt_id') != row['attempt_id']
+                or type(end_step) is not int or not 1 <= end_step <= len(record['trajectory'])
+                or prefix.get('original_goal_completed') is not False
+                or prefix.get('excluded_tail', {}).get('source_unknown') is not (terminal.get('unknown') is True)):
+            raise ValueError('Saved historical prefix must bind the identical raw attempt and interval')
+        from .trusted_prefix import project_prefix
+        expected = project_prefix(record, raw, end_step, {'attempt_id': row['attempt_id']},
+                                  rule=prefix['protocol'])
+        if expected['trusted_prefix'] != prefix:
+            raise ValueError('Saved prefix differs from its independently rechecked interval')
+        root = raw.parent; sample = root.parent.parent/'samples'/row['sample_id']
+        for base, key in ((root, 'capture_files_sha256'), (sample, 'sample_files_sha256')):
+            if not saved.get(key): raise ValueError('Complete saved bytes required')
+            for name, digest in saved[key].items():
+                path = base/name
+                if path.is_symlink() or not path.resolve().is_relative_to(base.resolve()) or file_sha(path) != digest:
+                    raise ValueError('Saved derivation bytes differ')
+        derivations = [json.loads(line) for line in (root/'derivations.jsonl').read_text().splitlines() if line.strip()]
+        saved_rows = [r for r in derivations if r.get('status') == 'derived_saved']
+        if not saved_rows or any(r.get('effective_steps') != end_step for r in saved_rows):
+            raise ValueError('Derivation ledger must hold exactly this interval as the only effective delivery')
+        return {'schema_version':'webcollect-historical-prefix-derivation-1',
+                'original_attempt':dict(row), 'original_failure':recovery['failure'],
+                'raw_receipt':recovery['raw_receipt'],
+                'interval':prefix['source_interval'], 'rule':prefix['protocol'],
+                'successor_save':receipts[0], 'model_requests_unchanged':requests,
+                'browser_calls':0, 'model_calls':0, 'new_attempts':0}
+
     def finish_attempt(self, attempt_id, worker_id, lease_token, outcome, *, failure_class=None, root_cause=None, evidence=None, exact_images=None, now=None, derivation_recovery=None):
         if outcome not in ('collected_pending_review', 'rejected'):
             raise ValueError('生产只能保存待审或拒绝，不授予QC/客户PASS')
@@ -642,7 +731,9 @@ class RuntimeStore:
             if derivation_recovery is not None:
                 if outcome != 'collected_pending_review' or exact_images is None:
                     raise ValueError('Offline derivation recovery only commits a complete pending sample')
-                recovery_proof = self._derived_recovery(con, row, derivation_recovery, evidence)
+                recovery_proof = (self._historical_prefix_recovery(con, row, derivation_recovery, evidence)
+                                  if derivation_recovery.get('recovery_kind') == 'historical_prefix'
+                                  else self._derived_recovery(con, row, derivation_recovery, evidence))
             if row['status'] not in ACTIVE and recovery_proof is None:
                 if (row['status'], row['failure_class'], row['root_cause'], row['evidence_json']) != (outcome, failure_class, root_cause, canonical(evidence)):
                     raise ValueError('已终结attempt不可覆盖为另一结果')

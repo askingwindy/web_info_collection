@@ -420,17 +420,18 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, **stop_data}
     ending=summary.get('collection_ending')
     prefix_end=None
-    from .trusted_prefix import VERSION as PREFIX_VERSION, candidate_end, project_prefix
-    prefix_requested=(task['fragment'].get('trusted_prefix_protocol')==PREFIX_VERSION and
+    from .trusted_prefix import VERSION as PREFIX_VERSION, V2_VERSION as PREFIX_V2, candidate_end, project_prefix
+    prefix_rule=task['fragment'].get('trusted_prefix_protocol')
+    prefix_requested=(prefix_rule in (PREFIX_VERSION, PREFIX_V2) and
         (summary['unknown'] or summary.get('host_failure') or
          (ending and ending.get('flagged')) or summary.get('stop_reason') in ('blocked','no_path','budget')))
     if prefix_requested:
         try:
             from .postprocess import session_record
-            prefix_end=candidate_end(evidence/'raw')
+            prefix_end=candidate_end(evidence/'raw', rule=prefix_rule)
             if prefix_end is not None:
-                project_prefix(session_record(evidence/'raw',allow_unknown_for_prefix=True),evidence/'raw',prefix_end,ids)
-                write_json(evidence/'prefix-source-closeout.json',{'protocol':PREFIX_VERSION,
+                project_prefix(session_record(evidence/'raw',allow_unknown_for_prefix=True),evidence/'raw',prefix_end,ids,rule=prefix_rule)
+                write_json(evidence/'prefix-source-closeout.json',{'protocol':prefix_rule,
                     'attempt_id':attempt['attempt_id'],'raw_receipt':raw_receipt,
                     'original_stop_reason':summary['stop_reason'],'original_unknown':summary['unknown'],
                     'original_failure_class':summary['failure_class'],
@@ -439,7 +440,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                     'original_request_ledger_unchanged':True})
         except (ValueError,KeyError,TypeError,OSError) as prefix_error:
             prefix_end=None
-            write_json(evidence/'prefix-ineligible.json',{'protocol':PREFIX_VERSION,
+            write_json(evidence/'prefix-ineligible.json',{'protocol':prefix_rule,
                 'error':str(prefix_error),'raw_receipt':raw_receipt,'normal_sample_saved':False})
     if ending and not ending.get('safe_for_pending_sample') and prefix_end is None:
         pending=evidence/'raw-ending-pending.json'
@@ -480,7 +481,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     # real manifest (schema_version pins rule_version=m4-1) with this sample.
     delivery_manifest = {**manifest, 'samples': list(manifest.get('samples') or []) + [ids['sample_id']]}
     derived = postprocess_derivation(evidence, sample, ids, delivery_manifest,
-                                     validators=(audit_validator, dedup_validator), prefix_end_step=prefix_end)
+                                     validators=(audit_validator, dedup_validator), prefix_end_step=prefix_end,
+                                     prefix_rule=prefix_rule)
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})

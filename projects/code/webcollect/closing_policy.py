@@ -90,18 +90,18 @@ def validate_record(record):
         from .consumer_page_policy import ending_evidence, PLAN_PROTOCOL
         actual=ending_evidence(record['task'],prefix,{oid:state(record,oid) for oid in record['observations']},final)
         if (not actual or actual!=marker.get('boundary_return_evidence')
-                or marker.get('plan_protocol') not in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8')
+                or marker.get('plan_protocol') not in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9')
                 or marker.get('plan_protocol')!=record['task']['fragment'].get('plan_protocol') or not safe):
             raise ValueError('Boundary return lacks two original effective actions and a sealed safe return')
     if marker.get('kind')=='HOST_PLAN_ENDPOINT':
         if (marker.get('plan_protocol')!=record['task']['fragment'].get('plan_protocol')
-                or marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8')):
+                or marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9')):
             raise ValueError('Host endpoint is not bound to the original plan task')
         basis=marker.get('endpoint_evidence') or {}
         final_evidence=record['observations'][final]['evidence']
         if basis.get('image')!=final_evidence['image']:
             raise ValueError('Endpoint image differs from sealed final observation')
-        if record['task']['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+        if record['task']['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
             from types import SimpleNamespace
             from pathlib import Path
             from .agent_observation import project
@@ -191,11 +191,11 @@ def annotation_errors(annotation):
     if kind=='HOST_BOUNDARY_RETURN':
         from .consumer_page_policy import VERSION as PAGE_POLICY, PLAN_PROTOCOL
         proof=marker.get('boundary_return_evidence') or {}
-        if (marker.get('plan_protocol') not in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8') or proof.get('policy')!=PAGE_POLICY
+        if (marker.get('plan_protocol') not in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9') or proof.get('policy')!=PAGE_POLICY
                 or marker.get('goal_completion')!='NOT_CLAIMED' or marker.get('finish_origin')!='host'
                 or effective<2 or marker.get('unverified_tail_dispatches')!=0):
             errors.append('Boundary return must preserve two verified operations without a login/download success claim')
-    if kind=='HOST_PLAN_ENDPOINT' and (marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8')
+    if kind=='HOST_PLAN_ENDPOINT' and (marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9')
             or marker.get('finish_origin')!='host' or marker.get('goal_completion')!='NOT_CLAIMED'):
         errors.append('Host endpoint requires frozen conditional-plan binding and no business-success claim')
     return errors

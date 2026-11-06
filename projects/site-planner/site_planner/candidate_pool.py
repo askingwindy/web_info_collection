@@ -740,6 +740,15 @@ class CandidatePool:
             self.event(con,row['candidate_id'],row['claim_id'],stage,old)
             return True
 
+    def has_prior_claims(self, candidate_id, exclude_claim_id):
+        """Whether this candidate was already attempted under another claim.
+
+        Distinguishes a fresh candidate (first claim ever) from a legitimate
+        research/recovery re-run when guarding against task-key duplicates."""
+        with self.pool.connect() as con:
+            return bool(con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=? AND claim_id<>? LIMIT 1',
+                                    (candidate_id, exclude_claim_id)).fetchone())
+
     def finish(self, claim, *, state, reason, stage):
         if state not in ('failed','reconcile') or not reason: raise ValueError('Failure/uncertainty reason required')
         with self.transaction() as con:

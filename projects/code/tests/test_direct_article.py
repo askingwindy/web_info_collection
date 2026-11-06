@@ -20,7 +20,9 @@ class DirectArticle(unittest.TestCase):
                 {'element_id':'toc','selector':'nav:1 > a:1','href':self.url+'#later'}], 'values':[]}
     def test_explicit_contract_identity_and_no_invented_semantic_keywords(self):
         validate_contract(self.contract);self.assertTrue(initial(self.task,self.state,self.contract))
-        prompt=system_for(self.task);self.assertIn('不提供浏览器原生Ctrl/Cmd+F',prompt)
+        prompt=system_for(self.task)
+        self.assertIn('浏览器原生查找在当前宿主无法打开、输入或取证，不提供该能力',prompt)
+        self.assertNotIn('不提供浏览器原生Ctrl/Cmd+F',prompt)
         self.assertNotIn('搜索后用expected.kind=search_results',prompt)
         for field,value in [('url','https://example.org/wiki/Other'),('url',self.url+'?search=x')]:
             wrong=deepcopy(self.state);wrong[field]=value
@@ -81,11 +83,16 @@ class DirectArticle(unittest.TestCase):
             state=deepcopy(self.state);state['capture_controls'][3]['href']=self.url+suffix
             after=deepcopy(state);after['url']=self.url+suffix
             self.assertIsNotNone(transition(self.task,state,after,'click',{},'link')[0])
-    def test_search_and_submit_and_native_find_refused(self):
+    def test_search_and_submit_refused_but_revoked_find_hotkey_dispatches(self):
         state=deepcopy(self.state);state['elements'].append({'element_id':'q','native_role':'input','visible':True,'inputable':True,'text':'搜索'})
         state['capture_controls'].append({'element_id':'q','input_type':'search'})
-        for action,args,cid in [('click',{},'q'),('type',{'text':'月食'},'q'),('hotkey',{'keys':['enter']},None),('hotkey',{'keys':['ctrl','f']},None),('hotkey',{'keys':['meta','f']},None)]:
+        for action,args,cid in [('click',{},'q'),('type',{'text':'月食'},'q'),('hotkey',{'keys':['enter']},None)]:
             with self.assertRaises(ValueError):before_action(self.task,state,action,args,cid)
+        # The 2026-11-06 decision revoked the native-find prohibition: the
+        # find combo passes the ban layer; its effect verification stays honest
+        # (the headless host cannot evidence the find bar, so it counts 0 steps).
+        for keys in (['ctrl','f'],['meta','f'],['Control','F']):
+            before_action(self.task,state,'hotkey',{'keys':keys})
         state['elements'].append({'element_id':'button','native_role':'button','text':'搜索','visible':True});state['capture_controls'].append({'element_id':'button'})
         with self.assertRaises(ValueError):before_action(self.task,state,'click',{},'button')
         before_action(self.task,state,'hotkey',{'keys':['pagedown']})

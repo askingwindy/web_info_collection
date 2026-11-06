@@ -646,9 +646,40 @@ def _search_cooldown(pool,run_id):
         if remaining>0:time.sleep(remaining)
 
 
+_TASKED_PAIRS_CACHE = {}
+
+
+def _registry_tasked_pairs(pool, batch):
+    """(entry_url, requested_goal) pairs already holding consumer registry
+    tasks, resolved once per producer batch run. Legacy batches without a
+    chain manifest return an empty set (no behavior change)."""
+    from webcollect.planning import canonical as _canonical
+    from webcollect.candidate_consumer import tasked_entry_index
+    key = (str(pool.path), batch)
+    if key in _TASKED_PAIRS_CACHE:
+        return _TASKED_PAIRS_CACHE[key]
+    with pool.pool.connect() as con:
+        frozen = con.execute('SELECT config FROM runs WHERE id=?', (batch,)).fetchone()
+    manifest = json.loads(frozen[0]).get('current_chain_manifest') if frozen else None
+    if not manifest:
+        pairs = frozenset()
+    else:
+        from webcollect.current_chain import read_chain_scope
+        scope = read_chain_scope(Path(manifest['path']).absolute())
+        pairs = frozenset(tasked_entry_index(scope['registry']))
+    _TASKED_PAIRS_CACHE[key] = pairs
+    return pairs
+
+
 def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *, application_id=None):
     if pool.consumption(candidate['entry_url'],kind=candidate.get('candidate_kind')):
         return pool.record_row_conclusion(header,result='REJECTED',reason='NO_CONSUME: producer image-only page exclusion',original_row=row)
+    from webcollect.planning import canonical as _canonical
+    from webcollect.candidate_consumer import normalize_entry_url
+    if ((normalize_entry_url(candidate['entry_url']), _canonical(candidate.get('requested_goal')))
+            in _registry_tasked_pairs(pool, batch)):
+        return pool.record_row_conclusion(header, result='REJECTED',
+            reason='TASKED_URL_DUPLICATE: consumer registry already holds this entry URL and goal', original_row=row)
     if source.get('table_policy'):
         try:
             app = pool.pool.application(candidate['entry_url'])

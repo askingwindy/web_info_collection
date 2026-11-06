@@ -517,13 +517,17 @@ class ModelGateway:
         if content_envelope not in (None,'single-json-fence-1','single-json-commentary-1'):raise ValueError('Unknown text envelope protocol')
         if grounded_choice:
             prompt=json.loads(text)
-            system += '\n本轮输出协议（字段只在这里定义一次）：\n'+json.dumps(branch_wire_schema(schema,prompt),ensure_ascii=False,separators=(',',':'))
-            system += '\ncontinue_plan 只执行 current_step 及原剩余计划；更改下一动作必须 replan。每个业务步骤必须给 action、purpose、expected 及动作参数。citations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}。finish_reading 是含 reading_answer 的分支决定，不是业务步骤。decision_summary 一句话概括本轮决定，不输出推理过程。'
+            wire=branch_wire_schema(schema,prompt)
+            system += '\n本轮输出协议（字段只在这里定义一次）：\n'+json.dumps(wire,ensure_ascii=False,separators=(',',':'))
+            system += '\n只返回一个choice对象的JSON，或直接返回剩余步骤计划（宿主按replan处理）；不输出解释或第二个结构。'
+            system += '\nchoice只能取本轮options中列出的值；只执行 current_step 及原剩余计划时选相应继续项，更改下一动作必须 replan。replan的每个业务步骤必须给 action、purpose、expected 及动作参数。decision_summary 一句话概括本轮决定，不输出推理过程。'
+            if 'citations' in json.dumps(wire):
+                system += '\ncitations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}；finish_reading 是含 reading_answer 的分支决定，不是业务步骤。'
         adapter_version=('banded-plain-json-3' if content_envelope=='single-json-commentary-1' else 'banded-plain-json-2') if content_envelope else 'banded-plain-json-1'
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
                    'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,
                    'max_requests':max_requests,'declared':{},'plain_json':True,'inference_images':True,
-                   'dispatch_policy':'grounded-choice-1' if grounded_choice else None}
+                   'dispatch_policy':'branch-choice-1' if grounded_choice else None}
         return self._call(job,purpose+':'+adapter_version,text,schema,images=images,
                           attempts=attempts,output_limit=output_limit,native_context=context,
                           synthetic_response=synthetic_response)
@@ -665,7 +669,7 @@ class ModelGateway:
                         self.ledger.heartbeat(job)
                     elif dispatch_policy == 'patient-first-plan-1':
                         self.ledger.heartbeat(job, request_timeout=native_context['timeout_seconds'])
-                    elif dispatch_policy == 'grounded-choice-1':
+                    elif dispatch_policy == 'branch-choice-1':
                         self.ledger.heartbeat(job)
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
                         'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
@@ -830,7 +834,7 @@ class ModelGateway:
                     if tool_calls:
                         raise ValueError('Plain decision must not contain provider tool calls')
                     parsed,normalized=parse_decision_content(choice['message']['content'],native_context.get('content_envelope'))
-                    if native_context.get('dispatch_policy')=='grounded-choice-1':
+                    if native_context.get('dispatch_policy')=='branch-choice-1':
                         original_parsed=parsed
                         parsed=normalize_branch(parsed,json.loads(text))
                         normalized=normalized or parsed!=original_parsed

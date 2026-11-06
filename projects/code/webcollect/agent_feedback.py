@@ -30,7 +30,7 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
     step_root=evidence
     if projection is not None and outcome=='collected_pending_review':
         binding=load_json(projection)
-        if binding.get('protocol')!='webcollect-trusted-prefix-1' or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',binding.get('directory','')):
+        if binding.get('protocol') not in ('webcollect-trusted-prefix-1','webcollect-trusted-prefix-2') or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',binding.get('directory','')):
             raise ValueError('Unrecognized prefix feedback projection')
         step_root=evidence/binding['directory']
     for path in sorted(step_root.glob('step_*.json')):

@@ -12,14 +12,26 @@ from .planning import object_sha256, verify_evidence
 
 VERSION = 'webcollect-trusted-prefix-1'
 MINIMUM = 6
+# V2 accepts any nonempty consecutive effective-action prefix: 1-4 effective
+# actions classify short_flow, >=5 ordinary, zero actions never a sample. The
+# V1 six-action rule keeps explaining its own historical receipts.
+V2_VERSION = 'webcollect-trusted-prefix-2'
+V2_MINIMUM = 1
+RULES = {VERSION: MINIMUM, V2_VERSION: V2_MINIMUM}
+CLASSIFICATION = '1-4 effective actions -> short_flow; >=5 -> ordinary; 0 -> not a sample'
 
 
-def _projection(source, raw_root, end_step, ids):
+def _projection(source, raw_root, end_step, ids, *, rule=VERSION):
     from .postprocess import effective_trajectory
     from .agent_observation import project
     from .react_session import struct_goal
-    if type(end_step) is not int or not MINIMUM <= end_step <= len(source['trajectory']):
-        raise ValueError('Trusted prefix requires at least six original consecutive effective actions')
+    minimum = RULES.get(rule)
+    if minimum is None:
+        raise ValueError('Unknown trusted-prefix rule')
+    if type(end_step) is not int or not minimum <= end_step <= len(source['trajectory']):
+        raise ValueError('Trusted prefix requires at least '
+                         + ('six' if rule == VERSION else str(minimum))
+                         + ' original consecutive effective actions')
     if source['boundary'].get('attempt_id') not in (None, ids['attempt_id']):
         raise ValueError('Prefix attempt differs from its sealed source attempt')
     rows = deepcopy(source['trajectory'][:end_step])
@@ -44,8 +56,9 @@ def _projection(source, raw_root, end_step, ids):
         raise ValueError('Prefix interval contains duplicate dispatches')
     source_receipt = {'path': str((Path(raw_root)/'raw-receipt.json').resolve()),
                       'sha256': file_sha(Path(raw_root)/'raw-receipt.json')}
-    binding = {'protocol': VERSION, 'kind': 'TRUSTED_HISTORICAL_PREFIX', 'flagged': False, 'source_attempt_id': ids['attempt_id'],
+    binding = {'protocol': rule, 'kind': 'TRUSTED_HISTORICAL_PREFIX', 'flagged': False, 'source_attempt_id': ids['attempt_id'],
         'source_interval': {'start_step': 1, 'end_step': end_step},
+        'effective_actions': end_step, 'classification_rule': CLASSIFICATION,
         'source_operations': [row['operation_id'] for row in rows],
         'raw_receipt': source_receipt, 'source_terminal': deepcopy(source['receipt']['terminal']),
         'boundary_observation_id': final_id, 'boundary_evidence': deepcopy(final['evidence']),
@@ -60,15 +73,15 @@ def _projection(source, raw_root, end_step, ids):
             'source_ending': deepcopy(source['terminal'].get('collection_ending'))},
         'original_goal_completed': False, 'QC_approval': False,
         'cost_attribution': 'Original attempt and model-request ledger retained; no new model calls',
-        'interval_key': object_sha256({'attempt_id': ids['attempt_id'],
+        'interval_key': object_sha256({'rule': rule, 'attempt_id': ids['attempt_id'],
             'raw_receipt': source_receipt, 'start_step': 1, 'end_step': end_step})}
     # Keep the original task and all source observations/goals. Only the
     # derivative terminal points at the historical boundary.
     return {**source, 'trajectory': rows, 'terminal': terminal, 'trusted_prefix': binding}
 
 
-def project_prefix(source, raw_root, end_step, ids):
-    return _projection(source, raw_root, end_step, ids)
+def project_prefix(source, raw_root, end_step, ids, *, rule=VERSION):
+    return _projection(source, raw_root, end_step, ids, rule=rule)
 
 
 def validate_projection(record):
@@ -78,18 +91,21 @@ def validate_projection(record):
     root = Path(binding['raw_receipt']['path']).parent
     source = session_record(root, allow_unknown_for_prefix=True)
     expected = _projection(source, root, binding['source_interval']['end_step'],
-                           {'attempt_id': binding['source_attempt_id']})
+                           {'attempt_id': binding['source_attempt_id']}, rule=binding['protocol'])
     if (binding != expected['trusted_prefix'] or record['task'] != expected['task']
             or record['trajectory'] != expected['trajectory'] or record['terminal'] != expected['terminal']):
         raise ValueError('Prefix projection differs from its independently rechecked source interval')
     return binding
 
 
-def candidate_end(raw_root):
+def candidate_end(raw_root, *, rule=VERSION):
     """Largest historical boundary available; no unknown tail is retried."""
     from .postprocess import session_record
+    minimum = RULES.get(rule)
+    if minimum is None:
+        raise ValueError('Unknown trusted-prefix rule')
     source = session_record(raw_root, allow_unknown_for_prefix=True)
-    return len(source['trajectory']) if len(source['trajectory']) >= MINIMUM else None
+    return len(source['trajectory']) if len(source['trajectory']) >= minimum else None
 
 
 def natural_instruction(record):
@@ -126,7 +142,7 @@ def natural_instruction(record):
 
 def model_context(binding):
     """Bound QC context contains no local paths or original private protocol."""
-    return {'protocol':VERSION,'source_attempt_id':binding['source_attempt_id'],
+    return {'protocol':binding['protocol'],'source_attempt_id':binding['source_attempt_id'],
         'source_interval':binding['source_interval'],'source_operations':binding['source_operations'],
         'historical_boundary_image_sha256':binding['boundary_evidence']['image']['sha256'],
         'historical_boundary_tree_sha256':binding['boundary_evidence']['state']['sha256'],

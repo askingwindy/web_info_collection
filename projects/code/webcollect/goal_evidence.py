@@ -15,7 +15,7 @@ VERSION = 'webcollect-goal-evidence-2'
 
 def contract_for(task):
     from .react_session import struct_goal
-    if task.get('fragment', {}).get('plan_protocol') not in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8'):
+    if task.get('fragment', {}).get('plan_protocol') not in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
         return None
     objective = task['fragment'].get('session_objective', {}).get('objective') or struct_goal(task)
     return objective.get('evidence_contract') if isinstance(objective, dict) else None
@@ -333,7 +333,7 @@ def reading_evidence(s, start, contract):
                 and (branch.get('provider_reply') or {}).get('choice') == reply.get('choice')
                 and reply.get('attempt_id') == s.attempt_id and origin['document_identity'] == landing_doc):
             archived = []
-            if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') == 'webcollect-banded-conditional-plan-8':
+            if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') in ('webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
                 # A selected passage remains evidence after useful reading in the
                 # same opened document; it is never relabelled as current text.
                 for passage in passages:

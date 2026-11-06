@@ -17,15 +17,15 @@ def audit_capture(batch, sample_id):
         projection=projection_index(evidence)
         source_evidence=evidence
         if projection is not None:
-            from .trusted_prefix import VERSION, project_prefix
+            from .trusted_prefix import RULES as PREFIX_RULES, project_prefix
             from .postprocess import session_record
             index=read_json(projection)
             binding=index.get('binding')
-            if index.get('protocol')!=VERSION or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',index.get('directory','')):
+            if index.get('protocol') not in PREFIX_RULES or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',index.get('directory','')):
                 raise ValueError('Prefix capture projection differs from delivered interval')
             source=session_record(evidence/'raw',allow_unknown_for_prefix=True)
             actual=project_prefix(source,evidence/'raw',binding['source_interval']['end_step'],
-                {'attempt_id':binding['source_attempt_id']})['trusted_prefix']
+                {'attempt_id':binding['source_attempt_id']},rule=binding['protocol'])['trusted_prefix']
             if actual!=binding:raise ValueError('Prefix capture projection source changed')
             evidence=evidence/index['directory']
         # A fragment sample ends mid-business by contract: its complete step

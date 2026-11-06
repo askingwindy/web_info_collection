@@ -1,7 +1,10 @@
 """Explicit direct-article reading: original body, observed links, immediate return.
 
-This version does not change the older search/reading evidence contract. Native
-browser Find is not observable here and is deliberately not offered or simulated.
+This version does not change the older search/reading evidence contract. The
+browser-native Find bar belongs to browser chrome, which the current headless
+viewport host cannot open, type into or evidence; the capability is declared
+unavailable rather than prohibited, and page-DOM retrieval never masquerades
+as a native Ctrl/Cmd+F.
 """
 from urllib.parse import urlsplit,unquote,parse_qs
 import re
@@ -89,8 +92,13 @@ def before_action(task,state,action,arguments,cid=None,*,pending=None):
         focused=[elements.get(v['element_id'],{}) for v in state.get('values',[]) if v.get('focused')]
         edits=any(e.get('inputable') or e.get('native_role') in ('input','textarea','select') for e in focused)
         activates_button=keys==['space'] and any(e.get('native_role') in ('button','summary') or e.get('element_type')=='button' for e in focused)
-        if len(keys)!=1 or keys[0] not in SCROLL_KEYS or edits or activates_button:
-            raise ValueError('DIRECT_ARTICLE_UNSUPPORTED_HOTKEY_NO_FIND_OR_SUBMIT')
+        # The revoked native-find prohibition is gone: Ctrl/Cmd+F may dispatch
+        # honestly. In the current host it has no observable effect, so it
+        # counts zero effective steps like any other unverified action.
+        find_combo=(len(keys)==2 and keys[1]=='f'
+                    and keys[0] in ('ctrl','control','meta','cmd','command'))
+        if (len(keys)!=1 or keys[0] not in SCROLL_KEYS or edits or activates_button) and not find_combo:
+            raise ValueError('DIRECT_ARTICLE_UNSUPPORTED_HOTKEY_NO_SUBMIT')
         return
     if action!='click':raise ValueError('DIRECT_ARTICLE_ONLY_READING_LINKS_AND_RETURN')
     element=next((e for e in state.get('elements',[]) if e['element_id']==cid),{})

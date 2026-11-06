@@ -573,7 +573,45 @@ def release_observation(ledger, pool, claim):
     return {'state':'observed','candidate_state':'pending','job_id':job['id'],'evidence':evidence}
 
 
-async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None):
+def normalize_entry_url(url):
+    """Merge safe URL-form differences for task-duplicate matching: scheme
+    upgrade (http==https), lowercase host, percent-decoded path, default-port
+    drop. Genuine redirects (.html drop, path changes) stay distinct -- only
+    the live browser observation can resolve those."""
+    from urllib.parse import urlsplit, urlunsplit, unquote
+    if not isinstance(url, str) or not url:
+        return url
+    parts = urlsplit(url.strip())
+    scheme = 'https' if parts.scheme in ('http', 'https') else parts.scheme.lower()
+    host = (parts.hostname or '').lower()
+    if parts.port and parts.port not in (80, 443):
+        host = f'{host}:{parts.port}'
+    return urlunsplit((scheme, host, unquote(parts.path or '/'), parts.query, parts.fragment))
+
+
+def tasked_entry_index(registry_path):
+    """Normalized (entry_url, requested_goal) pairs that already hold consumer
+    tasks. A fresh candidate re-deriving an existing task's key would be
+    refused as a paused duplicate only after burning a claim and an entry
+    observation; the 2026-11-06 effort experiment lost 28% of its pages to
+    exactly this."""
+    import sqlite3
+    con = sqlite3.connect(f"file:{Path(registry_path).resolve()}?mode=ro", uri=True)
+    try:
+        pairs = set()
+        for (task_json,) in con.execute('SELECT task_json FROM m4_tasks'):
+            try:
+                task = json.loads(task_json)
+            except (TypeError, ValueError):
+                continue
+            goal = ((task.get('workflow_proposal') or {}).get('spec') or {}).get('goal', {}).get('structured')
+            pairs.add((normalize_entry_url(task.get('initial_url')), canonical(goal)))
+        return pairs
+    finally:
+        con.close()
+
+
+async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None):
     """Exactly one original claim, one goal and at most one saved result."""
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
     current=pool.get_claim(claim['claim_id'])
@@ -584,6 +622,19 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     if current['stage']!='claimed': return finish_or_reconcile(pool,claim)
     paths = startup_check(ledger, output=output, registry=registry, policy=policy, history_set=history_set, qc_policy=qc_policy, pool=pool)
     output, registry, policy, history_set = (paths[k] for k in ('output','registry','policy','history_set'))
+    snapshot = claim['snapshot']
+    # A never-before-claimed candidate whose entry URL and requested goal already
+    # hold a registry task re-derives that task's key: execution would be refused
+    # as a paused duplicate. Close it now with zero browser and model cost, before
+    # the claim stage advances. Legitimate research/recovery re-runs carry prior
+    # claims on the same candidate and pass.
+    if (not pool.has_prior_claims(claim['candidate_id'], claim['claim_id'])
+            and (normalize_entry_url(snapshot.get('entry_url')), canonical(snapshot.get('requested_goal')))
+                in tasked_entry_index(registry)):
+        reason = 'TASKED_URL_DUPLICATE: 该入口 URL 与目标在注册库已存在任务（task_key 重复）'
+        pool.finish(claim, state='failed', stage='claim', reason=reason)
+        return {'state': 'failed', 'stage': 'claim', 'reason': reason,
+                'formal_attempts': 0, 'browser_calls': 0, 'model_calls': 0}
     supplied_policy = load_json(policy)
     objective_binding=None
     if session_objective is not None:
@@ -647,7 +698,8 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
                 generator='react-url', history_registry=registry, history_set=history_set,
                 react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
                 react_site_category=hints['category'], react_app_name=hints['name'],
-                react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles,'session_objective':objective_binding})
+                react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles,'session_objective':objective_binding,
+                    **({'effort_profile':effort_profile} if effort_profile else {})})
             catalog = root/'planning/catalog.json'
         else:
             anchor=await first_observation(ledger,claim,root)

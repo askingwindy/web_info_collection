@@ -695,7 +695,7 @@ def _write_terminal_step(evidence, record, ids):
     return raw
 
 
-def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, validators=(), prefix_end_step=None):
+def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, validators=(), prefix_end_step=None, prefix_rule=None):
     """Derive, validate, record and seal; reprocessing appends, never re-collects.
 
     `validators` are deterministic delivery checks (capture audit, producer
@@ -706,8 +706,8 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     raw_root = evidence_root / 'raw'
     record = session_record(raw_root, allow_unknown_for_prefix=prefix_end_step is not None)
     if prefix_end_step is not None:
-        from .trusted_prefix import project_prefix
-        record = project_prefix(record, raw_root, prefix_end_step, ids)
+        from .trusted_prefix import project_prefix, VERSION as PREFIX_RULE_V1
+        record = project_prefix(record, raw_root, prefix_end_step, ids, rule=prefix_rule or PREFIX_RULE_V1)
     task = record['task']
     derivations_path = evidence_root / 'derivations.jsonl'
     prior = []

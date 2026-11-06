@@ -276,6 +276,36 @@ def _image_regions(state, *, unloaded=False):
     return regions
 
 
+def _unrelated_failed_images(state):
+    """Failed images whose own exclusion evidence proves they occupy no target,
+    result, visible text or control area, with no unknown paint or coverage.
+
+    A readiness-only exemption: the exact-pixel comparison never masks their
+    blank boxes, and images related to the task's protected content stay held.
+    """
+    safe=set()
+    for image in state.get('capture_images',[]):
+        reasons=image.get('exclusion_reasons')
+        if not isinstance(reasons,list) or 'image_not_loaded' not in reasons:
+            continue
+        if not (image.get('complete') is True and image.get('natural_width')==0
+                and image.get('natural_height')==0):
+            continue
+        basis=image.get('exclusion_basis',{})
+        samples=basis.get('hit_samples')
+        if (not isinstance(basis,dict) or basis.get('schema_version')!='webcollect-decorative-image-basis-1'
+                or basis.get('protected_overlap') is True
+                or basis.get('text_or_control_overlap') is True
+                or basis.get('unknown_paint_overlaps')
+                or basis.get('unbounded_paint_sources')
+                or 'covered_or_unknown_hit' in reasons
+                or not isinstance(samples,list)
+                or not all(isinstance(h,dict) and h.get('ancestor') is True for h in samples)):
+            continue
+        safe.add(image['element_id'])
+    return safe
+
+
 def _media_regions(state):
     width,height=state['screen_resolution'];regions=[]
     for media in state.get('capture_media',[]):
@@ -327,10 +357,11 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             failed=[i for i in original.get('capture_images',[]) if not
                     (i.get('complete') and i.get('natural_width',0)>0 and i.get('natural_height',0)>0)]
             safe={r['element_id'] for r in _image_regions(original,unloaded=True)}
+            safe |= _unrelated_failed_images(original)
             if failed and all(i.get('element_id') in safe for i in failed):
                 projected['capture_readiness']['images_ready']=True
                 loading_proof.append({'state_fingerprint':fingerprint(original),'images':deepcopy(failed),
-                    'reason':'Explicit decorative failed images disjoint from target, text, controls and protected results; pixels remain exact.'})
+                    'reason':'Failed images carry their own proof of being disjoint from target, results, text, controls and unknown paint; pixels remain exact.'})
         from .capture_geometry import compare_geometry
         right,geometry_proof=compare_geometry(left,right)
     loaded=_loaded(left) and _loaded(right)
