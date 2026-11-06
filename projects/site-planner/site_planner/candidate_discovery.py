@@ -671,9 +671,35 @@ def _registry_tasked_pairs(pool, batch):
     return pairs
 
 
+def _application_pending_cap(pool, batch):
+    """Per-application pending inventory ceiling from the frozen batch config
+    (default 100). The 2026-11-06 stock audit found one application holding
+    17.7% of all pending pages; over-concentrated supply is a single point of
+    failure once that site rots."""
+    with pool.pool.connect() as con:
+        frozen = con.execute('SELECT config FROM runs WHERE id=?', (batch,)).fetchone()
+    return int((json.loads(frozen[0]) if frozen else {}).get('application_pending_cap', 100))
+
+
+def _app_pending_over_limit(pool, batch, application_id, header, row):
+    if not application_id:
+        return None
+    cap = _application_pending_cap(pool, batch)
+    with pool.pool.connect() as con:
+        pending = con.execute("SELECT COUNT(*) FROM data_candidates WHERE application_id=? AND state='pending'",
+                              (application_id,)).fetchone()[0]
+    if pending < cap:
+        return None
+    return pool.record_row_conclusion(header, result='OVER_LIMIT',
+        reason=f'APP_PENDING_CAP: application pending inventory {pending} >= {cap}', original_row=row)
+
+
 def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *, application_id=None):
     if pool.consumption(candidate['entry_url'],kind=candidate.get('candidate_kind')):
         return pool.record_row_conclusion(header,result='REJECTED',reason='NO_CONSUME: producer image-only page exclusion',original_row=row)
+    over = _app_pending_over_limit(pool, batch, application_id, header, row)
+    if over is not None:
+        return over
     from webcollect.planning import canonical as _canonical
     from webcollect.candidate_consumer import normalize_entry_url
     if ((normalize_entry_url(candidate['entry_url']), _canonical(candidate.get('requested_goal')))
@@ -684,6 +710,9 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
         try:
             app = pool.pool.application(candidate['entry_url'])
             application_id = application_id or (app or {}).get('id')
+            over = _app_pending_over_limit(pool, batch, application_id, header, row)
+            if over is not None:
+                return over
             source = site_tables.Discovery(pool).source(application_id,candidate['entry_url'],source)
             if ('expected_site_decision_id' in source
                     and source['expected_site_decision_id'] != source['site_decision_id']):
