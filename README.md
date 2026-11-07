@@ -10,7 +10,7 @@
 
 2026-11-05 后续研发采用“必要工程设计 → 集中完成代码 → 一次集成测试 → 稳定基线试跑”。Agent 修改完成后用真实 GLM 验证基线样本；协议不匹配优先按 Agent 实际输出修复工程接入，减少反复单测，禁止过度设计与过度防御编程，以快速实现功能和上线为核心。[执行约定](AGENTS.md#修改与验证)
 
-2026-11-07 Muxtly 正规 Runtime 保存闭环尝试按停止规则阻断于生产者候选发布：新隔离研发工程与调用方目标文件经 `candidate_project init`/`produce-entries --goals` 正式建立并完成 4 次真实 GET 与 1 次站点分类；第二个生产者模型会话被账户轮换派到 1113 额度账户，`ai-target-page-purpose-1` 封存 UNKNOWN 后同源生产者派发被冻结口径永久隔离，无既有结算入口。零消费会话、零保存；解锁选项与全部账面证据见[阻断记录](verify_results/consumer-runtime-muxtly-20261107-r01/README.md)。
+2026-11-07 Muxtly 正规 Runtime 保存闭环打通：生产者 AI 发布路径被 1113-UNKNOWN 阻断（原账保留）后，固定基线改经现有公开候选登记 API `CandidatePool.put()`（baseline_import，r01 生产者真实文件作源引用）重新登记，消费者链 claim→entry_session→ReactSession→postprocess→Runtime 提交一次完成，可信前缀形式真实保存（7 有效步、4 次 GLM、0 UNKNOWN，S000001_sample_000001=collected_pending_review，哈希/单次提交/心跳/阶段计时全核验）；本会话目标计算未完成（计算按钮未点击，goal UNVERIFIED），按不连续重试规则停止，研发结果不计生产量。[完整结果与更正措辞](verify_results/consumer-runtime-muxtly-20261107-r01/README.md)
 
 2026-11-07 消费者工程与 Agent 整体优化一轮已实施并集成：visit UNKNOWN 迟到结算竞态、收尾重段阻塞事件循环、弱 finish_when 提前收尾（含 finish_early 全协议链）、反馈收据版本化追加、history 重复图折叠与阶段计时。原 12 候选配对基线因用户删除 candidate-project 目录全部未覆盖；改用两个固定基线样本与读书网目标在新研发账本配对真实 GLM 复验（Muxtly high/high 8 步目标 VERIFIED；其余因 429 UNKNOWN、节点重绑定循环或能力边界有界失败）。effort 保持未决定。[改动、集成与真实结果](verify_results/consumer-overall-optimization-20261107-r01/)
 
