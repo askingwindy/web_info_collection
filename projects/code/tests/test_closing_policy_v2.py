@@ -9,7 +9,7 @@ import test_react_native as native_fixture
 from test_react_session import ReactHarness, act_step, decide
 from test_react_native import scroll,finish
 from webcollect.react_session import build_url_task
-from webcollect.closing_policy import VERSION,annotation_errors
+from webcollect.closing_policy import V2_VERSION as VERSION,annotation_errors
 from webcollect.postprocess import session_record,effective_trajectory,process
 from webcollect.batch_core import load_json,file_sha,BatchLedger
 

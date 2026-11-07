@@ -15,7 +15,7 @@ VERSION = 'webcollect-goal-evidence-2'
 
 def contract_for(task):
     from .react_session import struct_goal
-    if task.get('fragment', {}).get('plan_protocol') not in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10'):
+    if task.get('fragment', {}).get('plan_protocol') not in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11'):
         return None
     objective = task['fragment'].get('session_objective', {}).get('objective') or struct_goal(task)
     return objective.get('evidence_contract') if isinstance(objective, dict) else None
@@ -239,15 +239,21 @@ def search_focus_from_pair(before, after, proof):
 
 def reading_evidence(s, start, contract):
     typed, sources, opened, passages = [], [], [], []
+    # Sources carry (document_identity, url): a back-navigation revisits the
+    # same result page under a new identity, and its result links stay sources.
     subject, aspects = contract['subject'], contract['aspects']
     landing_doc = None
     downward_reading=[]
+    def is_source_page(observation):
+        return any(identity == observation['document_identity']
+                   or same_url(url, observation['url']) and result_links(observation, start, subject)
+                   for identity, url in sources)
     for step in s.trajectory:
         before, after = (s.observation_records[step[k]] for k in ('before_observation_id', 'after_observation_id'))
         if not (before.get('capture_verified') and after.get('capture_verified')):
             continue
         cid = (step.get('target') or {}).get('control_id')
-        source_doc = any(d == before['document_identity'] for d in sources)
+        source_doc = is_source_page(before)
         if step['action'] == 'type':
             query = (step.get('arguments') or {}).get('text') or ''
             val = after['controls'].get(cid, {}).get('value') or {}
@@ -258,7 +264,7 @@ def reading_evidence(s, start, contract):
                 sources, opened, passages, landing_doc = [], [], [], None
                 downward_reading=[]
                 if result_links(after, start, subject):
-                    sources.append(after['document_identity'])
+                    sources.append((after['document_identity'], after['url']))
         elif step['action'] in ('click','hotkey') and typed:
             entry = typed[-1]
             field = before['controls'].get(entry['field'], {}).get('value') or {}
@@ -270,15 +276,15 @@ def reading_evidence(s, start, contract):
                               (input_form is None or control['binding'].get('form_index') == input_form))
             submitted=(before['document_identity'] == entry['document_identity'] and field.get('value') == entry['query']
                     and (submit_key or submit_control) and urlsplit(before['url']).netloc == urlsplit(after['url']).netloc)
-            if submitted and result_links(after, start, subject) and after['document_identity'] not in sources:
-                sources.append(after['document_identity'])
+            if submitted and result_links(after, start, subject) and all(
+                    identity != after['document_identity'] for identity, _ in sources):
+                sources.append((after['document_identity'], after['url']))
             article=state(after)
             headings=[e for e in article.get('elements',[]) if e.get('visible') and e.get('native_role')=='h1' and norm(e.get('text',''))==norm(subject)]
             if submitted and before['document_identity']!=after['document_identity'] and len(headings)==1 and any(
                     e.get('visible') and len((e.get('text') or '').strip())>=12 and e.get('native_role') not in ('a','input','button','h1','h2','h3')
                     and region_matches(article,e['element_id'],'正文') for e in article.get('elements',[])):
                 landing_doc=after['document_identity'];passages=[]
-                sources.append(landing_doc)
                 opened.append({'text':headings[0]['text'],'href':after['url'],'landing':after['url'],
                                'operation_id':step['operation_id'],'source':'verified_search_submission_direct_article'})
             # Delayed same-document suggestions can appear after the input capture.
@@ -333,7 +339,7 @@ def reading_evidence(s, start, contract):
                 and (branch.get('provider_reply') or {}).get('choice') == reply.get('choice')
                 and reply.get('attempt_id') == s.attempt_id and origin['document_identity'] == landing_doc):
             archived = []
-            if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') in ('webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10'):
+            if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') in ('webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11'):
                 # A selected passage remains evidence after useful reading in the
                 # same opened document; it is never relabelled as current text.
                 for passage in passages:
@@ -353,7 +359,7 @@ def reading_evidence(s, start, contract):
                        and option.get('passage') == candidate for option in branch.get('options', [])):
                     selected = candidate
                     break
-    current_source = s.current['document_identity'] in sources
+    current_source = any(identity == s.current['document_identity'] for identity, _ in sources) or is_source_page(s.current)
     if typed and not current_source and s.current['document_identity'] == typed[-1]['document_identity']:
         field = s.current['controls'].get(typed[-1]['field'], {}).get('value') or {}
         current_source = bool(field.get('value') == typed[-1]['query'] and result_links(s.current,start,subject))

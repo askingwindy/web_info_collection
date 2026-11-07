@@ -35,7 +35,7 @@ class BandedSessionTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
             'rule_version':'1.0.0','sites':[{'site_id':'S000001','uri':self.page.url,'site_category':self.task['site_category']}],
             'samples':[self.ids['sample_id']]}
 
-    def recorded(self,n=5,name='banded',bad=None,mark_endpoint=True):
+    def recorded(self,n=5,name='banded',bad=None,mark_endpoint=True,task=None):
         self.prompts=[]
         original=self.surface.execute_action
         def execute(kind,args):
@@ -50,7 +50,7 @@ class BandedSessionTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
             return {'name':'submit_plan','arguments':plan,'tool_call_id':'provider-first',
                     'assistant_message':{'role':'assistant','tool_calls':[]},'request_id':'mock-provider'}
         evidence=self.root/name/'evidence'/self.ids['sample_id']
-        return ReactSession(self.task,evidence/'raw',choose,self.page,steps_directory=evidence,attempt_id='offline-plan'),evidence
+        return ReactSession(self.task if task is None else task,evidence/'raw',choose,self.page,steps_directory=evidence,attempt_id='offline-plan'),evidence
 
     async def test_first_plan_then_five_host_actions_finish_and_export_qc_input(self):
         s,e=self.recorded();r=await s.run()
@@ -283,34 +283,15 @@ class BandedSafetyTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
     async def test_contracted_seven_step_proposal_leaves_one_slot_for_the_visible_result(self):
         from webcollect.goal_evidence import VERSION as evidence_version
         from webcollect.react_session import ReactStop
+        from webcollect.banded_plan import V10_VERSION
+        from webcollect.closing_policy import V2_VERSION as END_V2
 
-        session, _ = self.recorded(7, name='contracted-seven')
-        session.task['fragment']['session_objective'] = {'objective':{
-            'kind':'calculation', 'description':'读出面积',
-            'evidence_contract':{'version':evidence_version, 'kind':'calculation',
-                'inputs':[{'label':'长','value':'12.5'}], 'result_label':'面积','unit':'平方英尺'}}}
-        await session._observe()
-        controller = session.plan_controller
-        await controller.request(session)
-        self.assertEqual(controller.check_page_urls['p0'], self.page.url)
-        self.assertEqual(len(controller.frozen_plan['steps']), 7)
-        self.assertEqual(controller.target_steps, 8)
-        controller.position = 7
-        session.trajectory = [{'effect_evidence':{'verified':True}} for _ in range(7)]
-        async def choose_last(prompt):
-            self.assertEqual(prompt['replan_contract']['remaining_effective_limit'], 1)
-            self.assertIn('replan', {option['choice'] for option in prompt['options']})
-            remaining = plan_for(prompt, 7)
-            remaining['steps'] = [{'action':'click','target':{'text':'计算面积'},
-                'purpose':'取得本次计算结果','expected':{'kind':'goal_evidence'}}]
-            remaining['finish_when'] = {'kind':'goal_evidence'}
-            return {'choice':'replan','plan':remaining}
-        session.choose = choose_last
-    async def test_contracted_seven_step_proposal_leaves_one_slot_for_the_visible_result(self):
-        from webcollect.goal_evidence import VERSION as evidence_version
-        from webcollect.react_session import ReactStop
-
-        session, _ = self.recorded(7, name='contracted-seven')
+        # V10 keeps the historical eight-slot contracted flow; V11's twelve-slot
+        # long ceiling and its one-shot excess correction are covered by
+        # test_long_plan_20261107.py.
+        session, _ = self.recorded(7, name='contracted-seven',
+                                   task=build_url_task(url=self.page.url, task_version='plan',
+                                                       ending_policy=END_V2, plan_protocol=V10_VERSION))
         session.task['fragment']['session_objective'] = {'objective':{
             'kind':'calculation', 'description':'读出面积',
             'evidence_contract':{'version':evidence_version, 'kind':'calculation',
@@ -352,9 +333,14 @@ class BandedSafetyTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
 
     async def test_plain_replan_remaining_extends_to_session_ceiling_after_one(self):
         # V10: the remaining path is bounded by the shared session ceiling,
-        # not by the original plan length minus executed steps.
+        # not by the original plan length minus executed steps. (V11's same-kind
+        # excess takes the one-shot budget_feedback correction instead of the
+        # hard raise; covered in test_long_plan_20261107.py.)
+        from webcollect.banded_plan import V10_VERSION
+        from webcollect.closing_policy import V2_VERSION as END_V2
         for remaining,accepted in ((7,True),(8,False)):
-            s,_=self.recorded(name='remaining-'+str(remaining));await s._observe()
+            s,_=self.recorded(name='remaining-'+str(remaining),task=build_url_task(
+                url=self.page.url,task_version='plan',ending_policy=END_V2,plan_protocol=V10_VERSION));await s._observe()
             c=s.plan_controller;initial=c.prompt(s)
             c.plan=plan_for(initial);c.submitted=True;c.frozen_band='five';c.target_steps=5
             s.trajectory.append({'effect_evidence':{'verified':True}})

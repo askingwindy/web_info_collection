@@ -352,7 +352,10 @@ def assert_current_evidence(scope, value):
                 walk(entry)
         elif isinstance(item, dict):
             if item.get('schema_version')=='candidate-research-replay-1':
-                _require(set(item)=={'schema_version','original_claim_id','objective','authorization','production_counted'}
+                required={'schema_version','original_claim_id','objective','authorization','production_counted'}
+                fields=set(item)
+                _require((fields==required or fields==required|{'objective_origin'})
+                         and item.get('objective_origin','original') in ('original','model-proposed-research')
                          and item['production_counted'] is False and bool(item['original_claim_id']), 'invalid research input metadata')
                 _require(all(_ref(Path(item[k]['path']))==item[k] for k in ('objective','authorization')), 'research input metadata changed')
                 objective=load_json(item['objective']['path']);authorization=load_json(item['authorization']['path'])

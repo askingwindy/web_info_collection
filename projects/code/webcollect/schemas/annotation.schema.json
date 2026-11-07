@@ -667,7 +667,10 @@
                     "type": "object",
                     "properties": {
                       "protocol": {
-                        "const": "webcollect-five-eight-attempt-ending-2"
+                        "enum": [
+                          "webcollect-five-eight-attempt-ending-2",
+                          "webcollect-banded-attempt-ending-3"
+                        ]
                       }
                     },
                     "required": [

@@ -210,7 +210,8 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
     the same entry is a new transparent version, never a silent duplicate.
     """
     if plan_protocol is not None and ending_policy is None:
-        from .closing_policy import VERSION as ending_policy
+        from .closing_policy import VERSION as CURRENT_ENDING,V2_VERSION as LEGACY_ENDING
+        ending_policy=CURRENT_ENDING if plan_protocol=='webcollect-banded-conditional-plan-11' else LEGACY_ENDING
     if site_category is None:
         site_category = 'UNKNOWN' if decision_protocol == NATIVE_VERSION else '综合'
     from .collect import verify_public_url
@@ -432,11 +433,13 @@ def validate_task(task):
             raise ValueError('reasoning_effort_profile requires a native conditional-plan task')
         if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
             raise ValueError('Invalid frozen reasoning effort profile')
-    if fragment.get('plan_protocol') and fragment.get('ending_policy')!='webcollect-five-eight-attempt-ending-2':
-        raise ValueError('Conditional plans require the frozen V2 atomic ending policy')
+    from .closing_policy import VERSION as CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
+    if fragment.get('plan_protocol'):
+        expected_close=CLOSE_POLICY if fragment['plan_protocol']=='webcollect-banded-conditional-plan-11' else LEGACY_CLOSE_POLICY
+        if fragment.get('ending_policy')!=expected_close:
+            raise ValueError('Conditional plan and atomic ending policy versions do not match')
     from .reading_progress import END_POLICY
-    from .closing_policy import VERSION as CLOSE_POLICY
-    if fragment.get('ending_policy') not in (None,END_POLICY,CLOSE_POLICY):
+    if fragment.get('ending_policy') not in (None,END_POLICY,*CLOSE_POLICIES):
         raise ValueError('Unknown frozen ending policy')
     if 'glm_http_call_limit' in spec or 'glm_http_call_limit' in fragment:
         if not native or any(type(part.get('glm_http_call_limit')) is not int or
@@ -994,7 +997,10 @@ class ReactSession:
 
     def _range_close(self, kind, reason, *, unknown=False, force_pending=False):
         """Host finish without another model request or browser action."""
-        from .closing_policy import VERSION as POLICY
+        from .closing_policy import attempt_limit
+        POLICY=self.task['fragment']['ending_policy']
+        band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
+        limit=attempt_limit(self.task,band)
         refs=getattr(self,'business_attempt_refs',[])
         attempts=[load_json(ref['path']) for ref in refs]
         tail_dispatches=self.actual_dispatches-len(self.trajectory)
@@ -1029,6 +1035,7 @@ class ReactSession:
         unknown=bool(unknown or self.unknown or (tail_dispatches and not safe and not tail_known))
         flagged=kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
         self.collection_ending={'protocol':POLICY,'kind':kind,'flagged':flagged,'reason':reason,
+            **({'attempt_limit':limit,'attempt_band':band} if POLICY=='webcollect-banded-attempt-ending-3' else {}),
             'business_attempts':len(refs),'actual_atomic_dispatches':self.actual_dispatches,
             'verified_effective_steps':len(self.trajectory),'unverified_tail_dispatches':tail_dispatches,
             'zero_dispatch_attempts':sum(a['actual_dispatches_delta']==0 for a in attempts),
@@ -1049,7 +1056,7 @@ class ReactSession:
             'last_attempt':attempts[-1] if attempts else None,
             'raw_only_pending':not safe}
         self.event('range-finish',collection_ending=self.collection_ending)
-        self.stop_reason='budget' if kind=='EIGHT_ATTEMPT_LIMIT' else 'ready' if kind in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN') else 'blocked'
+        self.stop_reason='budget' if kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') else 'ready' if kind in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN') else 'blocked'
         self.stop_summary=reason
         self.unknown=self.unknown or unknown
         self.state='finished' if safe else 'closed_pending_reconciliation'
@@ -1077,10 +1084,13 @@ class ReactSession:
             actual_dispatches_delta=dispatch_delta,effective_steps_delta=effective_delta,outcome=outcome,reason=reason)
         if not hasattr(self,'business_attempt_refs'):self.business_attempt_refs=[]
         self.business_attempt_refs.append(ref)
-        if 5<=number<=8 and outcome!='VERIFIED':
+        from .closing_policy import attempt_limit,limit_kind
+        band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
+        limit=attempt_limit(self.task,band)
+        if 5<=number<=limit and outcome!='VERIFIED':
             self._range_close(outcome,reason,unknown=unknown)
-        elif number==8 and self.plan_controller is None:
-            self._range_close('EIGHT_ATTEMPT_LIMIT','已达到8次业务动作尝试；未获得目标完成确认，保存真实末态待审')
+        elif number==limit and self.plan_controller is None:
+            self._range_close(limit_kind(limit),f'已达到{limit}次业务动作尝试；未获得目标完成确认，保存真实末态待审')
 
     async def _tool_act(self, arguments):
         if not self._v2():return await self._perform_act(arguments)
@@ -1427,8 +1437,11 @@ class ReactSession:
             return await self._perform_primitive(step,row,operation,observation,arguments,element,dispatch,executed,prior_raws)
         self._awaiting_primitive_attempt=False
         number=len(getattr(self,'business_attempt_refs',[]))+1
-        if number>8:
-            self._range_close('EIGHT_ATTEMPT_LIMIT','已达8次业务动作尝试，不再派发第9次')
+        from .closing_policy import attempt_limit,limit_kind
+        band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
+        limit=attempt_limit(self.task,band)
+        if number>limit:
+            self._range_close(limit_kind(limit),f'已达{limit}次业务动作尝试，不再派发第{limit+1}次')
             return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
         self._active_business_attempt=number
         before_dispatch=self.actual_dispatches;before_effective=len(self.trajectory)
@@ -1891,14 +1904,16 @@ class ReactSession:
                 result['reading_progress'] = reading(states, self.current['observation_id'], self.trajectory)
                 result['ending_evidence'] = ending(len(self.trajectory), states[self.current['observation_id']])
             if self._v2():
-                from .closing_policy import system_prompt, VERSION as POLICY
-                # V1 remains byte-for-byte available to historical tasks.
-                result['system'] = system_prompt(result['system'])
+                from .closing_policy import system_prompt,attempt_limit
+                POLICY=self.task['fragment']['ending_policy']
+                band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
+                limit=attempt_limit(self.task,band)
+                result['system'] = system_prompt(result['system'],self.task)
                 result['ending_evidence']={'protocol':POLICY,'business_attempts':len(getattr(self,'business_attempt_refs',[])),
                     'actual_atomic_dispatches':self.actual_dispatches,'verified_effective_steps':len(self.trajectory),
                     'unverified_tail_dispatches':self.actual_dispatches-len(self.trajectory),
-                    'finish_counted_as_action':False,'attempt_interval':[5,8]}
-                result['reading_progress']['instruction']='按当前新正文与位置核对目标；达到目标就finish，不凑步。5–8次业务动作尝试内异常尾步由宿主收口并标记。'
+                    'finish_counted_as_action':False,'attempt_interval':[5,limit]}
+                result['reading_progress']['instruction']=f'按当前新正文与位置核对目标；达到目标就finish，不凑步。5–{limit}次业务动作尝试内异常尾步由宿主收口并标记。'
             if self.task['fragment'].get('planning_intent_protocol'):
                 result['planning_basis']={'site_primary_category':self.task.get('site_category','UNKNOWN'),
                     'page_purpose':(self.task.get('candidate_binding') or {}).get('candidate',{}).get('page_purpose','UNKNOWN'),
@@ -2247,8 +2262,11 @@ class ReactSession:
         self.short_flow, self.short_flow_reason = flow_classification(len(self.trajectory))
         if self._v2() and not getattr(self,'collection_ending',None):
             original_stop=self.stop_reason
+            from .closing_policy import attempt_limit
+            band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
+            limit=attempt_limit(self.task,band)
             budget_prefix=(original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
-                           and 5<=len(getattr(self,'business_attempt_refs',[]))<=8 and bool(self.trajectory))
+                           and 5<=len(getattr(self,'business_attempt_refs',[]))<=limit and bool(self.trajectory))
             # Every dispatch accounted for by a definite attempt outcome keeps
             # the closeout definite: a known zero-effect tail never turns the
             # whole range into an effect UNKNOWN by closure default.
@@ -2511,12 +2529,12 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
     from .model_gateway import ModelGateway
     from .agent_controller import _job_request_count
     from .goal_evidence import contract_for
+    from .banded_plan import VERSIONS as PLAN_VERSIONS,V9_VERSION,V10_VERSION,V11_VERSION
     gateway = None  # Cached/UNKNOWN paths do not select or read an account.
     protocol = task['fragment']['decision_protocol']
     plan_protocol = task['fragment'].get('plan_protocol')
-    banded_protocols = ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8',
-                        'webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10')
-    modern_plan = plan_protocol in ('webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10')
+    banded_protocols = PLAN_VERSIONS[6:]
+    modern_plan = plan_protocol in (V9_VERSION,V10_VERSION,V11_VERSION)
     grounded = bool(contract_for(task))
     # V9 dispatches explicit low for the first plan and for ordinary branches;
     # the choice no longer depends on a special evidence contract. Frozen V7/V8
@@ -2617,18 +2635,19 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                     first_timeout = None
                     if patient:
                         first_timeout = choose.first_plan_timeout_seconds
-                    elif prompt['protocol'] in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10'):
+                    elif prompt['protocol'] in PLAN_VERSIONS[5:]:
                         first_timeout = min(300,ledger.config['budget']['lease_seconds']-10)
                     response = await asyncio.to_thread(gateway.call_tool, job, prompt['protocol'],
-                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10') else None), **common)
+                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in PLAN_VERSIONS[4:] else None), **common)
                 else:
                     from .banded_plan import choice_schema
                     from .direct_article import protocol_schema
                     completion=prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1'
+                    branch_limit=prompt.get('replan_contract',{}).get('attempt_limit',8)
                     # V9 ordinary branches use the same choice wire protocol as
                     # grounded branches; V8 and older keep their original form.
                     response = await asyncio.to_thread(gateway.call_message, job, prompt['protocol'],
-                        text_payload, protocol_schema(choice_schema(grounded, inherited=(prompt['protocol']=='webcollect-banded-conditional-plan-8' or modern_plan),wire=modern_plan),prompt.get('evidence_contract'),completion=completion), grounded_choice=(grounded or modern_plan), content_envelope=('single-json-commentary-1' if completion or modern_plan else 'single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
+                        text_payload, protocol_schema(choice_schema(grounded, inherited=(prompt['protocol']=='webcollect-banded-conditional-plan-8' or modern_plan),wire=modern_plan,max_steps=branch_limit),prompt.get('evidence_contract'),completion=completion,max_steps=branch_limit), grounded_choice=(grounded or modern_plan), content_envelope=('single-json-commentary-1' if completion or modern_plan else 'single-json-fence-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8') else None), **common)
                 ledger.finish(job, result=response)
                 return response
             response = await asyncio.to_thread(gateway.call_tool, job, protocol,

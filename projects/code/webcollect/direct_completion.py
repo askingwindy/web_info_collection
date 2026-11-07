@@ -17,7 +17,7 @@ def enabled(task):
     return direct(task) and task.get('fragment', {}).get('direct_completion_protocol') == VERSION
 
 
-def schema(value):
+def schema(value, *, max_steps=8):
     from .banded_plan import obj, text
     value = deepcopy(value)
     passage = obj({'observation_id':text(200), 'node':text(120), 'quote':text(4000)})
@@ -55,9 +55,9 @@ def schema(value):
             props['checks']['contains']={'type':'object','properties':{'evidence_kind':{'const':'reading'}},'required':['evidence_kind']}
             check=props['checks']['items'];check['properties'].update(
                 evidence_kind={'enum':['reading','actions']},
-                required_step_indices={'type':'array','maxItems':8,'uniqueItems':True,
+                required_step_indices={'type':'array','maxItems':max_steps,'uniqueItems':True,
                     'description':'reading is empty and may be omitted; actions requires original zero-based click/back indices',
-                    'items':{'type':'integer','minimum':0,'maximum':7}})
+                    'items':{'type':'integer','minimum':0,'maximum':max_steps-1}})
             check['required']=list(dict.fromkeys([*[k for k in check.get('required',[]) if k!='required_step_indices'],'evidence_kind']))
             check['properties']['visible_text']['minLength']=0
             check.setdefault('allOf',[]).append({'if':{'properties':{'evidence_kind':{'const':'reading'}},'required':['evidence_kind']},
@@ -98,14 +98,14 @@ def validate_plan(plan):
             raise ValueError('Action check requires ordered original click/back step indices')
 
 
-def initial_plan_issues(plan, observation, contract):
+def initial_plan_issues(plan, observation, contract, *, max_steps=8):
     """All currently decidable proposal errors; no browser action or field repair."""
     from jsonschema import Draft202012Validator
     from .banded_plan import plan_schema
     from .direct_article import protocol_schema,url_key
     from .goal_evidence import norm
     issues=[{'field_path':list(e.absolute_path),'detail':e.message}
-        for e in Draft202012Validator(protocol_schema(plan_schema(True,wire=True,pending_checks=True),contract,completion=True)).iter_errors(plan)]
+        for e in Draft202012Validator(protocol_schema(plan_schema(True,wire=True,pending_checks=True,max_steps=max_steps),contract,completion=True,max_steps=max_steps)).iter_errors(plan)]
     steps=plan.get('steps',[])
     if not isinstance(steps,list):return issues
     for i,c in enumerate(plan.get('checks',[]) if isinstance(plan.get('checks'),list) else []):

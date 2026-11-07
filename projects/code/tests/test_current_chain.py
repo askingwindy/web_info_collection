@@ -24,6 +24,10 @@ class CurrentChainTests(unittest.TestCase):
         descriptor={'schema_version':'candidate-research-replay-1','original_claim_id':'original',
                     'objective':reference(objective),'authorization':reference(authorization),'production_counted':False}
         assert_current_evidence(self.scope,descriptor)
+        for origin in ('original','model-proposed-research'):
+            assert_current_evidence(self.scope,{**descriptor,'objective_origin':origin})
+        with self.assertRaisesRegex(ValueError,'invalid research'):
+            assert_current_evidence(self.scope,{**descriptor,'objective_origin':'invented'})
         with self.assertRaisesRegex(ValueError,'out-of-chain'):
             assert_current_evidence(self.scope,{'research_replay':descriptor,'observation':reference(objective)})
         bad=deepcopy(descriptor);bad['observation']=reference(objective)
