@@ -8,6 +8,7 @@ never grants review states and never lets model text act as a tool result.
 """
 import asyncio
 from copy import deepcopy
+import hashlib
 import json
 import time
 import secrets
@@ -539,7 +540,7 @@ class ReactSession:
 
     def __init__(self, task, directory, choose, page, *, steps_directory=None, navigation=None,
                  url_check=None, preflight=None, frame_guard=None, site_context=None,
-                 entry_observation=None, attempt_id=None):
+                 entry_observation=None, attempt_id=None, phase_ledger=None):
         validate_task(task)
         self.task = deepcopy(task)
         self.native = self.task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
@@ -565,6 +566,9 @@ class ReactSession:
         self.frame_guard = frame_guard
         self.context = deepcopy(site_context or {})
         self.attempt_id = attempt_id or str(self.root.resolve())
+        # Optional phase metering into the output's metering/phases.jsonl; the
+        # session never creates or requires a platform of its own.
+        self.phase_ledger = Path(phase_ledger) if phase_ledger else None
         self.active_reference = None
         self.budgets = deepcopy(self.task['fragment']['budgets'])
         self.glm_session_id = getattr(choose, 'glm_session_id', None)
@@ -631,6 +635,15 @@ class ReactSession:
             result['page_actions'] = [name for name in result['page_actions'] if name != 'back']
         return result
 
+    def _phase(self, name, **scope):
+        """Reuse telemetry.phase when a ledger is bound; otherwise a no-op."""
+        from contextlib import nullcontext
+        from .telemetry import phase as _telemetry_phase
+        if self.phase_ledger is None:
+            return nullcontext()
+        return _telemetry_phase(self.phase_ledger, name,
+                                scope={'attempt_id': self.attempt_id, **scope})
+
     # ------------------------------------------------------------------ journal
 
     def event(self, kind, **payload):
@@ -693,7 +706,9 @@ class ReactSession:
         options={'action_scope':action_scope} if action_scope else {}
         try:
             try:
-                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
+                with self._phase('capture_observation', observation=self.used['max_observations'],
+                                 selector=selector):
+                    return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
             except Exception as error:
                 if 'Execution context was destroyed' not in str(error):
                     raise
@@ -1965,7 +1980,8 @@ class ReactSession:
         if not self.native:
             self._consume('max_model_calls')
         try:
-            decision = await self.choose(prompt)
+            with self._phase('model_wait', decision=self.used['max_decisions']):
+                decision = await self.choose(prompt)
         except SessionGLMCallLimit:
             raise
         except BudgetStop as error:
@@ -2340,6 +2356,53 @@ class ReactSession:
                 'unknown': self.unknown, 'failure_class': self.failure_class}
 
 
+def _image_part_sha(part):
+    """SHA of one history image part's decoded payload; None if not a data URL."""
+    import base64 as _b64
+    url = (part.get('image_url') or {}).get('url') or ''
+    marker = ';base64,'
+    if not url.startswith('data:') or marker not in url:
+        return None
+    try:
+        return hashlib.sha256(_b64.b64decode(url.split(marker, 1)[1], validate=False)).hexdigest()
+    except (ValueError, TypeError):
+        return None
+
+
+def dedupe_history_images(history, *, extra_images=1, max_images):
+    """Collapse duplicate-SHA history images, then oldest-truncate to budget.
+
+    Within one outgoing request an identical image (same SHA) never occupies a
+    second image slot: every older duplicate becomes a text reference with its
+    hash prefix; different hashes stay. Afterwards the oldest remaining images
+    beyond the budget (current-frame images are counted via extra_images)
+    become text references too. Original messages are copied, never mutated.
+    """
+    history = deepcopy(history)
+    images = [part for message in history if message.get('role') == 'user'
+              and isinstance(message.get('content'), list) for part in message['content']
+              if isinstance(part, dict) and part.get('type') == 'image_url']
+    latest = {}
+    for part in images:
+        digest = _image_part_sha(part)
+        if digest is not None:
+            latest[digest] = part
+    for part in images:
+        digest = _image_part_sha(part)
+        if digest is not None and part is not latest[digest]:
+            part.clear()
+            part.update(type='text',
+                        text='该轮与后续某轮截图内容相同（sha256 前缀 ' + digest[:12] + '），已由最新一轮图片代表，此处省略重传。')
+    remaining = [part for message in history if message.get('role') == 'user'
+                 and isinstance(message.get('content'), list) for part in message['content']
+                 if isinstance(part, dict) and part.get('type') == 'image_url']
+    excess = max(0, len(remaining) + extra_images - max_images)
+    for part in remaining[:excess]:
+        part.clear()
+        part.update(type='text', text='该轮截图已保存在原观察记录中，本次请求省略重传。')
+    return history
+
+
 def react_chooser(ledger, task, attempt_id, *, parent_job=None):
     """Each decision keeps an original ledger identity; UNKNOWN is never resent."""
     if not isinstance(attempt_id, str) or not attempt_id.strip():
@@ -2533,14 +2596,10 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
             history = deepcopy(prompt.get('_history', []))
             if ledger.real_glm:
                 # Keep the current PNG and most recent historical images in this
-                # outgoing message. Original journal, requests and tool IDs stay intact.
-                images = [part for message in history if message['role'] == 'user'
-                          and isinstance(message['content'], list) for part in message['content']
-                          if part.get('type') == 'image_url']
-                excess = max(0, len(images) + 1 - ledger.config['model']['max_images'])
-                for image in images[:excess]:
-                    image.clear()
-                    image.update(type='text', text='该轮截图已保存在原观察记录中，本次请求省略重传。')
+                # outgoing message. Original journal, requests and tool IDs stay
+                # intact; identical images never consume a second image slot.
+                history = dedupe_history_images(history, extra_images=1,
+                                                max_images=ledger.config['model']['max_images'])
             if prompt.get('protocol') in banded_protocols + ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6'):
                 text_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
                 if prompt['phase'] == 'first':

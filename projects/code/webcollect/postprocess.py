@@ -717,8 +717,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         saved = load_json(evidence_root / 'saved_sample.json')
         binding = saved.get('raw_execution', {}).get('trusted_prefix')
         actual = {p.relative_to(delivery_root).as_posix(): file_sha(p) for p in Path(delivery_root).rglob('*') if p.is_file()}
-        excluded={'saved_sample.json','context_cleanup_error.json','derivations.jsonl','planning-feedback-collected_pending_review.json'}
-        captures={p.relative_to(evidence_root).as_posix():file_sha(p) for p in evidence_root.rglob('*') if p.is_file() and p.name not in excluded}
+        captures={p.relative_to(evidence_root).as_posix():file_sha(p) for p in evidence_root.rglob('*') if p.is_file() and not post_seal_name(p.name)}
         if (binding != record['trusted_prefix'] or saved.get('sample_id') != ids['sample_id']
                 or actual != saved.get('sample_files_sha256') or captures!=saved.get('capture_files_sha256')):
             raise ValueError('Existing prefix differs from immutable interval or saved sample')
@@ -844,13 +843,11 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         sample_files = {p.relative_to(delivery_root).as_posix(): file_sha(p)
                         for p in sorted(delivery_root.rglob('*')) if p.is_file()}
         # The append-only derivation ledger and the attempt close-out feedback
-        # receipt are written after the seal by design; the frozen capture hash
-        # never covers them.
-        post_seal = ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl',
-                     'planning-feedback-collected_pending_review.json')
+        # receipts (canonical and every versioned append) are written after the
+        # seal by design; the frozen capture hash never covers them.
         capture_files = {p.relative_to(evidence_root).as_posix(): file_sha(p)
                          for p in sorted(evidence_root.rglob('*')) if p.is_file()
-                         and p.name not in post_seal}
+                         and not post_seal_name(p.name)}
         saved = {'attempt_id': ids.get('attempt_id'), 'sample_id': ids['sample_id'],
                  'sample_files_sha256': sample_files, 'capture_files_sha256': capture_files,
                  'semantic_review': 'REVIEW_REQUIRED',
@@ -898,6 +895,16 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
 def _append_derivation(path, row):
     with Path(path).open('a', encoding='utf-8') as stream:
         stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True, allow_nan=False) + '\n')
+
+
+def post_seal_name(name):
+    """Post-seal close-out receipts never belong to the frozen capture hash.
+
+    Covers the canonical historical feedback names and every versioned
+    appended receipt (same prefix, attempt/content digest suffix).
+    """
+    return (name in ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl')
+            or name.startswith('planning-feedback-'))
 
 
 def write_json_file(path, value):

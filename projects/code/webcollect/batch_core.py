@@ -522,7 +522,23 @@ class BatchLedger:
         if getattr(error,'responsibility',None):metrics['responsibility']=error.responsibility
         with self.transaction() as con:
             row = con.execute('SELECT * FROM top_level_visits WHERE id=?',(visit['id'],)).fetchone()
-            if not row or row['state'] != 'reserved_for_dispatch': raise ValueError('Visit missing or already settled')
+            if not row: raise ValueError('Visit missing or already settled')
+            if row['state'] != 'reserved_for_dispatch':
+                # The lease-recovery/sync path already sealed this reservation as
+                # UNKNOWN. The original worker's late definite outcome is kept as
+                # its own batch event with the original error and usage; the
+                # sealed visit, its execution identity and the site's UNKNOWN
+                # fact are never rewritten. A genuine reconciliation keeps its
+                # own reassessment route. Any other double settlement is a bug.
+                if row['state'] == 'unknown':
+                    self.event(con,'top_level_visit_late_outcome',{'id':visit['id'],'job_id':row['job_id'],
+                        'sealed_state':'unknown','late_state':state,
+                        'late_response_status':response_status,'late_landed_uri':landed_uri,
+                        'late_error_type':type(error).__name__ if error else None,
+                        'late_error_message':str(error) if error else None,
+                        'late_metrics':metrics})
+                    return {'late_outcome_recorded':True,'sealed_state':'unknown','state':state,'id':visit['id']}
+                raise ValueError('Visit missing or already settled')
             con.execute('UPDATE top_level_visits SET finished_at=?,state=?,response_status=?,landed_uri=?,error_type=?,error_message=?,metrics=? WHERE id=?',
                 (time.time(),state,response_status,landed_uri,type(error).__name__ if error else None,str(error) if error else None,
                  canonical(metrics or {}),visit['id']))
@@ -540,7 +556,7 @@ class BatchLedger:
         binding = self.config.get('site_failure_guard')
         if binding is None or self.config['mode'] != 'real':
             return
-        from .site_failure_stop import SiteFailureStore, execution_id
+        from .site_failure_stop import SiteFailureStore, application_key, execution_id
         store = SiteFailureStore(binding)
         with self.connect() as con:
             jobs = {row['id']: dict(row) for row in con.execute('SELECT id,kind,state,lease FROM jobs')}
@@ -557,7 +573,22 @@ class BatchLedger:
             state = 'failed' if row['state'] == 'failed' and responsibility!='unknown' else 'unknown'
             # An event binding, not a hash of the changing SQLite file.
             fact = {key: row[key] for key in ('id', 'job_id', 'target_uri', 'dispatched_at')}
-            store.record(row['target_uri'], execution_id('probe', self.path, row['id']),
+            identity = execution_id('probe', self.path, row['id'])
+            existing = store.execution(identity)
+            if existing is not None:
+                # Exact late-settlement replay: this same visit was already
+                # sealed as UNKNOWN by lease recovery or an earlier sync, and
+                # its row has since taken the original worker's late definite
+                # outcome. The sealed site fact stays authoritative; the late
+                # error is retained as the ledger's own event. Any other
+                # difference (application, stage, evidence/usage binding) is a
+                # real identity conflict and still raises inside record().
+                if (existing['application_key'] == application_key(row['target_uri'], binding.get('application_registry'))
+                        and existing['stage'] == 'probe' and existing['state'] == 'unknown'
+                        and existing['evidence'] == [{'visit_fact': fact}]
+                        and existing['usage_refs'] == [{'ledger': str(self.path), 'visit_id': row['id']}]):
+                    continue
+            store.record(row['target_uri'], identity,
                 stage='probe', state=state, reason=row['error_type'] or 'Unresolved visit dispatch',
                 real_execution=True, evidence=[{'visit_fact': fact}],
                 usage_refs=[{'ledger': str(self.path), 'visit_id': row['id']}], return_status=False)

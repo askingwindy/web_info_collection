@@ -76,6 +76,20 @@ V10_CHOICE_ADDENDUM = (
     '收到目标未绑定反馈时，先看已执行动作数与原图是否已提供：仍缺证据选request_original_image（若可选），'
     '路径失效选replan并给剩余步骤，无法有据继续选stop。原图是补充视觉证据，不是目标完成。'
 )
+# 2026-11-07 goal semantics: first and follow-up rounds share one meaning —
+# the endpoint must prove the requested result, never a pre-existing keyword.
+FIRST_GOAL_SEMANTICS = (
+    '终点必须证明 requested_goal/session_objective 所要求的结果，而不是页面任意位置已有关键词。'
+    '若终点在首帧已经成立，检查它是否只是说明、导航、标签、默认参数或示例；'
+    '需要动作产生的结果必须绑定动作后的新证据。计划长度是路线估计，不是完成依据；'
+    '不得为达到档位添加无关动作，也不得删去原目标必要步骤。'
+)
+BRANCH_GOAL_SEMANTICS = (
+    '先核对原目标/checks、已执行动作的真实效果和剩余计划。'
+    'finish_when 命中只说明该条件可见；剩余计划未走时，确认它确属冗余才能申请提前完成（finish_early，若在options中）。'
+    '聚焦不是输入，输入不是计算，计算说明/示例不是本次计算结果；列表标题不是已读正文。'
+    '自然完成可少于五步并如实标短；无法证明完成时继续有据路线或停止，片段保存由宿主另行判断。'
+)
 
 
 def system_for(task):
@@ -610,6 +624,12 @@ class Controller:
         self.selection=None; self.submitted=False;self.last_document=None;self.visual_confirmations={};self.pending_effect=None
         self.check_page_urls = {}
         self.initial_feedback = None
+        # BF3 close-out state: first-frame endpoint marker, agent early-finish
+        # application and its once-per-session decline marker.
+        self.endpoint_established_at_first_frame=False
+        self.early_finish=None
+        self.early_finish_declined=False
+        self._early_finish_asked=False
         # V10 image-choice accounting: one provision per (observation, branch
         # context); repeats are a protocol fault, not a fresh dispatch budget.
         self.provided_original_for=set()
@@ -793,6 +813,10 @@ class Controller:
                 payload['fact_progress'].pop('session_objective',None)
             for key in ('step_fields','predicate_fields'):
                 payload.get('replan_contract',{}).pop(key,None)
+        # 2026-11-07: one shared goal semantic on every round, appended after
+        # all protocol-specific wording so first and follow-up requests cannot
+        # drift apart on what the endpoint must prove.
+        payload['system'] = payload['system'] + (FIRST_GOAL_SEMANTICS if first else BRANCH_GOAL_SEMANTICS)
         return payload
 
     def _executed_summary(self,s):
@@ -866,7 +890,13 @@ class Controller:
                 'predicate':self.plan['finish_when'],'image':s.current['evidence']['image'],
                 'visual_confirmation':self.visual_confirmations.get(key),
                 'initial_observation_id':getattr(self,'frozen_plan',self.plan)['observation_id'],
-                'session_objective_evidence':__import__('webcollect.session_objective',fromlist=['progress']).progress(s,getattr(self,'frozen_plan',self.plan)['observation_id'])}
+                'session_objective_evidence':__import__('webcollect.session_objective',fromlist=['progress']).progress(s,getattr(self,'frozen_plan',self.plan)['observation_id']),
+                'finish_route':{'planned_steps':len(self.plan['steps']),
+                    'executed_effective_steps':len(s.trajectory),
+                    'remaining_planned_steps':max(0,len(self.plan['steps'])-self.position),
+                    'finish_when_established_on_first_frame':bool(getattr(self,'endpoint_established_at_first_frame',False)),
+                    'completion_origin':('agent_finish_early' if getattr(self,'early_finish',None)
+                                         else 'host_plan_endpoint')}}
 
     def visual_option(self,predicate):
         return [{'choice':'visual_yes','meaning':'当前原图/ROI明确显示此条件；只引用实际可见行和原文',
@@ -932,7 +962,8 @@ class Controller:
         s._last_model_intent=s.event('model-intent',prompt=s._strip_prompt(prompt))
         s._consume('max_decisions')
         try:
-            response=await s.choose(prompt)
+            with s._phase('model_wait', decision=s.used['max_decisions']):
+                response=await s.choose(prompt)
         except OutcomeUnknown as error:
             s.unknown=True
             raise ReactStop('blocked',str(error),'interrupted',unknown=True) from error
@@ -964,18 +995,41 @@ class Controller:
                 if error_page and (len(plan['steps'])!=1 or plan['steps'][0]['action']!='open_url'
                                    or plan['steps'][0].get('page_id') not in ['p'+str(i) for i in range(len(s.page_urls))]):
                     raise ValueError('ERROR_PAGE_ONLY_REGISTERED_RECOVERY_ALLOWED')
+                # BF3 first-frame endpoint check: a finish_when already satisfied
+                # by the initial observation while the plan still carries business
+                # actions is a weak endpoint (page description, navigation,
+                # label, default parameter or example text). The exact endpoint
+                # predicate is evaluated, never a string length or digit test.
+                # Contracted goal-evidence endpoints are exempt: they demand
+                # action-produced evidence by definition, and proved() needs the
+                # accepted plan's frozen observation for them.
+                if (not error_page and plan['steps'] and not s.actual_dispatches
+                        and not getattr(self,'initial_feedback',None)
+                        and (not contract or plan['finish_when']['kind']
+                             not in ('goal_evidence', 'search_results', 'document_changed'))
+                        and self.proved(plan['finish_when'], s)):
+                    raise ValueError('ENDPOINT_VISIBLE_ON_FIRST_FRAME')
                 assigned=s.context.get('band_budget',{}).get('assigned_band')
                 if assigned and plan['band'] not in (assigned,'short'):
                     if not (assigned=='long' and plan['band']=='five' and plan.get('band_reason')):
                         raise ValueError('PLAN_DIFFERS_FROM_HOST_LOCKED_BAND')
             except (ValueError,ValidationError) as error:
-                if not direct_completion or s.actual_dispatches or self.plan is not None or s.unknown:raise
-                if str(error)!='INITIAL_PLAN_HAS_DETERMINISTIC_ERRORS':
+                weak_first_frame = str(error)=='ENDPOINT_VISIBLE_ON_FIRST_FRAME'
+                if ((not direct_completion and not weak_first_frame) or s.actual_dispatches
+                        or self.plan is not None or s.unknown):raise
+                if weak_first_frame:
+                    issues.append({'field_path':['finish_when'],
+                        'detail':'终点条件已在首帧成立，而计划仍含业务动作；该条件可能只是页面说明、导航、标签、默认参数或示例文字，不能证明目标结果。'})
+                elif str(error)!='INITIAL_PLAN_HAS_DETERMINISTIC_ERRORS':
                     issues.append({'field_path':list(getattr(error,'absolute_path',[])),'detail':str(error)})
+                instruction=('首帧已满足该计划声明的终点条件，而计划仍含业务动作：终点若只是说明、导航、标签、默认参数或示例文字，不能作为完成依据；'
+                    '需要动作产生结果的，终点必须绑定动作后的新结果证据（如本次计算产生的新数值、搜索打开后的新正文）。'
+                    '若原目标确属纯观察且首帧已完整回答，可如实零动作结束（不构成样本），不得为产生样本添加无关动作。'
+                ) if weak_first_frame else ('此前提案尚未接受，零业务动作。按同一目标与本观察一次修正全部列明参数错误，重新提交完整计划；不执行错误提案、不猜未来控件。原会话调用预算继续累计。')
                 self.initial_feedback={'version':'webcollect-initial-plan-feedback-1',
                     'attempt_id':s.attempt_id,'observation_id':s.current['observation_id'],
                     'previous_arguments':deepcopy(response['arguments']),'errors':issues,
-                    'instruction':'此前提案尚未接受，零业务动作。按同一目标与本观察一次修正全部列明参数错误，重新提交完整计划；不执行错误提案、不猜未来控件。原会话调用预算继续累计。'}
+                    'instruction':instruction,'weak_first_frame_endpoint':weak_first_frame}
                 s.event('plan-validation-feedback',feedback=self.initial_feedback,provider_response=response,
                         before_first_business_dispatch=True)
                 return
@@ -984,6 +1038,13 @@ class Controller:
                 s.tool_call_ids.add(response['tool_call_id'])
             if s.actual_dispatches:raise ValueError('INITIAL_PLAN_CANNOT_RELOCK_AFTER_DISPATCH')
             self.plan=plan;self.position=0;self.submitted=True
+            # Whether the accepted endpoint was already established by the very
+            # first observation. Such a generalized finish_when can never by
+            # itself complete a no-contract session while planned steps remain;
+            # only executing the route (or an explicitly contracted objective)
+            # can. Natural short flows keep their action-produced endpoints.
+            self.endpoint_established_at_first_frame=bool((self.initial_feedback or {}).get('weak_first_frame_endpoint')) \
+                and self.proved(plan['finish_when'], s)
             self.last_document=deepcopy(s.current['document_identity'])
             self.frozen_band=plan['band'] if assigned=='long' and plan['band']=='five' else assigned or plan['band']
             if s.context.get('band_budget',{}).get('project'):
@@ -1104,7 +1165,29 @@ class Controller:
                     raise ReactStop('budget','同帧重复看图且无新增信息达到无进展上限','collector')
             self.request_original=s.current['observation_id']
             self.provided_original_for.add(key)
-        elif response['choice']=='continue':self.last_document=deepcopy(s.current['document_identity'])
+        elif response['choice']=='finish_early':
+            # The agent explicitly applies for early completion of a remaining
+            # plan. The host re-verifies exactly the facts that made the option
+            # available: synchronized current frame, no pending effect, the
+            # endpoint actually proved, not first-frame established, and no
+            # explicit contract (contracted sessions finish through their own
+            # verified objective instead). A failing check is a protocol fault.
+            if (self.pending_effect is not None or not s.current.get('capture_verified')
+                    or not self.proved(self.plan['finish_when'],s)
+                    or getattr(self,'endpoint_established_at_first_frame',False)
+                    or contract_for(s.task)):
+                raise ValueError('FINISH_EARLY_REJECTED: 提前完成必须绑定由已执行动作产生且当前同步末帧仍证实的终点，并有剩余计划确属冗余的确认')
+            self.early_finish={'decision':s.used['max_decisions'],
+                'remaining_planned_steps':len(self.plan['steps'])-self.position,
+                'finish_when':deepcopy(self.plan['finish_when']),
+                'basis':'agent_requested_action_produced_endpoint',
+                'goal_completion':'UNCONFIGURED_pending_independent_QC'}
+            await self.finish(s,'Agent申请提前完成：剩余计划确属冗余，当前同步末帧已证实终点；目标完成状态待独立QC',endpoint=True)
+        elif response['choice']=='continue':
+            if getattr(self,'_early_finish_asked',False):
+                self._early_finish_asked=False
+                self.early_finish_declined=True
+            self.last_document=deepcopy(s.current['document_identity'])
         elif response['choice']=='replan':
             if not response.get('plan'):raise ValueError('Replan requires a grounded remaining plan')
             # The remaining path may grow or shrink inside the session's shared
@@ -1161,6 +1244,9 @@ class Controller:
         if s.state=='finished':
             # Host endpoint reports a verified fragment, not business or AI acceptance.
             s.event('host-plan-finish',plan=self.plan,actual_effective_steps=len(s.trajectory),
+                    remaining_planned_steps=max(0,len(self.plan['steps'])-self.position),
+                    finish_when_established_on_first_frame=bool(getattr(self,'endpoint_established_at_first_frame',False)),
+                    agent_finish_early=bool(getattr(self,'early_finish',None)),
                     collection_ending=s.collection_ending)
         s.last_tool_result=result
         if s.state != 'finished':
@@ -1396,9 +1482,40 @@ class Controller:
                                   *self.image_option(s,object_sha256(step['expected']),'当前同帧原清晰图'),
                                   {'choice':'stop','meaning':'如实结束'}]);return
         self.position+=1
-        if (self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False)
-                and not self.continue_reading(s)):
-            await self.finish(s,'已证实计划可见终点；自然提前完成不凑步')
+        endpoint_now=(self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False)
+                      and not self.continue_reading(s))
+        if endpoint_now:
+            from .session_objective import progress
+            evidence=progress(s,getattr(self,'frozen_plan',self.plan)['observation_id'])
+            if evidence['required']:
+                # An explicit contract/objective: proved() already demanded the
+                # goal progress; both conditions hold, so this is a normal
+                # completion of the remaining route.
+                await self.finish(s,'当前目标已在原轨迹和本帧得到验证，结束剩余计划')
+            elif self.position>=len(self.plan['steps']):
+                await self.finish(s,'已证实计划可见终点；自然提前完成不凑步')
+            elif getattr(self,'endpoint_established_at_first_frame',False):
+                # A generalized finish_when that already held on the first frame
+                # is not completion evidence on its own: keep executing the
+                # remaining planned route (the loop continues to the next step).
+                pass
+            elif getattr(self,'early_finish_declined',False):
+                # The agent already confirmed the remaining route is required;
+                # do not re-ask the same question at every following step.
+                pass
+            else:
+                # No explicit contract, endpoint newly produced by the executed
+                # actions, and planned steps remain: the host does not decide
+                # completion from a generalized finish_when alone. The agent
+                # must confirm the remaining route is redundant (finish_early)
+                # or keep going.
+                self._early_finish_asked=True
+                await self.request(s,[
+                    {'choice':'finish_early','meaning':'当前同步末帧已由已执行动作产生 finish_when 所需新证据；确认剩余计划确属冗余，申请提前完成并绑定当前可见终点'},
+                    {'choice':'continue','meaning':'剩余计划仍属目标必要路线，继续执行下一步'},
+                    {'choice':'replan','meaning':'按当前结果修订剩余路径'},
+                    {'choice':'stop','meaning':'无法有据继续，如实结束'}])
+                return
         elif self.position>=len(self.plan['steps']):
             await self.round(s)
 

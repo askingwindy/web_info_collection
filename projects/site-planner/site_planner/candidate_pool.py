@@ -577,11 +577,33 @@ class CandidatePool:
             if not saved or original['state']!='succeeded':
                 raise ValueError('Research requires a settled original saved execution')
             old_binding=json.loads(original['binding'] or '{}')
-            original_objective=load_json(__import__('pathlib').Path(old_binding['output'])/'session-objective.json')
-            if load_json(objective['path'])!=original_objective:
-                raise ValueError('Research cannot change the original objective')
+            proposed_objective=load_json(objective['path'])
+            original_objective_path=__import__('pathlib').Path(old_binding['output'])/'session-objective.json'
+            if original_objective_path.is_file():
+                if proposed_objective!=load_json(original_objective_path):
+                    raise ValueError('Research cannot change the original objective')
+                objective_origin='original'
+            else:
+                # The original production execution carried no explicit session
+                # objective. A research replay may bind one NEW objective for the
+                # pair: the first research claim freezes its exact bytes and every
+                # later research claim on this candidate must reuse them. It is
+                # model-proposed research input, never written back to the
+                # producer's candidate goal.
+                frozen=None
+                for prior in con.execute("SELECT binding FROM candidate_claims WHERE candidate_id=?",(candidate_id,)):
+                    prior_replay=(json.loads(prior[0] or '{}') if prior[0] else {}).get('research_replay') or {}
+                    if prior_replay.get('objective_origin')=='model-proposed-research':
+                        frozen=prior_replay['objective']
+                if frozen is not None:
+                    from webcollect.planning import verify_evidence as _verify
+                    _verify([frozen])
+                    if proposed_objective!=load_json(frozen['path']):
+                        raise ValueError('Research objective differs from the frozen model-proposed objective for this candidate')
+                objective_origin='model-proposed-research'
             descriptor={'schema_version':'candidate-research-replay-1','original_claim_id':original_claim_id,
-                        'objective':objective,'authorization':authorization,'production_counted':False}
+                        'objective':objective,'objective_origin':objective_origin,
+                        'authorization':authorization,'production_counted':False}
             prior=con.execute('SELECT * FROM candidate_claims WHERE request_id=?',(request_id,)).fetchone()
             if prior:
                 if prior['worker_id']!=worker_id or prior['candidate_id']!=candidate_id or json.loads(prior['binding'] or '{}').get('research_replay')!=descriptor:

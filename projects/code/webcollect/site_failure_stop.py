@@ -168,6 +168,16 @@ class SiteFailureStore:
         if return_status:
             return self.status(application)
 
+    def execution(self, identity):
+        """Read-only sealed fact for one exact execution identity, or None."""
+        with self.connect() as con:
+            row = con.execute('SELECT execution_id,application_key,stage,state,reason,evidence_json,usage_refs_json '
+                              'FROM site_executions WHERE execution_id=?', (identity,)).fetchone()
+        if not row:
+            return None
+        return {'execution_id': row[0], 'application_key': row[1], 'stage': row[2], 'state': row[3],
+                'reason': row[4], 'evidence': json.loads(row[5]), 'usage_refs': json.loads(row[6])}
+
     def enable_closed_entry_uri_scope(self, manifest, producer_ledger, reason):
         """Bind this local decision to the original new project's producer book."""
         from .current_chain import check_project_guard, read_chain_scope

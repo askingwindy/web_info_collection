@@ -144,19 +144,19 @@ def verify_committed_samples(output, attempts):
                 for row in evidence):
             raise ValueError('已完成样本缺少已提交的保存收据，停止续跑：' + attempt['sample_id'])
         receipt = read_json(receipt_path)
-        excluded = ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl',
-                    'planning-feedback-collected_pending_review.json')
+        from .postprocess import post_seal_name
         expected = {name: digest for name, digest in (receipt.get('sample_files_sha256') or {}).items()}
         actual = sample_hashes(Path(output) / 'samples' / attempt['sample_id'])
         if (receipt.get('attempt_id') != attempt['attempt_id'] or
                 receipt.get('sample_id') != attempt['sample_id'] or not expected or actual != expected):
             raise ValueError('已完成样本缺失或证据改变，停止续跑：' + attempt['sample_id'])
         # Post-seal close-out receipts (append-only derivation ledger, attempt
-        # feedback) never belong to the frozen capture hash on either side.
+        # feedback and every versioned appended receipt) never belong to the
+        # frozen capture hash on either side.
         expected_raw = {name: digest for name, digest in (receipt.get('capture_files_sha256') or {}).items()
-                        if name not in excluded}
+                        if not post_seal_name(name)}
         actual_raw = {name: digest for name, digest in sample_hashes(receipt_path.parent).items()
-                      if name not in excluded}
+                      if not post_seal_name(name)}
         if not expected_raw or expected_raw != actual_raw:
             raise ValueError('已完成样本的原始采集证据改变，停止续跑：' + attempt['sample_id'])
 
@@ -354,8 +354,11 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     from .agent_feedback import save_attempt_feedback, site_context
     from .production_quality import require_public_task_state
     from .scaffold import program_version
+    from .telemetry import phase as telemetry_phase
     ids = {**{key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')},
            'attempt_id': attempt['attempt_id']}
+    phase_ledger = Path(output) / 'metering' / 'phases.jsonl'
+    meter_identity = {'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id']}
     entry_host = verify_public_url(task['initial_url'])
     allowed_hosts = {verify_public_url(task['site_uri']), entry_host, *task.get('allowed_hosts', [])}
     def url_check(url):
@@ -396,20 +399,26 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     session = ReactSession(task, evidence / 'raw', chooser, page, steps_directory=evidence,
         navigation=navigation, url_check=url_check, preflight=preflight,
         frame_guard=frame_guard, site_context=feedback_context, attempt_id=attempt['attempt_id'],
+        phase_ledger=phase_ledger,
         **({'entry_observation': entry_observation} if entry_observation is not None else {}))
-    summary = await session.run()
+    with telemetry_phase(phase_ledger, 'react_session_run', scope=meter_identity):
+        summary = await session.run()
     raw_receipt = summary['raw_receipt']
     stop_data = {'stop_details': summary['stop_details']} if 'stop_details' in summary else {}
     def _event_now():
         return datetime.now(timezone.utc).isoformat()
-    def finish_failure(failure_class, root_cause, extra_evidence=()):
+    async def finish_failure(failure_class, root_cause, extra_evidence=()):
         failure = evidence / 'failure.json'
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': now(),
                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
                 'failure_class': failure_class, 'raw_saved': True,
                 'stop_reason': summary['stop_reason'], **stop_data})
-        feedback_ref = save_attempt_feedback(evidence, attempt, 'rejected', root_cause)
+        # The feedback receipt globs/copies step files; keep it off the event
+        # loop so the two heartbeat layers keep renewing during close-out.
+        with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
+            feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
+                                                   'rejected', root_cause)
         store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
             evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
@@ -428,16 +437,22 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     if prefix_requested:
         try:
             from .postprocess import session_record
-            prefix_end=candidate_end(evidence/'raw', rule=prefix_rule)
-            if prefix_end is not None:
-                project_prefix(session_record(evidence/'raw',allow_unknown_for_prefix=True),evidence/'raw',prefix_end,ids,rule=prefix_rule)
-                write_json(evidence/'prefix-source-closeout.json',{'protocol':prefix_rule,
-                    'attempt_id':attempt['attempt_id'],'raw_receipt':raw_receipt,
-                    'original_stop_reason':summary['stop_reason'],'original_unknown':summary['unknown'],
-                    'original_failure_class':summary['failure_class'],
-                    'original_host_failure':summary.get('host_failure'),
-                    'original_collection_ending':ending,'original_goal_completed':False,
-                    'original_request_ledger_unchanged':True})
+            # Prefix identification/projection re-derives the whole raw journal;
+            # run it in a worker thread so the loop keeps serving heartbeats.
+            with telemetry_phase(phase_ledger, 'prefix_projection', scope=meter_identity):
+                prefix_end=await asyncio.to_thread(candidate_end, evidence/'raw', rule=prefix_rule)
+                if prefix_end is not None:
+                    source=await asyncio.to_thread(session_record, evidence/'raw',
+                                                   allow_unknown_for_prefix=True)
+                    await asyncio.to_thread(project_prefix, source, evidence/'raw', prefix_end, ids,
+                                            rule=prefix_rule)
+                    write_json(evidence/'prefix-source-closeout.json',{'protocol':prefix_rule,
+                        'attempt_id':attempt['attempt_id'],'raw_receipt':raw_receipt,
+                        'original_stop_reason':summary['stop_reason'],'original_unknown':summary['unknown'],
+                        'original_failure_class':summary['failure_class'],
+                        'original_host_failure':summary.get('host_failure'),
+                        'original_collection_ending':ending,'original_goal_completed':False,
+                        'original_request_ledger_unchanged':True})
         except (ValueError,KeyError,TypeError,OSError) as prefix_error:
             prefix_end=None
             write_json(evidence/'prefix-ineligible.json',{'protocol':prefix_rule,
@@ -447,19 +462,19 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         write_json(pending,{'schema_version':'webcollect-raw-ending-pending-2',
             'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
             'saved_raw':True,'normal_sample_saved':False,'requires_reconciliation':True,'QC_status':'NOT_RUN'})
-        result=finish_failure('interrupted' if summary['unknown'] else 'collector',
+        result=await finish_failure('interrupted' if summary['unknown'] else 'collector',
             'react_raw_ending_pending:'+ending['reason'],_evidence(pending))
         return {**result,'raw_preservation_status':'saved_pending_reconciliation','collection_ending':ending,
                 'pending_receipt':str(pending),'QC_status':'NOT_RUN'}
     if (summary['unknown'] or summary['failure_class'] == 'interrupted') and prefix_end is None:
         react_close_event(store, attempt, 'react_raw_unknown', _event_now(),
             {'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, 'unknown': True})
-        return finish_failure('interrupted',
+        return await finish_failure('interrupted',
                               'react_unknown:' + str(summary['stop_summary'] or summary['stop_reason']))
     if summary.get('host_failure') and prefix_end is None:
         react_close_event(store, attempt, 'react_raw_rejected', _event_now(),
             {'stop_reason':summary['stop_reason'],'raw_receipt':raw_receipt,'primary_failure':summary['stop_summary']})
-        return finish_failure(summary['failure_class'], 'react_' + str(summary['stop_summary'] or summary['stop_reason']))
+        return await finish_failure(summary['failure_class'], 'react_' + str(summary['stop_summary'] or summary['stop_reason']))
     def audit_validator(delivery_root):
         from .evidence import audit_capture
         audited = audit_capture(output, attempt['sample_id'])
@@ -480,9 +495,16 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     # The structural check validates a runtime-manifest shape: inherit the
     # real manifest (schema_version pins rule_version=m4-1) with this sample.
     delivery_manifest = {**manifest, 'samples': list(manifest.get('samples') or []) + [ids['sample_id']]}
-    derived = postprocess_derivation(evidence, sample, ids, delivery_manifest,
-                                     validators=(audit_validator, dedup_validator), prefix_end_step=prefix_end,
-                                     prefix_rule=prefix_rule)
+    # The full derivation (raw record rebuild, effective-trajectory recount,
+    # capture audit, dedup and file hashing) is offline work on this attempt's
+    # own files; it runs in a bounded worker thread. Runtime commits, the exact
+    # index registration and ledger transactions keep their original loop-side
+    # boundaries below.
+    with telemetry_phase(phase_ledger, 'react_postprocess', scope=meter_identity):
+        derived = await asyncio.to_thread(postprocess_derivation, evidence, sample, ids,
+                                          delivery_manifest,
+                                          validators=(audit_validator, dedup_validator),
+                                          prefix_end_step=prefix_end, prefix_rule=prefix_rule)
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})
@@ -490,31 +512,34 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         errors = derived.get('errors') or []
         if (task['fragment'].get('decision_protocol') == NATIVE_REACT and derived['status'] == 'delivery_rejected'
                 and errors and all(error.startswith('producer_exact_dedup:') for error in errors)):
-            return finish_failure('collector', 'react_exact_image_conflict',
+            return await finish_failure('collector', 'react_exact_image_conflict',
                                   _evidence(evidence / 'producer_dedup.json') + [derived['record_ref']])
         if derived['status'] in ('processing_failed', 'delivery_rejected'):
-            return finish_failure('program', 'derivation_' + derived['status'] + ': ' +
+            return await finish_failure('program', 'derivation_' + derived['status'] + ': ' +
                                   str(derived.get('error') or derived.get('errors') or '')[:300])
         cause = summary['stop_details']['code'] if stop_data else 'react_' + derived['status']
-        return finish_failure('collector', cause)
-    saved = evidence / 'saved_sample.json'
-    feedback_ref = save_attempt_feedback(evidence, attempt, 'collected_pending_review')
-    derived_ref = {'path': str((evidence / 'derived.json').resolve()),
-                   'sha256': sha(evidence / 'derived.json')}
-    from .runtime import ImageCommitConflict
-    try:
-        store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
-            'collected_pending_review',
-            evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
-            exact_images=index.sample_images(sample))
-    except ImageCommitConflict as conflict:
-        if task['fragment'].get('decision_protocol') != NATIVE_REACT:
-            raise
-        collision = evidence / 'concurrent_image_conflict.json'
-        write_json(collision, {'exact_conflicts': conflict.conflicts})
-        return finish_failure('collector', 'react_exact_image_commit_conflict',
-                              _evidence(collision) + [derived_ref])
-    index.add_sample(sample)
+        return await finish_failure('collector', cause)
+    with telemetry_phase(phase_ledger, 'react_commit', scope=meter_identity):
+        saved = evidence / 'saved_sample.json'
+        with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
+            feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
+                                                   'collected_pending_review')
+        derived_ref = {'path': str((evidence / 'derived.json').resolve()),
+                       'sha256': sha(evidence / 'derived.json')}
+        from .runtime import ImageCommitConflict
+        try:
+            store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+                'collected_pending_review',
+                evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
+                exact_images=index.sample_images(sample))
+        except ImageCommitConflict as conflict:
+            if task['fragment'].get('decision_protocol') != NATIVE_REACT:
+                raise
+            collision = evidence / 'concurrent_image_conflict.json'
+            write_json(collision, {'exact_conflicts': conflict.conflicts})
+            return await finish_failure('collector', 'react_exact_image_commit_conflict',
+                                  _evidence(collision) + [derived_ref])
+        index.add_sample(sample)
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             **({'collection_ending':ending} if ending else {}),
             **({'trusted_prefix':derived['trusted_prefix'],'original_goal_completed':False} if derived.get('trusted_prefix') else {}),

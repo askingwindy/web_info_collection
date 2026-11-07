@@ -567,14 +567,26 @@ class BandedAmbiguityExecutionTests(ReactHarness,unittest.IsolatedAsyncioTestCas
         async def choose(p):
             calls.append(deepcopy(p))
             if len(calls)==1:
+                # 2026-11-07: a finish_when already visible on the first
+                # frame (the page title) is a weak endpoint; the host sends it
+                # back once for an action-produced endpoint instead. The second
+                # submission rebinds to the focus the click will produce.
                 plan=plan_for(p,1);plan['steps']=[{'action':'click','target':{'text':'部门'},
                     'purpose':'选择同名输入中的第二项','expected':{'kind':'focused','text':'部门'}}]
                 plan['finish_when']={'kind':'visible_text','text':'受控输入页面'}
                 return {'name':'submit_plan','tool_call_id':'provider-ambiguous','arguments':plan}
+            if len(calls)==2:
+                plan=plan_for(p,1);plan['steps']=[{'action':'click','target':{'text':'部门'},
+                    'purpose':'选择同名输入中的第二项','expected':{'kind':'focused','text':'部门'}}]
+                # Same-document URL equality completes with the executed route;
+                # two same-name controls make a focused endpoint unprovable.
+                plan['finish_when']={'kind':'url','text':p['observation']['url']}
+                return {'name':'submit_plan','tool_call_id':'provider-ambiguous-2','arguments':plan}
             return {'attempt_id':s.attempt_id,'observation_id':s.current['observation_id'],'choice':'node:control-1'}
         s.choose=choose;r=await s.run()
-        self.assertEqual(r['effective_steps'],1,r);self.assertEqual(len(calls),2)
+        self.assertEqual(r['effective_steps'],1,r);self.assertEqual(len(calls),3)
         self.assertEqual(len(self.surface.executed),1)
+        self.assertTrue(s.plan_controller.initial_feedback['weak_first_frame_endpoint'])
         self.assertTrue(next(v for v in self.surface.state['values'] if v['element_id']=='control-1')['focused'])
 
 

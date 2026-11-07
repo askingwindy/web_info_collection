@@ -598,14 +598,22 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
         options={**({'assertions':assertions} if assertions else {}),
                  **({'protected_selectors':protected_selectors} if protected_selectors else {}),
                  'timeout': timeout}
+        timings={'before_dom_ms':None,'png_1_ms':None,'after_dom_ms':None,'png_2_ms':None,'final_dom_ms':None}
+        mark=time.monotonic()
         before=await observe(page,selector,index,**options)
+        timings['before_dom_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
         try:png,screenshot_evidence=await timed_png()
         except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
+        timings['png_1_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
         after=await observe(page,selector,index,**options)
+        timings['after_dom_ms']=round((time.monotonic()-mark)*1000,1)
         extra={};v2='capture_readiness' in before
         if v2:
+            mark=time.monotonic()
             comparison,comparison_method=await timed_png()
+            timings['png_2_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
             final=await observe(page,selector,index,**options)
+            timings['final_dom_ms']=round((time.monotonic()-mark)*1000,1)
             stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
             final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
             extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
@@ -623,7 +631,19 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
         if not accepted and attempt_index+1<retries:
             next_delay=min(_CAPTURE_RETRY_DELAYS[min(attempt_index,len(_CAPTURE_RETRY_DELAYS)-1)],
                            max(0.0,_CAPTURE_WAIT_BUDGET-requested_wait))
+        # One compact reason per rejected attempt: which proof failed first,
+        # without duplicating the full stability receipts kept alongside.
+        rejected_reason=None
+        if not accepted:
+            if v2:
+                rejected_reason=('dom_unstable' if not same else
+                                 'related_dom_changed' if not stability['related_dom_stable'] else
+                                 'loading_incomplete' if not stability['loading_complete'] else
+                                 'pixel_change_outside_allowed')
+            else:
+                rejected_reason='dom_unstable'
         attempts.append({'attempt':attempt_index+1,'started_ns':started,'ended_ns':ended,'dom_stable':same,
+                         'phase_timings_ms':timings,'rejected_reason':rejected_reason,
                          'delay_before_ms':round(delay_before*1000),'next_retry_delay_ms':round(next_delay*1000),
                          'native_window_wait_ms':round(native_window['requested_wait_ms'],3),
                          'native_window_evidence':native_window,

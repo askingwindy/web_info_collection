@@ -62,12 +62,33 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
             if (evidence/Path(name).with_suffix('.png')).exists():
                 diagnostic['image'] = reference(evidence/Path(name).with_suffix('.png'))
             diagnostics.append(diagnostic)
-    path = evidence/f'planning-feedback-{outcome}.json'
-    return exclusive(path, {'schema_version': VERSION,
+    body = {'schema_version': VERSION,
         'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id'], 'task_id': attempt['task_id'],
         'outcome': outcome, 'error': error, 'steps': steps, 'diagnostics': diagnostics,
         **({'trusted_prefix':binding['binding']} if step_root!=evidence else {}),
-        'semantic_review': 'REVIEW_REQUIRED', 'QC_approval': False})
+        'semantic_review': 'REVIEW_REQUIRED', 'QC_approval': False}
+    from .planning import object_sha256
+    path = evidence/f'planning-feedback-{outcome}.json'
+    if path.exists():
+        # A repeated close-out of the same attempt/outcome: identical content
+        # returns the original reference; different content (e.g. a second
+        # rejected close-out with another error after an UNKNOWN replay) keeps
+        # every prior receipt byte-frozen and appends its own versioned file
+        # that records the receipt it follows.
+        try:
+            previous = load_json(path)
+        except (ValueError, OSError):
+            previous = None
+        if previous is not None and object_sha256(previous) == object_sha256(body):
+            return reference(path)
+        body = {**body, 'previous_receipt': reference(path)}
+        versioned = evidence/f'planning-feedback-{outcome}-{str(attempt["attempt_id"])[:12]}-{object_sha256(body)[:16]}.json'
+        if versioned.exists():
+            if object_sha256(load_json(versioned)) != object_sha256(body):
+                raise ValueError('Feedback receipt content collision: ' + str(versioned))
+            return reference(versioned)
+        return exclusive(versioned, body)
+    return exclusive(path, body)
 
 
 def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None, collection_report=None,
