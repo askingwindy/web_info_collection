@@ -224,10 +224,20 @@ def _post_state_bound(state, scope):
     was allowed -- to the observed href of the dispatched control. External
     documents that were never observed stay rejected."""
     from urllib.parse import urlsplit
+    source_document = scope.get('source_document')
     if urlsplit(state.get('url','')).hostname == urlsplit(scope['source_url']).hostname:
-        return True
+        # Same host alone is not the source content: an unobserved document
+        # replacement on the same host must stay rejected. Only the source
+        # document itself, or an observed same-host landing, binds.
+        if source_document is None or state.get('document_identity') == source_document:
+            return True
+        href = scope.get('observed_href')
+        if scope.get('allow_navigation') and href:
+            landed, target = urlsplit(state.get('url','')), urlsplit(href)
+            return landed.path == target.path and landed.query == target.query
+        return False
     if not scope.get('allow_navigation'):
-        return state.get('url') == scope['source_url'] and state.get('document_identity') == scope['source_document']
+        return state.get('url') == scope['source_url'] and state.get('document_identity') == source_document
     href = scope.get('observed_href')
     if not href:
         return False

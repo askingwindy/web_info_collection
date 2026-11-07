@@ -10,7 +10,7 @@ EXIT_LABELS = {'取消', '返回', '关闭', '取消下载', '暂不登录', '�
 
 
 def enabled(task):
-    return task.get('fragment', {}).get('plan_protocol') in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9')
+    return task.get('fragment', {}).get('plan_protocol') in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10')
 
 
 def full_image(state):

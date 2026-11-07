@@ -338,9 +338,10 @@ def related_projection(state):
 
 def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True, action_scope=None):
     """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
-    from .dynamic_regions import STABILITY as dynamic_rule, enabled as dynamic_enabled, pair as dynamic_pair
-    if rule_version==dynamic_rule or (rule_version is None and dynamic_enabled(before) and dynamic_enabled(after)):
-        return dynamic_pair(before,after,png_before,png_after,action_scope=action_scope)
+    from .dynamic_regions import DYNAMIC_STABILITY_RULES, STABILITY as dynamic_rule, enabled as dynamic_enabled, pair as dynamic_pair
+    if rule_version in DYNAMIC_STABILITY_RULES or (rule_version is None and dynamic_enabled(before) and dynamic_enabled(after)):
+        return dynamic_pair(before,after,png_before,png_after,action_scope=action_scope,
+                            rule_version=rule_version or dynamic_rule)
     from .action_stability import VERSIONS as focus_versions, pair as focus_pair
     if action_scope is not None or rule_version in focus_versions:
         if action_scope is None:raise ValueError('Scoped proof requires its frozen action scope')

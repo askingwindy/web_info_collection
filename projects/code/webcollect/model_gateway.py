@@ -308,7 +308,14 @@ def branch_wire_schema(schema, prompt):
     value=deepcopy(schema.get('oneOf',[schema])[0])
     props=value.get('properties',{})
     choices=[o['choice'] for o in prompt.get('options',[])]
-    if 'choice' in props and choices:props['choice']={'enum':choices}
+    if 'choice' in props and choices:
+        wire_choices=list(choices)
+        # V10 renamed the image-view choice; a model replying with the frozen
+        # historical name maps determinably (v10 has no continue-by-choice
+        # semantics), so the wire accepts the alias and the host interprets it.
+        if 'request_original_image' in choices and 'original' not in choices:
+            wire_choices.append('original')
+        props['choice']={'enum':wire_choices}
     props.setdefault('decision_summary',{'type':'string','minLength':1,'maxLength':80})
     plan=props.get('plan',{})
     for alternative in plan.get('anyOf',[]):

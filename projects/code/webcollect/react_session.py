@@ -543,7 +543,7 @@ class ReactSession:
         validate_task(task)
         self.task = deepcopy(task)
         self.native = self.task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
-        from .banded_plan import enabled, Controller, SYSTEM as PLAN_SYSTEM, VERSION as PLAN_VERSION, tools as plan_tools, system_for
+        from .banded_plan import enabled, Controller, SYSTEM as PLAN_SYSTEM, VERSION as PLAN_VERSION, MODERN_BRANCH_PROTOCOLS, tools as plan_tools, system_for
         from .direct_article import protocol_schema
         from .goal_evidence import contract_for
         contracted = bool(contract_for(task))
@@ -604,14 +604,14 @@ class ReactSession:
             {'type': dialog.type, 'message': dialog.message}))
         self.binding = exclusive(self.root / 'boundary.json',
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
-             'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-8',PLAN_VERSION)) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
+             'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
              'decision_protocol': self.task['fragment']['decision_protocol'] if self.native else REACT_VERSION,
              **({'attempt_id': self.attempt_id} if contracted else {}),
              **({'first_plan_reasoning_effort': getattr(choose,'first_plan_reasoning_effort',None),
                  'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort',None)} if self.native else {}),
              **({'first_plan_timeout_seconds': choose.first_plan_timeout_seconds}
                 if getattr(choose,'first_plan_timeout_seconds',None) else {}),
-             **({'tool_schema_sha256': object_sha256(protocol_schema(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol')==PLAN_VERSION),contract_for(self.task)) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
+             **({'tool_schema_sha256': object_sha256(protocol_schema(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS),contract_for(self.task)) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
                     self.task['fragment'].get('reference_protocol'))),
                  'effective_action_rule': RULE_VERSION,
                  # The recorded effort is the value actually dispatched, not the
@@ -1731,10 +1731,13 @@ class ReactSession:
             return await self._native_finish(arguments)
         from jsonschema import Draft202012Validator
         try:
+            # short_flow fields are accepted-but-ignored host facts; only the
+            # finish identity fields are required (keyword: obj() takes no
+            # second positional argument).
             Draft202012Validator(obj({'observation_id': TEXT,
                 'stop_reason': {'enum': list(STOP_REASONS)}, 'summary': TEXT,
                 'short_flow': {},
-                'short_flow_reason': {}} , ['observation_id','stop_reason','summary'])).validate(arguments)
+                'short_flow_reason': {}}, required=['observation_id','stop_reason','summary'])).validate(arguments)
         except Exception as error:
             return self._rejected('finish', 'finish 参数不合法：' + str(error).splitlines()[0])
         if arguments['observation_id'] != self.current['observation_id']:
@@ -2448,8 +2451,9 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
     gateway = None  # Cached/UNKNOWN paths do not select or read an account.
     protocol = task['fragment']['decision_protocol']
     plan_protocol = task['fragment'].get('plan_protocol')
-    banded_protocols = ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9')
-    modern_plan = plan_protocol == 'webcollect-banded-conditional-plan-9'
+    banded_protocols = ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8',
+                        'webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10')
+    modern_plan = plan_protocol in ('webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10')
     grounded = bool(contract_for(task))
     # V9 dispatches explicit low for the first plan and for ordinary branches;
     # the choice no longer depends on a special evidence contract. Frozen V7/V8
@@ -2554,10 +2558,10 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                     first_timeout = None
                     if patient:
                         first_timeout = choose.first_plan_timeout_seconds
-                    elif prompt['protocol'] in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
+                    elif prompt['protocol'] in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10'):
                         first_timeout = min(300,ledger.config['budget']['lease_seconds']-10)
                     response = await asyncio.to_thread(gateway.call_tool, job, prompt['protocol'],
-                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9') else None), **common)
+                        text_payload, prompt['tools'], inference=True, timeout_seconds=first_timeout, patient_first_plan=patient, content_plan_protocol=('strict-plan-content-1' if prompt['protocol'] in ('webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10') else None), **common)
                 else:
                     from .banded_plan import choice_schema
                     from .direct_article import protocol_schema

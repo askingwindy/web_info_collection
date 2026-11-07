@@ -230,6 +230,12 @@ class EntryEngineering(legacy.Consumption):
         async def verify(page,state,*args,**kwargs):return {'matched':True,'state_fingerprint':'CONTROLLED'}
         stack.enter_context(patch('playwright.async_api.async_playwright',return_value=manager))
         stack.enter_context(patch('webcollect.browser.capture',side_effect=self.capture))
+        # The entry session's bounded hydration wait reads live state through
+        # browser.observe (page.evaluate of the snapshot program); the synthetic
+        # surface supplies that state so the formal entry chain really runs.
+        async def observed(page, selector=None, index=0, **kwargs):
+            return (await self.capture(page,selector,index))['state']
+        stack.enter_context(patch('webcollect.browser.observe',side_effect=observed))
         stack.enter_context(patch('webcollect.browser.verify_execution_state',side_effect=verify))
         stack.enter_context(patch('webcollect.browser.execute',side_effect=action))
         stack.enter_context(patch('webcollect.collect.capture_before_action',side_effect=before))

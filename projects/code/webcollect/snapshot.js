@@ -580,6 +580,8 @@
       element.getAttribute('title') || selected || (element.matches('input[type=submit],input[type=button]') ? element.value : ''));
   };
   const unrelatedTransforms=new WeakMap(),transformProofs=[];
+  const quarantinedRoots=[];
+  const inQuarantine = element => quarantinedRoots.some(root => root.contains(element));
   const boundedDecoration = element => {
     const st=getComputedStyle(element),r=element.getBoundingClientRect();
     if(element===target||!element.matches('img[alt=""][aria-hidden="true"]')||
@@ -615,8 +617,45 @@
       relation:'explicit decorative image disjoint from every text/control/protected region',
       pixel_exclusion_allowed:false,actions_supported:false};
   };
+  // 2026-11-06 R3: one unsupported-geometry decoration must not fail the whole
+  // page observation. Quarantine only provably task-irrelevant subtrees: no
+  // text, no own semantics, no interactive descendant, no protected/assertion
+  // member, disjoint from every other text/control box. Targets and anything
+  // they contain stay strict and keep the honest UNSUPPORTED_GEOMETRY failure.
+  const quarantineUnsupported = (element,error) => {
+    if(element===target||element.contains(target))return null;
+    const st=getComputedStyle(element),r=element.getBoundingClientRect();
+    if(clean(element.textContent)||['aria-label','aria-labelledby','title','placeholder'].some(k=>element.hasAttribute(k)))return null;
+    if(element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,video,canvas,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio],[role=img]')
+       ||element.hasAttribute('onclick')||st.cursor==='pointer')return null;
+    if(element.querySelector('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio],[role=img],img,video,canvas,iframe,frame,[onclick]'))return null;
+    for(const selector of [...protected_selectors,...assertions.filter(x=>x.selector).map(x=>x.selector)])
+      if(element.matches(selector)||element.querySelector(selector))return null;
+    if(r.left<0||r.top<0||r.right>width||r.bottom>height)return null;
+    const overlap=b=>Math.min(r.right,b.right)>Math.max(r.left,b.left)&&Math.min(r.bottom,b.bottom)>Math.max(r.top,b.top);
+    const protectedRegions=[];
+    const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    while(walker.nextNode()) {
+      const text=walker.currentNode;
+      if(!clean(text.textContent)||text.parentElement.closest('script,style,noscript,template')||element.contains(text))continue;
+      const range=document.createRange();range.selectNodeContents(text);
+      for(const box of range.getClientRects()) {if(overlap(box))return null;protectedRegions.push([box.left,box.top,box.right,box.bottom]);}
+    }
+    const selectors=['a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]',
+      ...protected_selectors,...assertions.filter(x=>x.selector).map(x=>x.selector)];
+    for(const selector of selectors)for(const control of document.querySelectorAll(selector)) {
+      if(element.contains(control))continue;
+      const box=control.getBoundingClientRect();if(overlap(box))return null;
+      protectedRegions.push([box.left,box.top,box.right,box.bottom]);
+    }
+    return {schema_version:'webcollect-unrelated-transform-2',bbox:[Math.floor(r.left),Math.floor(r.top),Math.ceil(r.right),Math.ceil(r.bottom)],
+      transform:st.transform,rotate:st.rotate,error:error.message,protected_regions:protectedRegions,
+      relation:'unsupported-geometry subtree with no text/control/protected overlap; retained as bounded visual evidence',
+      pixel_exclusion_allowed:false,actions_supported:false};
+  };
   for (const element of document.querySelectorAll('body *')) {
     if (element.matches('script,style,noscript,template,svg,svg *')) continue;
+    if (inQuarantine(element)) continue;
     const style = getComputedStyle(element), rect = element.getBoundingClientRect();
     if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0 ||
         rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= height || rect.left >= width) continue;
@@ -631,9 +670,11 @@
        !element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio]')&&
        !element.hasAttribute('onclick')&&style.cursor!=='pointer'&&!candidateScroll)continue;
     try {axisScale(element);} catch(error) {
-      const proof=boundedDecoration(element);if(!proof)throw error;
+      const proof=boundedDecoration(element)||quarantineUnsupported(element,error);
+      if(!proof)throw error;
       if(!observer.ids.has(element))observer.ids.set(element,`e_${observer.next++}`);
       proof.element_id=observer.ids.get(element);unrelatedTransforms.set(element,proof);transformProofs.push(proof);
+      quarantinedRoots.push(element);
       nodes.push(element);records.push({element_id:proof.element_id,parent_id:'root',element_type:'image',native_role:'img',
         text:'',bbox:[Math.floor(rect.left),Math.floor(rect.top),Math.ceil(rect.right),Math.ceil(rect.bottom)],
         clickable:false,inputable:false,scrollable:false,visible:true,enabled:false,state:'default',geometry_proof:proof});

@@ -1,5 +1,9 @@
 # WebCollect 采集核心
 
+2026-11-06 [对照实验修复](../../docs/对照实验问题修复与八并发AB试跑计划-20261106.md)第一阶段已实现并通过基础集成：计划协议升至 `webcollect-banded-conditional-plan-10`（原图选项改为 `request_original_image`，每帧每情境一次，旧名 `original` 作可确定别名；`bind_target` 支持唯一 node+href 身份绑定）；档位由步骤事实归一化、剩余步数共享会话 8 步上限；动态区域稳态 `webcollect-dynamic-region-stability-2` 容差与全部内容框不相交的成块动画像素（v1 回放不变）；snapshot.js 隔离无文字无交互的非常规几何装饰子树。新增 `python -m webcollect.consumer_ab`（prepare/worker/run/status/adjust-concurrency）：A=high/low、B=high/high，8 槽位每 worker 一次会话不补位，请求按 `dispatch_attempt_id` 归因。rev2（深夜返工）：修复子进程 --pool 缺参、调整后配置路径、outcome 形状、未派发请求计数；formal entry/dynamic_regions 两失败及 legacy finish 位置参数缺陷已修；SESSION_STEP_CAP 硬顶移除改用既有预算；草案 4 能力类配对，worker 透传 --session-objective。核心 9 套件含真实子进程定向验证全部 OK。交接见[验证目录](../../verify_results/consumer-ab-repair-20261106-r01/)，真实 GLM 与 8 并发实跑待第二阶段。
+
+2026-11-06 下一轮[消费者闭环修复与 A4/B4 试跑](../../docs/对照实验问题修复与八并发AB试跑计划-20261106.md)分为基础测试、重新打开工程后的 8 次真实采集；A=high/low，B=high/high，各 4 个并发 worker 各采集一次。[触发提示词](../../docs/对照实验修复与AB试跑触发提示词-20261106.md)按阶段使用，不直接复用旧 50 页驱动。
+
 规划采集会话最多实际调用 GLM 25 次，重试计入同一 attempt，触顶后记录 `glm_session_call_limit`。[计量与停止原因](../../docs/额度限制清单与取消说明-20261101.md#单个会话的-25-次-glm-调用)
 
 从[本机启动说明](../../docs/工程说明.md#本机有界批次启动)准备范围文件，用 `start_candidates.py --scope <范围文件> consumer --limit 20 --poll-seconds 3` 等候本批候选。脚本会传入原池、当前链、作业账、worker 身份及范围中指定的 QC 策略。监视器独立启动，原始收据和调用日志按 claim/attempt 对照。

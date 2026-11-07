@@ -196,7 +196,11 @@ class BandedFormalEntryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn('tools',payload);self.assertNotIn('tool_choice',payload)
                 self.assertNotIn('bands',prompt);self.assertNotIn('image_asset',prompt)
                 self.assertTrue(prompt['observation']['rendered_dom'])
-                self.assertEqual(prompt['plan_schema'],tools()[0]['function']['parameters'])
+                # V10 branch wire: choices ride the system protocol; no plan
+                # schema copy and no image asset in the payload.
+                self.assertNotIn('plan_schema',prompt)
+                self.assertIn('continue',{o['choice'] for o in prompt['options']})
+                self.assertIn('executed_steps',prompt)
                 self.assertEqual([m['role'] for m in payload['messages']],['system','user'])
                 message={'content':json.dumps({'attempt_id':prompt['attempt_id'],
                     'observation_id':prompt['observation']['observation_id'],'choice':'continue'})}
@@ -302,24 +306,62 @@ class BandedSafetyTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
             remaining['finish_when'] = {'kind':'goal_evidence'}
             return {'choice':'replan','plan':remaining}
         session.choose = choose_last
+    async def test_contracted_seven_step_proposal_leaves_one_slot_for_the_visible_result(self):
+        from webcollect.goal_evidence import VERSION as evidence_version
+        from webcollect.react_session import ReactStop
+
+        session, _ = self.recorded(7, name='contracted-seven')
+        session.task['fragment']['session_objective'] = {'objective':{
+            'kind':'calculation', 'description':'读出面积',
+            'evidence_contract':{'version':evidence_version, 'kind':'calculation',
+                'inputs':[{'label':'长','value':'12.5'}], 'result_label':'面积','unit':'平方英尺'}}}
+        await session._observe()
+        controller = session.plan_controller
+        await controller.request(session)
+        self.assertEqual(controller.check_page_urls['p0'], self.page.url)
+        self.assertEqual(len(controller.frozen_plan['steps']), 7)
+        self.assertEqual(controller.target_steps, 8)
+        controller.position = 7
+        session.trajectory = [{'effect_evidence':{'verified':True}} for _ in range(7)]
+        async def choose_last(prompt):
+            self.assertEqual(prompt['replan_contract']['remaining_effective_limit'], 1)
+            self.assertIn('replan', {option['choice'] for option in prompt['options']})
+            remaining = plan_for(prompt, 7)
+            remaining['steps'] = [{'action':'click','target':{'text':'计算面积'},
+                'purpose':'取得本次计算结果','expected':{'kind':'goal_evidence'}}]
+            remaining['finish_when'] = {'kind':'goal_evidence'}
+            return {'choice':'replan','plan':remaining}
+        session.choose = choose_last
         with patch('webcollect.goal_evidence.progress', return_value={'status':'UNVERIFIED','kind':'calculation'}):
             await controller.round(session)
             self.assertEqual(controller.plan['steps'][0]['target']['text'], '计算面积')
             session.trajectory.append({'effect_evidence':{'verified':True}})
-            with self.assertRaisesRegex(ReactStop, 'FROZEN_PLAN_ENDPOINT_UNPROVEN'):
-                await controller.round(session)
+            # V10: the remaining allowance comes from the session's own budgets
+            # (closing-policy attempt ceiling here), not a new protocol cap;
+            # the graceful EIGHT_ATTEMPT_LIMIT range close stays the bound.
+            from webcollect.banded_plan import remaining_step_allowance
+            self.assertEqual(remaining_step_allowance(session), 0)
+            exhausted = plan_for(controller.prompt(session), 1)
+            async def refuse(prompt):
+                return {'attempt_id':session.attempt_id,'observation_id':session.current['observation_id'],
+                        'choice':'replan','plan':exhausted}
+            session.choose = refuse
+            with self.assertRaisesRegex(ValueError, 'REMAINING'):
+                await controller.request(session, [{'choice':'replan'}])
         self.assertEqual(session.actual_dispatches, 0)
 
-    async def test_plain_replan_remaining_four_allowed_five_rejected_after_one(self):
-        for remaining,accepted in ((4,True),(5,False)):
+    async def test_plain_replan_remaining_extends_to_session_ceiling_after_one(self):
+        # V10: the remaining path is bounded by the shared session ceiling,
+        # not by the original plan length minus executed steps.
+        for remaining,accepted in ((7,True),(8,False)):
             s,_=self.recorded(name='remaining-'+str(remaining));await s._observe()
             c=s.plan_controller;initial=c.prompt(s)
             c.plan=plan_for(initial);c.submitted=True;c.frozen_band='five';c.target_steps=5
             s.trajectory.append({'effect_evidence':{'verified':True}})
-            revised=plan_for(initial);revised['steps']=revised['steps'][:remaining]
+            revised=plan_for(initial,8);revised['steps']=revised['steps'][:remaining]
             async def choose(p):return {'attempt_id':s.attempt_id,'observation_id':s.current['observation_id'],'choice':'replan','plan':revised}
             s.choose=choose
-            if accepted:await c.request(s,[{'choice':'replan'}]);self.assertEqual(len(c.plan['steps']),4)
+            if accepted:await c.request(s,[{'choice':'replan'}]);self.assertEqual(len(c.plan['steps']),remaining)
             else:
                 with self.assertRaisesRegex(ValueError,'REMAINING'):await c.request(s,[{'choice':'replan'}])
     async def test_long_proposal_can_ground_to_five_with_reason_before_dispatch(self):

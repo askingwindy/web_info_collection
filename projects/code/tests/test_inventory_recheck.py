@@ -79,8 +79,13 @@ class RecheckCullingTests(unittest.TestCase):
         self.assertEqual(self.states(), {'c-ok': 'pending', 'c-404': 'pending',
                                          'c-strike': 'pending', 'c-claimed': 'pending'})
         con = sqlite3.connect(self.path)
-        self.assertEqual(con.execute('SELECT COUNT(*) FROM inventory_rechecks').fetchone()[0], 0)
+        # Dry-run has zero side effects: the auxiliary table itself is not even
+        # created outside the formal write path.
+        has_table = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='inventory_rechecks'").fetchone()
+        rows = con.execute('SELECT COUNT(*) FROM inventory_rechecks').fetchone()[0] if has_table else 0
         con.close()
+        self.assertEqual(rows, 0)
         with mock.patch.object(inventory_recheck, '_get_check', side_effect=lambda url, t: script[url]):
             inventory_recheck.run(self.path, limit=10, stale_hours=0, timeout=5,
                                   host_interval=0, dry_run=False, smoke=0, audit=0, report_dir=None)

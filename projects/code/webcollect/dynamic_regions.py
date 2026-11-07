@@ -11,7 +11,18 @@ import re
 from PIL import Image, ImageChops, ImageDraw
 
 VERSION='webcollect-dynamic-regions-1'
-STABILITY='webcollect-dynamic-region-stability-1'
+STABILITY='webcollect-dynamic-region-stability-2'
+STABILITY_V1='webcollect-dynamic-region-stability-1'
+DYNAMIC_STABILITY_RULES=(STABILITY_V1,STABILITY)
+# A frame-pair may carry animated paint that no DOM region classifies (the
+# 2026-11-06 experiment lost 18 pages to a ~300x108 animated block with no
+# element, text or control). Such change is tolerated only when its bounding
+# box is a coherent animation block, not stray pixel noise: a minimum changed
+# area and side length apply, and it must stay provably disjoint from every
+# text/control/target box.
+UNCLASSIFIED_PAINT_MAX_FRACTION=0.25
+UNCLASSIFIED_PAINT_MIN_PIXELS=4096
+UNCLASSIFIED_PAINT_MIN_SIDE=32
 
 
 def enabled(state):
@@ -131,8 +142,40 @@ def scope_ids(scope):
     return {x for row in rows for x in [row.get('control_id'),row.get('node'),row.get('element',{}).get('element_id')] if x}
 
 
-def pair(before,after,png_before,png_after, *, action_scope=None):
+def _boxes_overlap(a,b):
+    return bool(a and b and min(a[2],b[2])>max(a[0],b[0]) and min(a[3],b[3])>max(a[1],b[1]))
+
+
+def _unclassified_dynamic_paint(a,b,outside,width,height):
+    """Bounded tolerance for animated paint no region classifies.
+
+    Honest failure stays: any overlap with visible text, controls, windows or
+    the action scope's protected identities, or a change area beyond the
+    fraction cap, still rejects the pair. Nothing is masked in saved evidence.
+    """
+    box=outside.getbbox()
+    if not box:return None
+    changed=outside.histogram()[255]
+    if changed<UNCLASSIFIED_PAINT_MIN_PIXELS:return None
+    if box[2]-box[0]<UNCLASSIFIED_PAINT_MIN_SIDE or box[3]-box[1]<UNCLASSIFIED_PAINT_MIN_SIDE:return None
+    if (box[2]-box[0])*(box[3]-box[1])>UNCLASSIFIED_PAINT_MAX_FRACTION*width*height:return None
+    content=[]
+    for state in (a,b):
+        for element in state.get('elements',[]):
+            if element.get('visible') is not True:continue
+            if element.get('text') or element.get('clickable') or element.get('inputable') or element.get('element_type')=='window':
+                content.append(element.get('bbox'))
+    if any(_boxes_overlap(box,row) for row in content if row):return None
+    return {'schema_version':'webcollect-unclassified-dynamic-paint-1','bbox':list(box),
+        'changed_pixels':changed,
+        'content_boxes_checked':len(content),
+        'relation':'coherent animated paint outside every classified region and disjoint from all visible text/control/protected boxes',
+        'pixel_exclusion_allowed_in_saved_evidence':False}
+
+
+def pair(before,after,png_before,png_after, *, action_scope=None, rule_version=STABILITY):
     from .browser import fingerprint,_loaded,stability_pair
+    legacy = rule_version==STABILITY_V1
     keep=protected_ids(before,scope_ids(action_scope))|protected_ids(after,scope_ids(action_scope))
     from .action_stability import validate_dynamic_scope
     scope_error=None
@@ -176,12 +219,19 @@ def pair(before,after,png_before,png_after, *, action_scope=None):
         base=stability_pair(a,b,png_before,comparison_png,rule_version='webcollect-related-stability-6')
         pixels={'changed_pixels':changed.histogram()[255],'outside_dynamic_pixels':outside.histogram()[255],'outside_allowed_pixels':base['pixel_change']['outside_allowed_pixels'],
             'bbox':list(changed.getbbox()) if changed.getbbox() else None,'difference_mask_sha256':hashlib.sha256(changed.tobytes()).hexdigest()}
-    return {'schema_version':STABILITY,'accepted':bool(enabled(before) and enabled(after) and not scope_error and target_ok and base['accepted']),
+    unclassified=None
+    if (not legacy and not base['accepted'] and base['related_dom_stable'] and base['loading_complete']
+            and pixels['outside_dynamic_pixels']>0):
+        unclassified=_unclassified_dynamic_paint(a,b,outside,*left.size)
+    accepted=bool(enabled(before) and enabled(after) and not scope_error and target_ok
+                  and (base['accepted'] or unclassified is not None))
+    return {'schema_version':STABILITY_V1 if legacy else STABILITY,'accepted':accepted,
         'full_dom_stable':fingerprint(before)==fingerprint(after),'related_dom_stable':bool(base['related_dom_stable'] and target_ok),'loading_complete':base['loading_complete'],
         'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),'related_fingerprint':fingerprint(a),
         'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
         'dynamic_region_contract':VERSION,'allowed_dynamic_regions':deepcopy(allowed),'target_protection':target_proofs,
         'action_scope':deepcopy(action_scope),'scope_error':scope_error,'pixel_change':pixels,'border_enabled':True,
+        **({'unclassified_dynamic_paint':unclassified} if unclassified else {}),
         'remaining_pixels_existing_rule':base,'comparison_only_png_sha256':hashlib.sha256(comparison_png).hexdigest(),
         'meaning':'Only classified native bounded regions may change; original evidence retained; no action-effect or QC credit'}
 

@@ -68,7 +68,7 @@ class EndingV2Tests(ReactHarness,unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mark['kind'],'KNOWN_NO_EFFECT');self.assertFalse(mark['external_effect_unknown'])
         raw_tail=Path(mark['last_attempt']['raw_steps'][-1]['path']);tail_hash=file_sha(raw_tail)
         _,a=self.derive(evidence)
-        self.assertTrue(a['short_flow']);self.assertIn('4个有效操作',a['short_flow_reason'])
+        self.assertTrue(a['short_flow']);self.assertIn('4 个有效业务操作',a['short_flow_reason'])
         self.assertEqual(a['completion_status'],'controlled_exception');self.assertEqual(len(a['steps']),5)
         self.assertEqual(file_sha(raw_tail),tail_hash)
         self.assertFalse(load_json(raw_tail).get('postconditions_checked',False))
