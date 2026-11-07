@@ -10,6 +10,8 @@
 
 2026-11-05 后续研发采用“必要工程设计 → 集中完成代码 → 一次集成测试 → 稳定基线试跑”。Agent 修改完成后用真实 GLM 验证基线样本；协议不匹配优先按 Agent 实际输出修复工程接入，减少反复单测，禁止过度设计与过度防御编程，以快速实现功能和上线为核心。[执行约定](AGENTS.md#修改与验证)
 
+2026-11-07 Muxtly 正规 Runtime 保存闭环尝试按停止规则阻断于生产者候选发布：新隔离研发工程与调用方目标文件经 `candidate_project init`/`produce-entries --goals` 正式建立并完成 4 次真实 GET 与 1 次站点分类；第二个生产者模型会话被账户轮换派到 1113 额度账户，`ai-target-page-purpose-1` 封存 UNKNOWN 后同源生产者派发被冻结口径永久隔离，无既有结算入口。零消费会话、零保存；解锁选项与全部账面证据见[阻断记录](verify_results/consumer-runtime-muxtly-20261107-r01/README.md)。
+
 2026-11-07 消费者工程与 Agent 整体优化一轮已实施并集成：visit UNKNOWN 迟到结算竞态、收尾重段阻塞事件循环、弱 finish_when 提前收尾（含 finish_early 全协议链）、反馈收据版本化追加、history 重复图折叠与阶段计时。原 12 候选配对基线因用户删除 candidate-project 目录全部未覆盖；改用两个固定基线样本与读书网目标在新研发账本配对真实 GLM 复验（Muxtly high/high 8 步目标 VERIFIED；其余因 429 UNKNOWN、节点重绑定循环或能力边界有界失败）。effort 保持未决定。[改动、集成与真实结果](verify_results/consumer-overall-optimization-20261107-r01/)
 
 2026-11-05 原 Wiki 词条入口已按用户确认的 403 废弃；可用页导航到 403 时优先返回继续原目标。替换后的 Vue 术语表阅读目标已真实完成并正式保存，属于两步自然短流程，同样本四项独立 AI 内容检查通过；完整 QC、严格常规长度双基线及发布尚未通过。[结果、用量与下一步](docs/规划采集Agent双基线修复结果与续验计划-20261105.md)
