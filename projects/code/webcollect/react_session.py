@@ -698,8 +698,16 @@ class ReactSession:
         from .browser import capture
         number = self.used['max_observations']
         action_scope = None
-        from .action_stability import POST_VERSION, post_observation_scope, reading_scope
-        if self.task['fragment'].get('action_stability_protocol')==POST_VERSION and self.current:
+        from .action_stability import POST_VERSION, ACTION_SCOPED_VERSION, post_observation_scope, reading_scope, post_action_document_scope
+        evidence_protocol=self.task['fragment'].get('action_stability_protocol')
+        if evidence_protocol==ACTION_SCOPED_VERSION and self.current:
+            # Minimal post-action observation: the captured document is internally
+            # settled; the action effect itself is proven by the per-action
+            # predicates, never by two whole-page screenshots agreeing.
+            trigger=getattr(self,'_navigation_trigger',None)
+            source=(getattr(self,'_navigation_source',None) if trigger else None) or load_json(self.current['evidence']['state']['path'])
+            action_scope=post_action_document_scope(source,trigger)
+        elif evidence_protocol==POST_VERSION and self.current:
             trigger=getattr(self,'_navigation_trigger',None)
             source=(getattr(self,'_navigation_source',None) if trigger else None) or load_json(self.current['evidence']['state']['path'])
             try:
@@ -1011,7 +1019,14 @@ class ReactSession:
         if safe:
             from .reading_progress import same_view
             prefix=load_json(self.observation_records[self.trajectory[-1]['after_observation_id']]['evidence']['state']['path'])
-            safe=same_view(prefix,final_state)
+            if self.task['fragment'].get('action_stability_protocol')=='webcollect-action-scoped-evidence-1':
+                # Action-scoped ending: the final frame keeps the same document,
+                # scroll and visible reading material; unrelated decorative
+                # image/overlay membership changes are not endpoint changes.
+                from .action_stability import action_scoped_view_stable
+                safe=action_scoped_view_stable(prefix,final_state)
+            else:
+                safe=same_view(prefix,final_state)
             from .direct_completion import enabled as explicit,bridge_evidence
             if not safe and explicit(self.task) and kind=='HOST_PLAN_ENDPOINT' and not tail_dispatches:
                 terminal_bridge=bridge_evidence(self.task,
@@ -1266,14 +1281,40 @@ class ReactSession:
                     return self._need_observation('act', f'目标控件 {cid} 不在当前观察中，请重新观察', data=self._deltas(executed))
                 selector, index = control['binding'].get('selector'), control['binding'].get('index', 0)
             action_scope = None
-            from .action_stability import VERSIONS as focus_versions, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION, scope_for, followup_scope
+            from .action_stability import VERSIONS as focus_versions, VERSION as FIRST_FOCUS_VERSION, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSION, scope_for, followup_scope, action_scoped_scope, document_scope
             focus_protocol=self.task['fragment'].get('action_stability_protocol')
+            if focus_protocol == ACTION_SCOPED_VERSION:
+                # Action-relevant minimal evidence: every ordinary action gets a
+                # target-level (click/type/hotkey) or document-level
+                # (scroll/back/open_url) scope; unrelated overlay/announcement
+                # repaints never block dispatch. Older protocols keep their
+                # search-flow scopes below untouched.
+                try:
+                    scoped_state = load_json(self.current['evidence']['state']['path'])
+                    if row['action'] in ('click', 'type') and cid:
+                        action_scope = action_scoped_scope(scoped_state, cid, row['action'])
+                    elif row['action'] == 'hotkey':
+                        focused = [key for key, c in self.current['controls'].items()
+                                   if (c.get('value') or {}).get('focused') is True]
+                        if len(focused) == 1:
+                            action_scope = action_scoped_scope(scoped_state, focused[0], 'hotkey')
+                        else:
+                            action_scope = document_scope(scoped_state, 'hotkey')
+                    elif row['action'] in ('scroll', 'back', 'open_url'):
+                        action_scope = document_scope(scoped_state, row['action'])
+                    else:
+                        action_scope = None
+                except ValueError as error:
+                    return self._need_observation('act', '动作级局部证据不足：' + str(error),
+                                                  data=self._deltas(executed))
+                self.event('action-scoped-evidence', action=row['action'], target=cid,
+                           scope_purpose=(action_scope or {}).get('purpose'), action_dispatched=False)
             focus = getattr(self, 'preflight_search_focus', None)
             typing_focus=None
             if focus_protocol in (TYPING_VERSION,FOLLOWUP_VERSION,POST_VERSION) and cid and row['action']=='type':
                 from .goal_evidence import search_focus_target
                 typing_focus=search_focus_target(self.current,allow_combobox=True)
-            if (focus_protocol in focus_versions
+            if (focus_protocol in (FIRST_FOCUS_VERSION, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION)
                     and not focus and not self.trajectory and row['action'] == 'click'):
                 from .goal_evidence import search_focus_target
                 candidate_focus = search_focus_target(self.current)
@@ -1281,7 +1322,7 @@ class ReactSession:
                     focus = candidate_focus
                     self.event('first-action-observed-focus-basis', target=focus,
                                observation=self.current['evidence'], action_dispatched=False)
-            if (focus_protocol in focus_versions
+            if (focus_protocol in (FIRST_FOCUS_VERSION, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION)
                     and focus and not self.trajectory and row['action'] == 'click' and cid == focus['node']):
                 try:
                     action_scope = scope_for(load_json(self.current['evidence']['state']['path']), cid, selector, index or 0,
@@ -2168,7 +2209,9 @@ class ReactSession:
             from .action_stability import VERSIONS as focus_versions
             if self.task['fragment'].get('action_stability_protocol') in focus_versions and not self.trajectory:
                 from .goal_evidence import contract_for, search_focus_target
-                if (contract_for(self.task) or {}).get('kind') == 'reading' and not __import__('webcollect.direct_article',fromlist=['enabled']).enabled(self.task):
+                if ((contract_for(self.task) or {}).get('kind') == 'reading'
+                        and not (contract_for(self.task) or {}).get('direct_entry')
+                        and not __import__('webcollect.direct_article',fromlist=['enabled']).enabled(self.task)):
                     target = search_focus_target(self.current)
                     if target and not (self.current['controls'][target['node']].get('value') or {}).get('focused'):
                         self.preflight_search_focus = target

@@ -4,6 +4,11 @@ from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
 
 VERSION='webcollect-session-objective-1'
+# Per-objective execution-evidence policies a frozen objective may select. The
+# chosen protocol is stamped into spec+fragment before the task-id hash, so it
+# is part of frozen task identity; older objectives without the field keep the
+# protocol their generator bound.
+EVIDENCE_POLICIES=('webcollect-action-scoped-evidence-1',)
 
 def bind(reference,claim):
     verify_evidence([reference]);value=load_json(reference['path'])
@@ -16,6 +21,9 @@ def bind(reference,claim):
     if (not objective.get('description') or type(minimum) is not int
             or band not in ('five','long') or not (minimum==5 if band=='five' else 5<=minimum<=8)):
         raise ValueError('Explicit objective and compatible five/long operation minimum required')
+    policy=objective.get('evidence_policy')
+    if policy is not None and policy not in EVIDENCE_POLICIES:
+        raise ValueError('Unknown objective evidence policy')
     return {'reference':deepcopy(reference),'objective':deepcopy(objective)}
 
 def apply(task,binding):
@@ -25,6 +33,13 @@ def apply(task,binding):
     if direct(task):
         from .direct_completion import VERSION as COMPLETION
         spec['direct_completion_protocol']=task['fragment']['direct_completion_protocol']=COMPLETION
+    policy=binding['objective'].get('evidence_policy')
+    if policy:
+        from .action_stability import ACTION_SCOPED_VERSION
+        if policy!=ACTION_SCOPED_VERSION or not task['fragment'].get('plan_protocol'):
+            raise ValueError('Objective evidence policy requires a conditional-plan task')
+        spec['action_stability_protocol']=policy
+        task['fragment']['action_stability_protocol']=policy
     instruction=binding['objective']['description']
     spec['goal']['instruction']=instruction
     for field in ('instruction','final_result','completion_judgement'):task[field]=instruction

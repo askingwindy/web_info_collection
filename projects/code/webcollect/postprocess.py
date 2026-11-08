@@ -162,8 +162,8 @@ def _delayed_bridge(record, previous, before_id, after_id):
 
 def _scoped_continuity(record, previous, row, raw):
     """Explain only adjacent same-document drift using the next action's receipt."""
-    from .action_stability import FOLLOWUP_VERSION, POST_VERSION, pair
-    if record['task']['fragment'].get('action_stability_protocol') not in (FOLLOWUP_VERSION,POST_VERSION):return False
+    from .action_stability import FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSION, pair
+    if record['task']['fragment'].get('action_stability_protocol') not in (FOLLOWUP_VERSION,POST_VERSION,ACTION_SCOPED_VERSION):return False
     capture=raw.get('capture') or {}
     accepted=[a for a in capture.get('attempts',[]) if (a.get('stability') or {}).get('accepted') and (a.get('final_stability') or {}).get('accepted')]
     pair_receipt=accepted[-1] if accepted else capture

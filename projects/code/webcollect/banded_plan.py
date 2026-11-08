@@ -153,6 +153,9 @@ def system_for(task):
                    '长阅读由多段滚动自然组成：每段滚动须暴露并阅读与目标相关的新正文区域，不为凑步重复滚动已读区域；'
                    '依据目标确需跨页核实时，点击相关链接并核验新文档身份，back后先核验原页面身份再继续阅读；每次点击须有独立查阅目的。'
                    '新正文出现后，仅在原段能回答用户所问关系时选其cite选项，否则重规划或诚实停止。')
+        if contract.get('direct_entry'):
+            prompt += ('本任务入口已直接打开目标词条，不经过站内检索：不聚焦或输入站内搜索框，也不提交搜索；'
+                       '正文引用只来自原词条实际显示的内容。')
     else:
         prompt += ('保持指定不变的字段。按页面触发计算或自动更新，再用goal_evidence核实本次具名数值和单位。'
                    '若输入后没有结果，滚动露出计算按钮时应点击一次；若结果已自动更新即可结束。'
@@ -173,6 +176,8 @@ def system_for(task):
                    '收到零派发的编译失配时，依据最新值、选项、可用控件及剩余预算修订，不重做已完成步骤。')
     if contract['version']==DIRECT_VERSION:
         prompt=prompt.replace('首轮自行规划完整条件路径，必要时包含真正触发计算的点击及站内检索后的正文阅读。','首轮根据当前词条规划自然阅读与必要链接往返，不使用站内检索。')
+    elif contract.get('direct_entry'):
+        prompt=prompt.replace('首轮自行规划完整条件路径，必要时包含真正触发计算的点击及站内检索后的正文阅读。','首轮从已打开的目标词条正文直接规划自然阅读路径，不经过站内检索。')
     if task['fragment'].get('plan_protocol')==V11_VERSION and contract['version']!=DIRECT_VERSION:
         # V11 action-space composition: the model plans the full path from the
         # frozen goal and page evidence; no route template is hard-coded and no
@@ -1064,7 +1069,18 @@ class Controller:
         if not contract or contract['kind']!='reading' or len(s.trajectory)>=minimum:return False
         if self.position>=len(self.plan['steps']):return False
         step=self.plan['steps'][self.position]
-        return step['action']=='scroll' and bool(step['purpose'].strip()) and step['expected']['kind'] in ('scroll_changed','goal_evidence')
+        if step['action']=='scroll' and bool(step['purpose'].strip()) and step['expected']['kind'] in ('scroll_changed','goal_evidence'):
+            return True
+        # Action-scoped tasks: a citation never voids the frozen remaining plan.
+        # Planned cross-page checks with independent purposes are legitimate
+        # free-composition tails; every step still passes the ordinary atomic
+        # effect/identity validation on execution, and the minimum caps it.
+        # Older protocols keep the scroll-only rule with their frozen receipts.
+        from .action_stability import ACTION_SCOPED_VERSION
+        return (s.task['fragment'].get('action_stability_protocol')==ACTION_SCOPED_VERSION
+                and all(row['action'] in s.task['fragment']['allowed_actions']
+                        and bool(str(row.get('purpose','')).strip())
+                        for row in self.plan['steps'][self.position:]))
 
     def targets(self, s, target):
         transition=getattr(self,'target_transitions',{}).get(target.get('node'))

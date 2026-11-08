@@ -51,7 +51,12 @@ def validate_contract(contract):
     kind = contract.get('kind')
     if kind == 'reading':
         aspects = contract.get('aspects')
-        valid = (set(contract) == {'version', 'kind', 'subject', 'aspects'} and text(contract['subject'])
+        required = {'version', 'kind', 'subject', 'aspects'}
+        # v2 reading contracts may declare direct entry: the entry page itself is
+        # the subject article and site search is not part of the objective.
+        allowed = required | ({'direct_entry'} if contract.get('version') == VERSION else set())
+        valid = (required <= set(contract) <= allowed and text(contract['subject'])
+                 and contract.get('direct_entry') in (None, True)
                  and isinstance(aspects, list) and 2 <= len(aspects) <= 4 and all(map(text, aspects))
                  and len({norm(a) for a in aspects}) == len(aspects))
     elif kind == 'calculation':
@@ -261,6 +266,28 @@ def reading_evidence(s, start, contract):
     subject, aspects = contract['subject'], contract['aspects']
     landing_doc = None
     downward_reading=[]
+    # A direct-entry contract opens the subject article itself: the initial
+    # observation is the landing document, no search chain is required or
+    # allowed, and passages/downward reading are collected on that article.
+    direct_entry = contract.get('direct_entry') is True and contract['version'] == VERSION
+    if direct_entry:
+        initial = state(start)
+        headings = [e for e in initial.get('elements', []) if e.get('visible') and e.get('native_role') == 'h1'
+                    and norm(e.get('text', '')) == norm(subject)]
+        body_ready = any(e.get('visible') and len((e.get('text') or '').strip()) >= 12
+                         and e.get('native_role') not in ('a', 'input', 'button', 'h1', 'h2', 'h3')
+                         and region_matches(initial, e['element_id'], '正文') for e in initial.get('elements', []))
+        if len(headings) == 1 and body_ready:
+            landing_doc = start['document_identity']
+            opened.append({'text': headings[0]['text'], 'href': start['url'], 'landing': start['url'],
+                           'operation_id': None, 'source': 'direct_entry_article'})
+            for e in initial.get('elements', []):
+                quote = e.get('text') or ''
+                if (e.get('visible') and len(quote.strip()) >= 12 and all(norm(a) in norm(quote) for a in aspects)
+                        and e.get('native_role') not in ('a', 'input', 'button', 'h1', 'h2', 'h3')
+                        and region_matches(initial, e['element_id'], '正文')):
+                    passages.append({'node': e['element_id'], 'quote': quote, 'url': start['url'],
+                                     'observation_id': start['observation_id'], 'operation_id': None})
     def is_source_page(observation):
         return any(identity == observation['document_identity']
                    or same_url(url, observation['url']) and result_links(observation, start, subject)
@@ -398,8 +425,17 @@ def reading_evidence(s, start, contract):
     else:
         requires_reading=bool(fragment.get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4') and requested_scroll)
     reading_met=not requires_reading or bool(downward_reading)
-    return {'status': ('VERIFIED' if reading_met else 'READING_REQUIRED') if selected else 'PASSAGE_AVAILABLE' if candidates else 'UNVERIFIED',
+    status=('VERIFIED' if reading_met else 'READING_REQUIRED') if selected else 'PASSAGE_AVAILABLE' if candidates else 'UNVERIFIED'
+    if direct_entry:
+        # The direct contract forbids site search: any search-input action keeps
+        # the objective honestly unverified instead of re-labelling the trace.
+        if typed and status=='VERIFIED':
+            status='UNVERIFIED'
+        if landing_doc is None and not opened:
+            status='UNVERIFIED'
+    return {'status': status,
             'required_downward_reading':requires_reading,'reading_requirement_basis':({'reference':objective_binding.get('reference'),'clause':requested_scroll.group(0),'start':requested_scroll.start()} if requires_reading else None),'downward_reading_satisfied':reading_met,'downward_reading':downward_reading,
+            'direct_entry':direct_entry,'direct_entry_search_forbidden':[t['query'] for t in typed] if direct_entry and typed else [],
             'search_inputs': typed, 'opened_results': opened, 'passages': candidates,
             'result_page_current': current_source,
             'selected_passage': selected, 'citation_event': ref if selected else None}
