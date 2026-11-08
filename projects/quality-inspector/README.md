@@ -251,6 +251,15 @@ projects/code/.venv/bin/python projects/quality-inspector/qc.py check-set \
 
 仓库启动器自动引用`projects/code`；安装CLI `webcollect-ai-qc`时同时安装webcollect（可用本地`ai` extra）。真实凭据/试验金额/费率未配置，真实正反例检出率与usage尚未验证。具体命令和证据见[三程序运行记录](../prd/三程序E0-E3运行记录-20261026.md)。
 
+## QC 回执恢复与只读对账（2026-11-08）
+
+`python -m quality_inspector.qc_recovery` 提供两个显式入口，不改变普通采集、四路判重、人工审核、发布与客户验收口径：
+
+- `visual-recover --config <冻结配置> --ledger <原账> --job <ai-visual作业> --output <包外回执> [--allow-correction] [--controlled-correction <合成夹具>]`：处理"模型回执是完整逐帧审核、四项结论合法、仅每项缺 `evidence_steps`"被网关判 `invalid_response` 的作业。恢复前逐项重校原 Schema 确认缺陷仅限 evidence_steps（其余结构损坏、状态枚举错误均判不可恢复并保留）。可确定引用按 `qc-evidence-reference-normalization-1` 归一化：只接受 `帧a至帧b`、`帧n`、`第n步` 和与供应帧数完全相等的"N帧"全称引用；越界、计数不符或无引用一律不可确定——不默认填空、不自动把全部步骤写成证据、不删除必填校验、不改签旧 invalid。不可确定项仅凭显式 `--allow-correction` 发一次有界纠正请求（purpose `visual-part-N-evidence-recovery`）：重建的原 prompt 与原回执、同帧同 SHA 原图重新供应，模型只重述指定检查并引用真实帧；纠正请求失败/UNKNOWN 不重发（再次执行会直接复用已结算行或拒绝）。原请求/回执/费用字节永不改写；结果与审计（原请求 ID 与保留状态、逐项匹配文本、规则版本、纠正请求账）写入作业结果的 `evidence_recovery` 并随 `qc-review-2` 记录导出。恢复前核验样本快照、语义规则版本、合同与作业身份，任何不匹配即拒绝。
+- `reconcile --config <冻结配置> --ledger <原账> --job <QC作业> --output <包外回执>`：只读对账原账请求行（逐行 SHA）、迟到已结算答案（按原账 timeout-retry 绑定规则判定）与 UNKNOWN/费用预留。没有迟到结果时 UNKNOWN 与预留原样保留，不重发、不自动超时重试、不把 UNKNOWN 记零费用或当 PASS。资料作业的传输超时按此入口留证；需要新的资料审核时以新材料身份另行准备，不借恢复掩盖旧 UNKNOWN。
+
+单样本无对照邻域时 ai-difference 的 `NOT_APPLICABLE_EMPTY_SET` 是如实结果，不虚构邻居形成 PASS。受控夹具结果一律标注 SYNTHETIC，不构成真实 AI PASS；真实纠正请求须在明确授权窗口执行。
+
 2026-10-27新增DeepSeek/GLM厂商协议适配，字段、未配置模板及用量边界见[采集程序接入说明](../code/README.md#deepseek--glm-辅助判断接口2026-10-27)。`ai-visual`与近邻原图比较必须使用已明确配置视觉能力的模型；纯文本模型可承担资料/文本辅助判断，不能代替原图审核。同一worker账只绑定一个模型，使用不同模型时分别冻结配置和账本。GLM视觉请求省略其不支持的`response_format`，输出仍须通过本地Schema和证据绑定；接口兼容的离线通过不增加真实AI审核数。
 
 日期视觉验收器的`vision_ocr.swift`已纳入安装包资源。对保留原帧运行安装包时，原固定0.9置信度门槛继续生效；安装可用不表示日期限定验收器已完成真实校准或可自动PASS。
