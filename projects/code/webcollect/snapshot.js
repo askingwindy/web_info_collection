@@ -1371,8 +1371,81 @@
       ||/(?:^|\s)output(?:$|\s)/.test(words)
       ||/(?:calculation|calculator|calculated|computed|computation|conversion|converted|validation|form|tool)[\s_-]+output|output[\s_-]+(?:calculation|calculated|computed|conversion|validation|result)/.test(words);
   };
+  // Bounded combobox suggestion popups (2026-11-08 wwiki breakpoint): the
+  // focused search input's ARIA popup keeps re-rendering between two
+  // no-action observations. It is exempted only with a complete proof: one
+  // focused, enabled, visible search/text input owning it through
+  // aria-owns/aria-controls inside its own widget subtree, no input/submit
+  // control or action target inside, disjoint from the input, and free of the
+  // existing paint/assertion/business-overlap guards. Suggestion changes
+  // themselves never grant an action effect, effective step or QC credit.
+  const suggestionVersion='webcollect-search-suggestions-1';
+  const suggestionOwner=input=>{
+    const ids=[...(input.getAttribute('aria-owns')||'').split(/\s+/),(input.getAttribute('aria-controls')||'').split(/\s+/)].filter(Boolean);
+    const popups=[];
+    for(const key of ['aria_owns','aria_controls']){
+      const attr=key==='aria_owns'?'aria-owns':'aria-controls';
+      for(const id of (input.getAttribute(attr)||'').split(/\s+/).filter(Boolean)){
+        const x=document.getElementById(id);
+        if(x&&x!==input&&!x.contains(input)&&!input.contains(x)&&x.getAttribute('role')==='listbox'
+          &&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&!popups.some(p=>p.element===x))popups.push({element:x,key});
+      }
+    }
+    if(popups.length!==1)return null;
+    // DOM locality: duplicated popup ids in other widgets must not bind here.
+    for(let host=popups[0].element.parentElement;host;host=host.parentElement)if(host===input.parentElement||host.contains(input))return popups[0];
+    return null;
+  };
   const candidates=[...document.querySelectorAll('*')].filter(n=>n!==document.body&&n!==document.documentElement&&categoryOf(n)&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
-  const dynamicRegions=[];const allowedRoots=[];
+  const dynamicRegions=[];const allowedRoots=[];const suggestionMembers=new Set();
+  for(const popup of [...new Set([...document.querySelectorAll('[role=listbox]')])]){
+    const owners=[...document.querySelectorAll('input')].filter(i=>i.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})
+      &&!i.disabled&&!i.readOnly&&(i.type==='search'||i.type==='text'||i.getAttribute('role')==='combobox')).filter(i=>suggestionOwner(i)&&suggestionOwner(i).element===popup);
+    const reasons=[];
+    const raw=rawBox(popup),clip=clipFor(popup),members=[popup,...popup.querySelectorAll('*')],memberSet=new Set(members);
+    const boundedBoxes=members.filter(x=>x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).map(x=>{const r=rawBox(x),c=clipFor(x);return [Math.max(r[0],c.left),Math.max(r[1],c.top),Math.min(r[2],c.right),Math.min(r[3],c.bottom)];}).filter(r=>r[0]<r[2]&&r[1]<r[3]);
+    const paintBox=[Math.min(raw[0],...boundedBoxes.map(r=>r[0])),Math.min(raw[1],...boundedBoxes.map(r=>r[1])),Math.max(raw[2],...boundedBoxes.map(r=>r[2])),Math.max(raw[3],...boundedBoxes.map(r=>r[3]))];
+    const box=[Math.max(0,Math.floor(paintBox[0])),Math.max(0,Math.floor(paintBox[1])),Math.min(width,Math.ceil(paintBox[2])),Math.min(height,Math.ceil(paintBox[3]))];
+    if(box[0]>=box[2]||box[1]>=box[3])continue;
+    if(owners.length!==1)reasons.push('combobox_owner_not_unique');
+    const owner=owners[0];
+    if(owner){
+      const inputBox=rawBox(owner);
+      if(intersects(box,inputBox)||memberSet.has(owner))reasons.push('overlaps_or_contains_search_input');
+      if(owner!==document.activeElement)reasons.push('combobox_not_focused');
+    }
+    if(members.some(x=>x.matches('input,textarea,select,output,button,[contenteditable=true],[role=button],[role=searchbox],[role=textbox]')))reasons.push('input_or_submit_control_inside');
+    // A live suggestion popup legitimately mixes SVG icons, transforms and
+    // shadows inside a scrollable (overflow:auto/scroll) menu. Its paint is
+    // bounded by box containment: every visible member must stay inside the
+    // region's paint box under any clipping ancestor. Property-only paint
+    // (ad/announcement/image categories keep their stricter rule) is not a
+    // rejection here because the popup's own pixels are what may change.
+    const clippedInside=x=>{for(let a=x.parentElement;a&&popup.contains(a);a=a.parentElement){const c=getComputedStyle(a),r=rawBox(a);if((/(?:^| )paint(?: |$)/.test(c.contain)||['hidden','clip'].includes(c.overflowX)&&['hidden','clip'].includes(c.overflowY)||['auto','scroll'].includes(c.overflowX)||['auto','scroll'].includes(c.overflowY))&&r[0]>=paintBox[0]&&r[1]>=paintBox[1]&&r[2]<=paintBox[2]&&r[3]<=paintBox[3])return true;}return false;};
+    for(const x of members){const r=rawBox(x);if(!x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+      const clipped=[[Math.max(r[0],clip.left),Math.max(r[1],clip.top),Math.min(r[2],clip.right),Math.min(r[3],clip.bottom)]];
+      if(!clippedInside(x)&&clipped.some(b=>b[0]<paintBox[0]||b[1]<paintBox[1]||b[2]>paintBox[2]||b[3]>paintBox[3]))reasons.push('descendant_paint_outside_region');
+    }
+    const assertionNodes=[...assertions.filter(c=>c.selector).map(c=>document.querySelectorAll(c.selector)[c.index||0]),...protected_selectors.flatMap(s=>[...document.querySelectorAll(s)])].filter(Boolean);
+    if(assertionNodes.some(x=>x===popup||popup.contains(x)||!x.contains(popup)&&intersects(box,rawBox(x))))reasons.push('explicit_semantic_evidence');
+    if(target&&memberSet.has(target))reasons.push('action_target_inside');
+    const businessOutside=[...document.querySelectorAll('input,textarea,select,output,[contenteditable=true],[id],[class],[aria-label]')].filter(x=>!memberSet.has(x)&&!x.contains(popup)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).filter(x=>x.matches('input,textarea,select,output,[contenteditable=true]')||businessSemantic(x));
+    if(businessOutside.some(x=>intersects(box,rawBox(x))))reasons.push('overlaps_business_evidence');
+    const externalText=[];const tw0=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    while(tw0.nextNode()){const t=tw0.currentNode,p=t.parentElement;if(!p||memberSet.has(p)||!clean(t.textContent)||p.closest('script,style,noscript,template')||!p.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;const r=document.createRange();r.selectNodeContents(t);for(const q of r.getClientRects())if(q.width&&q.height&&intersects(box,[q.left,q.top,q.right,q.bottom]))externalText.push([q.left,q.top,q.right,q.bottom]);}
+    const externalControls=nodes.filter((x,i)=>!memberSet.has(x)&&!x.contains(popup)&&(records[i].clickable||records[i].inputable||records[i].element_type==='image'||records[i].element_type==='window')&&intersects(box,records[i].bbox));
+    if(!observer.ids.has(popup))observer.ids.set(popup,`e_${observer.next++}`);
+    const ownerBinding=(owner&&suggestionOwner(owner)&&!reasons.length)
+      ?{suggestion_binding:{schema_version:suggestionVersion,combobox_selector:selectorOf(owner),input_type:owner.type||'',link:suggestionOwner(owner).key}}:{};
+    dynamicRegions.push({schema_version:dynamicVersion,category:'search_suggestions',tag:popup.localName,native_image_paint:null,
+      attributes:regionAttributes(popup),selector:selectorOf(popup),element_id:observer.ids.get(popup),bbox:box,raw_bbox:raw,
+      native_paint_bbox:paintBox,clip_bbox:[clip.left,clip.top,clip.right,clip.bottom],
+      member_ids:members.map(x=>{if(!observer.ids.has(x))observer.ids.set(x,`e_${observer.next++}`);return observer.ids.get(x);}),
+      member_selectors:members.map(selectorOf),eligible:reasons.length===0,reasons:[...new Set(reasons)],
+      external_text_overlaps:externalText,external_paint_overlaps:[],external_control_ids:externalControls.map(x=>observer.ids.get(x)),
+      target_inside:!!target&&memberSet.has(target),...ownerBinding});
+    if(!reasons.length){allowedRoots.push(popup);for(const x of members)suggestionMembers.add(x);}
+  }
   for(const n of candidates){
     if(unrelatedTransforms.has(n))continue; // Preserve the existing bounded transformed-decoration proof.
     if(allowedRoots.some(p=>p!==n&&p.contains(n)))continue;
@@ -1399,7 +1472,9 @@
     if(semanticOwners.length||relatedOwners.length||n.matches('[role=status],[role=alert],[aria-live]')&&n.closest('form'))reasons.push('business_result_semantics');
     const assertionNodes=[...assertions.filter(c=>c.selector).map(c=>document.querySelectorAll(c.selector)[c.index||0]),...protected_selectors.flatMap(s=>[...document.querySelectorAll(s)])].filter(Boolean);
     if(assertionNodes.some(x=>x===n||n.contains(x)||!x.contains(n)&&intersects(box,rawBox(x))))reasons.push('explicit_semantic_evidence');
-    const businessOutside=[...document.querySelectorAll('input,textarea,select,output,[contenteditable=true],[id],[class],[aria-label]')].filter(x=>!memberSet.has(x)&&!x.contains(n)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).filter(x=>x.matches('input,textarea,select,output,[contenteditable=true]')||businessSemantic(x));
+    // Members of an already-exempted suggestion popup are that popup's own
+    // changing content, not foreign business evidence overlapping this region.
+    const businessOutside=[...document.querySelectorAll('input,textarea,select,output,[contenteditable=true],[id],[class],[aria-label]')].filter(x=>!memberSet.has(x)&&!suggestionMembers.has(x)&&!x.contains(n)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).filter(x=>x.matches('input,textarea,select,output,[contenteditable=true]')||businessSemantic(x));
     if(businessOutside.some(x=>intersects(box,rawBox(x))))reasons.push('overlaps_business_evidence');
     const externalText=[];const tw=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
     while(tw.nextNode()){const t=tw.currentNode,p=t.parentElement;if(!p||memberSet.has(p)||!clean(t.textContent)||p.closest('script,style,noscript,template')||!p.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;const r=document.createRange();r.selectNodeContents(t);for(const q of r.getClientRects())if(q.width&&q.height&&intersects(box,[q.left,q.top,q.right,q.bottom]))externalText.push([q.left,q.top,q.right,q.bottom]);}

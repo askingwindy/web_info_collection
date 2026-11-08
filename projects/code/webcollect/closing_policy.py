@@ -145,6 +145,12 @@ def validate_record(record):
                 observations[oid]=ob
             session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],
                 observation_records=observations,current=observations[final])
+            # The live session exposes its structured goal to the evidence
+            # machinery; the offline replay must reconstruct the same surface,
+            # or objective requirements derived from the goal description
+            # (downward reading) would silently differ between both sides.
+            from .react_session import struct_goal
+            session.requested_goal=struct_goal(record['task'])
             from .goal_evidence import contract_for
             if contract_for(session.task):
                 session.attempt_id = record['boundary']['attempt_id']

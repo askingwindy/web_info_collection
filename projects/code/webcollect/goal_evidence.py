@@ -156,9 +156,25 @@ def calc_evidence(s, start, contract):
             'retained_fields': retained, 'result_quotes': results[:3]}
 
 
+def suggestion_member_ids(ob):
+    """Members of an eligible combobox suggestion popup on this frame.
+
+    Suggestion rows are live overlay content: their appearance proves nothing
+    about a submitted search, so they stay outside result/source evidence while
+    remaining ordinary clickable inventory for the model.
+    """
+    from .dynamic_regions import regions as allowed_regions, SUGGESTION_CATEGORY
+    try:
+        return {x for r in allowed_regions(state(ob)) if r.get('category') == SUGGESTION_CATEGORY
+                for x in r.get('member_ids', [])}
+    except Exception:
+        return set()
+
+
 def result_links(ob, start, subject):
     """Expose current first-party result links, excluding navigation and pre-existing links."""
     old = {c['binding'].get('href') for c in start['controls'].values()}
+    suggestions = suggestion_member_ids(ob)
     matches = {}
     for cid, c in ob['controls'].items():
         e, binding = c['element'], c['binding']
@@ -166,7 +182,8 @@ def result_links(ob, start, subject):
         if (not ob.get('capture_verified') or not href or href in old or not e.get('visible')
                 or e.get('native_role') != 'a' or not name
                 or urlsplit(href).hostname != urlsplit(ob['url']).hostname
-                or re.search(r'(?:^| > )(?:nav|aside|footer|header):', binding.get('selector') or '')):
+                or re.search(r'(?:^| > )(?:nav|aside|footer|header):', binding.get('selector') or '')
+                or cid in suggestions):
             continue
         if norm(subject) in norm(name + ' ' + unquote(href)):
             matches[cid] = {'node': cid, 'text': name, 'href': href}
@@ -366,8 +383,20 @@ def reading_evidence(s, start, contract):
     fragment=getattr(s,'task',{}).get('fragment',{})
     objective_binding=fragment.get('session_objective',{})
     description=(objective_binding.get('objective') or {}).get('description','')
+    if not description:
+        requested_goal=getattr(s,'requested_goal',None)
+        if isinstance(requested_goal,dict):
+            description=requested_goal.get('description','')
     requested_scroll=re.search(r'(?:往下|向下)(?:滚动)?阅读|(?:往下|向下)滚动|scroll\s+down',description,re.I)
-    requires_reading=bool(fragment.get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4') and requested_scroll)
+    # The requirement belongs to the contracted objective itself: a reading
+    # contract whose frozen description demands downward reading must not be
+    # silently waived because the task binds a different stability protocol
+    # version (the raw-drive wwiki break left it false). Legacy sealed receipts
+    # keep their original coupling.
+    if contract['version']==VERSION and description:
+        requires_reading=bool(requested_scroll)
+    else:
+        requires_reading=bool(fragment.get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4') and requested_scroll)
     reading_met=not requires_reading or bool(downward_reading)
     return {'status': ('VERIFIED' if reading_met else 'READING_REQUIRED') if selected else 'PASSAGE_AVAILABLE' if candidates else 'UNVERIFIED',
             'required_downward_reading':requires_reading,'reading_requirement_basis':({'reference':objective_binding.get('reference'),'clause':requested_scroll.group(0),'start':requested_scroll.start()} if requires_reading else None),'downward_reading_satisfied':reading_met,'downward_reading':downward_reading,

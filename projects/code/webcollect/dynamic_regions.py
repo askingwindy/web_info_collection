@@ -14,6 +14,11 @@ VERSION='webcollect-dynamic-regions-1'
 STABILITY='webcollect-dynamic-region-stability-2'
 STABILITY_V1='webcollect-dynamic-region-stability-1'
 DYNAMIC_STABILITY_RULES=(STABILITY_V1,STABILITY)
+# Bounded combobox suggestion popup: exempted only with its binding proof that
+# a real focused search input of this same state owns the popup. The category
+# is not derivable from tag/attributes alone, so regions() re-binds it here.
+SUGGESTION_CATEGORY='search_suggestions'
+SUGGESTION_VERSION='webcollect-search-suggestions-1'
 # A frame-pair may carry animated paint that no DOM region classifies (the
 # 2026-11-06 experiment lost 18 pages to a ~300x108 animated block with no
 # element, text or control). Such change is tolerated only when its bounding
@@ -48,13 +53,39 @@ def overlap(a,b):
     return bool(a and b and min(a[2],b[2])>max(a[0],b[0]) and min(a[3],b[3])>max(a[1],b[1]))
 
 
+def _suggestion_binding(state, row):
+    """Re-bind a suggestion-popup region to this state's own search input.
+
+    The declared category is accepted only when the recorded binding names a
+    unique real input control of this same capture with a search/text type;
+    anything else (result listboxes, unrelated popups, forged rows) stays
+    rejected exactly like every unclassified region.
+    """
+    binding = row.get('suggestion_binding')
+    if (not isinstance(binding, dict) or set(binding) != {'schema_version','combobox_selector','input_type','link'}
+            or binding.get('schema_version') != SUGGESTION_VERSION
+            or binding.get('link') not in ('aria_owns','aria_controls')
+            or not isinstance(binding.get('combobox_selector'), str) or not binding['combobox_selector']
+            or binding.get('input_type') not in ('search','text')):
+        return None
+    owners = [c for c in state.get('capture_controls', [])
+              if c.get('selector') == binding['combobox_selector']]
+    if (len(owners) != 1 or owners[0].get('tag') != 'input'
+            or owners[0].get('input_type') != binding['input_type']):
+        return None
+    return binding
+
+
 def regions(state):
     if not enabled(state):return []
     width,height=state['screen_resolution'];result=[]
     for r in state['dynamic_region_contract'].get('regions',[]):
         b=r.get('bbox');attrs=r.get('attributes',{})
+        derived=category(r.get('tag'),{} if r.get('tag') in ('::before','::after') else attrs,r.get('native_image_paint'))
+        if r.get('category')!=derived and not (r.get('category')==SUGGESTION_CATEGORY and _suggestion_binding(state,r) is not None):
+            continue
         if (r.get('schema_version')!=VERSION or r.get('eligible') is not True or r.get('reasons')!=[]
-                or r.get('category')!=category(r.get('tag'),{} if r.get('tag') in ('::before','::after') else attrs,r.get('native_image_paint')) or not r.get('category')
+                or not r.get('category')
                 or set(attrs)!= {'id','class','role','aria-label','aria-roledescription','title'}
                 or not isinstance(r.get('external_text_overlaps'),list) or not isinstance(r.get('external_control_ids'),list)
                 or not isinstance(b,list) or len(b)!=4 or not all(type(v)is int for v in b)
