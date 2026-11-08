@@ -32,8 +32,7 @@ from webcollect.planning import object_sha256
 
 from . import semantic_runtime
 from .ai_worker import (PROMPT_VERSION, POLICY_VERSION, DECISION, compact_trajectory, obj,
-                        segments, validate_review, verify_snapshot, _retain_decisions,
-                        bound_review_schema, synthetic_review, visual_part_prompt)
+                        segments, validate_review, verify_snapshot)
 from .contract import fingerprint
 from .semantic import rule_ids
 
@@ -126,18 +125,22 @@ def _schema_errors(value, schema):
                   key=lambda error: list(error.absolute_path))
 
 
-def _evidence_only_defect(errors):
-    """True when every Schema defect is a missing/invalid evidence_steps."""
-    for error in errors:
-        path = list(error.absolute_path)
-        if path and path[0] == EVIDENCE_KEY:
-            continue
-        if not path and error.validator == 'required':
-            missing = [name for name in error.validator_value if name not in error.instance]
-            if missing == [EVIDENCE_KEY]:
-                continue
-        return False
-    return True
+def _recoverable_schema_error(error):
+    """Only checks.<name>.evidence_steps defects may be recovered.
+
+    A required error exactly at a check object qualifies only when
+    ``evidence_steps`` is its single missing key. Everything else—including
+    root structure, extra root fields, ``step_observations`` damage and any
+    ``failure_assessment`` defect—is unrecoverable damage.
+    """
+    path = list(error.absolute_path)
+    if len(path) >= 3 and path[0] == 'checks' and path[2] == EVIDENCE_KEY:
+        return True
+    if (len(path) == 2 and path[0] == 'checks' and error.validator == 'required'
+            and isinstance(error.instance, dict)):
+        missing = [name for name in error.validator_value if name not in error.instance]
+        return missing == [EVIDENCE_KEY]
+    return False
 
 
 def _host_check_states(parsed, group):
@@ -154,27 +157,34 @@ def _host_check_states(parsed, group):
 
 
 def classify_reply(parsed, schema, check_names, group):
-    """Combine Schema and host-evidence classification of a stored reply."""
+    """Validate the complete original reply first, then classify evidence defects.
+
+    The full bound Schema runs on the whole parsed reply before anything is
+    deemed recoverable; only evidence_steps defects inside ``checks`` survive
+    the filter. Host evidence semantics (empty/out-of-bounds/duplicate
+    citations) then decide which surviving checks are valid or defective.
+    """
     problems = []
-    observations = parsed.get('step_observations')
-    observation_schema = schema['properties']['step_observations']
-    if not isinstance(observations, list) or _schema_errors(observations, observation_schema):
-        problems.append('step_observations are structurally damaged')
+    defective = set()
+    for error in _schema_errors(parsed, schema):
+        if _recoverable_schema_error(error):
+            defective.add(list(error.absolute_path)[1])
+            continue
+        location = '/'.join(str(item) for item in error.absolute_path) or '<root>'
+        problems.append('schema ' + location + ': ' + error.message[:200])
+    if problems:
+        return {'checks': {}, 'recoverable': False, 'problems': problems}
+    if not isinstance(parsed.get('checks'), dict) or not isinstance(parsed.get('step_observations'), list):
+        return {'checks': {}, 'recoverable': False,
+                'problems': ['reply lacks its checks/step_observations objects']}
     states = {}
     for name in check_names:
-        check = (parsed.get('checks') or {}).get(name)
+        check = parsed['checks'].get(name)
         if not isinstance(check, dict):
             problems.append('check ' + name + ': missing decision object')
             continue
-        errors = _schema_errors(check, schema['properties']['checks']['properties'][name])
-        if errors and not _evidence_only_defect(errors):
-            problems.append('check ' + name + ': ' + errors[0].message[:200])
-            continue
         host_state = _host_check_states({'checks': {name: check}}, group)[name]
-        if not errors and host_state == 'valid':
-            states[name] = 'valid'
-        else:
-            states[name] = 'evidence_defect'
+        states[name] = 'valid' if (name not in defective and host_state == 'valid') else 'evidence_defect'
     return {'checks': states, 'recoverable': not problems, 'problems': problems}
 
 
@@ -257,7 +267,10 @@ def visual_recovery_plan(ledger, job):
     return {'protocol': RECOVERY_PROTOCOL, 'job_id': job['id'], 'parts': parts,
             'indeterminate_checks': sorted({name for part in parts for name in part.get('indeterminate', [])}),
             'unrecoverable_parts': [part['segment'] for part in parts if part['state'] == 'unrecoverable'],
-            'never_dispatched_parts': [part['segment'] for part in parts if part['state'] == 'never_dispatched']}
+            'never_dispatched_parts': [part['segment'] for part in parts if part['state'] == 'never_dispatched'],
+            # A multi-segment trajectory always needs the whole-continuity
+            # consolidation request; recovery authorization does not cover it.
+            'consolidation_required': len(parts) > 1}
 
 
 def _verify_recoverable_identity(ledger, job):
@@ -379,27 +392,10 @@ def _correction_call(ledger, gateway, job, part, controlled):
                                           'redispatched': True}
 
 
-def _merge_part(ledger, gateway, job, part, *, allow_correction, controlled, total_segments):
-    if part['state'] == 'never_dispatched':
-        context, images = compact_trajectory(job['payload']['candidate'], part['step_ids'])
-        if job['payload'].get('trusted_prefix'):
-            context['trusted_prefix'] = job['payload']['trusted_prefix']
-        # Preserve the original do_visual check order so the rebuilt request
-        # keeps its exact identity (a settled request would cache-hit instead).
-        rules = job['payload'].get('semantic_rule_ids') or {}
-        check_names = [name for name in semantic_runtime.VISUAL_CHECKS if name in rules]
-        prompt = visual_part_prompt(context, part['segment'], total_segments, part['step_ids'], check_names)
-        result = gateway.call(job, f"visual-part-{part['segment']}",
-                              json.dumps(prompt, ensure_ascii=False),
-                              bound_review_schema(part['step_ids'], check_names), images=images,
-                              synthetic_response={**synthetic_review(part['step_ids']),
-                                                  'checks': {name: synthetic_review(part['step_ids'])['checks'][name]
-                                                             for name in check_names}})
-        validate_review(result, part['step_ids'])
-        return deepcopy(result), {'fresh_request': True, 'classification': {name: 'valid' for name in check_names},
-                                  'normalization': {}, 'correction': None}
-    if part['state'] == 'unrecoverable':
-        raise ValueError('Original reply is not an evidence-only defect: ' + part['reason'])
+def _merge_part(ledger, gateway, job, part, *, allow_correction, controlled):
+    """Merge one dispatched segment; correction is the only dispatch path."""
+    if part['state'] not in ('settled', 'recoverable'):
+        raise ValueError('Segment is not a dispatched recoverable review: ' + str(part['state']))
     parsed = part['parsed']
     checks = {}
     audit = {'normalization': {}, 'correction': None}
@@ -429,6 +425,41 @@ def _merge_part(ledger, gateway, job, part, *, allow_correction, controlled, tot
     return merged, audit
 
 
+def _all_requests(ledger, job_id):
+    with ledger.connect() as con:
+        return [dict(row) for row in con.execute(
+            'SELECT id,purpose,attempt,state,usage,error,reserved_tokens,reserved_cost '
+            'FROM model_requests WHERE job_id=? ORDER BY started', (job_id,))]
+
+
+def _dispatch_audit_entry(row):
+    return {'request_id': row['id'], 'purpose': row['purpose'], 'state': row['state'],
+            'error': row['error'], 'usage': json.loads(row['usage']) if row['usage'] else None,
+            'reserved_tokens': row['reserved_tokens'], 'reserved_cost_micros': row['reserved_cost']}
+    # An UNKNOWN row keeps usage=None with its original reservation above; it is
+    # never reported as a zero-cost or settled request.
+
+
+def _attach_dispatch_audit(receipt, ledger, job_id, before_ids):
+    """Count this run's new ledger request rows on every terminal receipt.
+
+    The count never depends on in-memory audit structures. A failure while
+    reading the audit must not mask the original recovery error.
+    """
+    try:
+        rows = _all_requests(ledger, job_id)
+        receipt.update({
+            'model_requests_dispatched': sum(row['id'] not in before_ids for row in rows),
+            'dispatched_requests': [_dispatch_audit_entry(row) for row in rows
+                                    if row['id'] not in before_ids],
+            'prior_recovery_requests': [_dispatch_audit_entry(row) for row in rows
+                                        if row['id'] in before_ids and 'evidence-recovery' in row['purpose']]})
+    except Exception as audit_error:
+        receipt['dispatch_audit_error'] = (type(audit_error).__name__ +
+                                           '; counts unavailable, original reason retained')
+    return receipt
+
+
 def recover_visual(config_path, ledger_path, job_id, *, allow_correction=False, controlled=None, output):
     """Recover one retained ai-visual job; original receipts stay untouched."""
     ledger = BatchLedger(ledger_path, load_json(config_path))
@@ -438,6 +469,7 @@ def recover_visual(config_path, ledger_path, job_id, *, allow_correction=False, 
     output = Path(output).resolve()
     if output.is_relative_to(Path(candidate['path']).parents[1]):
         raise ValueError('Recovery receipts must be written outside the candidate package')
+    before_ids = {row['id'] for row in _all_requests(ledger, job['id'])}
     base_receipt = {'schema_version': RECOVERY_RECEIPT_VERSION, 'protocol': RECOVERY_PROTOCOL,
                     'normalization_version': NORMALIZATION_VERSION, 'job_id': job['id'],
                     'sample_id': candidate['sample_id'], 'mode': ledger.config['mode'],
@@ -450,67 +482,62 @@ def recover_visual(config_path, ledger_path, job_id, *, allow_correction=False, 
                     'original_receipts_retained': [row for part in plan['parts']
                                                    for row in part['original_requests']],
                     'original_bytes_modified': False, 'automatic_retry': False,
-                    'model_requests_dispatched': 0}
-    if plan['unrecoverable_parts']:
-        base_receipt.update(status='stopped', reason='original replies contain non-evidence damage',
-                            unrecoverable_parts=plan['unrecoverable_parts'])
+                    'model_requests_dispatched': 0, 'dispatched_requests': [], 'prior_recovery_requests': []}
+
+    def stop(**updates):
+        base_receipt.update(status='stopped', **updates)
+        _attach_dispatch_audit(base_receipt, ledger, job['id'], before_ids)
         save_json(output, base_receipt)
         return base_receipt
+
+    if plan['unrecoverable_parts']:
+        return stop(reason='original replies contain non-evidence damage',
+                    unrecoverable_parts=plan['unrecoverable_parts'])
+    if plan['never_dispatched_parts']:
+        # Missing segments belong to the normal worker's own dispatch flow;
+        # --allow-correction never authorizes re-running them here.
+        return stop(reason='segments were never dispatched under the original identity; '
+                           'rerun the normal review worker for them (recovery dispatches nothing)',
+                    never_dispatched_parts=plan['never_dispatched_parts'])
+    if plan['consolidation_required']:
+        # Multi-segment recovery would need a whole-continuity consolidation
+        # request, which no existing recovery authorization covers.
+        return stop(reason='multi-segment recovery requires a whole-continuity consolidation request '
+                           'outside the recovery authorization; no request dispatched',
+                    consolidation_required=True, segments=len(plan['parts']))
     if plan['indeterminate_checks'] and not allow_correction:
         base_receipt.update(status='correction_required',
                             reason='checks lack determinable citations; explicit --allow-correction dispatches one bounded request',
                             indeterminate_checks=plan['indeterminate_checks'],
                             normalizable_checks={str(part['segment']): part['normalization']
                                                  for part in plan['parts'] if part.get('normalization')})
+        _attach_dispatch_audit(base_receipt, ledger, job['id'], before_ids)
         save_json(output, base_receipt)
         return base_receipt
     gateway = None
-    if allow_correction or plan['never_dispatched_parts']:
-        gateway = ModelGateway(ledger)
-    results = []
     audits = []
+    final = None
     with semantic_runtime.guard(ledger, job):
         owned = _claim_review_required(ledger, job['id'])
         job = {**job, 'owner': owned['owner']}
         try:
-            for part in plan['parts']:
-                ledger.heartbeat(job)
-                merged, audit = _merge_part(ledger, gateway, job, part,
-                                            allow_correction=allow_correction, controlled=controlled,
-                                            total_segments=len(plan['parts']))
-                validate_review(merged, part['step_ids'])
-                results.append(merged)
-                audits.append({'segment': part['segment'],
-                               'source_request': part['source_request']['id'] if part.get('source_request') else None,
-                               'source_request_state': part.get('source_request', {}).get('state'),
-                               'source_response_sha256': part.get('source_response_sha256'),
-                               'classification': part.get('classification'),
-                               **audit})
+            if len(plan['parts']) != 1:
+                raise ValueError('Recovery executes exactly one dispatched segment; '
+                                 'the plan-level authorization gate was bypassed')
+            part = plan['parts'][0]
+            ledger.heartbeat(job)
+            merged, audit = _merge_part(ledger, gateway, job, part,
+                                        allow_correction=allow_correction, controlled=controlled)
+            validate_review(merged, part['step_ids'])
+            audits.append({'segment': part['segment'],
+                           'source_request': part['source_request']['id'] if part.get('source_request') else None,
+                           'source_request_state': part.get('source_request', {}).get('state'),
+                           'source_response_sha256': part.get('source_response_sha256'),
+                           'classification': part.get('classification'),
+                           **audit})
             annotation = load_json(Path(candidate['path']) / 'annotation.json')
             steps = [row['step_id'] for row in annotation['steps']]
-            if len(results) == 1:
-                final = results[0]
-            else:
-                boundary_ids = sorted(set([steps[-1], *[part['step_ids'][0] for part in plan['parts'][1:]]]))
-                if len(boundary_ids) > ledger.config['model']['max_images']:
-                    raise ValueError('Too many continuity boundaries for the configured final request')
-                context, images = compact_trajectory(candidate, boundary_ids)
-                if gateway is None:
-                    gateway = ModelGateway(ledger)
-                check_names = list(results[0]['checks'])
-                whole = gateway.call(job, 'visual-whole-continuity', json.dumps({
-                    'instruction': 'Consolidate every segment. Verify whole trajectory terminal state and continuity against boundary/final originals. Include exactly one observation for EVERY step from segment evidence, exactly the required check decisions, retain every known failure or unresolved item.',
-                    'segments': results, 'whole_task': annotation['task_instruction'],
-                    'boundary_frames': context}, ensure_ascii=False),
-                    bound_review_schema(steps, check_names), images=images,
-                    synthetic_response={'step_observations': synthetic_review(steps)['step_observations'],
-                                        'checks': {name: synthetic_review(steps)['checks'][name]
-                                                   for name in check_names}})
-                validate_review(whole, steps)
-                for name in check_names:
-                    whole['checks'][name] = _retain_decisions(whole['checks'][name],
-                                                              [part['checks'][name] for part in results])
-                final = whole
+            final = merged
             final['checks']['substantive_difference'] = {'status': 'REVIEW_REQUIRED',
                 'note': 'Separate evidence-bound business comparison.', 'evidence_steps': steps}
             final['semantic_check_sources'] = {name: job['id'] for name in semantic_runtime.VISUAL_CHECKS}
@@ -525,7 +552,7 @@ def recover_visual(config_path, ledger_path, job_id, *, allow_correction=False, 
                     'job_id': job['id'], 'protocol': RECOVERY_PROTOCOL,
                     'original_requests': base_receipt['original_receipts_retained'],
                     'normalization': {part['segment']: part.get('normalization', {}) for part in plan['parts']},
-                    'correction_requests': [part['correction'] for part in audits if part.get('correction')],
+                    'correction_requests': [item['correction'] for item in audits if item.get('correction')],
                     'result_sha256': object_sha256(final)})
         except Exception as error:
             first = type(error).__name__
@@ -536,14 +563,15 @@ def recover_visual(config_path, ledger_path, job_id, *, allow_correction=False, 
                     ledger.event(con, 'qc_recovery_cleanup_failed',
                                  {'job_id': job['id'], 'first_error': first,
                                   'cleanup_error': type(cleanup).__name__})
-            base_receipt.update(status='stopped', reason=first)
+            base_receipt['reason'] = first
+            base_receipt['reason_detail'] = str(error)[:300]
+            _attach_dispatch_audit(base_receipt, ledger, job['id'], before_ids)
+            base_receipt['status'] = 'stopped'
             save_json(output, base_receipt)
             raise
     base_receipt.update(status='done', result_sha256=object_sha256(final), parts=audits,
-                        correction_requests=[part['correction'] for part in audits if part.get('correction')],
-                        model_requests_dispatched=sum(1 for part in audits
-                                                      if (part.get('correction') or {}).get('redispatched')
-                                                      or part.get('fresh_request')))
+                        correction_requests=[item['correction'] for item in audits if item.get('correction')])
+    _attach_dispatch_audit(base_receipt, ledger, job['id'], before_ids)
     save_json(output, base_receipt)
     return base_receipt
 

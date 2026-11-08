@@ -9,11 +9,12 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from make_fixture import fixture as make_candidate
-from webcollect.batch_core import BatchLedger
+from webcollect.batch_core import BatchLedger, ModelRateWait, OutcomeUnknown
 from quality_inspector import ai_worker
 from quality_inspector import qc_recovery
 from quality_inspector.ai_worker import snapshot
@@ -48,19 +49,20 @@ def fully_determinable_reply(ids):
 
 
 class RecoveryHarness:
-    def __init__(self, root, reply):
+    def __init__(self, root, reply, *, config=None, controlled=None):
+        self.config = config or LEDGER_CONFIG
         self.root = Path(root)
         self.sample = Path(make_candidate(self.root / 'candidate'))
-        self.ledger = BatchLedger(self.root / 'ledger.sqlite3', LEDGER_CONFIG, initialize=True)
-        identity = {'candidate': snapshot(self.sample), 'model': LEDGER_CONFIG['model'],
+        self.ledger = BatchLedger(self.root / 'ledger.sqlite3', self.config, initialize=True)
+        identity = {'candidate': snapshot(self.sample), 'model': self.config['model'],
                     'prompt_version': ai_worker.PROMPT_VERSION, 'policy_version': ai_worker.POLICY_VERSION,
                     'contract_sha256': fingerprint()[1], 'mode': 'synthetic',
                     'semantic_rule_ids': rule_ids()}
         self.job_id = self.ledger.enqueue('ai-visual', identity)
-        outcome = ai_worker.run(self.ledger, controlled={0: reply})
-        self.worker = outcome
+        self.worker = ai_worker.run(self.ledger,
+                                    controlled=controlled if controlled is not None else {0: reply})
         self.config_path = self.root / 'config.json'
-        self.config_path.write_text(json.dumps(LEDGER_CONFIG, ensure_ascii=False))
+        self.config_path.write_text(json.dumps(self.config, ensure_ascii=False))
 
     def job(self):
         return self.ledger.get(self.job_id)
@@ -120,8 +122,15 @@ class VisualRecoveryTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
 
-    def harness(self, reply):
-        return RecoveryHarness(self.root / f'h{len(list(self.root.iterdir()))}', reply)
+    def harness(self, reply, *, config=None, controlled=None):
+        return RecoveryHarness(self.root / f'h{len(list(self.root.iterdir()))}', reply,
+                               config=config, controlled=controlled)
+
+    def multi_segment_config(self):
+        from copy import deepcopy as _copy
+        config = _copy(LEDGER_CONFIG)
+        config['model']['max_images'] = 4  # six frames split into [1,2,3,4] + [4,5,6]
+        return config
 
     def test_complete_legal_reply_needs_no_recovery(self):
         ids = [1, 2, 3, 4, 5, 6]
@@ -201,6 +210,10 @@ class VisualRecoveryTests(unittest.TestCase):
         rows = harness.requests('visual-part-0-evidence-recovery:')
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['state'], 'invalid_response')
+        first = json.loads((self.root / 'r1.json').read_text())
+        self.assertEqual(first['status'], 'stopped')
+        self.assertEqual(first['model_requests_dispatched'], 1)
+        self.assertEqual(first['dispatched_requests'][0]['state'], 'invalid_response')
         # The failed correction is retained: a second authorized attempt never re-dispatches.
         with self.assertRaises(Exception):
             qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
@@ -210,6 +223,13 @@ class VisualRecoveryTests(unittest.TestCase):
                                            'evidence_steps': ids}}}},
                                        output=self.root / 'r2.json')
         self.assertEqual(len(harness.requests('visual-part-0-evidence-recovery:')), 1)
+        second = json.loads((self.root / 'r2.json').read_text())
+        self.assertEqual(second['status'], 'stopped')
+        self.assertEqual(second['model_requests_dispatched'], 0)
+        self.assertEqual(second['dispatched_requests'], [])
+        self.assertEqual([row['request_id'] for row in second['prior_recovery_requests']],
+                         [rows[0]['id']])
+        self.assertEqual(second['prior_recovery_requests'][0]['state'], 'invalid_response')
 
     def test_fully_determinable_reply_recovers_without_any_dispatch(self):
         harness = self.harness(fully_determinable_reply([1, 2, 3, 4, 5, 6]))
@@ -232,6 +252,153 @@ class VisualRecoveryTests(unittest.TestCase):
         self.assertEqual(receipt['status'], 'stopped')
         self.assertEqual(receipt['unrecoverable_parts'], [0])
         self.assertEqual(harness.job()['state'], 'review_required')
+
+    # ---- P0: unauthorized dry-run must be 0-dispatch on every path ----
+
+    def test_never_dispatched_segment_never_dispatches_under_any_authorization(self):
+        config = self.multi_segment_config()
+        # Part 0 fails at the gateway; part 1 is never dispatched by the worker.
+        harness = self.harness(None, config=config,
+                               controlled={0: reply_without_evidence([1, 2, 3, 4])})
+        self.assertEqual(harness.job()['state'], 'review_required')
+        plan = qc_recovery.visual_recovery_plan(harness.ledger, harness.job())
+        self.assertEqual(plan['never_dispatched_parts'], [1])
+        job_before = harness.job()
+        requests_before = harness.requests()
+        for authorized in (False, True):
+            receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                                 allow_correction=authorized,
+                                                 output=self.root / f'never-{authorized}.json')
+            self.assertEqual(receipt['status'], 'stopped')
+            self.assertIn('never dispatched', receipt['reason'])
+            self.assertEqual(receipt['never_dispatched_parts'], [1])
+            self.assertEqual(receipt['model_requests_dispatched'], 0)
+            self.assertEqual(receipt['dispatched_requests'], [])
+        # Job state, attempts and the original request ledger are untouched.
+        self.assertEqual(harness.job(), job_before)
+        self.assertEqual(harness.requests(), requests_before)
+
+    def test_multisegment_consolidation_stops_without_dispatch(self):
+        ids = [1, 2, 3, 4]
+        settled = fully_determinable_reply(ids)
+        for name in settled['checks']:
+            settled['checks'][name]['evidence_steps'] = ids
+        config = self.multi_segment_config()
+        # Part 0 settles; part 1 replies invalid; the whole-continuity request never ran.
+        harness = self.harness(None, config=config,
+                               controlled={0: settled, 1: reply_without_evidence([4, 5, 6])})
+        self.assertEqual(harness.job()['state'], 'review_required')
+        plan = qc_recovery.visual_recovery_plan(harness.ledger, harness.job())
+        self.assertTrue(plan['consolidation_required'])
+        self.assertEqual(plan['never_dispatched_parts'], [])
+        job_before = harness.job()
+        requests_before = harness.requests()
+        for authorized in (False, True):
+            receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                                 allow_correction=authorized,
+                                                 output=self.root / f'consolidation-{authorized}.json')
+            self.assertEqual(receipt['status'], 'stopped')
+            self.assertTrue(receipt['consolidation_required'])
+            self.assertIn('consolidation', receipt['reason'])
+            self.assertEqual(receipt['model_requests_dispatched'], 0)
+            self.assertEqual(receipt['dispatched_requests'], [])
+        self.assertEqual(harness.job(), job_before)
+        self.assertEqual(harness.requests(), requests_before)
+        self.assertEqual(len(requests_before), 2)  # settled part 0 + invalid part 1 only
+
+    # ---- P0: stopped receipts must count real dispatches from the ledger ----
+
+    def test_stopped_receipt_counts_unknown_correction_dispatch(self):
+        class UnknownGateway:
+            def __init__(self, ledger):
+                self._ledger = ledger
+
+            def call(self, job, purpose, text, schema, **kwargs):
+                while True:
+                    try:
+                        # The real gateway reserves purpose + ':' + identity; mirror that shape.
+                        request = self._ledger.reserve_request(job, purpose + ':synthetic-stub', 0,
+                                                               request_json={'synthetic': 'unknown-rehearsal'})
+                        break
+                    except ModelRateWait as limit:  # same bounded wait the gateway loop uses
+                        time.sleep(min(limit.seconds, 1))
+                self._ledger.settle_request(request['id'], state='unknown', error='TimeoutError',
+                                            response={'transport_error': {'reason_type': 'TimeoutError'}})
+                raise OutcomeUnknown('simulated transport unknown: ' + request['id'])
+
+        harness = self.harness(reply_without_evidence([1, 2, 3, 4, 5, 6]))
+        with patch.object(qc_recovery, 'ModelGateway', lambda ledger: UnknownGateway(ledger)):
+            with self.assertRaises(Exception):
+                qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                           allow_correction=True, output=self.root / 'unknown.json')
+        receipt = json.loads((self.root / 'unknown.json').read_text())
+        self.assertEqual(receipt['status'], 'stopped')
+        self.assertEqual(receipt['reason'], 'OutcomeUnknown')
+        self.assertEqual(receipt['model_requests_dispatched'], 1)
+        row = receipt['dispatched_requests'][0]
+        self.assertEqual(row['state'], 'unknown')
+        self.assertIsNone(row['usage'])
+        self.assertEqual(row['reserved_cost_micros'], LEDGER_CONFIG['model']['reserve_cost_micros'])
+        self.assertIn('evidence-recovery', row['purpose'])
+        # No automatic retry: exactly one correction request exists.
+        self.assertEqual(len(harness.requests('visual-part-0-evidence-recovery:')), 1)
+        self.assertEqual(harness.job()['state'], 'review_required')
+
+    def test_stopped_receipt_counts_succeeded_correction_then_bind_failure(self):
+        ids = [1, 2, 3, 4, 5, 6]
+        harness = self.harness(reply_without_evidence(ids))
+        correction = {'checks': {'language': {'status': 'PASS',
+            'note': 'SYNTHETIC restate: 帧1至帧6控件均为简体中文', 'evidence_steps': ids}}}
+        with patch.object(qc_recovery.semantic_runtime, 'bind_result',
+                          side_effect=ValueError('bind rehearsal failure')):
+            with self.assertRaises(Exception):
+                qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                           allow_correction=True, controlled={'0': correction},
+                                           output=self.root / 'bind.json')
+        receipt = json.loads((self.root / 'bind.json').read_text())
+        self.assertEqual(receipt['status'], 'stopped')
+        self.assertIn('bind rehearsal failure', receipt['reason_detail'])
+        self.assertEqual(receipt['model_requests_dispatched'], 1)
+        row = receipt['dispatched_requests'][0]
+        self.assertEqual(row['state'], 'succeeded')
+        self.assertTrue(row['usage'])
+        self.assertEqual(harness.job()['state'], 'review_required')
+
+    # ---- P1: full-Schema pre-validation before evidence classification ----
+
+    def test_extra_root_field_is_unrecoverable_with_zero_dispatch(self):
+        reply = fully_determinable_reply([1, 2, 3, 4, 5, 6])
+        reply['unrequested_summary'] = 'extra root field'
+        harness = self.harness(reply)
+        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                             output=self.root / 'extra-root.json')
+        self.assertEqual(receipt['status'], 'stopped')
+        self.assertEqual(receipt['unrecoverable_parts'], [0])
+        self.assertEqual(receipt['model_requests_dispatched'], 0)
+        self.assertEqual(harness.job()['state'], 'review_required')
+        self.assertEqual(len(harness.requests()), 1)
+
+    def test_invalid_failure_assessment_scope_is_unrecoverable_with_zero_dispatch(self):
+        reply = fully_determinable_reply([1, 2, 3, 4, 5, 6])
+        reply['failure_assessment'] = {'scope': 'GALAXY', 'reason': 'structurally present but out of enum',
+                                       'evidence_steps': [1]}
+        harness = self.harness(reply)
+        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                             output=self.root / 'bad-scope.json')
+        self.assertEqual(receipt['status'], 'stopped')
+        self.assertEqual(receipt['unrecoverable_parts'], [0])
+        self.assertEqual(receipt['model_requests_dispatched'], 0)
+        self.assertEqual(harness.job()['state'], 'review_required')
+
+    def test_damaged_step_observations_are_unrecoverable(self):
+        reply = fully_determinable_reply([1, 2, 3, 4, 5, 6])
+        reply['step_observations'][2]['note'] = ''  # minLength violation inside observations
+        harness = self.harness(reply)
+        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,
+                                             output=self.root / 'damaged-observations.json')
+        self.assertEqual(receipt['status'], 'stopped')
+        self.assertEqual(receipt['unrecoverable_parts'], [0])
+        self.assertEqual(receipt['model_requests_dispatched'], 0)
 
     def test_wrong_duplicate_or_out_of_bounds_citations_need_the_model(self):
         ids = [1, 2, 3, 4, 5, 6]
