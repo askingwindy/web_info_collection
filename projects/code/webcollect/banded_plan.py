@@ -96,8 +96,10 @@ def system_with_attempt_limit(text, limit):
         return text+'\n不设模型调用次数、动作次数、固定档位、重规划次数或会话总时长配额。自然完成即结束，无法继续照实停止；不为数量补动作。'
     if limit==10:
         text=text.replace(V11_PLANNING_GUIDANCE,'').replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；','').replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。','').replace('先核算完整路径的8步额度：','先核算累计10个有效业务动作的额度：')
+        text=text.replace('本次期望至少5个有实际效果的业务动作；','本次按完成原目标所需的自然有效动作规划；')
         text += V11_READING_LINK_PREFERENCE.replace('计划含跨页访问时安排核验落地并阅读，再返回来源继续剩余计划；可先完成已计划的落地阅读，不要求立即back。','跨页访问只为核对原问题所需事实，核验落地并读取正文；仅原剩余计划确需来源页时返回，不为组合动作跨页或返回。') + '阅读以原问题及具体正文事实为目标；标题、年份或目录卡片出现不等于正文问题已回答。没有与原问题相关的可见链接时可纯滚动，不固定点击次数、顺序或往返模板。'
-        return text+'\n先按原目标形成完成所需的最短完整自然路径，通常控制在5–10个有效业务动作。自然路径不足5步时，仅在原目标范围内补充仍有独立业务用途、能产生新证据的有效动作；没有就直接提交短路径，由宿主标记short_flow。不得为达到5步另选繁琐目标、增加第二组输入或跨词条任务，也不得重复输入、重复计算、无效往返或制造错误。累计最多10步，重规划只提交剩余步骤且不重置总额。目标所需结果已可见时结束，不追逐预想文案。checks.page用实际URL/page_id，region优先正文或已证明区域，引用由宿主回算。'
+        text += '相关链接查阅后返回来源继续阅读是正常阅读路径，不能仅因点击后返回就认定无效往返。跳转→返回→滚动→滚动→滚动，或跳转→返回→跳转→返回→滚动，均可形成5个有效动作；每次跳转有原目标相关查阅用途，返回实际回到来源，滚动露出新正文即可，不要求在落地页再滚动才能返回。这些只是可选组合，不是固定模板。不要为达到步数扩成逐章遍历目录或新增问题；同一阅读目标允许自由组合点击、返回与滚动。'
+        return text+'\n先按原目标形成完成所需的最短完整自然路径，通常控制在5–10个有效业务动作。自然路径不足5步时，仅在原目标范围内补充仍有独立业务用途、能产生新证据的有效动作；没有就直接提交短路径，由宿主标记short_flow。不得为达到5步另选繁琐目标、增加第二组输入或跨词条任务，也不得重复输入、重复计算、无效往返或制造错误。单位或选项当前已满足原目标时只按当前观察核对，不再select同一值，不为达到5步或long档重复选择。每个输入前所需聚焦click、非空值的真实全选、type与最终计算提交均分别计入完整路径，累计不得超过10步。累计最多10步，重规划只提交剩余步骤且不重置总额。目标所需结果已可见时结束，不追逐预想文案。checks.page用实际URL/page_id，region优先正文或已证明区域，引用由宿主回算。'
     if limit!=LONG_PLAN_ATTEMPT_CEILING:return text
     return (text.replace('6–8步','6–12步').replace('8步额度','12步额度')
             .replace('长档的八个槽位','长档的十二个槽位'))
@@ -833,6 +835,8 @@ class Controller:
         self.plan=None; self.position=0; self.last=None; self.request_original=False
         self.selection=None; self.submitted=False;self.last_document=None;self.visual_confirmations={};self.pending_effect=None
         self.check_page_urls = {}
+        from .plan_evidence import bind_check_pages
+        self.plan_page_binding=self.frozen_page_binding=bind_check_pages({},[])
         self.initial_feedback = None
         # BF3 close-out state: first-frame endpoint marker, agent early-finish
         # application and its once-per-session decline marker.
@@ -1088,6 +1092,9 @@ class Controller:
                 contract_payload.pop(key,None)
             if 'fields' in contract_payload:
                 contract_payload['fields']='steps必填；其他字段继承原目标与证据，不设步数额度'
+        from .plan_execution import enabled as execution_enabled
+        if execution_enabled(s.task):
+            payload['system']+='动作效果与目标完成分开：目录或正文链接点击按原目标、实际href和实测落地核验；未来正文用原问题描述，不把预猜关键词当跳转成功的唯一依据。宿主确认落地只推进当前动作，原问题仍由checks和终点证据独立核验。输入必须先真实聚焦；单位已满足目标只核对不重选。无效前提反馈后只重规划剩余必要动作，累计最多10步，不凑步。'
         from .plan_evidence import READING_COMPLETION_POLICY
         if s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY:
             payload['system']+='提前完成必须由宿主逐项证明剩余计划目的已被真实正文目标证据覆盖；finish_when命中和一句冗余说明均不充分。歧义时继续原计划中的有用动作或如实停止，不添加审核调用。'
@@ -1138,6 +1145,18 @@ class Controller:
 
     def visual_key(self,predicate,s):
         return (object_sha256(predicate),s.current['evidence']['image']['sha256'],object_sha256(s.current['document_identity']))
+
+    def record_late_effect(self,s,predicate):
+        from .plan_execution import enabled
+        if not enabled(s.task):return
+        row=s.trajectory[-1]
+        s.event('plan-effect',expected=predicate,established=True,actual=deepcopy(self.last),
+            literal_expected_established=proves(predicate,s.current),execution_proof=None,
+            late_observation={'plan_sha256':object_sha256(self.plan),'plan':self.plan_event,
+                'operation_id':row['operation_id'],'raw_step':row['raw_step'],
+                'action_after_observation_id':row['after_observation_id'],
+                'observation_id':s.current['observation_id'],'evidence':deepcopy(s.current['evidence']),
+                'visual_confirmation':self.visual_confirmations.get(self.visual_key(predicate,s))})
 
     def proved(self,predicate,s,before=None,cid=None):
         contract = contract_for(s.task)
@@ -1383,13 +1402,23 @@ class Controller:
                 # focus/type/scroll/trigger evidence, not merely the first draft.
                 self.target_steps = attempt_limit(s.task,self.frozen_band)
             self.frozen_plan=deepcopy(plan)
-            if grounded:
-                self.check_page_urls = {page['page_id']: page['url'] for page in prompt['registered_pages']}
+            from .plan_execution import enabled as execution_enabled
+            page_binding_event={}
+            if execution_enabled(s.task):
+                from .plan_evidence import bind_check_pages
+                self.plan_page_binding=bind_check_pages(plan,prompt.get('registered_pages',[]))
+                self.frozen_page_binding=deepcopy(self.plan_page_binding)
+                self.check_page_urls=deepcopy(self.frozen_page_binding['pages'])
+                page_binding_event={'page_binding':deepcopy(self.plan_page_binding),
+                    'registered_pages':deepcopy(prompt.get('registered_pages',[])),
+                    'page_registry_source':s._last_model_intent}
+            elif grounded or s.task['fragment'].get('reading_completion_policy')=='webcollect-reading-plan-completion-1':
+                self.check_page_urls = {page['page_id']: page['url'] for page in prompt.get('registered_pages',[])}
             s.working_goal=plan['goal']
             s.goal_updates.append({'description':plan['goal'],'basis_observation_id':s.current['observation_id'],
                                   'reason':'frozen conditional plan','applied_at_decision':s.used['max_decisions']})
             s._last_decision=s.event('conditional-plan',plan=plan,provider_response=response,plan_sha256=object_sha256(plan),
-                                     before_first_business_dispatch=s.actual_dispatches==0,
+                                     before_first_business_dispatch=s.actual_dispatches==0,**page_binding_event,
                                      **({'check_page_urls':deepcopy(self.check_page_urls)} if s.task['fragment'].get('reading_completion_policy')=='webcollect-reading-plan-completion-1' else {}))
             self.original_plan_event=self.plan_event=s._last_decision
             # Provider call stays archived above; it is never sent in text-mode history.
@@ -1479,6 +1508,7 @@ class Controller:
                 document_identity=s.current['document_identity'],decision_event=s._last_decision)
             self.visual_confirmations[self.visual_key(predicate,s)]=proof
             if self.pending_effect:
+                self.record_late_effect(s,predicate)
                 self.position+=1;self.pending_effect=None
             self.selection=None
         elif response['choice'] in ('original','request_original_image'):
@@ -1567,7 +1597,15 @@ class Controller:
             self.plan=plan;self.position=0;self.selection=None;self.recovery_prefix=False;self.pending_effect=None
             self.last_document=deepcopy(s.current['document_identity'])
             s.working_goal=plan['goal']
-            self.plan_event=s.event('conditional-plan-revision',plan=plan,original_requested_goal=s.requested_goal)
+            from .plan_execution import enabled as execution_enabled
+            page_binding_event={}
+            if execution_enabled(s.task):
+                from .plan_evidence import bind_check_pages
+                self.plan_page_binding=bind_check_pages(plan,prompt.get('registered_pages',[]))
+                page_binding_event={'page_binding':deepcopy(self.plan_page_binding),
+                    'registered_pages':deepcopy(prompt.get('registered_pages',[])),
+                    'page_registry_source':s._last_model_intent}
+            self.plan_event=s.event('conditional-plan-revision',plan=plan,original_requested_goal=s.requested_goal,**page_binding_event)
         elif response['choice']=='stop':
             await self.finish(s,'模型选择如实结束当前片段',endpoint=False)
 
@@ -1593,7 +1631,7 @@ class Controller:
         from .session_objective import progress
         objective=progress(s,(getattr(self,'frozen_plan',self.plan) or {}).get('observation_id'))
         result=facts(s, getattr(self,'frozen_plan',self.plan) or {}, page_urls=self.check_page_urls,
-                     objective_evidence=objective)
+                     objective_evidence=objective,page_binding=self.frozen_page_binding)
         result['session_objective']=objective
         return result
 
@@ -1665,6 +1703,32 @@ class Controller:
             detail=(result.get('error') or {}).get('message') or result.get('summary') or str(result.get('error'))
             raise ReactStop('blocked','HOST_PLAN_FINISH_REJECTED: '+str(detail),'collector')
 
+    async def recover_precondition(self,s,step,cid,code,reason):
+        control=s.current['controls'][cid]
+        key=object_sha256({'state':s.current['evidence']['state']['sha256'],'node':cid,
+                          'action':step['action'],'value':step.get('value'),'reason':code})
+        if self.qualification_no_progress_key==key:
+            self.qualification_no_progress_streak+=1
+            s._consume('max_no_progress')
+        else:
+            self.qualification_no_progress_key=key;self.qualification_no_progress_streak=1
+        if self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
+            from .react_session import ReactStop
+            raise ReactStop('blocked','PRE_DISPATCH_NO_PROGRESS: 同一状态和前提连续反馈后仍未修正；零派发，不计有效动作','collector')
+        s._consume('max_replans')
+        feedback={'reason_code':code,'reason':reason,'stage':'compile_before_dispatch',
+            'action_dispatched':False,'effective_step_delta':0,'position':self.position,
+            'observation_id':s.current['observation_id'],'target':cid,
+            'requested_value':step.get('value'),'current_value':deepcopy(control.get('value')),
+            'current_probe':deepcopy(control.get('probe')),
+            'options':deepcopy(control.get('binding',{}).get('options',[])),
+            'completed_effective_steps':len(s.trajectory),'actual_dispatches':s.actual_dispatches,
+            'remaining_effective_limit':remaining_step_allowance(s),
+            'instruction':'保留原目标和checks，仅修订剩余必要动作。缺聚焦先安排真实click；已满足选项只核对、不重复select；选项按实际value与label对应，不猜。所有聚焦、输入及提交累计最多10个有效动作，不凑步。'}
+        s.event('plan-compile-mismatch',**feedback)
+        await self.request(s,[{'choice':'replan','meaning':'依据当前前提、值和选项重规划未派发的剩余必要步骤','compile_feedback':feedback},
+                             {'choice':'stop','meaning':'无法有据继续，如实保留当前片段'}])
+
     async def round(self,s):
         guard=getattr(s.choose,'guard_unresolved',None)
         if guard:
@@ -1711,6 +1775,7 @@ class Controller:
         if self.pending_effect is not None:
             predicate=self.pending_effect['predicate']
             if self.proved(predicate,s):
+                self.record_late_effect(s,predicate)
                 self.position+=1;self.pending_effect=None
             else:
                 await self.request(s,self.visual_option(predicate)+self.image_option(s,object_sha256(predicate),'同帧原图/ROI')+
@@ -1825,6 +1890,11 @@ class Controller:
                     return
                 truth=s.current['controls'][cid]['actions'].get(action,{})
             if truth.get('status')!='PROVEN':
+                from .plan_execution import enabled as execution_enabled
+                if execution_enabled(s.task) and action=='type' and truth.get('reason')=='TYPE_REQUIRES_CURRENT_FOCUS':
+                    await self.recover_precondition(s,step,cid,'TYPE_REQUIRES_CURRENT_FOCUS',
+                        '当前输入框尚未聚焦，type不能派发；先规划真实click聚焦')
+                    return
                 # Plan wording is not progress: a unique but unqualified target
                 # can otherwise consume all model calls without any dispatch.
                 progress_key=object_sha256({
@@ -1872,17 +1942,40 @@ class Controller:
         before=load_json(s.current['evidence']['state']['path']); n=len(s.trajectory)
         # One planned step is exactly one atomic action. No compound shortcut can cross endpoint.
         from .agent_controller import compile_step
-        from .agent_controller import SelectionValueMismatch
+        from .agent_controller import SelectionValueMismatch, PlanPreconditionError
         try:
             compiled=compile_step(s.task,s.page_urls,actual,s.current,navigation_count=s.navigation_count)
-        except SelectionValueMismatch as error:
+        except PlanPreconditionError as error:
+            await self.recover_precondition(s,step,cid,error.code,str(error))
+            return
+        except ValueError as error:
+            from .closing_policy import effective_limit
+            unchanged_selection=(effective_limit(s.task) is not None and action=='select'
+                                 and str(error)=='Unchanged selection is not effective')
+            if (not isinstance(error,SelectionValueMismatch) and not unchanged_selection):
+                raise
             if s.task['fragment'].get('plan_protocol') not in IMAGE_CHOICE_PROTOCOLS:
                 raise
             count=getattr(self,'compile_replans',0)
-            if limit is not None and count >= 1:
+            if unchanged_selection:
+                # Reuse the binding/qualification no-progress guard for a
+                # repeated same-state refusal; this is still zero dispatch.
+                progress_key=object_sha256({'state':s.current['evidence']['state']['sha256'],
+                    'node':cid,'action':action,'requested_value':actual.get('value'),
+                    'reason':'UNCHANGED_SELECTION'})
+                if self.qualification_no_progress_key==progress_key:
+                    self.qualification_no_progress_streak+=1
+                    s._consume('max_no_progress')
+                else:
+                    self.qualification_no_progress_key=progress_key
+                    self.qualification_no_progress_streak=1
+                if self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
+                    from .react_session import ReactStop
+                    raise ReactStop('blocked','UNCHANGED_SELECTION_NO_PROGRESS: 同一选项已满足目标，连续反馈后仍重复选择；零派发，不计有效动作','collector')
+            elif limit is not None and count >= 1:
                 raise ValueError('PRE_DISPATCH_REPLAN_LIMIT: '+str(error)) from error
             s._consume('max_replans')
-            self.compile_replans=count+1
+            if not unchanged_selection:self.compile_replans=count+1
             feedback={'reason':str(error),'error_type':type(error).__name__,
                 'stage':'compile_before_dispatch','action_dispatched':False,
                 'position':self.position,'observation_id':s.current['observation_id'],
@@ -1891,7 +1984,11 @@ class Controller:
                 'options':deepcopy(s.current['controls'][cid]['binding'].get('options',[])),
                 'completed_effective_steps':len(s.trajectory),
                 'actual_dispatches':s.actual_dispatches}
-            if s.task['fragment'].get('plan_protocol')!=V11_VERSION:
+            if unchanged_selection:
+                feedback.update(reason_code='UNCHANGED_SELECTION',effective_step_delta=0,
+                    remaining_effective_limit=remaining_step_allowance(s),
+                    instruction='当前选项值已是请求值，重复select没有有效业务效果。保留原目标和checks，依据已见当前值核对单位，重新提交剩余必要动作；不要重放已完成动作，不为5步或long档加入重复选择。聚焦click、type及计算提交均须在累计10步内。')
+            elif s.task['fragment'].get('plan_protocol')!=V11_VERSION:
                 feedback['remaining_effective_limit']=remaining_step_allowance(s)
             s.event('plan-compile-mismatch',**feedback)
             await self.request(s,[{'choice':'replan','meaning':'按最新选项与控件修订未派发的剩余步骤',
@@ -1907,8 +2004,16 @@ class Controller:
                    'observation_id':s.current['observation_id']}
         if s.state!='recording':return
         if await self.exit_boundary(s):return
-        established=len(s.trajectory)==n+1 and (self.proved(step['expected'],s,before,cid)
+        literal_established=len(s.trajectory)==n+1 and (self.proved(step['expected'],s,before,cid)
             if contract else proves(step['expected'],s.current,before,cid))
+        execution_proof=None
+        from .plan_execution import enabled as execution_enabled, step_execution_proof
+        if execution_enabled(s.task) and len(s.trajectory)==n+1:
+            actual_row=s.trajectory[-1]
+            actual_before=load_json(s.observation_records[actual_row['before_observation_id']]['evidence']['state']['path'])
+            actual_after=load_json(s.observation_records[actual_row['after_observation_id']]['evidence']['state']['path'])
+            execution_proof=step_execution_proof(s.task,step,actual_row,actual_before,actual_after)
+        established=literal_established or execution_proof is not None
         transition=None
         if established and step['expected']['kind']=='focused' and cid and cid not in s.current['controls']:
             matches=[key for key,c in s.current['controls'].items() if (c.get('value') or {}).get('focused') is True]
@@ -1918,6 +2023,7 @@ class Controller:
                 if not hasattr(self,'target_transitions'):self.target_transitions={}
                 self.target_transitions[cid]=transition
         s.event('plan-effect',expected=step['expected'],established=established,actual=self.last,
+                **({'literal_expected_established':literal_established,'execution_proof':execution_proof} if execution_enabled(s.task) else {}),
                 **({'observed_focus_transition':transition} if transition else {}))
         if not established:
             self.pending_effect={'position':self.position,'predicate':step['expected']}

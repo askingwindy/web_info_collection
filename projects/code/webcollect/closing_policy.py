@@ -97,6 +97,33 @@ def no_effect_proven(raw, observations, *, action_scoped=False):
             and same_view(before,after))
 
 
+def validate_plan_page_bindings(record):
+    """Replay plan-local page bindings from sealed model-visible registries."""
+    from .plan_evidence import PLAN_EXECUTION_POLICY, bind_check_pages
+    if record['task']['fragment'].get('plan_execution_policy')!=PLAN_EXECUTION_POLICY:return
+    from pathlib import Path
+    root=Path(record['receipt']['boundary']['path']).parent
+    sealed=record['receipt']['files_sha256'];known={}
+    for name in sorted(sealed):
+        if not name.endswith(('-conditional-plan.json','-conditional-plan-revision.json')):continue
+        verify_evidence([{'path':str(root/name),'sha256':sealed[name]}])
+        event=load_json(root/name);reference=event.get('page_registry_source') or {}
+        source=Path(reference.get('path',''))
+        if source.parent!=root or sealed.get(source.name)!=reference.get('sha256'):
+            raise ValueError('Plan page registry source is outside the sealed original attempt')
+        verify_evidence([reference]);prompt=load_json(source).get('prompt') or {}
+        registered=event.get('registered_pages')
+        if registered is None or prompt.get('registered_pages')!=registered:
+            raise ValueError('Plan page registry differs from its original model-visible prompt')
+        binding=bind_check_pages(event['plan'],registered)
+        if event.get('page_binding')!=binding:
+            raise ValueError('Plan page binding differs from original checks and registered pages')
+        for key,url in binding['pages'].items():
+            if key in known and known[key]!=url:
+                raise ValueError('Replanning reused an original page ID for a different URL')
+            known[key]=url
+
+
 def validate_reading_completion(record, basis):
     """Recompute the flag's early-end coverage from its sealed plan and facts."""
     from .plan_evidence import READING_COMPLETION_POLICY, facts, remaining_plan_coverage
@@ -123,6 +150,9 @@ def validate_reading_completion(record, basis):
             raise ValueError('Reading completion original-plan kind mismatch')
         loaded.append(event)
     original,current=loaded;plan=current['plan'];position=receipt.get('position')
+    from .plan_evidence import PLAN_EXECUTION_POLICY
+    execution_policy=record['task']['fragment'].get('plan_execution_policy')==PLAN_EXECUTION_POLICY
+    if execution_policy:validate_plan_page_bindings(record)
     if (receipt.get('original_plan_sha256')!=object_sha256(original['plan'])
             or receipt.get('current_plan_sha256')!=object_sha256(plan)
             or type(position) is not int or not 0<=position<=len(plan['steps'])):
@@ -139,6 +169,60 @@ def validate_reading_completion(record, basis):
                 or event.get('expected')!=plan['steps'][index]['expected']
                 or actual.get('observation_id') not in after_ids):
             raise ValueError('Reading completed-step evidence differs from the sealed plan')
+        if execution_policy:
+            verify_evidence([{'path':str(root/name),'sha256':sealed[name]}])
+            if event.get('established') is not True:
+                continue
+            proof=event.get('execution_proof')
+            late=event.get('late_observation')
+            if late:
+                if late.get('plan_sha256')!=object_sha256(plan) or late.get('plan')!=receipt['current_plan']:
+                    raise ValueError('Late plan effect belongs to a different original plan')
+                matches=[row for row in record['trajectory'] if row['operation_id']==late.get('operation_id')]
+                oid=late.get('observation_id')
+                if (len(matches)!=1 or oid not in record['observations']
+                        or matches[0]['raw_step']!=late.get('raw_step')
+                        or matches[0]['after_observation_id']!=late.get('action_after_observation_id')
+                        or matches[0]['after_observation_id']!=actual.get('observation_id')
+                        or late.get('evidence')!={key:value for key,value in record['observations'][oid]['evidence'].items() if key!='html'}):
+                    raise ValueError('Late plan effect lost its original action or synchronized observation')
+                late_observations={key:project(state(record,key),{k:value['evidence'][k] for k in ('image','state','capture')})
+                                   for key,value in record['observations'].items()}
+                for key,observation in late_observations.items():
+                    observation['html']=Path(record['observations'][key]['evidence']['html']['path']).read_text()
+                late_session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],
+                    observation_records=late_observations,current=late_observations[oid],
+                    requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
+                from .banded_plan import Controller
+                controller=Controller();controller.plan=plan;controller.frozen_plan=original['plan']
+                visual_ref=late.get('visual_confirmation')
+                if visual_ref:
+                    visual_path=Path(visual_ref['path'])
+                    if visual_path.parent!=root or sealed.get(visual_path.name)!=visual_ref['sha256']:
+                        raise ValueError('Late visual proof is outside the sealed attempt')
+                    verify_evidence([visual_ref]);visual=load_json(visual_path)
+                    if (visual.get('kind')!='model-visual-confirmation' or visual.get('predicate')!=event['expected']
+                            or visual.get('observation_id')!=oid or visual.get('image')!=late_session.current['evidence']['image']):
+                        raise ValueError('Late visual proof differs from its predicate or image')
+                    decision=visual.get('decision_event');verify_evidence([decision])
+                    branch=load_json(decision['path'])
+                    if branch.get('response',{}).get('choice')!='visual_yes':
+                        raise ValueError('Late visual proof lacks its original visual confirmation decision')
+                    controller.visual_confirmations[controller.visual_key(event['expected'],late_session)]=visual_ref
+                if not controller.proved(event['expected'],late_session):
+                    raise ValueError('Late synchronized observation does not establish the original predicate')
+            elif proof is not None:
+                from .plan_execution import step_execution_proof
+                matches=[row for row in record['trajectory'] if row['operation_id']==proof.get('operation_id')]
+                if len(matches)!=1:raise ValueError('Plan execution proof lacks one original effective operation')
+                row=matches[0]
+                replay=step_execution_proof(record['task'],plan['steps'][index],row,
+                    state(record,row['before_observation_id']),state(record,row['after_observation_id']),
+                    target_id=proof.get('source_node'))
+                if replay is None or replay!=proof:
+                    raise ValueError('Plan execution proof differs from original navigation and atomic effect')
+            elif event.get('literal_expected_established') is not True:
+                raise ValueError('Completed plan slot lacks literal predicate or original execution proof')
         effects.append(index)
     if effects!=list(range(position)):
         raise ValueError('Reading remaining-plan position skips unexecuted or unresolved actions')
@@ -147,7 +231,8 @@ def validate_reading_completion(record, basis):
         observations[oid]=project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')})
     session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],observation_records=observations,
         requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
-    evidence=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}))
+    evidence=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}),
+                   page_binding=original.get('page_binding') if execution_policy else None)
     expected=remaining_plan_coverage(session,plan,position,evidence)
     if expected!=receipt.get('coverage') or expected['status']!='COVERED':
         raise ValueError('Reading remaining purposes are not covered by sealed body goal facts')
@@ -160,6 +245,7 @@ def validate_record(record):
     policy=(record['task'].get('fragment',{}) or {}).get('ending_policy')
     if not enabled(record['task']) or not marker or marker.get('protocol')!=policy:
         raise ValueError('Missing versioned closure binding')
+    validate_plan_page_bindings(record)
     band=marker.get('attempt_band')
     limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) else MAXIMUM
     if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):

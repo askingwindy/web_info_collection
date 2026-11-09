@@ -2,6 +2,7 @@
 from urllib.parse import urldefrag, urlsplit, unquote
 import re
 import unicodedata
+from copy import deepcopy
 from .batch_core import load_json
 
 LEGACY_VERSION = 'webcollect-plan-facts-1'
@@ -194,12 +195,47 @@ def observed_basis(s, objective_evidence):
         'interpretation':'Observed witnesses only; no semantic mapping from free-text checks or independent QC judgment'}
 
 
-def facts(s,plan, *, page_urls=None, objective_evidence=None):
+PLAN_EXECUTION_POLICY = 'webcollect-plan-execution-1'
+
+
+def bind_check_pages(plan, registered_pages):
+    """Freeze this plan's original checks against its own registered page IDs."""
+    from .planning import object_sha256
+    pages={}
+    for row in registered_pages:
+        key,url=row['page_id'],row['url']
+        if key in pages and pages[key]!=url:
+            raise ValueError('A registered page ID cannot identify different URLs in one plan')
+        pages[key]=url
+    resolved=[]
+    for check in plan.get('checks',[]):
+        label=check.get('page') or ''
+        url=pages.get(label)
+        if url is None and re.fullmatch(r'(?:p[0-9]+(?:或p[0-9]+)+(?:对应章节正文)?|p[0-9]+对应章节正文)',label):
+            urls=[pages.get(key) for key in re.findall(r'p[0-9]+',label)]
+            if all(urls) and len({urldefrag(value)[0] for value in urls})==1:
+                url=urldefrag(urls[0])[0]
+        resolved.append(url)
+    body={'policy':PLAN_EXECUTION_POLICY,'pages':pages,
+          'checks':deepcopy(plan.get('checks',[])),'resolved_pages':resolved}
+    return {**body,'binding_sha256':object_sha256(body)}
+
+
+def verify_page_binding(plan, binding):
+    if not isinstance(binding,dict):raise ValueError('New plan execution requires its frozen page binding')
+    expected=bind_check_pages(plan,[{'page_id':key,'url':url} for key,url in binding.get('pages',{}).items()])
+    if expected!=binding:raise ValueError('Frozen plan page binding differs from its original checks or registry')
+    return binding
+
+
+def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None):
     checks=plan.get('checks',[]); rows=[]
+    bound_plan=bool(hasattr(s,'task') and s.task.get('fragment',{}).get('plan_execution_policy')==PLAN_EXECUTION_POLICY)
+    if bound_plan:verify_page_binding(plan,page_binding)
     modern=s.task.get('fragment',{}).get('ending_policy')=='webcollect-five-ten-effective-ending-5' if hasattr(s,'task') else True
     basis=observed_basis(s,objective_evidence) if modern else None
     navigation=basis['navigation'] if basis else []
-    for check in checks:
+    for check_index,check in enumerate(checks):
         if not all(check.get(key) for key in ('page','region','visible_text')):
             rows.append({**check,'status':'PENDING','evidence':[], 'seen_outside_allowed_source':[],
                          'missing_binding_fields':[key for key in ('page','region','visible_text') if not check.get(key)],
@@ -208,7 +244,17 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None):
             continue
         proofs=[];other=[];seen=set()
         # A page ID denotes the URL shown in this plan's first request, even after navigation.
-        bound_url = (page_urls or {}).get(check['page'])
+        bound_url = page_binding['resolved_pages'][check_index] if bound_plan else (page_urls or {}).get(check['page'])
+        if (not bound_plan and bound_url is None and hasattr(s,'task')
+                and s.task.get('fragment',{}).get('reading_completion_policy')==READING_COMPLETION_POLICY
+                and re.fullmatch(r'(?:p[0-9]+(?:或p[0-9]+)+(?:对应章节正文)?|p[0-9]+对应章节正文)',check['page'])):
+            # The model may name alternative registered section anchors of
+            # one article. Resolve only this finite ID syntax; prose, unknown
+            # IDs and alternatives belonging to different documents stay unbound.
+            page_ids=re.findall(r'p[0-9]+',check['page'])
+            urls=[(page_urls or {}).get(page_id) for page_id in page_ids]
+            if all(urls) and len({urldefrag(url)[0] for url in urls})==1:
+                bound_url=urldefrag(urls[0])[0]
         for oid,obs in s.observation_records.items():
             if not obs.get('capture_verified'):continue
             state=load_json(obs['evidence']['state']['path'])
@@ -216,6 +262,8 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None):
             if bound_url is not None:
                 page_ok = (page_matches(bound_url,state,navigation) if modern
                            else same_url(bound_url,state['url']))
+            elif bound_plan and re.match(r'^p[0-9]+',check['page']):
+                page_ok=False
             else:
                 page_ok = (page_matches(check['page'],state,navigation) if modern else
                            same_url(check['page'], state['url']) or check['page'] in headings)
@@ -261,14 +309,22 @@ def expected_navigation(s,controller):
                          and action in ('click','hotkey')
                          and urlsplit(before['url']).netloc == urlsplit(s.current['url']).netloc
                          and controller.proved(previous['expected'], s))
-    href=None
+    href=None;execution_proof=None
+    from .plan_execution import enabled, step_execution_proof
+    if enabled(s.task):
+        execution_proof=step_execution_proof(s.task,previous,row,
+            load_json(before['evidence']['state']['path']),
+            load_json(s.current['evidence']['state']['path']),
+            target_id=(row.get('target') or {}).get('control_id'))
     if action=='click':
         cid=(row.get('target') or {}).get('control_id')
         href=(before['controls'].get(cid,{}).get('binding') or {}).get('href')
-        if not same_url(href,s.current['url']) and not contracted_search:return None
+        if not same_url(href,s.current['url']) and not contracted_search and not execution_proof:return None
     elif action not in ('open_url','back') and not contracted_search:return None
     from .banded_plan import proves,bind_target
-    if previous['expected']['kind'] in ('document_changed','search_results'):
+    if execution_proof:
+        pass
+    elif previous['expected']['kind'] in ('document_changed','search_results'):
         if not controller.proved(previous['expected'], s, load_json(before['evidence']['state']['path'])):return None
     elif not proves(previous['expected'],s.current):return None
     step=controller.plan['steps'][controller.position]
@@ -278,7 +334,8 @@ def expected_navigation(s,controller):
     if step['action']=='open_url' and step['page_id'] not in ['p'+str(i) for i in range(len(s.page_urls))]:return None
     return {'source_observation_id':before['observation_id'],'landing_observation_id':s.current['observation_id'],
             'operation_id':row['operation_id'],'clicked_href':href,'landed_url':s.current['url'],
-            'expected':previous['expected'],'next_step':step,'new_model_requests':0}
+            'expected':previous['expected'],'next_step':step,'new_model_requests':0,
+            **({'execution_proof':execution_proof} if execution_proof else {})}
 
 
 async def verify_popup(origin,opened,operation,state):

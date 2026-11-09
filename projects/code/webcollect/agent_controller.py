@@ -602,6 +602,13 @@ class SelectionValueMismatch(ValueError):
     """A current observed option disproves the unexecuted planned value."""
 
 
+class PlanPreconditionError(ValueError):
+    """Known zero-dispatch correction for the explicit plan-execution policy."""
+    def __init__(self,code,message):
+        super().__init__(message)
+        self.code=code
+
+
 def compile_step(task, page_urls, step, observation, navigation_count=0):
     """Only current-target primitives; set_value expands before budget accounting.
 
@@ -627,6 +634,9 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
             raise ValueError('INSUFFICIENT: unobserved target')
         truth = c['actions'][action]
         if truth['status'] != PROVEN:
+            from .plan_execution import enabled as current_plan
+            if current_plan(task) and action=='type' and truth.get('reason')=='TYPE_REQUIRES_CURRENT_FOCUS':
+                raise PlanPreconditionError('TYPE_REQUIRES_CURRENT_FOCUS','Input must be focused by a real click before type')
             raise ValueError(truth['status'] + ': ' + truth['reason'])
     primitive = {'action': action, 'control_id': cid, 'goal': step['goal'], 'expected': step['expected']}
     if action == 'set_value':
@@ -663,8 +673,14 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         options = c['binding'].get('options', [])
         match = [o for o in options if o['value'] == step.get('value') and not o.get('disabled')]
         if len(match) != 1 or sum(o['label'] == match[0]['label'] for o in options) != 1:
+            from .plan_execution import enabled as current_plan
+            if current_plan(task):
+                raise PlanPreconditionError('SELECT_OPTION_NOT_PROVEN','Select must use a unique observed enabled option value; inspect current option labels and values')
             raise SelectionValueMismatch('Selection must name a unique observed enabled option')
         if step['value'] == c['value'].get('value'):
+            from .plan_execution import enabled as current_plan
+            if current_plan(task):
+                raise PlanPreconditionError('UNCHANGED_SELECTION','Unchanged selection is not effective')
             raise ValueError('Unchanged selection is not effective')
         primitive['option'] = match[0]['label']
     return [{**primitive, **{k: step[k] for k in ('value','keys','direction','page_id') if k in step}}]

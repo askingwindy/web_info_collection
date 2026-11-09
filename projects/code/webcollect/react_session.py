@@ -285,6 +285,7 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         if spec.get('ending_policy') == 'webcollect-five-ten-effective-ending-5':
             for part in (spec, task['fragment']):
                 part['reading_completion_policy'] = 'webcollect-reading-plan-completion-1'
+                part['plan_execution_policy'] = 'webcollect-plan-execution-1'
     if action_stability_protocol is not None:
         from .action_stability import VERSIONS as focus_versions
         if action_stability_protocol not in focus_versions or plan_protocol is None:
@@ -409,7 +410,7 @@ def validate_task(task):
     if not isinstance(actions, list) or not actions or any(action not in ALLOWED_TOOL_ACTIONS for action in actions):
         raise ValueError('React task needs a nonempty supported action whitelist')
     spec = (task.get('workflow_proposal') or {}).get('spec') or {}
-    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol','reading_completion_policy'):
+    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol','reading_completion_policy','plan_execution_policy'):
         if spec.get(extension) != fragment.get(extension):
             raise ValueError('Mismatched frozen React extension: ' + extension)
     if fragment.get('session_objective'):
@@ -429,6 +430,12 @@ def validate_task(task):
                 or fragment.get('plan_protocol') != 'webcollect-banded-conditional-plan-11'
                 or fragment.get('ending_policy') != 'webcollect-five-ten-effective-ending-5'):
             raise ValueError('Unknown frozen reading completion policy or incompatible task')
+    if fragment.get('plan_execution_policy') is not None:
+        if (fragment['plan_execution_policy'] != 'webcollect-plan-execution-1'
+                or fragment.get('plan_protocol') != 'webcollect-banded-conditional-plan-11'
+                or fragment.get('ending_policy') != 'webcollect-five-ten-effective-ending-5'
+                or fragment.get('reading_completion_policy') != 'webcollect-reading-plan-completion-1'):
+            raise ValueError('Unknown frozen plan execution policy or incompatible task')
     from .action_stability import VERSIONS as focus_versions
     if fragment.get('action_stability_protocol') not in (None, *focus_versions):
         raise ValueError('Unknown frozen action stability protocol')

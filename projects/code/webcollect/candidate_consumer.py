@@ -874,6 +874,14 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
                     **({'effort_profile':effort_profile} if effort_profile else {}),
                     **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+            except asyncio.CancelledError:
+                if campaign:
+                    shutdown=load_json(campaign)
+                    record('campaign_worker_cancelled',claim_id=claim['claim_id'],
+                           candidate_id=claim['candidate_id'],
+                           shutdown_reason=shutdown.get('worker_shutdown_reason') or shutdown.get('stop_reason'),
+                           claim_state=pool.get_claim(claim['claim_id'])['state'])
+                raise
             except Exception as error:
                 current=pool.get_claim(claim['claim_id'])
                 if current['state']=='consuming':
