@@ -7,7 +7,10 @@ a caller-selected business ID. Historical signatures survive review expiry;
 new dispatch always rechecks live source, capability, history and registry.
 """
 from copy import deepcopy
-from contextlib import closing
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
+import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import re
@@ -23,6 +26,27 @@ VERSION = 'observed-form-task-admission-1'
 SCHEMAS = {'real': ('webcollect-task-admission-packet-1', 'webcollect-task-admission-review-1'),
            'synthetic': ('webcollect-controlled-task-admission-packet-1', 'webcollect-controlled-task-admission-review-1')}
 CHECKS = ('observed_controls', 'necessary_actions', 'visible_terminal', 'business_novelty', 'not_parameter_variant')
+_FRAME_VALIDATION_RULE = 'task-admission-frame-validation-1'
+_FRAME_VALIDATIONS = ContextVar('task_admission_frame_validations', default=None)
+
+
+@contextmanager
+def frame_validation_scope(frames=None):
+    """Reuse sealed frame calculations only inside one caller-owned operation.
+
+    Nested validators share the operation. Every frame lookup still checks the
+    current file bytes, and live task/claim/page checks never enter this cache.
+    """
+    current = _FRAME_VALIDATIONS.get()
+    if frames is None and current is not None:
+        yield current
+        return
+    frames = {} if frames is None else frames
+    token = _FRAME_VALIDATIONS.set(frames)
+    try:
+        yield frames
+    finally:
+        _FRAME_VALIDATIONS.reset(token)
 
 
 def _require(condition, reason):
@@ -92,8 +116,24 @@ def context(history_scope, customer_history, registry, *, exclude_scope=None, ow
 
 def _frame(frame, mode):
     _require(isinstance(frame, dict) and set(frame) == {'image', 'state', 'capture'}, 'frame needs original image, state and capture binding')
-    image, state_path, capture_path = [_read(frame[key]) for key in ('image', 'state', 'capture')]
-    state, capture = load_json(state_path), load_json(capture_path)
+    contents = []
+    for name in ('image', 'state', 'capture'):
+        ref = frame[name]
+        _require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'}, 'exact path/SHA evidence reference required')
+        path = Path(ref['path'])
+        _require(path.is_absolute() and path.is_file() and not path.is_symlink(), 'evidence missing or changed')
+        data = path.read_bytes()
+        _require(hashlib.sha256(data).hexdigest() == ref['sha256'], 'evidence missing or changed')
+        contents.append(data)
+    from .browser import CAPTURE_VERSION, STABILITY_VERSION
+    cache_key = object_sha256({'rule': _FRAME_VALIDATION_RULE, 'admission': VERSION,
+                              'capture': CAPTURE_VERSION, 'stability': STABILITY_VERSION,
+                              'mode': mode, 'frame': frame})
+    frames = _FRAME_VALIDATIONS.get()
+    if frames is not None and cache_key in frames:
+        return deepcopy(frames[cache_key])
+    png, state_bytes, capture_bytes = contents
+    state, capture = json.loads(state_bytes), json.loads(capture_bytes)
     if mode == 'real':
         _require(not state.get('diagnostic_only') and not capture.get('diagnostic_only')
                  and capture.get('accepted_as_formal_frame') is not False, 'diagnostic/rejected frame cannot approve real admission')
@@ -103,13 +143,15 @@ def _frame(frame, mode):
         capture = capture['capture']
     _require(capture.get('screenshot_sha256') == frame['image']['sha256'] and _text(capture.get('observer_sha256')), 'image/observer capture binding mismatch')
     _require(isinstance(state.get('visible_text'), str) and isinstance(state.get('elements'), list) and state['elements'], 'original visible state/tree required')
-    with Image.open(image) as bitmap:
+    with Image.open(BytesIO(png)) as bitmap:
         _require(bitmap.format == 'PNG' and list(bitmap.size) == state.get('screen_resolution'), 'original PNG/tree dimensions differ')
         bitmap.verify()
     if mode == 'real':
         from .browser import validate_capture_receipt
-        validate_capture_receipt(state,capture,image.read_bytes())
+        validate_capture_receipt(state,capture,png)
         _require(not state.get('fixture') and state.get('mode') != 'synthetic' and not capture.get('fixture'), 'controlled frame cannot enter real admission')
+    if frames is not None:
+        frames[cache_key] = deepcopy((state, capture))
     return state, capture
 
 

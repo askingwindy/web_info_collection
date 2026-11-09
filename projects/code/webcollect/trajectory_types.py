@@ -55,7 +55,15 @@ def classify(record):
         if execute_query and rendered_result:
             add('search_query','搜索查询',row,'Actual query submission followed by changed rendered results/navigation.',target_label=label)
         filter_label=has(r'筛选|篩選|排序|升序|降序|从低到高|从高到低|sort|filter',label)
-        if action in ('select','click','double_click','hotkey') and filter_label and rendered_result:
+        group_selector=(binding.get('selector') or '').rsplit(' > ',1)[0]
+        grouped_buttons=[b for b in before.get('capture_controls',[])
+            if b.get('tag')=='button' and group_selector and (b.get('selector') or '').rsplit(' > ',1)[0]==group_selector]
+        category_switch = (len(grouped_buttons)>1 and action in ('click','double_click') and before.get('document_identity') == after.get('document_identity')
+            and before.get('url') == after.get('url') and e.get('clickable')
+            and e.get('native_role') in ('button','tab','option')
+            and before.get('visible_text') != after.get('visible_text')
+            and any(x in fields for x in ('visible_content','target.selected','target.owner.state')))
+        if action in ('select','click','double_click','hotkey') and (filter_label or category_switch) and rendered_result:
             add('filter_sort','筛选排序',row,'Actual filter/sort control followed by changed rendered content.',target_label=label)
         setting_label=has(r'主题|主題|深色|浅色|暗色|字[体體号號]|语言|語言|显示设置|顯示設定|设置|設定|theme|font|language|settings',label)
         if action in ('select','click','double_click','hotkey') and setting_label and control_changed:

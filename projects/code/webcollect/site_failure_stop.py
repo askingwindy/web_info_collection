@@ -278,11 +278,21 @@ class SiteFailureStore:
         target = endpoint(uri,aliases)
         if target[0] != netloc.removeprefix('www.'):
             return holds
+        # Probe facts name the book needed to resolve their original visit.
+        # Formal facts resolve through their registry in _fact_scope instead;
+        # an unrelated consumer book must not block producer page screening.
+        referenced_books=set()
+        for fact in facts:
+            if fact[0] in applied or fact[2]!='probe':continue
+            refs=json.loads(fact[5])
+            if len(refs)==1 and isinstance(refs[0],dict) and refs[0].get('ledger'):
+                referenced_books.add(refs[0]['ledger'])
         with ExitStack() as stack:
             books = {}
             for path in (producer, producer.with_name('consumer-jobs.sqlite3')):
+                if str(path) not in referenced_books:continue
                 if path.is_file() and not path.is_symlink():
-                    ledger = stack.enter_context(closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True)))
+                    ledger = stack.enter_context(closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=30)))
                     ledger.row_factory = sqlite3.Row
                     if ledger.execute("SELECT 1 FROM sqlite_master WHERE name='batch_meta'").fetchone():
                         bound = ledger.execute("SELECT json_extract(config,'$.site_failure_guard') FROM batch_meta WHERE id=1").fetchone()

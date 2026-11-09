@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from .batch_core import BatchLedger, ClosingConnection, load_json, save_json
+from .batch_core import BatchLedger, ClosingConnection, OutcomeUnknown, load_json, save_json
 from .candidate_consumer import guard_candidate_dispatch
 from .planning import object_sha256, verify_evidence
 from .agent_feedback import reference
@@ -28,10 +28,25 @@ class ReadOnlyLedger(BatchLedger):
         return con
 
 
-def verify_get(ledger, uri, ref):
+def verify_get(pool, ledger, uri, ref):
     """Verify a receipt against its original settled job and unique GET visit."""
     from site_planner.entry_access import POLICY, wire_uri
-    verify_evidence([ref]); access=load_json(ref['path'])
+    from site_planner import producer_observation
+    verify_evidence([ref]);access=load_json(ref['path'])
+    if access.get('policy') == producer_observation.RECEIPT_POLICY:
+        # Current producers reuse one shared anonymous observation visit; the
+        # observation module owns that lineage's job/visit/document binding.
+        try:
+            document,_result=producer_observation.from_pool(pool,ledger,uri)
+        except OutcomeUnknown as error:
+            raise ValueError('GET_original_job_or_visit_missing') from error
+        if (document is None or document.get('job_id') != access.get('job_id')
+                or document.get('visit_id') != access.get('visit_id')
+                or document.get('landed_uri') != access.get('landed_uri')
+                or document.get('http_status') != access.get('http_status')):
+            raise ValueError('GET_receipt_identity_or_status_mismatch')
+        verify_evidence([access['source_observation'],access['source_document']])
+        return access
     if (access.get('policy') != POLICY or access.get('result') != 'PASS' or access.get('method') != 'GET'
             or type(access.get('http_status')) is not int or not 200 <= access['http_status'] < 300
             or wire_uri(access.get('entry_uri','')) != wire_uri(uri)):
@@ -103,7 +118,7 @@ def inspect_rows(scope_path, *, candidate_ids=None):
                 verify_evidence(src['references'])  # same frozen sources checked by claim_next
                 ref = src.get('entry_http')
                 if ref:
-                    verify_get(producer,body['entry_url'],ref)
+                    verify_get(pool,producer,body['entry_url'],ref)
                     receipts.append(ref)
             if not receipts: raise ValueError('missing_bound_GET_2xx')
             counts['row_sources_GET_verified'] += 1

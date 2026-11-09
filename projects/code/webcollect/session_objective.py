@@ -8,7 +8,8 @@ VERSION='webcollect-session-objective-1'
 # chosen protocol is stamped into spec+fragment before the task-id hash, so it
 # is part of frozen task identity; older objectives without the field keep the
 # protocol their generator bound.
-EVIDENCE_POLICIES=('webcollect-action-scoped-evidence-1',)
+from .action_stability import ACTION_SCOPED_VERSIONS
+EVIDENCE_POLICIES=ACTION_SCOPED_VERSIONS
 
 def bind(reference,claim):
     verify_evidence([reference]);value=load_json(reference['path'])
@@ -35,8 +36,7 @@ def apply(task,binding):
         spec['direct_completion_protocol']=task['fragment']['direct_completion_protocol']=COMPLETION
     policy=binding['objective'].get('evidence_policy')
     if policy:
-        from .action_stability import ACTION_SCOPED_VERSION
-        if policy!=ACTION_SCOPED_VERSION or not task['fragment'].get('plan_protocol'):
+        if policy not in ACTION_SCOPED_VERSIONS or not task['fragment'].get('plan_protocol'):
             raise ValueError('Objective evidence policy requires a conditional-plan task')
         spec['action_stability_protocol']=policy
         task['fragment']['action_stability_protocol']=policy

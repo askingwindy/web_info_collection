@@ -753,7 +753,7 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
         return await working
     except BaseException as error:
         # Drain Runtime and collection close-out before deriving the claim outcome.
-        if not working.done(): working.cancel()
+        if not working.done(): working.cancel('consumer_session_hard_deadline' if isinstance(error, TimeoutError) and str(error)=='consumer_session_hard_deadline' else None)
         await asyncio.gather(working, return_exceptions=True)
         # Cross-process failure is conservative. Original requests/attempts are never reset.
         try:
@@ -806,7 +806,7 @@ def _cohort_rows(path, pool, registry, batch):
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              protocols=None, poll_seconds=None, producer_batch=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, **kwargs):
+              protocols=None, poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, **kwargs):
     if effort_profile is not None:
         from .react_session import validate_effort_profile
         effort_profile = validate_effort_profile(effort_profile)
@@ -819,7 +819,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     skipped = []
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError('Processing limit must be a positive integer')
-    if limit is None and not producer_batch:
+    if limit is None and not producer_batch and not campaign:
         limit = 1  # The unscoped entry point claims a single candidate.
     if poll_seconds is not None and (type(poll_seconds) is not int or poll_seconds < 1):
         raise ValueError('Polling interval must be a positive number of seconds')
@@ -838,6 +838,11 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     stop_details = None
     poll = 0
     while limit is None or len(results) < limit:
+        if campaign:
+            from .consumer_campaign import reached
+            if reached(campaign):
+                stop_reason = 'campaign_target_reached'
+                break
         if rows is not None and poll == len(rows):
             stop_reason = 'cohort_exhausted'
             break
@@ -863,10 +868,19 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         kwargs.update(checked)
         selected = rows[poll] if rows is not None else None
         row_batch = selected.get('producer_batch',producer_batch) if selected else producer_batch
-        claim=pool.claim_next(worker_id,f'{request_prefix}/{poll}',categories=categories,application_id=application_id,
+        def claim_next():
+            return pool.claim_next(worker_id,f'{request_prefix}/{poll}',categories=categories,application_id=application_id,
                               protocols=protocols, **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
                               **({'producer_batch': row_batch} if row_batch else {}),
                               **({'recovery_version':recovery_version} if recovery_version else {}))
+        if campaign:
+            from .consumer_campaign import claim_if_open
+            claim = claim_if_open(campaign, claim_next)
+            if claim is None:
+                stop_reason = 'campaign_target_reached'
+                break
+        else:
+            claim = claim_next()
         poll += 1
         if selected and claim['state'] in ('EMPTY','ALREADY_CLAIMED'):
             skipped.append({'candidate_id':selected['candidate_id'],'reason':claim['state']})
@@ -884,13 +898,13 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         try:
             result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,**({'effort_profile':effort_profile} if effort_profile else {}),**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
         except BudgetStop as error:
-            if target is None and rows is None: raise
+            if target is None and rows is None and not campaign: raise
             current = pool.get_claim(claim['claim_id'])
             if current['state'] == 'consuming':
                 pool.finish(claim,state='reconcile',stage=current['stage'],reason=str(error))
             result = {'state':'reconcile','resource_stop':{'reason':str(error)}}
         except Exception as error:
-            if not producer_batch and not (project_worker and isinstance(error,(SiteStopped,OutcomeUnknown))):
+            if not (producer_batch or campaign) and not (project_worker and isinstance(error,(SiteStopped,OutcomeUnknown))):
                 raise
             current = pool.get_claim(claim['claim_id'])
             if current['state'] == 'consuming' and current['stage'] == 'claimed' and isinstance(error,(SiteStopped,OutcomeUnknown)):
@@ -899,10 +913,13 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             if current['state'] not in ('failed','reconcile'):
                 raise
             result = {'state':current['state'], 'stage':current['stage'], 'reason':current.get('reason') or str(error)}
-        if producer_batch:
+        if campaign:
+            from .consumer_campaign import deliver
+            result['campaign_delivery'] = deliver(campaign, pool, claim)
+        if producer_batch or campaign:
             record_outcome(pool, claim, result)
-        results.append({**result, 'claim_id':claim['claim_id'], 'candidate_id':claim['candidate_id']} if producer_batch else result)
-        if result.get('resource_stop') or (result['state']=='reconcile' and not (producer_batch or project_worker)):
+        results.append({**result, 'claim_id':claim['claim_id'], 'candidate_id':claim['candidate_id']} if producer_batch or campaign else result)
+        if result.get('resource_stop') or (result['state']=='reconcile' and not (producer_batch or campaign or project_worker)):
             stop_reason = 'resource_pause' if result.get('resource_stop') else 'account_reconciliation'
             break
     if rows is not None:
@@ -1035,6 +1052,7 @@ def main(argv=None):
     runp=sub.add_parser('run')
     for name in ('config','ledger','output','registry','policy','history-set','worker-id','request-prefix'): runp.add_argument('--'+name,required=True)
     runp.add_argument('--limit',type=int); runp.add_argument('--category',action='append'); runp.add_argument('--application-id'); runp.add_argument('--qc-policy')
+    runp.add_argument('--campaign',type=Path,help='Shared site campaign receipt-counted delivery target')
     runp.add_argument('--cohort',type=Path,help='Visit only never-claimed members of the frozen validation cohort, in order')
     runp.add_argument('--skip-wechat-articles', action='store_true', help='Record observed WeChat article links and skip them for this entry run')
     runp.add_argument('--target',type=int,help='Receipt-counted result target, separate from --limit')
@@ -1087,9 +1105,12 @@ def main(argv=None):
             check_project_pool(scope, pool.pool)
             check_project_guard(scope, guard, a.ledger, role='consumer')
         ledger=BatchLedger(a.ledger,config,initialize=new_project)
+        if a.campaign:
+            import signal
+            signal.signal(signal.SIGINT, signal.default_int_handler)
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
-            categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+            categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
             protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None))
     print(json.dumps(result,ensure_ascii=False))
 

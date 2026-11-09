@@ -25,7 +25,7 @@ def _quality_batch_ids(value):
     return sorted(value)
 
 
-def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None, application_registry=None):
+def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None, application_registry=None, application_capacity_policy=None):
     """Return facts, not approval. Caller persists this versioned manifest explicitly."""
     paths = [Path(path).resolve() for path in package_paths]
     if not paths or len(paths) != len(set(paths)):
@@ -36,6 +36,10 @@ def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None, 
             'packages': [{'path': str(path), 'package_files_sha256': package_files(path)} for path in paths],
             'scope': 'explicit effective delivery versions only; excludes superseded copies',
             'not_an_acceptance': True}
+    if application_capacity_policy is not None:
+        if application_capacity_policy != 'flexible-total-200000-v1':
+            raise ValueError('Unknown application capacity policy')
+        result['application_capacity_policy'] = application_capacity_policy
     if supersedes:
         result['version_policy'] = {'schema_version': POLICY, 'supersedes': list(supersedes)}
     if quality_batch_ids is not None:
@@ -197,9 +201,13 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append({'sample': str(path), 'reason': str(error)})
     count = len(samples); share = max(categories.values(), default=0) / count if count else 0
+    capacity_policy = raw.get('application_capacity_policy', 'legacy-per-application-500-v1')
+    if capacity_policy not in ('legacy-per-application-500-v1', 'flexible-total-200000-v1'):
+        raise ValueError('Unknown application capacity policy')
+    application_limit = 500 if capacity_policy == 'legacy-per-application-500-v1' else None
     application_counts = Counter(); application_categories = {}; application_errors=[]
     try:
-        from .application_capacity import application_key, LIMIT
+        from .application_capacity import application_key
         registry=None
         if raw.get('application_registry'):
             from site_planner.site_pool import SitePool
@@ -215,7 +223,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             if aid in application_categories and application_categories[aid]!=category:
                 raise ValueError('Effective application has conflicting categories')
             application_categories[aid]=category
-        if max(application_counts.values(),default=0)>LIMIT:
+        if application_limit is not None and max(application_counts.values(),default=0)>application_limit:
             raise ValueError('Application exceeds 500 effective trajectories across all packages')
     except (ValueError,KeyError,TypeError,OSError) as error:
         application_errors.append(str(error)); errors.append({'reason':'application capacity: '+str(error)})
@@ -273,7 +281,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             'local_profile': selected, 'sample_count': count, 'site_count': len(active_sites),
             'statistics': {'categories': dict(categories), 'maximum_category_share': share,
                            'category_coverage': coverage,
-                           'applications':{'limit':500,'counts':dict(application_counts),
+                           'applications':{'limit':application_limit,'policy':capacity_policy,'counts':dict(application_counts),
                                            'category_counts':dict(Counter(application_categories.values())),
                                            'identity_basis':'bound_registry' if raw.get('application_registry') else 'canonical_hostname',
                                            'status':'FAIL' if application_errors else 'PASS','errors':application_errors},

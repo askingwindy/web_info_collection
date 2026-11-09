@@ -429,6 +429,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, **stop_data}
     ending=summary.get('collection_ending')
     prefix_end=None
+    verified_session=None
     from .trusted_prefix import VERSION as PREFIX_VERSION, V2_VERSION as PREFIX_V2, candidate_end, project_prefix
     prefix_rule=task['fragment'].get('trusted_prefix_protocol')
     prefix_requested=(prefix_rule in (PREFIX_VERSION, PREFIX_V2) and
@@ -436,16 +437,17 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
          (ending and ending.get('flagged')) or summary.get('stop_reason') in ('blocked','no_path','budget')))
     if prefix_requested:
         try:
-            from .postprocess import session_record
-            # Prefix identification/projection re-derives the whole raw journal;
-            # run it in a worker thread so the loop keeps serving heartbeats.
+            from .postprocess import _VerifiedSession
+            # Build once and retain the sealed-source verification through this
+            # close-out; file digests are checked again before reuse and saving.
             with telemetry_phase(phase_ledger, 'prefix_projection', scope=meter_identity):
-                prefix_end=await asyncio.to_thread(candidate_end, evidence/'raw', rule=prefix_rule)
+                verified_session=await asyncio.to_thread(_VerifiedSession, evidence/'raw')
+                prefix_end=await asyncio.to_thread(candidate_end, evidence/'raw', rule=prefix_rule,
+                                                   _verified=verified_session)
                 if prefix_end is not None:
-                    source=await asyncio.to_thread(session_record, evidence/'raw',
-                                                   allow_unknown_for_prefix=True)
+                    source=await asyncio.to_thread(verified_session.record, evidence/'raw')
                     await asyncio.to_thread(project_prefix, source, evidence/'raw', prefix_end, ids,
-                                            rule=prefix_rule)
+                                            rule=prefix_rule, _verified=verified_session)
                     write_json(evidence/'prefix-source-closeout.json',{'protocol':prefix_rule,
                         'attempt_id':attempt['attempt_id'],'raw_receipt':raw_receipt,
                         'original_stop_reason':summary['stop_reason'],'original_unknown':summary['unknown'],
@@ -504,7 +506,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         derived = await asyncio.to_thread(postprocess_derivation, evidence, sample, ids,
                                           delivery_manifest,
                                           validators=(audit_validator, dedup_validator),
-                                          prefix_end_step=prefix_end, prefix_rule=prefix_rule)
+                                          prefix_end_step=prefix_end, prefix_rule=prefix_rule,
+                                          _verified=verified_session)
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})
@@ -572,8 +575,10 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     from .telemetry import NetworkMeter, phase, worker_measurement
 
     from .telemetry import preparation_phase
+    from .task_admission import frame_validation_scope
     timing = Path(output).parent / "preparation-timings.jsonl"
-    with preparation_phase(timing, "runtime_validate"):
+    startup_frames = {}
+    with frame_validation_scope(startup_frames), preparation_phase(timing, "runtime_validate"):
         plan = read_json(plan_path)
         history = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope') or {}
         if history.get('candidate_project'):
@@ -621,7 +626,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 prior_scope = None
             if prior_scope == 'closed_replanned':
                 raise ValueError('scope已永久closed_replanned；新任务版本必须使用新输出范围')
-    with preparation_phase(timing, "runtime_bootstrap"):
+    with frame_validation_scope(startup_frames), preparation_phase(timing, "runtime_bootstrap"):
         sources = source_identity()
         bootstrap_path = output / 'bootstrap.json'
         if resume and bootstrap_path.exists():
@@ -723,6 +728,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
             if site_pool is not None:
                 store.bind_site_pool(site_pool)
             store.enqueue_plan(plan, publication)
+    del startup_frames
     with preparation_phase(timing, "runtime_recovery_snapshot"):
         # Reap this scope's expired leases plus any other dead-scope attempt of
         # the same campaign: an expired lease can never be resumed by its owner

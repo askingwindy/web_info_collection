@@ -1,4 +1,4 @@
-"""Prepare or launch consumers using the original shared scope and budgets."""
+"""Prepare or launch a chosen number of consumers on the original shared scope."""
 import argparse
 import json
 from pathlib import Path
@@ -51,22 +51,23 @@ def main():
     a.output.mkdir(parents=True, exist_ok=False)
     if a.launch:
         reason = f'consumer_roster --workers {a.workers} --prefix {a.prefix}'
-        if config['budget']['max_concurrent_jobs'] < a.workers:
-            from .consumer_ab import adjust_concurrency
-            adjusted = adjust_concurrency(scope['consumer_db'], scope['consumer_config'], target=a.workers, authorization=reason)
-            scope['consumer_config'] = adjusted['worker_config_required']
-            config = json.loads(Path(scope['consumer_config']).read_text())
-            # Keep a permanent reference in this launch directory as well.
-            (a.output / 'concurrency-adjustment.json').write_text(json.dumps(adjusted, indent=2) + '\n')
-        if policy['max_workers'] < a.workers:
-            from .runtime import RuntimeStore
-            policy = RuntimeStore(scope['registry'], 'project-setup').update_policy({'max_workers': a.workers}, reason)
-            policy_path = (a.output / 'consumer-policy.json').resolve()
-            policy_path.write_text(json.dumps(policy, ensure_ascii=False, indent=2) + '\n')
-            scope['policy'] = str(policy_path)
+        from .consumer_ab import adjust_concurrency
+        adjusted = adjust_concurrency(scope['consumer_db'], scope['consumer_config'], target=None, authorization=reason)
+        from .runtime import RuntimeStore
+        runtime_setting = RuntimeStore(scope['registry'], 'project-setup').set_consumer_concurrency(
+            max_workers=None, max_domain_workers=None, reason=reason)
+        # Frozen config/policy files stay bound to existing in-flight work.
+        # Worker count controls this launch; retired Runtime ceilings are not
+        # rewritten merely to match the requested process count.
+        (a.output / 'concurrency-adjustment.json').write_text(json.dumps(adjusted, indent=2) + '\n')
+        (a.output / 'runtime-concurrency.json').write_text(json.dumps(runtime_setting, indent=2) + '\n')
     roster = build_roster(scope, a.workers, a.prefix,
-                          job_limit=config['budget']['max_concurrent_jobs'],
-                          campaign_limit=policy['max_workers'])
+                          job_limit=None, campaign_limit=None)
+    roster['concurrency_control'] = 'launched_consumer_workers'
+    roster['concurrency_settings_applied'] = a.launch
+    roster['historical_config_limits'] = {
+        'max_concurrent_jobs': config['budget']['max_concurrent_jobs'],
+        'max_workers': policy['max_workers'], 'max_domain_workers': policy['max_domain_workers']}
     roster['total_limit'] = a.limit
     roster['recovery_version'] = a.recovery_version
     roster['effort_profile'] = {'first_plan': a.first_plan_effort, 'branch': a.branch_effort}

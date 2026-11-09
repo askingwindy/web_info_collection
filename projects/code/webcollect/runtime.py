@@ -262,6 +262,47 @@ class RuntimeStore:
         scope = self._scope(con)
         return json.loads(con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?', (scope['campaign_id'],)).fetchone()[0])
 
+    def consumer_concurrency(self, con=None):
+        """Read scheduling settings without changing the bound task policy."""
+        if con is None:
+            with closing(self._connect(readonly=True)) as current:
+                return self.consumer_concurrency(current)
+        policy = self._policy(con)
+        row = con.execute("SELECT payload_json FROM m4_events WHERE campaign_id=? "
+                          "AND event_type='consumer_concurrency' ORDER BY event_id DESC LIMIT 1",
+                          (policy['campaign_id'],)).fetchone()
+        if row is None:
+            return {key: policy[key] for key in ('max_workers', 'max_domain_workers')}
+        decision = json.loads(row[0])
+        keys = ('max_workers', 'max_domain_workers')
+        if (decision.get('schema_version') != 'webcollect-runtime-concurrency-1'
+                or decision.get('registry') != str(self.registry)
+                or decision.get('campaign_id') != policy['campaign_id']
+                or any(key not in decision or (decision[key] is not None
+                       and (type(decision[key]) is not int or decision[key] < 1)) for key in keys)):
+            raise ValueError('Consumer concurrency setting does not match its original campaign')
+        return {key: decision[key] for key in keys}
+
+    def set_consumer_concurrency(self, *, max_workers=None, max_domain_workers=None,
+                                 reason='consumer concurrency update'):
+        """None removes a scheduling cap; ownership and leases remain enforced."""
+        settings = {'max_workers': max_workers, 'max_domain_workers': max_domain_workers}
+        if any(value is not None and (type(value) is not int or value < 1)
+               for value in settings.values()):
+            raise ValueError('Consumer concurrency must be a positive integer or None')
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError('Consumer concurrency update requires its reason')
+        with self._transaction() as con:
+            before = self.consumer_concurrency(con)
+            if before != settings:
+                con.execute("CREATE INDEX IF NOT EXISTS m4_concurrency_campaign "
+                            "ON m4_events(campaign_id,event_id) WHERE event_type='consumer_concurrency'")
+                self._event(con, 'consumer_concurrency', timestamp(None), {
+                    'schema_version': 'webcollect-runtime-concurrency-1',
+                    'registry': str(self.registry), 'campaign_id': self._scope(con)['campaign_id'],
+                    **settings, 'before': before, 'reason': reason})
+        return settings
+
     def _event(self, con, event, now, payload=None, task_key=None, attempt_id=None):
         campaign = self._scope(con)['campaign_id']
         con.execute('INSERT INTO m4_events(scope_id,campaign_id,event_type,task_key,attempt_id,at,payload_json) VALUES(?,?,?,?,?,?,?)',
@@ -440,8 +481,12 @@ class RuntimeStore:
             from .admission_cohort import guard_scope
             guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
             campaign = policy['campaign_id']
+            concurrency = self.consumer_concurrency(con)
             live = list(con.execute("SELECT a.*,t.domain_key FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.status IN ('reserved','running') AND a.lease_expires_at>?", (current,)))
-            if sum(r['campaign_id'] == campaign for r in live) >= policy['max_workers'] or any(r['worker_id'] == worker_id for r in live):
+            if any(r['worker_id'] == worker_id for r in live):
+                return None
+            if (concurrency['max_workers'] is not None
+                    and sum(r['campaign_id'] == campaign for r in live) >= concurrency['max_workers']):
                 return None
             rows = list(con.execute("SELECT t.*,p.plan_sha256 FROM m4_tasks t JOIN m4_plan_tasks p ON p.task_key=t.task_key AND p.scope_id=t.scope_id WHERE t.scope_id=? AND t.status='queued' AND t.next_eligible_at<=? ORDER BY p.ordinal", (self.scope_id, current)))
             for row in rows:
@@ -451,7 +496,8 @@ class RuntimeStore:
                     con.execute("UPDATE m4_tasks SET status='needs_replan',quota_reserved=0 WHERE task_key=?", (row['task_key'],))
                     self._event(con, 'capability_expired', current, task_key=row['task_key'])
                     continue
-                if sum(r['domain_key'] == row['domain_key'] for r in live) >= policy['max_domain_workers']:
+                if (concurrency['max_domain_workers'] is not None
+                        and sum(r['domain_key'] == row['domain_key'] for r in live) >= concurrency['max_domain_workers']):
                     continue
                 domain = con.execute('SELECT next_start_at FROM m4_domains WHERE domain_key=?', (row['domain_key'],)).fetchone()
                 if domain and domain[0] > current:
@@ -1637,6 +1683,7 @@ class RuntimeStore:
                 item = dict(row); item['payload'] = json.loads(item.pop('payload_json')); events.append(item)
             campaign_attempts = con.execute('SELECT COUNT(*) FROM m4_attempts WHERE campaign_id=? AND started_at IS NOT NULL', (scope['campaign_id'],)).fetchone()[0]
             return {'schema_version': 'webcollect-runtime-snapshot-1', 'scope': scope, 'policy': policy,
+                    'consumer_concurrency': self.consumer_concurrency(con),
                     'tasks': tasks, 'attempts': attempts, 'events': events,
                     'campaign_actual_attempt_count': campaign_attempts,
                     'site_pool': self.site_pool_binding(),

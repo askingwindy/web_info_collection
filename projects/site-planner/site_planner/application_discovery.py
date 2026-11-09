@@ -295,13 +295,15 @@ class _Document(HTMLParser):
         if not self.hidden: self.text.append(data.strip())
 
 
-def homepage_document(ledger, batch, uri, output):
+def homepage_document(ledger, batch, uri, output, *, allowed_hosts=()):
     """One metered GET with immutable original-result recovery, never resend UNKNOWN."""
     from .pipeline import open_public_get, reserve_visit
     from webcollect.candidate_contract import application_matches
     from webcollect.site_failure_stop import SiteFailureStore
     from .entry_access import document_http_failure, shared_job
     uri=page_uri(uri)
+    if allowed_hosts and urlsplit(uri).hostname not in allowed_hosts:
+        raise ValueError('Homepage outside allowed_hosts')
     legacy=object_sha256({'kind':'application-evidence-get','payload':{'batch':batch,'uri':uri,'policy':POLICY}})
     with ledger.connect() as con:exists=con.execute('SELECT 1 FROM jobs WHERE id=?',(legacy,)).fetchone()
     jid=legacy if exists else shared_job(ledger,batch,uri,purpose='application-evidence-get',policy=POLICY)
@@ -322,6 +324,8 @@ def homepage_document(ledger, batch, uri, output):
         aliases=(ledger.config.get('site_failure_guard') or {}).get('application_registry')
         guard=SiteFailureStore(ledger.config['site_failure_guard']) if ledger.config.get('site_failure_guard') else None
         def check(url):
+            if allowed_hosts and urlsplit(url).hostname not in allowed_hosts:
+                raise ValueError('Homepage redirect outside allowed_hosts')
             if not application_matches(uri,url,aliases): raise ValueError('Homepage redirect leaves application')
             if guard: guard.guard(url)
         with open_public_get(uri,time.monotonic()+visit['timeout_seconds'],metrics,check) as response:
@@ -358,7 +362,7 @@ def homepage_document(ledger, batch, uri, output):
         raise
 
 
-def site_context(pool, ledger, batch, hits, output, *, isolate_homepages=False):
+def site_context(pool, ledger, batch, hits, output, *, isolate_homepages=False, use_seed_uri=False, allowed_hosts=()):
     """Reuse Table1 before any new site evidence IO. Explicit first-party documents
     can be supplied by the discovery Agent with a verifiable source reference.
     """
@@ -383,10 +387,11 @@ def site_context(pool, ledger, batch, hits, output, *, isolate_homepages=False):
             continue
         p=urlsplit(hit['uri']); match=re.match(r'^/(zh(?:-CN|-TW|-Hans|-Hant)?)(?:/|$)',p.path,re.I)
         uri=f'{p.scheme}://{p.netloc}/'+(match[1]+'/' if match else '')
+        if use_seed_uri:uri=hit['uri']
         try:
-            doc,ref=homepage_document(ledger,batch,uri,output)
+            doc,ref=homepage_document(ledger,batch,uri,output,**({'allowed_hosts':allowed_hosts} if allowed_hosts else {}))
             if not doc['chinese'] and doc['chinese_links']:
-                doc,ref=homepage_document(ledger,batch,doc['chinese_links'][0],output)
+                doc,ref=homepage_document(ledger,batch,doc['chinese_links'][0],output,**({'allowed_hosts':allowed_hosts} if allowed_hosts else {}))
             if not doc['chinese']: raise ValueError('No verified Chinese homepage')
             context.append({**doc,'reference':ref,'context_only':True})
         except Exception as error:

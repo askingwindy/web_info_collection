@@ -101,10 +101,23 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
             _raise_settled_selection(ledger,jid)
         raise OutcomeUnknown('Original tool selection unresolved; no replacement: ' + jid)
     with ledger.connect() as con:
-        if con.execute("SELECT 1 FROM model_requests WHERE state='reserved' OR "
-                       "(state='unknown' AND id NOT IN (SELECT value FROM json_each(?))) LIMIT 1",
-                       (json.dumps(list(isolated_requests)),)).fetchone():
-            raise OutcomeUnknown('Original model request unresolved; no new entry tool dispatch')
+        parallel=bool(ledger.producer_concurrency and ledger.max_concurrent_jobs>1)
+        from .producer_authority import isolation_host
+        registry=(ledger.config.get('site_failure_guard') or {}).get('application_registry')
+        current_urls=list(source_uris) or ([payload['homepage_uri']] if payload.get('homepage_uri') else [])
+        current_hosts={isolation_host(uri,registry) for uri in current_urls}
+        for unresolved in con.execute("SELECT r.id,r.job_id,r.state,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE r.state IN ('reserved','unknown')"):
+            if unresolved['state']=='unknown' and unresolved['id'] in isolated_requests:continue
+            if parallel and unresolved['job_id']!=jid:
+                # A live independent job owns its own claim/reservation. It is
+                # not an UNKNOWN outcome and must not lock the whole ledger.
+                if unresolved['state']=='reserved':continue
+                original=json.loads(unresolved['payload']).get('input',{})
+                original_urls=(original.get('source_uris',[]) if unresolved['kind']=='ai-target-page-purpose-1'
+                               else [original['homepage_uri']] if unresolved['kind']=='ai-application-site-classification-1' and original.get('homepage_uri') else [])
+                original_hosts={isolation_host(uri,registry) for uri in original_urls}
+                if current_hosts and original_hosts and current_hosts.isdisjoint(original_hosts):continue
+            raise OutcomeUnknown('Original model request unresolved for this source scope: '+unresolved['id'])
     job = ledger.claim(purpose, job_id=jid)
     if not job:
         raise OutcomeUnknown('Original tool selection already claimed: ' + jid)

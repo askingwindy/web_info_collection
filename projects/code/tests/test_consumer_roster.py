@@ -22,13 +22,13 @@ class ConsumerRosterTest(unittest.TestCase):
         self.assertEqual(roster['workers'][-1]['number'], 10)
         self.assertEqual(roster['launch_state'], 'NOT_STARTED')
 
-    def test_invalid_and_frozen_limits(self):
-        for count in (0, 11, True):
+    def test_positive_worker_count_is_independent_of_historical_limits(self):
+        for count in (0, -1, True, 1.5):
             with self.assertRaises(ValueError):
                 build_roster(self.scope(), count, 'r', job_limit=10, campaign_limit=10)
-        for limits in ((5, 10), (10, 5)):
-            with self.assertRaises(ValueError):
-                build_roster(self.scope(), 10, 'r', job_limit=limits[0], campaign_limit=limits[1])
+        for count, limits in ((11, (10, 10)), (10, (5, 10)), (10, (10, 5)), (20, (None, None))):
+            roster = build_roster(self.scope(), count, 'r', job_limit=limits[0], campaign_limit=limits[1])
+            self.assertEqual(len(roster['workers']), count)
 
     def test_timing_preserves_errors_and_does_not_create_capture(self):
         with tempfile.TemporaryDirectory() as d:

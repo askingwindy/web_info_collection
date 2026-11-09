@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 import socket
+import sqlite3
 import http.client
 import threading
 import multiprocessing
@@ -20,7 +21,7 @@ from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 
-from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, _integer, validate_config, file_sha
+from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, BudgetStop, _integer, validate_config, file_sha, save_json
 from .planning import object_sha256
 
 
@@ -406,10 +407,22 @@ class ModelGateway:
         from .model_credentials import account_id
         return account_id(self._credential) if self._credential is not None else 'synthetic'
 
+    def _save_unsettled_response(self, job, rid, *, state, usage, response, error):
+        # Reuse immutable artifact publication beside the original ledger; this
+        # evidence does not settle, reset, or authorize resending the request.
+        path = self.ledger.path.parent / 'model-response-evidence' / (rid + '.json')
+        save_json(path, {'ledger':str(self.ledger.path), 'job_id':job['id'],
+            'request_id':rid, 'attempted_state':state, 'usage':usage, 'response':response,
+            'local_error':type(error).__name__})
+
     def _settle_failure(self, job, rid, *, state, usage=None, response=None, error=None):
         try:
             self.ledger.settle_request(rid,state=state,usage=usage,response=response,error=error)
+        except sqlite3.Error as cleanup:
+            self._save_unsettled_response(job, rid, state=state, usage=usage, response=response, error=cleanup)
+            raise
         except ValueError as cleanup:
+            self._save_unsettled_response(job, rid, state=state, usage=usage, response=response, error=cleanup)
             if job['kind'] not in QC_KINDS:raise
             # Recovery may have already marked the original reserved request
             # UNKNOWN. Never overwrite that settlement or lose the first I/O
@@ -422,7 +435,7 @@ class ModelGateway:
     def call_tool(self, job, purpose, text, tools, *, system, history=(), images=(),
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
                   max_requests=None, synthetic_response=None, inference=False, content_plan_protocol=None,
-                  timeout_seconds=None, patient_first_plan=False):
+                  timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None):
         """Versioned native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
         Returned assistant/user messages are copied verbatim into attempt history;
@@ -499,7 +512,7 @@ class ModelGateway:
                    'reasoning_effort': reasoning_effort, 'seen_ids': seen,
                    'attempt_id': attempt_id, 'max_requests': max_requests, 'declared': declared,
                    'inference_images': inference,'content_plan_protocol':content_plan_protocol,
-                   'timeout_seconds':timeout_seconds,
+                   'timeout_seconds':timeout_seconds, 'dispatch_deadline':dispatch_deadline,
                    'dispatch_policy':'patient-first-plan-1' if patient_first_plan else None}
         return self._call(job, purpose + ':native-tool-1', text, {'type': 'object'},
                           images=images, attempts=attempts, output_limit=output_limit,
@@ -508,7 +521,7 @@ class ModelGateway:
 
     def call_message(self, job, purpose, text, schema, *, system, images=(), attempts=1,
                      output_limit=None, reasoning_effort=None, attempt_id=None, max_requests=None,
-                     synthetic_response=None, content_envelope=None, grounded_choice=False):
+                     synthetic_response=None, content_envelope=None, grounded_choice=False, dispatch_deadline=None):
         """Versioned inference-only text JSON. No tools or native history on wire.
 
         The same native dispatch context binds account, attempt, UNKNOWN and cap.
@@ -534,7 +547,7 @@ class ModelGateway:
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
                    'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,
                    'max_requests':max_requests,'declared':{},'plain_json':True,'inference_images':True,
-                   'dispatch_policy':'branch-choice-1' if grounded_choice else None}
+                   'dispatch_policy':'branch-choice-1' if grounded_choice else None, 'dispatch_deadline':dispatch_deadline}
         return self._call(job,purpose+':'+adapter_version,text,schema,images=images,
                           attempts=attempts,output_limit=output_limit,native_context=context,
                           synthetic_response=synthetic_response)
@@ -672,6 +685,9 @@ class ModelGateway:
                         raise ValueError('Local provider DNS preflight failed before reservation/HTTP dispatch') from None
             while True:
                 try:
+                    deadline = (native_context or {}).get('dispatch_deadline')
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
                     if qc_transport:
                         self.ledger.heartbeat(job)
                     elif dispatch_policy == 'patient-first-plan-1':
@@ -717,6 +733,7 @@ class ModelGateway:
             rid = request['id']
             usage, parsed, raw = None, None, None
             transport_receipt = {}
+            settling_locally = False
             try:
                 if model['provider'] == 'synthetic':
                     if synthetic_response is None:
@@ -787,6 +804,12 @@ class ModelGateway:
                             return None
                     timeout = (native_context or {}).get('timeout_seconds') or model['timeout_seconds']
                     opener = urllib.request.build_opener(NoRedirect)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        settling_locally = True
+                        self._settle_failure(job,rid,state='failed',
+                            response={'http_dispatched':False,'reason':'consumer_session_soft_deadline'},
+                            error='consumer_session_soft_deadline_before_http')
+                        raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
                     if qc_transport:
                         timeout = self.ledger.request_window(job, timeout)
                         timing = {'client_request_id':rid}
@@ -861,12 +884,6 @@ class ModelGateway:
                     parsed, normalized = parse_content(choice['message']['content'], model['provider'])
                 if not native_context:
                     Draft202012Validator(schema).validate(parsed)
-                if qc_transport: self.ledger.request_window(job, 0, cleanup_seconds=0)
-                self.ledger.settle_request(rid, state='succeeded', usage=usage,
-                    response={'result': parsed, 'provider_response': raw, **transport_receipt,
-                              'content_envelope_normalized': normalized,
-                              **({'tool_call_name': tool_name} if tool_name else {})})
-                return parsed
             except urllib.error.HTTPError as error:
                 # Retain useful failure status without persisting headers,
                 # echoed credentials, or the provider's arbitrary error prose.
@@ -918,7 +935,11 @@ class ModelGateway:
                         time.sleep(1)
                     continue
                 raise OutcomeUnknown('Provider outcome/charge UNKNOWN; request retained: ' + rid) from None
+            except (BudgetStop, sqlite3.Error):
+                raise
             except Exception as error:
+                if settling_locally:
+                    raise
                 # A received malformed answer still costs money. If usage is absent
                 # or invalid, keep its full reservation and do not retry automatically.
                 valid_usage = usage is not None and all(type(usage.get(k)) is int and usage[k]>=0
@@ -937,4 +958,16 @@ class ModelGateway:
                     correction = json.dumps({'protocol_error':type(error).__name__,
                         'errors':schema_error_feedback(error),
                         'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
+            else:
+                # Local settlement is outside response parsing/format correction.
+                response = {'result': parsed, 'provider_response': raw, **transport_receipt,
+                            'content_envelope_normalized': normalized,
+                            **({'tool_call_name': tool_name} if tool_name else {})}
+                try:
+                    if qc_transport: self.ledger.request_window(job, 0, cleanup_seconds=0)
+                    self.ledger.settle_request(rid, state='succeeded', usage=usage, response=response)
+                except (sqlite3.Error, ValueError) as error:
+                    self._save_unsettled_response(job, rid, state='succeeded', usage=usage, response=response, error=error)
+                    raise
+                return parsed
         raise ValueError('Bounded model attempts exhausted; semantic review remains pending')

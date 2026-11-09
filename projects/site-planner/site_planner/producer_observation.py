@@ -10,6 +10,7 @@ from webcollect.planning import object_sha256,verify_evidence
 from webcollect.candidate_contract import application_matches
 
 VERSION='producer-shared-observation-1'
+RECEIPT_POLICY='producer-entry-observed-get-2'
 
 def screen(pool,ledger,links,root,*,read_policy=None):
     browser=None
@@ -63,7 +64,7 @@ def entry_receipt(pool,ledger,uri,root):
     if ledger.config.get('site_failure_guard'):
         from webcollect.site_failure_stop import SiteFailureStore
         SiteFailureStore(ledger.config['site_failure_guard']).guard(uri)
-    record={'policy':'producer-entry-observed-get-2','job_id':doc['job_id'],'visit_id':doc['visit_id'],'method':'GET',
+    record={'policy':RECEIPT_POLICY,'job_id':doc['job_id'],'visit_id':doc['visit_id'],'method':'GET',
         'entry_uri':uri,'landed_uri':doc['landed_uri'],'http_status':doc['http_status'],'result':'PASS',
         'checked_at':load_json(result['observation']['path'])['observed_at'],'reason':None,
         'source_observation':result['observation'],'source_document':result['document'],'reused_original_browser_GET':True}

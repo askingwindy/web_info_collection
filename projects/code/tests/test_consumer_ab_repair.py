@@ -445,26 +445,28 @@ class EightSlotEntryTests(unittest.TestCase):
         ledger.finish(jobs[0])
         self.assertTrue(ledger.claim('collection', job_id=parents[8]))
 
-    def test_adjust_concurrency_is_audited_and_single_field(self):
+    def test_adjust_concurrency_is_audited_without_changing_frozen_config(self):
         from webcollect.batch_core import BatchLedger
         cfg = json.loads(CONFIG.read_text())
         cfg['budget']['max_concurrent_jobs'] = 4
         cfg_path = self.root / 'consumer-config.json'
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, sort_keys=True))
         ledger_path = self.root / 'jobs.sqlite3'
-        BatchLedger(ledger_path, cfg, initialize=True)
+        running = BatchLedger(ledger_path, cfg, initialize=True)
+        original_bytes = cfg_path.read_bytes()
         result = consumer_ab.adjust_concurrency(ledger_path, cfg_path, target=8,
                                                 authorization='consumer-ab-repair-20261106 phase-2 bounded experiment')
         self.assertTrue(result['changed'])
-        upgraded = {**cfg, 'budget': {**cfg['budget'], 'max_concurrent_jobs': 8}}
-        reopened = BatchLedger(ledger_path, upgraded)
+        reopened = BatchLedger(ledger_path, cfg)
         with reopened.connect() as con:
-            events = con.execute("SELECT detail FROM batch_events WHERE event='consumer_ab_concurrency_adjusted'").fetchall()
+            events = con.execute("SELECT detail FROM batch_events WHERE event='consumer_concurrency'").fetchall()
+            self.assertEqual(json.loads(con.execute('SELECT config FROM batch_meta').fetchone()[0]), cfg)
         self.assertEqual(len(events), 1)
         self.assertEqual(json.loads(events[0][0])['before']['max_concurrent_jobs'], 4)
         self.assertEqual(json.loads(events[0][0])['after']['max_concurrent_jobs'], 8)
-        with self.assertRaises(ValueError):
-            BatchLedger(ledger_path, cfg)  # The stale config no longer resumes.
+        self.assertEqual(running.max_concurrent_jobs, 8)
+        self.assertEqual(reopened.max_concurrent_jobs, 8)
+        self.assertEqual(cfg_path.read_bytes(), original_bytes)
 
 
 class TargetedLaunchTests(unittest.TestCase):

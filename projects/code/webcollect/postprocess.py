@@ -33,7 +33,7 @@ def _observation_capture(record, observation_id):
     return load_json(entry['evidence']['capture']['path'])
 
 
-def session_record(raw_root, *, allow_unknown_for_prefix=False):
+def session_record(raw_root, *, allow_unknown_for_prefix=False, _verification=None):
     """Load and verify the immutable raw journal of one react execution."""
     raw_root = Path(raw_root)
     boundary = load_json(raw_root / 'boundary.json')
@@ -56,6 +56,7 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False):
     if terminal.get('unknown') and not allow_unknown_for_prefix:
         raise ValueError('UNKNOWN 原始终态不能进入交付加工；先按原账核对')
     observations = {}
+    projected_observations = {}
     for path in sorted(raw_root.glob('observation-*.json')):
         if path.name.endswith('.capture.json'):
             continue
@@ -75,7 +76,10 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False):
         # observation_id hashes the canonical three-key evidence; html stays a
         # separate reference exactly as at capture time.
         canonical = {k: evidence[k] for k in ('image', 'state', 'capture')}
-        observations[project(state, canonical)['observation_id']] = {
+        projected = project(state, canonical)
+        if _verification is not None:
+            projected_observations[projected['observation_id']] = projected
+        observations[projected['observation_id']] = {
             'state_path': str(path.resolve()), 'url': state.get('url'), 'evidence': evidence}
     trajectory = []
     with (raw_root / 'trajectory.jsonl').open(encoding='utf-8') as stream:
@@ -88,7 +92,57 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False):
     record = {'protocol': REACT_VERSION, 'task': task, 'boundary': boundary, 'terminal': terminal,
               'receipt': receipt, 'observations': observations, 'trajectory': trajectory,
               'goal_updates': terminal.get('goal_updates') or []}
+    if _verification is not None:
+        _verification.update(files=files, observations=projected_observations)
     return record
+
+
+class _VerifiedSession:
+    """One close-out's verified raw bytes and projections; never persisted."""
+
+    def __init__(self, raw_root):
+        self.root = Path(raw_root).resolve()
+        self._verification = {}
+        self._source = session_record(self.root, allow_unknown_for_prefix=True,
+                                      _verification=self._verification)
+        self._source_sha256 = object_sha256(self._source)
+        self._prefixes = {}
+
+    def check(self, raw_root):
+        if Path(raw_root).resolve() != self.root or object_sha256(self._source) != self._source_sha256:
+            raise ValueError('Verified raw execution binding changed')
+        actual = {p.relative_to(self.root).as_posix(): file_sha(p)
+                  for p in sorted(self.root.rglob('*')) if p.is_file()}
+        if actual != self._verification['files']:
+            raise ValueError('封存原件缺失或字节改变，不能复用已核验记录')
+        # Raw steps may live beside raw/, so retain their independent binding.
+        verify_evidence([ref for row in self._source['trajectory']
+                         for ref in (row['dispatch'], row.get('raw_step')) if ref])
+
+    def record(self, raw_root):
+        self.check(raw_root)
+        return deepcopy(self._source)
+
+    def observations(self, record, observation_id=None):
+        self.check(self.root)
+        if record['observations'] != self._source['observations']:
+            raise ValueError('Observation references differ from verified raw execution')
+        projected = self._verification['observations']
+        return deepcopy(projected if observation_id is None else projected[observation_id])
+
+    def prefix(self, source, raw_root, end_step, ids, rule):
+        self.check(raw_root)
+        if object_sha256(source) != self._source_sha256:
+            raise ValueError('Prefix source differs from verified raw execution')
+        key = (rule, end_step, ids['attempt_id'])
+        if key not in self._prefixes:
+            from .trusted_prefix import _projection
+            projected = _projection(source, raw_root, end_step, ids, rule=rule, _verified=self)
+            self._prefixes[key] = (deepcopy(projected), object_sha256(projected))
+        projected, digest = self._prefixes[key]
+        if object_sha256(projected) != digest:
+            raise ValueError('Verified prefix projection changed')
+        return deepcopy(projected)
 
 
 def natural_instruction(task, record, effective):
@@ -162,8 +216,8 @@ def _delayed_bridge(record, previous, before_id, after_id):
 
 def _scoped_continuity(record, previous, row, raw):
     """Explain only adjacent same-document drift using the next action's receipt."""
-    from .action_stability import FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSION, pair
-    if record['task']['fragment'].get('action_stability_protocol') not in (FOLLOWUP_VERSION,POST_VERSION,ACTION_SCOPED_VERSION):return False
+    from .action_stability import FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSIONS, pair
+    if record['task']['fragment'].get('action_stability_protocol') not in (FOLLOWUP_VERSION,POST_VERSION,*ACTION_SCOPED_VERSIONS):return False
     capture=raw.get('capture') or {}
     accepted=[a for a in capture.get('attempts',[]) if (a.get('stability') or {}).get('accepted') and (a.get('final_stability') or {}).get('accepted')]
     pair_receipt=accepted[-1] if accepted else capture
@@ -191,7 +245,7 @@ def flow_classification(effective):
     return short, (f'最终保存轨迹包含 {effective} 个有效业务操作，少于 5 步，自动标记为短流程。' if short else None)
 
 
-def effective_trajectory(record, *, _audit_cancelled=False):
+def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
     """Recount native atomic dispatches from sealed evidence, never model labels.
 
     A gap, unknown dispatch or ineffective operation rejects the whole chain;
@@ -279,7 +333,7 @@ def effective_trajectory(record, *, _audit_cancelled=False):
             raise ValueError('Cancelled dispatch count differs from verified effects')
     elif record.get('trusted_prefix'):
         from .trusted_prefix import validate_projection
-        validate_projection(record)
+        validate_projection(record, _verified=_verified)
     elif v2(record['task']):
         marker=validate_closing(record)
         if not marker['safe_for_pending_sample']:
@@ -291,7 +345,7 @@ def effective_trajectory(record, *, _audit_cancelled=False):
         if not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],final_id):
             raise ValueError('末帧导航缺少原点击与延迟落地绑定')
     from .direct_article import verify_record
-    verify_record(record)
+    verify_record(record, _verified=_verified)
     return rows
 
 
@@ -437,7 +491,10 @@ def terminal_outcome(task, record, final_state):
                or ('samwaf' in title + ' ' + visible and any(phrase in visible for phrase in denial)))
     terminal = record['terminal']
     if record.get('trusted_prefix') and lines and not blocked:
-        return 'success', '本段历史边界已验证；' + description
+        values=[str(v['value']) for v in final_state.get('values',[]) if v.get('value_visible') and v.get('value') not in (None,'')]
+        actual=('末帧输入字段实际显示'+ '、'.join('「'+v+'」' for v in values)) if values else '末帧保留已执行区间及其可见内容'
+        result=visible_result_description(final_state)
+        return 'success', '本段历史边界已验证，完整原目标未确认完成；' + actual + ('；'+result if result else '')
     if task['fragment'].get('ending_policy') and not lines:
         return 'failed', description
     from .closing_policy import enabled as v2
@@ -488,6 +545,15 @@ def _write_delivery_bytes(path, data):
 
 def derive(task, record, delivery, ids, manifest, *, resume=False):
     """Build the complete delivery sample from the raw execution; no IO models."""
+    try:
+        trajectory = effective_trajectory(record)
+    except (ValueError, KeyError, TypeError) as error:
+        return {'status': 'processing_failed', 'error': str(error), 'effective_steps': 0}
+    return _derive_verified(task, record, trajectory, delivery, ids, manifest, resume=resume)
+
+
+def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resume=False):
+    """Internal derivation from the caller's already verified effective rows."""
     from .collect import chinese_ratio, describe_change, observed_frame_description
     from .task_contract import narrative_evidence, canonical_sha
     from .validate import validate_sample
@@ -496,10 +562,6 @@ def derive(task, record, delivery, ids, manifest, *, resume=False):
     from .validate import CONTROL
     delivery = Path(delivery)
     native = task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
-    try:
-        trajectory = effective_trajectory(record)
-    except (ValueError, KeyError, TypeError) as error:
-        return {'status': 'processing_failed', 'error': str(error), 'effective_steps': 0}
     if not trajectory:
         return {'status': 'no_actions', 'effective_steps': 0}
     effective = len(trajectory)
@@ -714,7 +776,7 @@ def _write_terminal_step(evidence, record, ids):
     return raw
 
 
-def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, validators=(), prefix_end_step=None, prefix_rule=None):
+def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, validators=(), prefix_end_step=None, prefix_rule=None, _verified=None):
     """Derive, validate, record and seal; reprocessing appends, never re-collects.
 
     `validators` are deterministic delivery checks (capture audit, producer
@@ -723,10 +785,14 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     """
     evidence_root = Path(evidence_root)
     raw_root = evidence_root / 'raw'
-    record = session_record(raw_root, allow_unknown_for_prefix=prefix_end_step is not None)
+    verified = _verified if _verified is not None else _VerifiedSession(raw_root)
+    record = verified.record(raw_root)
+    if record['terminal'].get('unknown') and prefix_end_step is None:
+        raise ValueError('UNKNOWN 原始终态不能进入交付加工；先按原账核对')
     if prefix_end_step is not None:
         from .trusted_prefix import project_prefix, VERSION as PREFIX_RULE_V1
-        record = project_prefix(record, raw_root, prefix_end_step, ids, rule=prefix_rule or PREFIX_RULE_V1)
+        record = project_prefix(record, raw_root, prefix_end_step, ids,
+                                rule=prefix_rule or PREFIX_RULE_V1, _verified=verified)
     task = record['task']
     derivations_path = evidence_root / 'derivations.jsonl'
     prior = []
@@ -754,8 +820,16 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         # The same canonical, dispatch-deduplicated list drives annotation,
         # terminal complete numbering, capture summaries and sealed receipts.
         # Raw journal bytes and their original order remain unchanged.
-        record = {**record, 'trajectory': effective_trajectory(record)}
-        derived = derive(task, record, delivery_root, ids, manifest, resume=bool(prior))
+        if prefix_end_step is not None:
+            from .trusted_prefix import validate_projection
+            # Projection already checked this exact interval's atomic effects.
+            # Recheck its bound bytes and result, without rebuilding the source.
+            validate_projection(record, _verified=verified)
+            trajectory = record['trajectory']
+        else:
+            trajectory = effective_trajectory(record, _verified=verified)
+        record = {**record, 'trajectory': trajectory}
+        derived = _derive_verified(task, record, trajectory, delivery_root, ids, manifest, resume=bool(prior))
     except Exception as error:  # noqa: BLE001 - recorded verbatim, raw stays intact
         failure = {'schema_version': VERSION, 'derivation': version, 'status': 'processing_failed',
                    'error_type': type(error).__name__, 'error': str(error),
@@ -779,6 +853,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         # Success path: project raw steps (actions already written live by the
         # session; the terminal complete record is projected here), identity and
         # the sealed delivery receipt.
+        verified.check(raw_root)
         from .closing_policy import enabled as v2
         projection_root.mkdir(parents=True, exist_ok=True)
         if prefix_end_step is not None:
@@ -882,6 +957,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                  'derivation': {'version': version, 'record': derived_ref,
                                 **({'prefix_projection':prefix_projection} if prefix_projection else {}),
                                 'source_mapping_sha256': object_sha256(derived['source_mapping'])}}
+        verified.check(raw_root)
         write_json_file(evidence_root / 'saved_sample.json', saved)
         _append_derivation(derivations_path, {'schema_version': VERSION, 'derivation': version,
             'status': 'derived_saved', 'effective_steps': derived['effective_steps'],

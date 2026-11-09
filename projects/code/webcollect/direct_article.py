@@ -242,7 +242,7 @@ def progress(session,start,contract):
     return result
 
 
-def verify_record(record):
+def verify_record(record, *, _verified=None):
     """Independent save-time replay from original snapshots/actions/citation."""
     from types import SimpleNamespace
     from .agent_observation import project
@@ -252,7 +252,9 @@ def verify_record(record):
     plans=sorted(raw.glob('*-conditional-plan.json'))
     if not plans:raise ValueError('DIRECT_ARTICLE_NO_ORIGINAL_PLAN')
     original_plan=load_json(plans[0])['plan'];initial_id=original_plan['observation_id']
-    observations={oid:project(load_json(ob['state_path']),{k:ob['evidence'][k] for k in ('image','state','capture')}) for oid,ob in record['observations'].items()}
+    observations=(_verified.observations(record) if _verified is not None else
+        {oid:project(load_json(ob['state_path']),{k:ob['evidence'][k] for k in ('image','state','capture')})
+         for oid,ob in record['observations'].items()})
     current=observations[record['terminal']['final_observation_id']]
     result=(record['terminal'].get('goal_evidence') or {}).get('session_objective') or {}
     session=SimpleNamespace(task=record['task'],plan_controller=SimpleNamespace(frozen_plan=original_plan),

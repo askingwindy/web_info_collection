@@ -143,7 +143,7 @@
     const emptyPlaceholder=node.matches('input,textarea')&&node.value===''&&!!node.placeholder;
     // DOM values are not visible strings when their actual text fill merges
     // into the provable background. The same paint rule applies to prose and
-    // labels; complex/unprovable backgrounds supply no native value evidence.
+    // labels; background effects alone do not make foreground text invisible.
     if(!frameworkLabelPaint(node,emptyPlaceholder?getComputedStyle(node,'::placeholder'):null))return false;
     // Preserve the existing complete-control occlusion gate for value evidence.
     // A target placeholder is instead bound to its fully measured glyph area;
@@ -176,7 +176,7 @@
       for(let owner=node;owner;owner=owner.parentElement) {
         const paint=getComputedStyle(owner);
         if(paint.opacity!=='1'||paint.filter!=='none'||paint.mixBlendMode!=='normal'||
-           paint.maskImage!=='none'||paint.contentVisibility!=='visible')return false;
+           paint.maskImage!=='none'||paint.contentVisibility==='hidden')return false;
         for(const pseudo of ['::before','::after']) {
           if(!['none','normal'].includes(getComputedStyle(owner,pseudo).content))return false;
         }
@@ -449,13 +449,13 @@
   };
   const frameworkLabelPaint = (label,foregroundStyle=null,minContrast=3) => {
     const style=foregroundStyle||getComputedStyle(label),fill=frameworkColor(style.webkitTextFillColor);
-    if(!fill||fill[3]===0||style.textShadow!=='none'||style.backgroundClip==='text')return false;
-    const layers=[];let background=null;
+    if(!fill||fill[3]===0||style.backgroundClip==='text')return false;
+    const layers=[];let background=null,complexBackground=false;
     for(let owner=label;owner;owner=owner.parentElement) {
       const paint=getComputedStyle(owner);
-      if(Number(paint.opacity)!==1||paint.filter!=='none'||paint.backdropFilter!=='none'||
+      if(Number(paint.opacity)!==1||paint.filter!=='none'||
          paint.mixBlendMode!=='normal'||paint.maskImage!=='none'||paint.webkitMaskImage!=='none'||
-         paint.contentVisibility!=='visible')return false;
+         paint.contentVisibility==='hidden')return false;
       // Hit testing reports an ancestor for its generated paint (and omits
       // pointerless pseudo-elements). An opaque ancestor ::after can cover
       // every glyph without adding a foreign DOM rectangle. Its geometry is
@@ -470,16 +470,28 @@
            pseudo.filter!=='none'||pseudo.backdropFilter!=='none'||
            ['Top','Right','Bottom','Left'].some(side=>parseFloat(pseudo['border'+side+'Width'])>0&&
              (frameworkColor(pseudo['border'+side+'Color'])?.[3]??1)>0);
-        if(painted&&!pseudoDisjointFromText(label,owner,which,pseudo))return false;
+        // A generated marker (e.g. a summary's +) does not cover all text
+        // merely because its box was not reconstructed. Keep actual opaque/
+        // filtered pseudo paint conservative; glyph exposure is still hit-tested.
+        const coveringPaint=!color||color[3]>0||pseudo.backgroundImage!=='none'||pseudo.boxShadow!=='none'||
+           pseudo.filter!=='none'||pseudo.backdropFilter!=='none'||
+           ['Top','Right','Bottom','Left'].some(side=>parseFloat(pseudo['border'+side+'Width'])>0&&
+             (frameworkColor(pseudo['border'+side+'Color'])?.[3]??1)>0);
+        if(painted&&coveringPaint&&!pseudoDisjointFromText(label,owner,which,pseudo))return false;
       }
       if(!background) {
         const color=frameworkColor(paint.backgroundColor);
-        if(!color||paint.backgroundImage!=='none')return false;
+        if(!color)return false;
+        if(paint.backgroundImage!=='none'||color[3]<1&&paint.backdropFilter!=='none')complexBackground=true;
         layers.push(color);if(color[3]===1)background=color;
       }
     }
+    // Images/gradients and backdrop filters paint behind the text. They make
+    // this solid-color contrast calculation inconclusive, not the text hidden.
+    // Foreground paint, pseudo-element occlusion and caller geometry still apply.
+    if(complexBackground)return true;
     // The unpainted CSS canvas is white only in the known light rendering
-    // mode. A dark/unknown canvas or a complex painted background is unsupported.
+    // mode. A dark/unknown canvas is unsupported by this contrast calculation.
     if(!background) {
       const scheme=getComputedStyle(document.documentElement).colorScheme;
       if(matchMedia('(prefers-color-scheme: dark)').matches||!['normal','light','light dark'].includes(scheme))return false;

@@ -28,14 +28,14 @@ def admit(existing, proposed, *, limit=LIMIT):
         if sid in members and members[sid]!=aid: raise ValueError('Effective sample changes application')
         members[sid]=aid
     counts.update(members.values())
-    if any(n>limit for n in counts.values()): raise ValueError('Existing effective set exceeds application capacity')
+    if limit is not None and any(n>limit for n in counts.values()): raise ValueError('Existing effective set exceeds application capacity')
     accepted=[]; rejected=[]; repeats=[]
     for item in proposed:
         sid,aid=item['sample_id'],item['application_id']
         if sid in members:
             if members[sid]!=aid: raise ValueError('Effective sample changes application')
             repeats.append(sid)
-        elif counts[aid]>=limit: rejected.append(sid)
+        elif limit is not None and counts[aid]>=limit: rejected.append(sid)
         else:
             members[sid]=aid;counts[aid]+=1;accepted.append(sid)
     return {'limit':limit,'counts':dict(counts),'accepted_sample_ids':accepted,

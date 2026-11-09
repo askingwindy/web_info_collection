@@ -21,7 +21,7 @@ RULES = {VERSION: MINIMUM, V2_VERSION: V2_MINIMUM}
 CLASSIFICATION = '1-4 effective actions -> short_flow; >=5 -> ordinary; 0 -> not a sample'
 
 
-def _projection(source, raw_root, end_step, ids, *, rule=VERSION):
+def _projection(source, raw_root, end_step, ids, *, rule=VERSION, _verified=None):
     from .postprocess import effective_trajectory
     from .agent_observation import project
     from .react_session import struct_goal
@@ -38,7 +38,8 @@ def _projection(source, raw_root, end_step, ids, *, rule=VERSION):
     final_id = rows[-1]['after_observation_id']
     final = source['observations'][final_id]
     state = load_json(final['state_path'])
-    ob = project(state, {k: final['evidence'][k] for k in ('image', 'state', 'capture')})
+    ob = (_verified.observations(source, final_id) if _verified is not None else
+          project(state, {k: final['evidence'][k] for k in ('image', 'state', 'capture')}))
     if not ob['capture_verified'] or not (state.get('visible_text') or '').strip():
         raise ValueError('Historical boundary has no independently verified image and synchronized tree')
     # Use the established atomic-effect and continuity checks without the old
@@ -51,8 +52,9 @@ def _projection(source, raw_root, end_step, ids, *, rule=VERSION):
         'stop_summary': '历史可信区间结束；不声称完整原目标完成'}
     terminal.pop('collection_ending', None)
     terminal.pop('goal_evidence', None)
-    recount = {**source, 'task': task, 'trajectory': rows, 'terminal': terminal}
-    if len(effective_trajectory(recount)) != end_step:
+    recount = {**source, 'task': task, 'trajectory': rows, 'terminal': terminal,
+               'continuity_proofs': deepcopy(source.get('continuity_proofs', []))}
+    if len(effective_trajectory(recount, _verified=_verified)) != end_step:
         raise ValueError('Prefix interval contains duplicate dispatches')
     source_receipt = {'path': str((Path(raw_root)/'raw-receipt.json').resolve()),
                       'sha256': file_sha(Path(raw_root)/'raw-receipt.json')}
@@ -77,40 +79,47 @@ def _projection(source, raw_root, end_step, ids, *, rule=VERSION):
             'raw_receipt': source_receipt, 'start_step': 1, 'end_step': end_step})}
     # Keep the original task and all source observations/goals. Only the
     # derivative terminal points at the historical boundary.
-    return {**source, 'trajectory': rows, 'terminal': terminal, 'trusted_prefix': binding}
+    return {**source, 'trajectory': rows, 'terminal': terminal, 'trusted_prefix': binding,
+            **({'continuity_proofs': deepcopy(recount['continuity_proofs'])}
+               if recount.get('continuity_proofs') else {})}
 
 
-def project_prefix(source, raw_root, end_step, ids, *, rule=VERSION):
+def project_prefix(source, raw_root, end_step, ids, *, rule=VERSION, _verified=None):
+    if _verified is not None:
+        return _verified.prefix(source, raw_root, end_step, ids, rule)
     return _projection(source, raw_root, end_step, ids, rule=rule)
 
 
-def validate_projection(record):
-    from .postprocess import session_record
+def validate_projection(record, *, _verified=None):
+    from .postprocess import _VerifiedSession
     binding = record['trusted_prefix']
     verify_evidence([binding['raw_receipt'], binding['source_terminal']])
     root = Path(binding['raw_receipt']['path']).parent
-    source = session_record(root, allow_unknown_for_prefix=True)
-    expected = _projection(source, root, binding['source_interval']['end_step'],
-                           {'attempt_id': binding['source_attempt_id']}, rule=binding['protocol'])
+    verified = _verified if _verified is not None else _VerifiedSession(root)
+    source = verified.record(root)
+    expected = project_prefix(source, root, binding['source_interval']['end_step'],
+                              {'attempt_id': binding['source_attempt_id']},
+                              rule=binding['protocol'], _verified=verified)
     if (binding != expected['trusted_prefix'] or record['task'] != expected['task']
-            or record['trajectory'] != expected['trajectory'] or record['terminal'] != expected['terminal']):
+            or record['trajectory'] != expected['trajectory'] or record['terminal'] != expected['terminal']
+            or record['observations'] != expected['observations']):
         raise ValueError('Prefix projection differs from its independently rechecked source interval')
     return binding
 
 
-def candidate_end(raw_root, *, rule=VERSION):
+def candidate_end(raw_root, *, rule=VERSION, _verified=None):
     """Largest historical boundary available; no unknown tail is retried."""
     from .postprocess import session_record
     minimum = RULES.get(rule)
     if minimum is None:
         raise ValueError('Unknown trusted-prefix rule')
-    source = session_record(raw_root, allow_unknown_for_prefix=True)
+    source = (_verified.record(raw_root) if _verified is not None else
+              session_record(raw_root, allow_unknown_for_prefix=True))
     return len(source['trajectory']) if len(source['trajectory']) >= minimum else None
 
 
 def natural_instruction(record):
     """Describe actual visible activities, never intended or excluded actions."""
-    from .collect import observed_frame_description
     from .task_instruction import generated_instruction
     activities=[]
     for row in record['trajectory']:
@@ -120,7 +129,10 @@ def natural_instruction(record):
         label=(raw.get('target_element') or {}).get('text') or (row.get('target') or {}).get('label') or ''
         action=row['action']
         if action=='type':
-            activities.append('在'+('「'+label+'」' if label else '当前输入框')+'填写「'+row['arguments']['text']+'」')
+            node=(row.get('target') or {}).get('control_id')
+            value=next((v.get('value') for v in after.get('values',[]) if v.get('element_id')==node and v.get('value_visible')),None)
+            activities.append('在'+('「'+label+'」' if label else '当前输入框')+'键入「'+row['arguments']['text']+'」'
+                + ('，字段实际显示「'+str(value)+'」' if value is not None else ''))
         elif action=='select':activities.append('选择「'+row['arguments']['option']+'」')
         elif action=='scroll':activities.append('向'+{'down':'下','up':'上','left':'左','right':'右'}[row['arguments']['direction']]+'浏览「'+before['title']+'」的页面内容')
         elif action=='back':activities.append('返回上一个页面')
@@ -130,7 +142,8 @@ def natural_instruction(record):
         else:activities.append('操作'+('「'+label+'」' if label else '当前可见页面控件'))
     actual=list(dict.fromkeys(activities))
     final=load_json(record['observations'][record['terminal']['final_observation_id']]['state_path'])
-    result=observed_frame_description(final)
+    final_values=[str(v['value']) for v in final.get('values',[]) if v.get('value_visible') and v.get('value') not in (None,'')]
+    result=('输入字段实际显示'+ '、'.join('「'+v+'」' for v in final_values)) if final_values else '保留末帧所示已执行片段，原目标完成未确认'
     import re
     first=load_json(record['observations'][record['trajectory'][0]['before_observation_id']]['state_path'])
     prior=set((first.get('visible_text') or '').splitlines())

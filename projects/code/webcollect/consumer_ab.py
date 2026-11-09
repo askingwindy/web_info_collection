@@ -326,41 +326,36 @@ def report(roster, ledger_path, experiment_dir):
 
 
 def adjust_concurrency(ledger_path, config_path, *, target, authorization):
-    """Audited max_concurrent_jobs adjustment on the original shared ledger.
-
-    Only the concurrency ceiling changes; every other frozen field must stay
-    byte-identical, and the before/after values plus the authorization note go
-    into batch_events before any worker may rely on the new ceiling.
-    """
+    """Set a live consumer limit (None means worker-controlled), not config."""
     from webcollect.batch_core import BatchLedger
     from webcollect.planning import object_sha256
     config = _load(config_path)
     ledger = BatchLedger(ledger_path, config)  # Validates against the frozen row first.
-    before = config['budget']['max_concurrent_jobs']
-    if type(target) is not int or target < 1:
-        raise ValueError('Target concurrency must be a positive integer')
-    if target == before:
-        return {'ledger': str(ledger_path), 'before': before, 'after': target, 'changed': False}
-    updated = deepcopy(config)
-    updated['budget']['max_concurrent_jobs'] = target
+    if target is not None and (type(target) is not int or target < 1):
+        raise ValueError('Target concurrency must be a positive integer or None')
+    if not isinstance(authorization, str) or not authorization.strip():
+        raise ValueError('Consumer concurrency adjustment requires its reason')
     with ledger.transaction() as con:
+        ledger.require_consumer_ledger(con)
         row = con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()
         if json.loads(row[0]) != config:
             raise ValueError('Ledger configuration changed during adjustment')
-        con.execute('UPDATE batch_meta SET config=? WHERE id=1', (json.dumps(updated, ensure_ascii=False, sort_keys=True),))
-        con.execute('INSERT INTO batch_events(at,event,detail) VALUES(?,?,?)', (
-            time.time(), 'consumer_ab_concurrency_adjusted', json.dumps({
-                'before': {'max_concurrent_jobs': before, 'config_sha256': object_sha256(config)},
-                'after': {'max_concurrent_jobs': target, 'config_sha256': object_sha256(updated)},
-                'authorization': authorization}, ensure_ascii=False)))
-    # Workers must resume the ledger with THIS file: the frozen row now holds
-    # the new ceiling, and constructing BatchLedger with the original config
-    # fails the frozen-config check by design.
-    from uuid import uuid4
-    adjusted_path = _save(Path(ledger_path).with_name(f'consumer-config.ab-adjusted-{uuid4().hex}.json'), updated)
-    return {'ledger': str(ledger_path), 'before': before, 'after': target, 'changed': True,
-            'adjusted_config': str(adjusted_path),
-            'worker_config_required': str(adjusted_path)}
+        before = ledger._job_concurrency_limit(con)
+        changed = before != target or ledger.consumer_concurrency(con) is None
+        if changed:
+            ledger.event(con, 'consumer_concurrency', {
+                'schema_version': 'webcollect-consumer-concurrency-1',
+                'ledger': str(ledger.path), 'run_id': config['run_id'],
+                'config_sha256': object_sha256(config),
+                'max_concurrent_jobs': target,
+                'before': {'max_concurrent_jobs': before},
+                'after': {'max_concurrent_jobs': target},
+                'authorization': authorization})
+    # Existing workers using this implementation read the next claim's setting
+    # from SQLite. Old Python processes retain their loaded implementation.
+    return {'ledger': str(ledger.path), 'before': before, 'after': target, 'changed': changed,
+            'configuration_changed': False,
+            'worker_config_required': str(Path(config_path).resolve())}
 
 
 def launch(roster, *, config, ledger_path, registry, policy_path, history_set,
@@ -455,7 +450,9 @@ def main(argv=None):
     adjust_p = sub.add_parser('adjust-concurrency')
     adjust_p.add_argument('--config', required=True)
     adjust_p.add_argument('--ledger', required=True)
-    adjust_p.add_argument('--target', type=int, required=True)
+    concurrency = adjust_p.add_mutually_exclusive_group(required=True)
+    concurrency.add_argument('--target', type=int)
+    concurrency.add_argument('--unlimited', action='store_true', help='let launched consumer workers determine concurrency')
     adjust_p.add_argument('--authorization', required=True)
     args = parser.parse_args(argv)
 

@@ -104,12 +104,12 @@ def validate_record(record):
             raw=tail[0]; before=raw['state']; after=state(record,raw['react']['after_observation_id'])
             safe=same_view(before,after) and same_view(after,state(record,final))
     if safe:
-        if record['task']['fragment'].get('action_stability_protocol')=='webcollect-action-scoped-evidence-1':
+        from .action_stability import ACTION_SCOPED_VERSIONS, action_scoped_view_stable
+        if record['task']['fragment'].get('action_stability_protocol') in ACTION_SCOPED_VERSIONS:
             # Offline mirror of the online action-scoped ending check: same
             # document/scroll and retained visible reading material; unrelated
             # decorative image/overlay membership changes are not endpoint
             # changes. Older protocols keep the full same_view rule.
-            from .action_stability import action_scoped_view_stable
             safe=action_scoped_view_stable(state(record,prefix[-1]['after_observation_id']),state(record,final))
         else:
             safe=same_view(state(record,prefix[-1]['after_observation_id']),state(record,final))

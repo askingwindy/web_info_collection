@@ -339,11 +339,11 @@ def related_projection(state):
 def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True, action_scope=None):
     """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
     from .dynamic_regions import DYNAMIC_STABILITY_RULES, STABILITY as dynamic_rule, enabled as dynamic_enabled, pair as dynamic_pair
-    if (action_scope is not None and action_scope.get('schema_version') == 'webcollect-action-scoped-evidence-1') \
-            or rule_version == 'webcollect-action-scoped-evidence-1':
+    from .action_stability import ACTION_SCOPED_VERSIONS, action_scoped_pair
+    if (action_scope is not None and action_scope.get('schema_version') in ACTION_SCOPED_VERSIONS) \
+            or rule_version in ACTION_SCOPED_VERSIONS:
         # The action-scoped protocol routes before any dynamic-region logic:
         # it never depends on region classification for unrelated overlays.
-        from .action_stability import action_scoped_pair
         if action_scope is None:raise ValueError('Scoped proof requires its frozen action scope')
         return action_scoped_pair(before,after,png_before,png_after,action_scope)
     if rule_version in DYNAMIC_STABILITY_RULES or (rule_version is None and dynamic_enabled(before) and dynamic_enabled(after)):
@@ -381,10 +381,12 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
     with Image.open(BytesIO(png_before)) as first,Image.open(BytesIO(png_after)) as last:
         if first.format!='PNG' or last.format!='PNG' or list(first.size)!=before['screen_resolution'] or first.size!=last.size:
             raise ValueError('同步像素证明需要相同视口分辨率的完整原始PNG')
-        channels=ImageChops.difference(first.convert('RGBA'),last.convert('RGBA')).split()
+        rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
+        channels=ImageChops.difference(rgba_first,rgba_last).split()
         diff=channels[0]
         for channel in channels[1:]:diff=ImageChops.lighter(diff,channel)
         changed=diff.point(lambda value:255 if value else 0)
+        changed_bbox=changed.getbbox()
         mask=Image.new('L',first.size,0);draw=ImageDraw.Draw(mask)
         geometry_regions=[]
         if rule_version==STABILITY_VERSION and related:
@@ -396,14 +398,14 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # and unchanged full semantic state are necessary; no whole-page score.
         border_proof=[]
         if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and related and allow_border:
-            rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
+            bounds=changed_bbox or (0,0,0,0)
             for region in before.get('paint_borders',[]):
                 box=region['bbox'];edges=region['edges']
                 if len(box)!=4 or len(edges)!=4:continue
                 points=set()
                 for x1,y1,x2,y2 in edges:
-                    for x in range(max(0,x1),min(first.width,x2)):
-                        for y in range(max(0,y1),min(first.height,y2)):
+                    for x in range(max(0,x1,bounds[0]),min(first.width,x2,bounds[2])):
+                        for y in range(max(0,y1,bounds[1]),min(first.height,y2,bounds[3])):
                             if changed.getpixel((x,y)) and not mask.getpixel((x,y)):points.add((x,y))
                 # Bound changed area relative to the proved border perimeter,
                 # and amplitude to one sixteenth of the channel range.
@@ -428,7 +430,6 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         paint_noise_proof=[]
         if (rule_version in (STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and allow_border and related and full
                 and before['capture_readiness'].get('document_ready')=='complete'):
-            rgba_first,rgba_last=first.convert('RGBA'),last.convert('RGBA')
             guard=[]
             for element in before.get('elements',[]):
                 # DOM-backed text and control values cannot change under an
@@ -451,8 +452,13 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                 box=element.get('bbox')
                 if isinstance(box,list) and len(box)==4 and box[2]-2>box[0] and box[3]-2>box[1]:
                     guard.append((box[0]+1,box[1]+1,box[2]-1,box[3]-1))
-            remaining={(x,y) for x in range(first.width) for y in range(first.height)
-                       if changed.getpixel((x,y)) and not mask.getpixel((x,y))}
+            outside=ImageChops.subtract(changed,mask)
+            bounds=outside.getbbox() or (0,0,0,0)
+            outside_pixels=outside.load()
+            # Keep v1-v6's x-major insertion and component traversal order:
+            # their complete proofs (including delta ordering) are frozen.
+            remaining={(x,y) for x in range(bounds[0],bounds[2]) for y in range(bounds[1],bounds[3])
+                       if outside_pixels[x,y]}
             components=[]
             while remaining:
                 if len(components)>=_NOISE_MAX_COMPONENTS:break
@@ -488,7 +494,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                                               'rule':'compact-repaint-noise-v2' if rule_version in (STABILITY_V4,STABILITY_V5,STABILITY_VERSION) else 'compact-repaint-noise-v1'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
-                      'bbox':list(changed.getbbox()) if changed.getbbox() else None,
+                      'bbox':list(changed_bbox) if changed_bbox else None,
                       'outside_allowed_pixels':outside.histogram()[255],
                       'difference_mask_sha256':hashlib.sha256(changed.tobytes()).hexdigest()}
     return {'schema_version':rule_version,'accepted':bool(related and not pixel_change['outside_allowed_pixels']),

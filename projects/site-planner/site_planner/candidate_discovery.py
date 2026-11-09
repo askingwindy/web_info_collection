@@ -684,14 +684,13 @@ def _application_pending_cap(pool, batch):
 def _app_pending_over_limit(pool, batch, application_id, header, row):
     if not application_id:
         return None
-    cap = _application_pending_cap(pool, batch)
-    with pool.pool.connect() as con:
-        pending = con.execute("SELECT COUNT(*) FROM data_candidates WHERE application_id=? AND state='pending'",
-                              (application_id,)).fetchone()[0]
-    if pending < cap:
+    snapshot = application_pending_remaining(pool, batch, application_id)
+    if snapshot['remaining'] > 0:
         return None
-    return pool.record_row_conclusion(header, result='OVER_LIMIT',
-        reason=f'APP_PENDING_CAP: application pending inventory {pending} >= {cap}', original_row=row)
+    reason = (f"APP_NEW_TARGET: cumulative distinct NEW {snapshot['new_count']} >= {snapshot['new_target']}"
+              if snapshot.get('new_target') is not None and snapshot['new_count'] >= snapshot['new_target']
+              else f"APP_PENDING_CAP: application pending inventory {snapshot['pending']} >= {snapshot['cap']}")
+    return pool.record_row_conclusion(header, result='OVER_LIMIT', reason=reason, original_row=row)
 
 
 def application_pending_remaining(pool, batch, application_id):
@@ -706,7 +705,16 @@ def application_pending_remaining(pool, batch, application_id):
     with pool.pool.connect() as con:
         pending = con.execute("SELECT COUNT(*) FROM data_candidates WHERE application_id=? AND state='pending'",
                               (application_id,)).fetchone()[0]
-    return {'pending': pending, 'cap': cap, 'remaining': max(0, cap - pending)}
+        frozen = con.execute('SELECT config FROM runs WHERE id=?', (batch,)).fetchone()
+        target = (json.loads(frozen[0]) if frozen else {}).get('application_new_target')
+        new_count = con.execute(
+            "SELECT COUNT(DISTINCT c.candidate_id) FROM data_candidates c "
+            "JOIN candidate_batch_rows b ON b.candidate_id=c.candidate_id "
+            "WHERE c.application_id=? AND b.result='NEW'", (application_id,)).fetchone()[0] if target is not None else None
+    remaining = max(0, cap - pending)
+    if target is not None:remaining = min(remaining, max(0, target - new_count))
+    return {'pending': pending, 'cap': cap, 'remaining': remaining,
+            **({'new_target': target, 'new_count': new_count} if target is not None else {})}
 
 
 def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *, application_id=None):
@@ -801,7 +809,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
                     search_engine=None, stall_threshold=2, per_direction_cap=None, batch_key=None,
                     excluded_applications=(), model_protocol=None, discovery_mode=None, feedback_scope=None,
                     search_count=10, entry_selection='rule', categories=(), probe_search_hold=None, dispatch_holds=None,
-                    producer_pipeline=None, producer_optimization=None, application_pending_cap=None, allowed_hosts=()):
+                    producer_pipeline=None, producer_optimization=None, application_pending_cap=None, application_new_target=None, allowed_hosts=(), site_expansion=False, prefer_simplified_chinese=False):
     """Entry/target candidate producer on webcollect-data-candidate-2.
 
     Per-response-row publication with stable identities; interruption resumes
@@ -874,7 +882,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
             search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories,
             probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds,producer_pipeline=producer_pipeline,
-            producer_optimization=producer_optimization, application_pending_cap=application_pending_cap, allowed_hosts=allowed_hosts)
+            producer_optimization=producer_optimization, application_pending_cap=application_pending_cap, application_new_target=application_new_target, allowed_hosts=allowed_hosts, site_expansion=site_expansion, prefer_simplified_chinese=prefer_simplified_chinese)
     if categories: raise ValueError('Category planning requires entry-tools-3 or entry-tools-4')
     if producer_pipeline == 'overlap-1':
         raise ValueError('producer_pipeline=overlap-1 requires an entry-tools grounded protocol')
@@ -1491,7 +1499,10 @@ def main(argv=None):
     entry.add_argument('--producer-optimization', choices=['observation-feedback-1'],
                        help='Opt-in for a new entry-tools-13 batch: bounded readiness, confirmed HTTP failure receipts and query feedback.')
     entry.add_argument('--feedback-scope',type=Path,help='Explicit original consumer scope; read-only feedback frozen for this batch')
+    entry.add_argument('--application-new-target', type=int, help='New batch: cumulative distinct NEW per application across this project, regardless of consumption state')
     entry.add_argument('--application-pending-cap', type=int, help='Explicit pending ceiling frozen for this new batch')
+    entry.add_argument('--prefer-simplified-chinese', action='store_true', help='New site-expansion batch: prefer simplified Chinese routes without excluding other Chinese pages')
+    entry.add_argument('--site-expansion', action='store_true', help='Persist and drain same-host link queue before supplementary search (new entry-tools-13 batch)')
     entry.add_argument('--allowed-host', action='append', default=[], help='Exact hostname allowed in this batch')
     entry.add_argument('--batch-key')
     entry.add_argument('--search-count',type=int,default=10,help='Requested results per distinct search, 1–50')
@@ -1514,7 +1525,7 @@ def main(argv=None):
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,model_protocol=a.model_protocol,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
             search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else (),
-            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization,application_pending_cap=a.application_pending_cap,allowed_hosts=a.allowed_host),
+            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization,application_pending_cap=a.application_pending_cap,application_new_target=a.application_new_target,allowed_hosts=a.allowed_host,site_expansion=a.site_expansion,prefer_simplified_chinese=a.prefer_simplified_chinese),
             ensure_ascii=False));return
     print(json.dumps(produce(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,
         queries=a.query,sources=load_json(a.sources) if a.sources else (),target=a.target,max_searches=a.max_searches,

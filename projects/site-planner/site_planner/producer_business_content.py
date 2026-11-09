@@ -2,7 +2,7 @@
 import json
 import re
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from webcollect.batch_core import OutcomeUnknown
 from webcollect.model_gateway import ModelGateway
@@ -33,7 +33,11 @@ SYSTEM = ('判断本页是否有与站点主营相关的基本公开业务内容
 
 QUOTES = {'type': 'array', 'maxItems': 6, 'uniqueItems': True,
           'items': {'type': 'string', 'pattern': '^q[0-9]+$'}}
-CORE = {'type': 'object', 'required': ['business', 'business_quote_ids', 'reason'], 'properties': {
+LEGACY_SYSTEM = SYSTEM
+SYSTEM += 'reason为可选说明；省略时宿主仅按原business判定及引用编号生成机械说明，不补业务判断。'
+REASON_REVISION = 'reason-default-1'
+
+CORE = {'type': 'object', 'required': ['business', 'business_quote_ids'], 'properties': {
     'business': {'enum': ['public_business', 'support', 'marketing', 'mismatch', 'UNKNOWN']},
     'business_quote_ids': QUOTES,
     'reason': {'type': 'string', 'minLength': 1, 'maxLength': 250}}}
@@ -165,7 +169,47 @@ def assess(proposal, evidence):
             'purpose_is_advisory': True, 'business_qualification': 'MAIN_CONTENT_WITNESS_NOT_EXECUTED',
             'content_witness_quote_ids': witnesses, 'content_evidence_ids': content_ids(evidence),
             'selection_reason': None if selected else 'business_content_not_proven' if business_ok else 'business_not_proven',
-            'reason': proposal['reason']}
+            'reason': proposal.get('reason', '宿主机械说明：原判定=' + proposal['business'] +
+                                   '；原引用=' + ','.join(proposal['business_quote_ids']) +
+                                   '；主区引用核验=' + ('通过' if selected else '未通过')),
+            'reason_origin': 'model' if 'reason' in proposal else REASON_REVISION}
+
+
+def recover_reason_record(pool, ledger, cached):
+    """Append a revision of a settled original; never dispatch or rewrite it."""
+    proposal=cached.get('proposal')
+    if (cached.get('selection_reason')!='invalid_business_decision'
+            or not isinstance(proposal,dict) or 'reason' in proposal):return None
+    binding=cached['binding']
+    revised=pool.pool.checkpoint(CACHE+'/'+REASON_REVISION,binding)
+    if revised is not None:return revised
+    if not cached.get('model_calls'):return None
+    call=cached['model_calls'][0];job=ledger.get(call['job_id'])
+    with ledger.connect() as con:
+        request=con.execute('SELECT state,usage,response FROM model_requests WHERE id=? AND job_id=?',
+                            (call['request_id'],call['job_id'])).fetchone()
+    if (not request or request['state'] not in ('succeeded','invalid_response') or not request['usage']
+            or cached.get('version')!=VERSION or job['payload']['input'].get('version')!=VERSION
+            or object_sha256(job['payload']['input'])!=call['input_sha256']):return None
+    try:
+        msg=json.loads(request['response'])['provider_response']['choices'][0]['message']
+        toolcalls=msg.get('tool_calls') or []
+        if len(toolcalls)!=1 or toolcalls[0]['function']['name']!='submit_supply_decisions':return None
+        args=json.loads(toolcalls[0]['function']['arguments'])
+        if args['decisions'][cached['page_key']]!=proposal:return None
+        schema=json.loads(json.dumps(job['payload']['tools'][0]['function']['parameters']))
+        for row in schema['properties']['decisions']['properties'].values():
+            row['required']=[key for key in row['required'] if key!='reason']
+        Draft202012Validator(schema).validate(args)
+        evidence=cached['target_evidence']
+        verify_evidence([evidence[k] for k in ('document','raw_html','rendered_dom','observation','screenshot') if k in evidence])
+        assessment=assess(proposal,evidence)
+        if assessment.get('selection_reason')=='invalid_business_decision':return None
+    except (KeyError,TypeError,ValueError,ValidationError):return None
+    revised={**cached,**assessment,'revision':REASON_REVISION,
+             'original_cache':{'namespace':CACHE,'binding':binding,'record_sha256':object_sha256(cached)},
+             'model_calls':[{**c,'reused':True} for c in cached['model_calls']]}
+    return pool.pool.checkpoint(CACHE+'/'+REASON_REVISION,binding,revised)
 
 
 def _cache(pool, ledger, binding):
@@ -183,7 +227,7 @@ def _cache(pool, ledger, binding):
             or original['payload']['input']['version'] != VERSION
             or object_sha256(original['payload']['input']) != call['input_sha256']):
         raise ValueError('Original supply decision binding changed')
-    return cached
+    return recover_reason_record(pool,ledger,cached) or cached
 
 
 def classify(ledger, links, scope, root, *, pool):

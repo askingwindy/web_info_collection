@@ -314,7 +314,7 @@ def _post_pair(before, after, png_before, png_after, scope):
 
 def pair(before, after, png_before, png_after, scope):
     from .dynamic_regions import enabled as dynamic_enabled,pair as dynamic_pair
-    if scope.get('schema_version') == ACTION_SCOPED_VERSION:
+    if scope.get('schema_version') in ACTION_SCOPED_VERSIONS:
         # The action-scoped protocol routes before any dynamic-region logic: it
         # never depends on region classification for unrelated overlays.
         return action_scoped_pair(before,after,png_before,png_after,scope)
@@ -350,8 +350,11 @@ def pair(before, after, png_before, png_after, scope):
 # (click), focus and value (type/hotkey on the unique focused control) or the
 # document basis (scroll/back/open_url). Post-dispatch effects keep the
 # existing per-action predicates in react_protocol/goal_evidence.
-ACTION_SCOPED_VERSION = 'webcollect-action-scoped-evidence-1'
-VERSIONS = (*VERSIONS, ACTION_SCOPED_VERSION)
+ACTION_SCOPED_V1 = 'webcollect-action-scoped-evidence-1'
+ACTION_SCOPED_V2 = 'webcollect-action-scoped-evidence-2'
+ACTION_SCOPED_VERSION = 'webcollect-action-scoped-evidence-3'
+ACTION_SCOPED_VERSIONS = (ACTION_SCOPED_V1, ACTION_SCOPED_V2, ACTION_SCOPED_VERSION)
+VERSIONS = (*VERSIONS, *ACTION_SCOPED_VERSIONS)
 CLICK_POINT_VERSION = 'webcollect-click-dispatch-point-1'
 BACK_OBSERVED_VERSION = 'webcollect-back-observed-document-1'
 
@@ -392,8 +395,9 @@ def action_scoped_projection(state, node, action, *, click_validation=None):
     if action == 'click' and not element.get('clickable'):
         raise ValueError('Action-scoped click target is not clickable')
     if action in ('type', 'hotkey'):
-        if (element.get('native_role') not in ('input', 'combobox') or not element.get('inputable')
-                or value.get('readonly') or not value.get('value_visible')
+        if (element.get('native_role') not in ('input', 'combobox')
+                or (action == 'type' and (not element.get('inputable') or value.get('readonly')))
+                or not value.get('value_visible')
                 or [v['element_id'] for v in state.get('values', []) if v.get('focused')] != [node]):
             raise ValueError('Action-scoped input requires an editable uniquely focused input')
     target = state.get('target')
@@ -426,7 +430,9 @@ def action_scoped_projection(state, node, action, *, click_validation=None):
     return basis
 
 
-def action_scoped_scope(state, node, action):
+def action_scoped_scope(state, node, action, *, version=ACTION_SCOPED_VERSION):
+    if version not in ACTION_SCOPED_VERSIONS:
+        raise ValueError('Unknown action-scoped policy')
     if action not in ('click', 'type', 'hotkey') or not node:
         raise ValueError('Action-scoped node proof supports click/type/hotkey on a target')
     from .dynamic_regions import projection as content_projection
@@ -434,15 +440,17 @@ def action_scoped_scope(state, node, action):
     geometry = next((g for g in projected.get('geometry_witnesses', []) if g.get('element_id') == node), {})
     validation = CLICK_POINT_VERSION if action == 'click' and (
         geometry.get('dispatch_point') or {}).get('schema_version') == CLICK_POINT_VERSION else None
-    return {'schema_version': ACTION_SCOPED_VERSION, 'action': action,
+    return {'schema_version': version, 'action': action,
             'purpose': 'action_scoped_dispatch', 'node': node,
             **({'click_validation': validation} if validation else {}),
             'basis': action_scoped_projection(projected, node, action, click_validation=validation)}
 
 
-def document_scope(state, action):
+def document_scope(state, action, *, version=ACTION_SCOPED_VERSION):
     """Document basis for target-less actions: identity (and pre-scroll
     position) stable during the capture; unrelated pixels may repaint."""
+    if version not in ACTION_SCOPED_VERSIONS:
+        raise ValueError('Unknown action-scoped policy')
     if action not in ('scroll', 'back', 'open_url', 'hotkey'):
         raise ValueError('Document scope supports scroll/back/open_url/hotkey')
     readiness = state.get('capture_readiness') or {}
@@ -452,17 +460,19 @@ def document_scope(state, action):
     if readiness.get('document_ready') not in ('interactive', 'complete'):
         raise ValueError('Document scope requires a loaded document')
     keys = ('url', 'document_identity', 'scroll') if action == 'scroll' else ('url', 'document_identity')
-    return {'schema_version': ACTION_SCOPED_VERSION, 'action': action,
+    return {'schema_version': version, 'action': action,
             'purpose': 'document_scoped_dispatch', 'node': None,
             'readiness_policy': 'webcollect-document-observed-1',
             'basis': {k: deepcopy(state.get(k)) for k in keys}}
 
 
-def post_action_document_scope(source, operation=None):
+def post_action_document_scope(source, operation=None, *, version=ACTION_SCOPED_VERSION):
     """Post-dispatch observation proof: the captured document is internally
     settled (same url+identity across the capture triple). Observation only;
     the action effect itself is verified by the per-action predicates."""
-    return {'schema_version': ACTION_SCOPED_VERSION, 'action': 'observe',
+    if version not in ACTION_SCOPED_VERSIONS:
+        raise ValueError('Unknown action-scoped policy')
+    return {'schema_version': version, 'action': 'observe',
             'purpose': 'post_action_document',
             **({'operation_id': operation['operation_id']} if operation else {}),
             'source_url': source.get('url'), 'allow_navigation': True}
@@ -490,24 +500,45 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
     from .browser import fingerprint
     action = scope.get('action')
     purpose = scope.get('purpose')
+    version = scope['schema_version']
     observation_only = purpose in ('post_action_document', 'entry_observation')
     with Image.open(BytesIO(png_before)) as a, Image.open(BytesIO(png_after)) as b:
         if a.format != 'PNG' or b.format != 'PNG' or a.size != b.size or list(a.size) != before['screen_resolution']:
             raise ValueError('Action-scoped proof needs complete original viewport PNGs')
-        channels = ImageChops.difference(a.convert('RGBA'), b.convert('RGBA')).split()
-        diff = channels[0]
-        for channel in channels[1:]:
-            diff = ImageChops.lighter(diff, channel)
-        changed = diff.point(lambda x: 255 if x else 0)
-        pixels = {'changed_pixels': changed.histogram()[255],
-                  'bbox': list(diff.getbbox()) if diff.getbbox() else None}
         guard = local = None
         if purpose == 'action_scoped_dispatch' and action in ('click', 'type', 'hotkey') and scope.get('node'):
             box = scope['basis']['element']['bbox']
             guard = [max(0, box[0] - 4), max(0, box[1] - 4), min(a.width, box[2] + 4), min(a.height, box[3] + 4)]
-            local = changed.crop(tuple(guard)).histogram()[255]
-            pixels['protected_changed_pixels'] = local
-            pixels['protected_bbox'] = guard
+        if version == ACTION_SCOPED_V1:
+            # Frozen v1 receipts include full-frame diagnostic values even
+            # where only the target region (or no pixels) affects acceptance.
+            channels = ImageChops.difference(a.convert('RGBA'), b.convert('RGBA')).split()
+            diff = channels[0]
+            for channel in channels[1:]:
+                diff = ImageChops.lighter(diff, channel)
+            changed = diff.point(lambda x: 255 if x else 0)
+            pixels = {'changed_pixels': changed.histogram()[255],
+                      'bbox': list(diff.getbbox()) if diff.getbbox() else None}
+            if guard is not None:
+                local = changed.crop(tuple(guard)).histogram()[255]
+                pixels['protected_changed_pixels'] = local
+                pixels['protected_bbox'] = guard
+        elif guard is not None:
+            # Keep the full originals and their hashes; only the comparison
+            # uses the already-required target box plus its four-pixel margin.
+            channels = ImageChops.difference(a.crop(tuple(guard)).convert('RGBA'),
+                                             b.crop(tuple(guard)).convert('RGBA')).split()
+            diff = channels[0]
+            for channel in channels[1:]:
+                diff = ImageChops.lighter(diff, channel)
+            local = diff.point(lambda x: 255 if x else 0).histogram()[255]
+            pixels = {'comparison': 'target_region', 'protected_changed_pixels': local,
+                      'protected_bbox': guard}
+        else:
+            # Decode to retain the original complete-PNG integrity check.
+            # Document-only evidence never claims an unchecked image is equal.
+            a.load(); b.load()
+            pixels = {'comparison': 'not_required', 'reason': 'document_identity_only'}
         valid = False
         if purpose == 'action_scoped_dispatch' and action in ('click', 'type', 'hotkey') and scope.get('node'):
             try:
@@ -530,8 +561,11 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
                      and before.get('document_identity') == after.get('document_identity'))
         else:
             raise ValueError('Unknown action-scoped proof')
-        accepted = bool(valid and not local) if local is not None else bool(valid)
-    result = {'schema_version': ACTION_SCOPED_VERSION, 'action_scope': deepcopy(scope),
+        # Frozen V1/V2 retain exact target pixels. V3 admits up to 100
+        # changed pixels only inside this existing protected target region.
+        tolerance = 100 if version == ACTION_SCOPED_VERSION else 0
+        accepted = bool(valid and local <= tolerance) if local is not None else bool(valid)
+    result = {'schema_version': version, 'action_scope': deepcopy(scope),
               'accepted': accepted, 'full_dom_stable': fingerprint(before) == fingerprint(after),
               'related_dom_stable': bool(valid), 'loading_complete': bool(valid),
               'before_fingerprint': fingerprint(before), 'after_fingerprint': fingerprint(after),
@@ -544,7 +578,7 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
 
 def action_scoped_pair(before, after, png_before, png_after, scope):
     """Dispatcher used by browser.stability_pair and postprocess replays."""
-    if scope.get('schema_version') != ACTION_SCOPED_VERSION:
+    if scope.get('schema_version') not in ACTION_SCOPED_VERSIONS:
         raise ValueError('Unknown action-scoped policy')
     return _action_scoped_pair(before, after, png_before, png_after, scope)
 

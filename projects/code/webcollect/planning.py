@@ -250,13 +250,25 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
     Tasks add capability_id, capability_version and task_family to the existing
     M4 contract. The original preflight retains the full task denominator.
     """
-    from .task_contract import validate_m4_plan
+    from .task_admission import frame_validation_scope
+    with frame_validation_scope():
+        receipt, prepared = _build_publication(plan, capabilities, now=now,
+                                               require_preflight=require_preflight)
+    # Preserve publication's existing advisory task exclusion. Verification
+    # below only inspects the prepared copy and never edits its input plan.
+    if prepared['tasks'] != plan['tasks']:
+        plan['tasks'] = prepared['tasks']
+    return receipt
+
+
+def _build_publication(plan, capabilities, *, now=None, require_preflight=True):
+    """Validate current bindings and derive a receipt without editing inputs."""
     from .collect import validate_plan
     from .preflight import validate_preflight_binding
     from .react_session import is_react_task
     if not isinstance(plan, dict) or plan.get('schema_version') != 'webcollect-plan-m4-1':
         raise ValueError('规划发布仅接受严格M4计划')
-    validate_m4_plan(plan)
+    plan = deepcopy(plan)
     validate_plan(plan)
     # React sessions preflight the already-open entry page inside their own
     # browser session (same-context requirement); an outer preflight binding
@@ -345,10 +357,16 @@ def publish_plan(plan, capabilities, *, now=None, require_preflight=True):
                                   if is_probe_failure(record)],
                'sample_ids_allocated': 0, 'QC_approval': False}
     receipt['publication_sha256'] = object_sha256(receipt)
-    return receipt
+    return receipt, plan
 
 
 def verify_publication(plan, publication, *, now=None):
+    from .task_admission import frame_validation_scope
+    with frame_validation_scope():
+        return _verify_publication(plan, publication, now=now)
+
+
+def _verify_publication(plan, publication, *, now=None):
     if not isinstance(publication, dict) or publication.get('schema_version') != 'webcollect-plan-publication-1':
         raise ValueError('计划发布收据格式错误')
     body = {k: v for k, v in publication.items() if k != 'publication_sha256'}
@@ -356,7 +374,7 @@ def verify_publication(plan, publication, *, now=None):
         raise ValueError('计划发布收据SHA不一致')
     # Recheck actual evidence and current expiry; publishing is not a permanent permit.
     catalog = list(publication.get('capability_catalog') or []) + list(publication.get('probe_failures', []))
-    expected = publish_plan(plan, catalog, now=now)
+    expected, _ = _build_publication(plan, catalog, now=now)
     for key in ('plan_sha256', 'task_count', 'tasks', 'capabilities', 'preflight_report_sha256',
                 'capability_catalog', 'capability_catalog_sha256', 'capability_candidate_count',
                 'sample_ids_allocated', 'QC_approval'):

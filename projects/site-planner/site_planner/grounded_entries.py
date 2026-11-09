@@ -10,9 +10,10 @@ import json
 from pathlib import Path
 import re
 import time
+import traceback
 from urllib.parse import urljoin, urlsplit
 
-from webcollect.batch_core import BatchLedger, load_json, save_json
+from webcollect.batch_core import BatchLedger, OutcomeUnknown, load_json, save_json
 from webcollect.model_gateway import ModelGateway
 from webcollect.planning import object_sha256, verify_evidence
 from .application_discovery import Discovery, POLICY, site_context, classify_homepage, verify_document
@@ -49,8 +50,16 @@ class Links(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a=dict(attrs)
         if self.track_context and tag not in ('input','img','br','hr','meta','link','source','wbr','area','base','embed','param'):
-            marker=' '.join(a.get(k,'') for k in ('class','id','aria-label')).lower()
-            self.context.append((tag,bool(re.search(r'lang|locale|language|语言|語言',marker)) or any(v for _,v in self.context)))
+            # Global feature classes (e.g. Vector's language-in-header-enabled)
+            # describe layout, not a language menu containing every page link.
+            tokens=(a.get('class','')+' '+a.get('id','')).lower().split()
+            language_menu=tag not in ('html','body') and (
+                any(re.fullmatch(r'(?:lang|language|locale)(?:[-_](?:switch(?:er)?|select(?:or)?|menu|list|dropdown))?'
+                                 r'|(?:p-lang(?:-btn)?|mw-portlet-lang|mw-interlanguage-selector|interlanguage-link)',token)
+                    for token in tokens)
+                or bool(re.fullmatch(r'(?:选择|選擇|切换|切換|更改)?(?:语言|語言)(?:选择|選擇|切换|切換)?'
+                                     r'|(?:select|choose|change|switch) language|languages?',a.get('aria-label','').strip(),re.I)))
+            self.context.append((tag,language_menu or any(v for _,v in self.context)))
         if tag in ('script','style'): self.hidden+=1
         if self.hidden: return
         if tag=='base' and a.get('href') and self.base_href is None:self.base_href=a['href']
@@ -416,6 +425,14 @@ def bounded_directories(pool, ledger, run, documents, seeds, root, aliases, excl
                 failures.append({'uri':h['uri'],'stage':'directory','type':type(error).__name__,'reason':str(error)})
     return result,failures
 
+def simplified_route_priority(link):
+    """Ordering only: retain traditional and language-unknown destinations."""
+    path=urlsplit(link['uri']).path.lower()
+    if re.match(r'^/(?:zh-cn|zh-hans|wiki)(?:/|$)',path):return 0
+    if re.match(r'^/(?:zh-tw|zh-hant|zh-hk|zh-mo)(?:/|$)',path):return 2
+    return 1
+
+
 def rank_links(links, categories, counts, feedback):
     """Under-supplied categories/modalities first, round robin within priorities."""
     modality_counts=counts.get('page_types',{})
@@ -457,9 +474,11 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             goals_path, target, max_searches, max_batches, batch_size, search_engine, stall_threshold,
             per_direction_cap, batch_key, excluded_applications, discovery_mode, feedback_scope, search_count,
             entry_selection='rule', model_protocol=PROTOCOL, categories=(), probe_search_hold=None, dispatch_holds=None,
-            producer_pipeline=None, producer_optimization=None, application_pending_cap=None, allowed_hosts=()):
+            producer_pipeline=None, producer_optimization=None, application_pending_cap=None, application_new_target=None, allowed_hosts=(), site_expansion=False, prefer_simplified_chinese=False):
     if application_pending_cap is not None and application_pending_cap < 1:
         raise ValueError('application_pending_cap must be positive')
+    if application_new_target is not None and application_new_target < 1:
+        raise ValueError('application_new_target must be positive')
     allowed_hosts=sorted(set(h.lower() for h in allowed_hosts))
     target_categories=tuple(categories)
     from .site_pool import category
@@ -491,6 +510,22 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             application_pending_cap=previous.get('application_pending_cap')
         if not allowed_hosts:
             allowed_hosts=previous.get('allowed_hosts', [])
+    if previous:
+        if site_expansion and not previous.get('site_expansion'):
+            raise ValueError('Site expansion requires a new batch')
+        site_expansion=previous.get('site_expansion',False)
+    if previous:
+        if prefer_simplified_chinese and not previous.get('prefer_simplified_chinese'):
+            raise ValueError('Simplified Chinese priority requires a new batch')
+        prefer_simplified_chinese=previous.get('prefer_simplified_chinese',False)
+    if prefer_simplified_chinese and not site_expansion:
+        raise ValueError('Simplified Chinese priority requires site expansion')
+    if site_expansion and (not allowed_hosts or model_protocol!='entry-tools-13'):
+        raise ValueError('Site expansion requires exact allowed_hosts and entry-tools-13')
+    if previous:
+        if application_new_target is not None and application_new_target!=previous.get('application_new_target'):
+            raise ValueError('Application cumulative NEW target requires a new batch')
+        application_new_target=previous.get('application_new_target')
     from .producer_read_policy import OPTIMIZATION, VERSION as READ_POLICY
     if producer_optimization not in (None,OPTIMIZATION):raise ValueError('Unsupported producer_optimization')
     if previous:
@@ -544,6 +579,12 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         **({'producer_pipeline':producer_pipeline} if not previous or 'producer_pipeline' in previous else {}),
         **({'producer_optimization':producer_optimization} if producer_optimization else {}),
         **({'current_chain_manifest':chain['manifest']} if chain else {})}
+    if prefer_simplified_chinese:
+        frozen['prefer_simplified_chinese']='route-order-1'
+    if site_expansion:
+        frozen['site_expansion']='first-party-queue-1'
+    if application_new_target is not None:
+        frozen['application_new_target']=application_new_target
     if application_pending_cap is not None:
         frozen['application_pending_cap']=application_pending_cap
     if allowed_hosts:
@@ -569,6 +610,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             elif PROTOCOL=='entry-tools-7':from . import page_purpose_v4 as purpose
             else:from . import page_purpose as purpose
             PURPOSE_SYSTEM,PURPOSE_VERSION=purpose.SYSTEM,purpose.VERSION
+            if (PROTOCOL=='entry-tools-13' and previous
+                    and previous.get('purpose_system')==purpose.LEGACY_SYSTEM):
+                PURPOSE_SYSTEM=previous['purpose_system']
             frozen.update(purpose_version=PURPOSE_VERSION,purpose_system=PURPOSE_SYSTEM,purpose_path='rule_then_model')
             if PROTOCOL in ('entry-tools-11','entry-tools-12','entry-tools-13'):
                 frozen.update(purpose_path='business_value_once' if PROTOCOL in ('entry-tools-12','entry-tools-13') else 'business_natural_task_once',purpose_is_advisory=True,
@@ -788,8 +832,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             if snapshot is None or in_flight.get(aid,0)+taken[aid]<snapshot['remaining']:
                 admitted.append(h);taken[aid]+=1
             else:
-                skipped.setdefault(aid,{'application_id':aid,'reason':'APP_PENDING_CAP_PREFLIGHT',
+                skipped.setdefault(aid,{'application_id':aid,'reason':'APP_NEW_TARGET_PREFLIGHT' if snapshot.get('new_target') is not None and snapshot['new_count']>=snapshot['new_target'] else 'APP_PENDING_CAP_PREFLIGHT',
                     'pending':snapshot['pending'],'cap':snapshot['cap'],'remaining':snapshot['remaining'],
+                    **({k:snapshot[k] for k in ('new_target','new_count')} if 'new_target' in snapshot else {}),
                     'preflight_in_flight':in_flight.get(aid,0)+taken[aid],'skipped_links':[]})['skipped_links'].append(
                     {'link_id':h['link_id'],'uri':h['uri']})
         return admitted,list(skipped.values()),snapshots
@@ -808,6 +853,40 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 'pipeline':producer_pipeline,'run_id':run,'unit':unit_key,'chunk_key':chunk_key,
                 'timestamp':time.time(),'records':records})
         return reference(path)
+
+    def content_refusal_hold(chunk_key, links):
+        """Seal only original HTTP 400/code 1301; no result or completion."""
+        if not site_expansion or PROTOCOL!='entry-tools-13':return None
+        checkpoint=chunk_key+'/content-refusal-1301'
+        saved=pool.pool.checkpoint(run,checkpoint)
+        if saved:
+            verify_evidence([saved['reference']])
+            return saved
+        scope=run+'/'+chunk_key
+        with ledger.connect() as con:
+            originals=con.execute(
+                "SELECT r.id,r.job_id,r.state,r.error,r.response,r.usage,r.reserved_tokens,r.reserved_cost,j.payload "
+                "FROM model_requests r JOIN jobs j ON j.id=r.job_id "
+                "WHERE r.state='unknown' AND r.error='HTTPError:400' AND j.kind='ai-target-page-purpose-1' "
+                "AND json_extract(j.payload,'$.input.scope')=?",(scope,)).fetchall()
+        for row in originals:
+            response=json.loads(row['response'] or '{}');original=json.loads(row['payload'])['input']
+            if str(response.get('provider_error',{}).get('provider_code'))!='1301':continue
+            urls=original.get('source_uris') or []
+            if not urls or not set(urls)<=set(h['uri'] for h in links):
+                raise OutcomeUnknown('Original content refusal source binding differs: '+row['id'])
+            receipt={'schema_version':'producer-content-refusal-hold-1','scope':scope,
+                     'request_id':row['id'],'job_id':row['job_id'],'state':'HELD',
+                     'original_request_state':'unknown','reason':'provider_content_refusal_1301',
+                     'source_uris':urls,'original_input_sha256':object_sha256(original),
+                     'original_response':response,'original_usage':row['usage'],
+                     'reserved_tokens':row['reserved_tokens'],'reserved_cost':row['reserved_cost'],
+                     'source_references':[h['reference'] for h in links if h['uri'] in urls],
+                     'selection_result':None,'scope_completed':False,'replacement_dispatches':0}
+            path=root/('content-refusal-'+object_sha256(receipt)+'.json');save_json(path,receipt)
+            return pool.pool.checkpoint(run,checkpoint,{'reference':reference(path),'request_id':row['id'],
+                                                       'job_id':row['job_id'],'state':'HELD'})
+        return None
 
     def dispatch_prefetch(chunk,start,unit_key):
         """One-batch lookahead inside the same prepared unit: screen(N+1) runs
@@ -852,11 +931,16 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         unit=0
         while new_count()<target and (max_batches is None or batches<max_batches):
             key='grounded-unit/'+str(unit)
+            prior_prepared=pool.pool.checkpoint(run,'grounded-unit/'+str(unit-1)+'/prepared') if site_expansion and unit else None
+            expansion=(prior_prepared or {}).get('expansion',{'queue':[],'visited':[],'offered':[]})
             saved=pool.pool.checkpoint(run,key+'/input')
             if saved:
                 seeds=saved['seeds'];search_request_id=saved.get('search_request_id');query=saved.get('query');direction=saved.get('direction')
             elif unit==0 and seed_sources:
                 seeds=[dict(h) for h in seed_sources];search_request_id=query=direction=None
+                pool.pool.checkpoint(run,key+'/input',{'seeds':seeds})
+            elif site_expansion and any((application_pending_remaining(pool,run,(pool.pool.application(h['uri']) or {}).get('id')) or {'remaining':1})['remaining'] > 0 for h in expansion['queue']):
+                seeds=[next(h for h in expansion['queue'] if (application_pending_remaining(pool,run,(pool.pool.application(h['uri']) or {}).get('id')) or {'remaining':1})['remaining'] > 0)];search_request_id=query=direction=None
                 pool.pool.checkpoint(run,key+'/input',{'seeds':seeds})
             else:
                 if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') and not queries and not directions and not target_categories:
@@ -907,7 +991,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 query=decision['query'];direction=decision['direction']
                 from .entry_selection import search_hits
                 from .category_search import public_search
-                from webcollect.batch_core import OutcomeUnknown
                 try:
                     if seen=='blocked':
                         raise OutcomeUnknown('Original search remains held')
@@ -947,13 +1030,19 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         if guard:
                             from webcollect.site_failure_stop import SiteStopped
                             try:guard.guard(h['uri'])
-                            except SiteStopped:
+                            except SiteStopped as error:
+                                status=guard.status(h['uri'])
+                                if (site_expansion and status.get('state')=='entry_uri_hold'
+                                        and not status.get('stopped') and not status.get('whole_application_unknowns')):
+                                    failures.append({'uri':h['uri'],'stage':'site_expansion',
+                                        'reason':'original_page_dispatch_hold','original_error':str(error),'guard_status':status})
+                                    continue
                                 if not independent:raise
                                 failures.append({'uri':h['uri'],'reason':'original_site_dispatch_hold'});continue
                         eligible.append(h)
                     return eligible
                 eligible=eligible_seeds(seeds)
-                context,errors=site_context(pool,ledger,run,eligible,root,**({'isolate_homepages':True} if independent else {}))
+                context,errors=site_context(pool,ledger,run,eligible,root,**({'isolate_homepages':True} if independent or site_expansion else {}), **({'use_seed_uri':bool(unit==0 and seed_sources),'allowed_hosts':allowed_hosts} if site_expansion else {}))
                 failures.extend(errors)
                 if independent and '企业后台与开源演示站' in target_categories:
                     lead_docs=list(context)
@@ -1004,11 +1093,47 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     homepage=site['decision']['homepage']
                     # Old protocols projected only classification fields. Read
                     # their original document for byte-bound HTML expansion.
+                    if site_expansion and urlsplit(homepage['uri']).hostname not in allowed_hosts:
+                        failures.append({'application_id':aid,'reason':'homepage_outside_allowed_hosts'});continue
                     documents[aid]={**verify_document(homepage),'reference':homepage['reference']}
                     categories[urlsplit(h['uri']).hostname]=site['category']
                 if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
-                    documents, directory_errors=bounded_directories(pool,ledger,run,documents,eligible,root,aliases,excluded,held_entries)
+                    documents, directory_errors=(documents,[]) if site_expansion else bounded_directories(pool,ledger,run,documents,eligible,root,aliases,excluded,held_entries)
                     failures.extend(directory_errors)
+                if site_expansion:
+                    from .application_discovery import homepage_document
+                    visited=set(expansion['visited']);offered=set(expansion['offered'])
+                    frontier=[h for h in expansion['queue'] if entry_identity(h['uri']) not in {entry_identity(v['uri']) for v in seeds}]
+                    for h in eligible:
+                        identity=entry_identity(h['uri'])
+                        if identity in visited:continue
+                        visited.add(identity)
+                        if any(entry_identity(d['uri'])==identity for d in documents.values()):continue
+                        try:
+                            doc,ref=homepage_document(ledger,run,h['uri'],root,allowed_hosts=allowed_hosts)
+                            if urlsplit(doc['uri']).hostname not in allowed_hosts:
+                                raise ValueError('Expansion redirect outside allowed_hosts')
+                            aid=pool.pool.application(h['uri'])['id']
+                            if aid in documents:documents[aid+'/'+identity]={**doc,'reference':ref,'application_id':aid}
+                        except Exception as error:
+                            failures.append({'uri':h['uri'],'stage':'site_expansion','type':type(error).__name__,'reason':str(error)})
+                    queued={entry_identity(h['uri']) for h in frontier}
+                    for d in documents.values():
+                        visited.add(entry_identity(d['uri']))
+                        for h in extract_links(d,aliases,strict=True):
+                            identity=entry_identity(h['uri'])
+                            if (urlsplit(h['uri']).hostname not in allowed_hosts or identity in visited or identity in queued
+                                    or identity in held_entries or language_or_login(h)):continue
+                            if pool.consumption(h['uri'],kind='entry'):continue
+                            frontier.append({**h,'title':h['anchor'],'content':h['heading']});queued.add(identity)
+                    # Interleave hosts so a large first site cannot starve the second.
+                    if prefer_simplified_chinese:frontier.sort(key=simplified_route_priority)
+                    buckets=defaultdict(deque)
+                    for h in frontier:buckets[urlsplit(h['uri']).hostname].append(h)
+                    frontier=[]
+                    while any(buckets.values()):
+                        for host in list(buckets):
+                            if buckets[host]:frontier.append(buckets[host].popleft())
                 links=[]; link_seen=set()
                 for document_key,document in documents.items():
                     aid=document.get('application_id',document_key)
@@ -1018,6 +1143,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         if pool.consumption(h['uri'],kind='target' if goals else 'entry'):
                             failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
                         if entry_identity(h['uri']) in historical:continue
+                        if site_expansion and entry_identity(h['uri']) in offered:continue
                         if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') and entry_identity(h['uri']) in held_entries:
                             failures.append({'uri':h['uri'],'stage':'target_preflight','reason':'original_unsettled_page_job_no_dispatch'})
                             continue
@@ -1050,6 +1176,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 # role remains UNKNOWN unless original HTML provides evidence.
                 for h in ([] if independent else eligible):
                     aid=pool.pool.application(h['uri'])['id']
+                    if site_expansion and entry_identity(h['uri']) in offered:continue
                     if aid not in documents or h.get('context_only') or entry_identity(h['uri']) in historical:continue
                     if not goals and existing_candidate(pool,{'candidate_kind':'entry','entry_url':h['uri']},aid):continue
                     if entry_identity(h['uri']) in {entry_identity(l['uri']) for l in links}:continue
@@ -1062,7 +1189,11 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     supply=Counter(h['application_id'] for h in links)
                     links.sort(key=lambda h:(-supply[h['application_id']],h['application_id'],
                         (game_business_priority(h) or 0) if public_business and app_categories.get(h['application_id'])=='小游戏' else 0))
+                if prefer_simplified_chinese:links.sort(key=simplified_route_priority)
                 prepared={'links':links,'site_origins':site_origins,'dropped':drops,'failures':failures,'distribution':counts}
+                if site_expansion:
+                    prepared['expansion']={'queue':frontier,'visited':sorted(visited),
+                        'offered':sorted(offered | {entry_identity(h['uri']) for h in links})}
                 pool.pool.checkpoint(run,key+'/prepared',prepared)
             failures=prepared['failures']
             # Persist the site's entire bounded list before selection/publication.
@@ -1077,6 +1208,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     if not bound:sites.bind_mining_request(site_allocation_scopes[aid],decision['mining_job_id'],decision['mining_request_receipt'])
             for start in range(0,len(prepared['links']),batch_size):
                 chunk=prepared['links'][start:start+batch_size];chunk_key=key+'/'+str(start)
+                refusal=content_refusal_hold(chunk_key,chunk)
+                if refusal:
+                    failures.append({'stage':'content_refusal','chunk':chunk_key,**refusal});continue
                 chunk=[h for h in chunk if not pool.consumption(h['uri'],kind='target' if goals else 'entry')]
                 if not chunk:continue
                 if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):chunk=chunk[:max(0,target-new_count())]
@@ -1142,7 +1276,13 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         # behind this chunk's classify/publish, in the same unit.
                         dispatch_prefetch(chunk,start,key)
                         classify_t0=time.monotonic() if overlap else None
-                        rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'pool':pool} if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else {})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                        try:
+                            rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'pool':pool} if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else {})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                        except OutcomeUnknown:
+                            refusal=content_refusal_hold(chunk_key,prepared['links'][start:start+batch_size])
+                            if not refusal:raise
+                            failures.append({'stage':'content_refusal','chunk':chunk_key,**refusal})
+                            continue
                         if fresh_metrics is not None and classify_t0 is not None:
                             fresh_metrics['classify_seconds']=round(time.monotonic()-classify_t0,3)
                         if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
@@ -1188,6 +1328,49 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     saved_selection={'items':items,'reference':reference(path),'job_id':job_id,
                         **({'preflight_skips':preflight_skips,'preflight_reference':preflight_reference} if overlap else {})}
                     pool.pool.checkpoint(run,chunk_key+'/selection',saved_selection)
+                if PROTOCOL=='entry-tools-13':
+                    # Compatibility recovery has its own append-only receipt and
+                    # scopes; original NOT_SELECTED conclusions stay immutable.
+                    from .producer_business_content import recover_reason_record, REASON_REVISION
+                    from .page_purpose_v6 import decision_row
+                    revision_key=chunk_key+'/'+REASON_REVISION
+                    revision=pool.pool.checkpoint(run,revision_key+'/selection')
+                    if revision is None:
+                        verify_evidence([saved_selection['reference']])
+                        original_body=load_json(saved_selection['reference']['path'])
+                        recovered=[];recovered_records=[]
+                        link_lookup={h['link_id']:h for h in chunk}
+                        for original_record in original_body.get('records',[]):
+                            h=link_lookup.get(original_record.get('link_id'))
+                            if h is None:continue
+                            repaired=recover_reason_record(pool,ledger,original_record)
+                            if not repaired or not repaired['selected']:continue
+                            r=decision_row(h,repaired)
+                            verified,_=isolate_decisions([{**r,'page_type':'UNKNOWN'}],[h])
+                            if not verified:continue
+                            recovered_records.append(repaired)
+                            recovered.extend({'candidate':{'schema_version':VERSION2,'candidate_kind':'target' if g else 'entry',
+                                'entry_url':h['uri'],'requested_goal':g['requested_goal'] if g else None},
+                                'application_id':h['application_id'],'hit':h,'decision':r,
+                                'site_origin':prepared['site_origins'][h['application_id']]}
+                                for g in ([g for g in goals if g['uri']==h['uri']] if goals else [None]))
+                        if recovered:
+                            body={**original_body,'records':recovered_records,'revision':REASON_REVISION,
+                                  'original_selection':saved_selection['reference'],'recovery_model_dispatches':0}
+                            path=root/('entry-links-revision-'+object_sha256([run,revision_key])+'.json')
+                            save_json(path,body)
+                            revision={'items':recovered,'reference':reference(path),'job_id':saved_selection['job_id']}
+                            pool.pool.checkpoint(run,revision_key+'/selection',revision)
+                    if revision:
+                        allocations_before=dict(site_allocation_scopes)
+                        for aid in {i['application_id'] for i in revision['items']}:
+                            aid_items=[i for i in revision['items'] if i['application_id']==aid]
+                            scopes[aid]=sites.freeze_scope(aid,run+'/'+revision_key,aid_items,[revision['reference']])
+                            site_allocation_scopes[aid]=sites.freeze_scope(aid,run+'/'+revision_key+'/site-input',
+                                [{'uri':i['candidate']['entry_url'],'goal':i['candidate']['requested_goal']} for i in aid_items],
+                                [revision['reference']])
+                        publish_items(revision['items'],revision['reference'],revision['job_id'],revision_key)
+                        site_allocation_scopes=allocations_before
                 items=saved_selection['items']
                 selected={i['hit']['link_id'] for i in items}
                 # Preflight-skipped links never reached the model; they conclude
@@ -1238,6 +1421,14 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             if max_batches is not None and batches>=max_batches:break
     except Exception as error:
         stopped={'stage':'grounded_producer','type':type(error).__name__,'reason':str(error)}
+        diagnostic={'schema_version':'producer-exception-diagnostic-1','recorded_at':time.time(),
+                    'batch_scope':run,'unit':unit,'chunk_key':locals().get('chunk_key'),
+                    'exception':stopped,'traceback':traceback.format_exc(),
+                    'sqlite_errorcode':getattr(error,'sqlite_errorcode',None),
+                    'sqlite_errorname':getattr(error,'sqlite_errorname',None)}
+        diagnostic_path=root/('producer-exception-'+object_sha256(diagnostic)+'.json')
+        save_json(diagnostic_path,diagnostic)
+        stopped={**stopped,'diagnostic':reference(diagnostic_path)}
     finally:
         # Current-batch model/publication settles first (above); only then is
         # an unexpected prefetch failure diagnosed. No background work survives.

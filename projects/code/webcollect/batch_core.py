@@ -278,18 +278,59 @@ class BatchLedger:
 
     @property
     def max_concurrent_jobs(self):
-        """An explicit producer decision may override only this scheduler limit."""
+        """Read consumer scheduling changes live; frozen model config stays put."""
+        with self.connect() as con:
+            return self._job_concurrency_limit(con)
+
+    def consumer_concurrency(self, con=None):
+        """A consumer-only setting is separate from the immutable run config."""
+        if con is None:
+            with self.connect() as current:
+                return self.consumer_concurrency(current)
+        row = con.execute("SELECT detail FROM batch_events WHERE event='consumer_concurrency' ORDER BY seq DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        self.require_consumer_ledger(con)
+        decision = json.loads(row[0])
+        limit = decision.get('max_concurrent_jobs')
+        if (decision.get('schema_version') != 'webcollect-consumer-concurrency-1'
+                or decision.get('ledger') != str(self.path)
+                or decision.get('run_id') != self.config['run_id']
+                or decision.get('config_sha256') != object_sha256(self.config)
+                or 'max_concurrent_jobs' not in decision
+                or limit is not None and (type(limit) is not int or limit < 1)):
+            raise ValueError('Consumer concurrency decision does not match its original ledger')
+        return decision
+
+    def require_consumer_ledger(self, con):
+        """Use the existing producer markers and project role binding."""
+        if (self.producer_policy is not None or self.producer_concurrency is not None
+                or con.execute("SELECT 1 FROM batch_events WHERE event IN "
+                               "('producer_budget_unlimited','producer_concurrency') LIMIT 1").fetchone()):
+            raise ValueError('Consumer concurrency cannot change a producer ledger')
+        guard = self.config.get('site_failure_guard')
+        if guard:
+            from .current_chain import registry_project, check_project_guard
+            registry = self.path.with_name('production-registry.sqlite3')
+            with sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True,
+                                 factory=ClosingConnection) as current:
+                check_project_guard(registry_project(current), guard, self.path, role='consumer')
+
+    def _job_concurrency_limit(self, con):
+        decision = self.consumer_concurrency(con)
+        if decision is not None:
+            return decision['max_concurrent_jobs']
         return (self.producer_concurrency or {}).get('max_concurrent_jobs', self.config['budget']['max_concurrent_jobs'])
 
-    def connect(self, create=False):
+    def connect(self, create=False, *, timeout=30):
         con = sqlite3.connect(str(self.path) if create else self.path.as_uri() + '?mode=rw',
-                              uri=not create, timeout=30, factory=ClosingConnection)
+                              uri=not create, timeout=timeout, factory=ClosingConnection)
         con.row_factory = sqlite3.Row
         return con
 
     @contextmanager
-    def transaction(self):
-        con = self.connect()
+    def transaction(self, *, timeout=30):
+        con = self.connect(timeout=timeout)
         try:
             con.execute('BEGIN IMMEDIATE')
             yield con
@@ -393,7 +434,8 @@ class BatchLedger:
                     raise BudgetStop('Parent already has an active decision; no parallel child')
             running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
                                   'AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)').fetchone()[0]
-            if parent_job is None and running >= self.max_concurrent_jobs:
+            job_limit = self._job_concurrency_limit(con)
+            if parent_job is None and job_limit is not None and running >= job_limit:
                 raise BudgetStop('max_concurrent_jobs reached; queued work retained')
             if domain:
                 last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
@@ -813,9 +855,14 @@ class BatchLedger:
                 account = request_json.get('account_id')
                 if account in self._unavailable_model_accounts(con):
                     raise OutcomeUnknown('Original account/model hold; no replacement request')
-                if con.execute("SELECT 1 FROM model_requests WHERE state='reserved' "
-                    "AND json_extract(request_json,'$.account_id')=? "
-                    "AND json_extract(request_json,'$.model')=?", (account, model['model'])).fetchone():
+                producer_kinds=('ai-application-site-classification-1','ai-target-page-purpose-1',
+                                'ai-grounded-entry-ids-1','ai-candidate-entry-tool-1','ai-search-plan')
+                parallel_producer=bool(self.producer_concurrency and self.producer_concurrency['max_concurrent_jobs']>1
+                                       and owned['kind'] in producer_kinds)
+                active=con.execute("SELECT r.job_id,j.kind FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE r.state='reserved' "
+                    "AND json_extract(r.request_json,'$.account_id')=? "
+                    "AND json_extract(r.request_json,'$.model')=?", (account, model['model']))
+                if any(not (parallel_producer and r['job_id']!=job['id'] and r['kind'] in producer_kinds) for r in active):
                     raise ModelRateWait(1)
                 # A known/unknown request pins its attempt to one account. A new
                 # independent attempt may select another healthy authorized key.
@@ -837,8 +884,21 @@ class BatchLedger:
             return {'id': rid, 'state': 'new'}
 
     def settle_request(self, request_id, *, state, usage=None, response=None, error=None):
+        # Replay only this complete local settlement, after rollback/close.
+        # A received provider answer must never trigger another HTTP request.
+        for attempt in range(2):
+            try:
+                return self._settle_request_once(request_id, state=state, usage=usage,
+                    response=response, error=error, timeout=30 if attempt == 0 else 1)
+            except sqlite3.Error as failure:
+                code = getattr(failure, 'sqlite_errorcode', None)
+                if attempt or code is None or code & 0xff not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise
+                time.sleep(.2)
+
+    def _settle_request_once(self, request_id, *, state, usage, response, error, timeout):
         cost = None
-        with self.connect() as con:
+        with self.connect(timeout=timeout) as con:
             original = con.execute('SELECT request_json FROM model_requests WHERE id=?', (request_id,)).fetchone()
         token_only = self.config['model'].get('accounting_mode') == 'tokens-1' or (original and json.loads(original[0] or '{}').get('accounting_mode') == 'tokens-1')
         if usage is not None and not token_only:
@@ -846,7 +906,7 @@ class BatchLedger:
             cached = usage.get('cached_input_tokens', 0)
             cost = ((usage['input_tokens'] - cached) * rates['input'] +
                     cached * rates['cached_input'] + usage['output_tokens'] * rates['output'] + 999999) // 1_000_000
-        with self.transaction() as con:
+        with self.transaction(timeout=timeout) as con:
             row = con.execute('SELECT * FROM model_requests WHERE id=?', (request_id,)).fetchone()
             if not row or row['state'] != 'reserved':
                 raise ValueError('Request already settled or missing')

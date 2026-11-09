@@ -97,7 +97,7 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
     return observation
 
 
-async def capture_before_action(page, evidence, selector=None, index=0, **options):
+async def capture_before_action(page, evidence, selector=None, index=0, *, include_html=False, **options):
     """One total caller-controlled deadline for capture and verification; no actions."""
     started=time.monotonic()
     budget=float(options.pop('timeout',12))
@@ -113,6 +113,10 @@ async def capture_before_action(page, evidence, selector=None, index=0, **option
                 timing['stage']='capture';phase=time.monotonic()
                 try:observation=await capture(page,selector,index,timeout=remaining(),**options)
                 finally:attempt['capture_seconds']=time.monotonic()-phase
+                if include_html:
+                    # Read the already-required HTML before the final preflight;
+                    # the caller can then dispatch without another browser await.
+                    observation['html']=await page.content()
                 timing['stage']='verify_execution_state';phase=time.monotonic()
                 try:observation['action_state_preflight']=await verify_execution_state(page,observation['state'],selector,index,timeout=remaining(),**options)
                 finally:attempt['verification_seconds']=time.monotonic()-phase
@@ -888,6 +892,12 @@ def describe_change(before, after, op, element):
 
 
 def validate_plan(plan):
+    from .task_admission import frame_validation_scope
+    with frame_validation_scope():
+        return _validate_plan(plan)
+
+
+def _validate_plan(plan):
     if not isinstance(plan,dict) or not isinstance(plan.get('tasks'),list) or not plan['tasks']:
         raise ValueError('计划必须包含非空 tasks 数组')
     task_ids=[task.get('task_id') for task in plan['tasks'] if isinstance(task,dict)]

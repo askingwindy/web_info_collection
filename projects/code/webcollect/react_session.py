@@ -706,15 +706,20 @@ class ReactSession:
         from .browser import capture
         number = self.used['max_observations']
         action_scope = None
-        from .action_stability import POST_VERSION, ACTION_SCOPED_VERSION, post_observation_scope, reading_scope, post_action_document_scope
+        from .action_stability import POST_VERSION, ACTION_SCOPED_VERSION, ACTION_SCOPED_VERSIONS, post_observation_scope, reading_scope, post_action_document_scope
         evidence_protocol=self.task['fragment'].get('action_stability_protocol')
-        if evidence_protocol==ACTION_SCOPED_VERSION and self.current:
+        if evidence_protocol in ACTION_SCOPED_VERSIONS and self.current:
             # Minimal post-action observation: the captured document is internally
             # settled; the action effect itself is proven by the per-action
             # predicates, never by two whole-page screenshots agreeing.
             trigger=getattr(self,'_navigation_trigger',None)
             source=(getattr(self,'_navigation_source',None) if trigger else None) or load_json(self.current['evidence']['state']['path'])
-            action_scope=post_action_document_scope(source,trigger)
+            action_scope=post_action_document_scope(source,trigger,version=evidence_protocol)
+        elif evidence_protocol in ACTION_SCOPED_VERSIONS[1:]:
+            # A new v2/v3 entry has no action target. Keep its document identity
+            # proof without falling back to the historical whole-frame rule.
+            action_scope=post_action_document_scope({'url':self.page.url},version=evidence_protocol)
+            action_scope['purpose']='entry_observation'
         elif evidence_protocol==POST_VERSION and self.current:
             trigger=getattr(self,'_navigation_trigger',None)
             source=(getattr(self,'_navigation_source',None) if trigger else None) or load_json(self.current['evidence']['state']['path'])
@@ -845,7 +850,9 @@ class ReactSession:
             effective_steps=len(self.trajectory))
         self.current = observation
         from .page_language import assess
-        language = assess(captured['state'])
+        language = assess(captured['state'], prior_states=[
+            load_json(o['evidence']['state']['path']) for oid,o in self.observation_records.items()
+            if oid != observation['observation_id'] and o.get('document_identity') == observation['document_identity']])
         if language['excluded']:
             self.event('language-excluded', assessment=language, evidence=evidence,
                        action_replayed=False)
@@ -1023,12 +1030,12 @@ class ReactSession:
         terminal_bridge=None
         if safe:
             from .reading_progress import same_view
+            from .action_stability import ACTION_SCOPED_VERSIONS, action_scoped_view_stable
             prefix=load_json(self.observation_records[self.trajectory[-1]['after_observation_id']]['evidence']['state']['path'])
-            if self.task['fragment'].get('action_stability_protocol')=='webcollect-action-scoped-evidence-1':
+            if self.task['fragment'].get('action_stability_protocol') in ACTION_SCOPED_VERSIONS:
                 # Action-scoped ending: the final frame keeps the same document,
                 # scroll and visible reading material; unrelated decorative
                 # image/overlay membership changes are not endpoint changes.
-                from .action_stability import action_scoped_view_stable
                 safe=action_scoped_view_stable(prefix,final_state)
             else:
                 safe=same_view(prefix,final_state)
@@ -1288,9 +1295,9 @@ class ReactSession:
                     return self._need_observation('act', f'目标控件 {cid} 不在当前观察中，请重新观察', data=self._deltas(executed))
                 selector, index = control['binding'].get('selector'), control['binding'].get('index', 0)
             action_scope = None
-            from .action_stability import VERSIONS as focus_versions, VERSION as FIRST_FOCUS_VERSION, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSION, scope_for, followup_scope, action_scoped_scope, document_scope
+            from .action_stability import VERSIONS as focus_versions, VERSION as FIRST_FOCUS_VERSION, TYPING_VERSION, FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSIONS, scope_for, followup_scope, action_scoped_scope, document_scope
             focus_protocol=self.task['fragment'].get('action_stability_protocol')
-            if focus_protocol == ACTION_SCOPED_VERSION:
+            if focus_protocol in ACTION_SCOPED_VERSIONS:
                 # Action-relevant minimal evidence: every ordinary action gets a
                 # target-level (click/type/hotkey) or document-level
                 # (scroll/back/open_url) scope; unrelated overlay/announcement
@@ -1300,16 +1307,16 @@ class ReactSession:
                     try:
                         scoped_state = load_json(self.current['evidence']['state']['path'])
                         if row['action'] in ('click', 'type') and cid:
-                            action_scope = action_scoped_scope(scoped_state, cid, row['action'])
+                            action_scope = action_scoped_scope(scoped_state, cid, row['action'], version=focus_protocol)
                         elif row['action'] == 'hotkey':
                             focused = [key for key, c in self.current['controls'].items()
                                        if (c.get('value') or {}).get('focused') is True]
-                            if len(focused) == 1:
-                                action_scope = action_scoped_scope(scoped_state, focused[0], 'hotkey')
+                            if len(focused) == 1 and not any(str(k).lower() in ('esc','escape') for k in row.get('keys', [])):
+                                action_scope = action_scoped_scope(scoped_state, focused[0], 'hotkey', version=focus_protocol)
                             else:
-                                action_scope = document_scope(scoped_state, 'hotkey')
+                                action_scope = document_scope(scoped_state, 'hotkey', version=focus_protocol)
                         elif row['action'] in ('scroll', 'back', 'open_url'):
-                            action_scope = document_scope(scoped_state, row['action'])
+                            action_scope = document_scope(scoped_state, row['action'], version=focus_protocol)
                         else:
                             action_scope = None
                         break
@@ -1385,7 +1392,7 @@ class ReactSession:
                     except ValueError:pass
             try:
                 observation = await capture_before_action(self.page, self.root, selector, index or 0,
-                    timeout=max(.1,_deadline-time.monotonic()), **({'action_scope': action_scope} if action_scope else {}))
+                    include_html=self.native, timeout=max(.1,_deadline-time.monotonic()), **({'action_scope': action_scope} if action_scope else {}))
             except EvidenceStale as error:
                 self.event('action-evidence-failed',error_type=type(error).__name__,
                     detail=str(error),timing=getattr(error,'action_refresh',None),
@@ -1437,7 +1444,7 @@ class ReactSession:
                     # the stale ID/probe. No action is sent on this branch.
                     self._consume('max_observations')
                     previous_controls=self.current['controls']
-                    fresh = self._accept(observation, await self.page.content(), cid)
+                    fresh = self._accept(observation, observation['html'], cid)
                     if cid:
                         self.focus_history.add((cid, self._probe_key(fresh)))
                     data.update(refreshed_observation_id=fresh['observation_id'],
@@ -1463,7 +1470,7 @@ class ReactSession:
                     data=data)
             if self.native:
                 self._consume('max_observations')
-                self._accept(observation, await self.page.content(), cid)
+                self._accept(observation, observation['html'], cid)
             try:
                 operation = self._build_operation(row, state, observation)
                 arguments, element = prepare_action(state, operation)
@@ -1549,13 +1556,17 @@ class ReactSession:
             remaining = min(REACT_OBSERVE_TIMEOUT_SECONDS,
                 observation.get('action_deadline_monotonic', time.monotonic()+REACT_OBSERVE_TIMEOUT_SECONDS)-time.monotonic())
             if remaining <= 0:
-                raise EvidenceStale('派发前总取证期限已耗尽；本动作零派发')
-            try:
-                preflight_state = await asyncio.wait_for(verify_execution_state(self.page, state,
-                    operation.get('selector'), operation.get('index', 0), timeout=remaining,
-                    **({'action_scope':observation['action_scope']} if observation.get('action_scope') else {})), timeout=remaining)
-            except TimeoutError as error:
-                raise EvidenceStale('最终派发复查超过原总取证期限；本动作零派发') from error
+                raise TimeoutError('派发前总取证期限已耗尽；本动作零派发')
+            preflight_state = observation.get('action_state_preflight')
+            if preflight_state is not None and (preflight_state.get('stability') or {}).get('action_scope') != observation.get('action_scope'):
+                preflight_state = None
+            if preflight_state is None:
+                try:
+                    preflight_state = await asyncio.wait_for(verify_execution_state(self.page, state,
+                        operation.get('selector'), operation.get('index', 0), timeout=remaining,
+                        **({'action_scope':observation['action_scope']} if observation.get('action_scope') else {})), timeout=remaining)
+                except TimeoutError as error:
+                    raise TimeoutError('派发前取证超时；本动作零派发') from error
             raw['state_preflight'] = {**preflight_state, 'phase': 'pre_dispatch'}
             pages_before = set(self.page.context.pages)
             dispatch_started = True
@@ -2011,7 +2022,7 @@ class ReactSession:
 
     def _strip_prompt(self, prompt):
         """Journal the prompt without duplicating the full system prompt body."""
-        stripped = deepcopy({k: v for k, v in prompt.items() if k != '_history'})
+        stripped = deepcopy({k: v for k, v in prompt.items() if k not in ('_history','_dispatch_deadline')})
         stripped['system'] = 'SHA256:' + object_sha256(prompt['system'])
         return stripped
 
@@ -2221,12 +2232,12 @@ class ReactSession:
             # Same Page: validate the supplied synchronization receipt before
             # accepting it. A changed/invalid entry is refreshed, never navigated.
             from .browser import validate_capture_receipt, verify_execution_state
-            from .action_stability import ACTION_SCOPED_VERSION
+            from .action_stability import ACTION_SCOPED_VERSIONS
             try:
                 validate_capture_receipt(captured['state'], captured['capture'], captured['png'])
                 if captured['state']['url'] != self.page.url:
                     raise ValueError('Entry observation URL changed')
-                if self.task['fragment'].get('action_stability_protocol') != ACTION_SCOPED_VERSION:
+                if self.task['fragment'].get('action_stability_protocol') not in ACTION_SCOPED_VERSIONS:
                     await verify_execution_state(self.page, captured['state'], timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
             except Exception:
                 await self._observe()
@@ -2252,8 +2263,8 @@ class ReactSession:
         await self._run_preflight()
 
     async def _run_preflight(self):
-        from .action_stability import ACTION_SCOPED_VERSION
-        if self.task['fragment'].get('action_stability_protocol') == ACTION_SCOPED_VERSION:
+        from .action_stability import ACTION_SCOPED_VERSIONS
+        if self.task['fragment'].get('action_stability_protocol') in ACTION_SCOPED_VERSIONS:
             self.event('preflight-reused-action-evidence', independent_probe_dispatched=False)
             return
         if self.preflight is not None:
@@ -2428,13 +2439,19 @@ class ReactSession:
                 self.failure_class = error.failure_class
                 self.unknown = self.unknown or error.unknown
             self.state = 'closed_by_host'
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as error:
             self.stop_reason, self.stop_summary = 'blocked', '会话被取消，保留已执行内容'
             self.unknown = True
             self.failure_class = 'interrupted'
             self.state = 'closed_by_host'
-            self._close()
-            raise
+            if not (self.host_limits and time.monotonic() >= self.host_limits['started_monotonic'] + self.host_limits['hard_seconds']):
+                self._close()
+                raise
+            # Only the bounded consumer deadline can resume prefix close-out.
+            # User/manual cancellation is propagated below by its explicit cause.
+            if not error.args or error.args[0] != 'consumer_session_hard_deadline':
+                self._close()
+                raise
         except BaseException as error:
             stop = ReactStop('blocked', type(error).__name__ + ': ' + str(error), 'program')
             self.stop_reason, self.stop_summary = 'blocked', str(stop)
@@ -2548,7 +2565,7 @@ def _legacy_chooser(ledger, task, attempt_id, *, parent_job=None):
     async def choose(prompt):
         nonlocal gateway
         payload = {'protocol': REACT_VERSION, 'attempt_id': attempt_id, 'task_id': task['task_id'],
-                   'site_uri': task['site_uri'], 'prompt_sha256': object_sha256(prompt),
+                   'site_uri': task['site_uri'], 'prompt_sha256': object_sha256({k:v for k,v in prompt.items() if k != '_dispatch_deadline'}),
                    'decision': prompt['progress']['decisions_used']}
         if parent_job is not None:
             payload['parent_job_id'] = parent_job['id']
@@ -2658,7 +2675,7 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
         # Hash the full wire prefix, including opaque protocol fields, without
         # putting those fields in ordinary prompt journals or annotations.
         payload = {'protocol': protocol, 'attempt_id': attempt_id, 'task_id': task['task_id'],
-                   'site_uri': task['site_uri'], 'prompt_sha256': object_sha256(prompt),
+                   'site_uri': task['site_uri'], 'prompt_sha256': object_sha256({k:v for k,v in prompt.items() if k != '_dispatch_deadline'}),
                    'decision': prompt['progress']['decisions_used']}
         if parent_job is not None:
             payload['parent_job_id'] = parent_job['id']
@@ -2701,7 +2718,7 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
             if gateway is None:
                 gateway = ModelGateway(ledger)
             user_payload = {key: value for key, value in prompt.items()
-                            if key not in ('system', 'tools', '_history', '_images')}
+                            if key not in ('system', 'tools', '_history', '_images', '_dispatch_deadline')}
             if prompt.get('protocol') in banded_protocols + ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6'):
                 user_payload=deepcopy(user_payload)
                 user_payload['observation'].pop('image_ref',None)
@@ -2724,7 +2741,7 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                 common = dict(system=prompt['system'], images=(prompt.get('_images') or [prompt['observation']['image_ref']])[-ledger.config['model']['max_images']:],
                     attempts=2 if grounded or modern_plan else 1, output_limit=ledger.config['model']['max_completion_tokens'],
                     reasoning_effort=effort,
-                    attempt_id=attempt_id, max_requests=request_limit)
+                    attempt_id=attempt_id, max_requests=request_limit, dispatch_deadline=prompt.get('_dispatch_deadline'))
                 if prompt['phase'] == 'first':
                     patient = current_plan and ledger.real_glm
                     first_timeout = None
@@ -2750,7 +2767,7 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                 system=prompt['system'], history=history,
                 images=[prompt['observation']['image_ref']], attempts=2,
                 output_limit=ledger.config['model']['max_completion_tokens'],
-                reasoning_effort='max', attempt_id=attempt_id, max_requests=request_limit)
+                reasoning_effort='max', attempt_id=attempt_id, max_requests=request_limit, dispatch_deadline=prompt.get('_dispatch_deadline'))
             ledger.finish(job, result=response)
             return response
         except OutcomeUnknown as error:

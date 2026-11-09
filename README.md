@@ -1,5 +1,11 @@
 # WebCollect
 
+2026-11-09 消费者补修已实现：新动作证据V3允许目标区域≤100个变化像素；同次派发复用已有预检；模型请求结算遇SQLite锁只在本地重试一次，本地异常不再发给模型纠错。按用户要求仅静态检查，未运行测试或实采、未重启已有进程。[修改范围与未验证边界](docs/消费者四项最小修复-20261109.md#像素容差本地结算重试与预检复用补修)。
+
+2026-11-09 22:10 用户授权 6 并发消费者，仅采集 Muxtly 与维基（zh.wikipedia.org）两站点，客户格式输出进入 `deliveries/20261109-muxtly-wiki-6w/`。以 multibatch cohort 冻结两站点全部可领候选（865 条，489 muxtly + 376 wiki，跨 4 个生产批次），统一入口 `consumer_roster --workers 6 --launch` 启动，模型 glm-5.3-flash、high/high。冻结前修复 `candidate_cohort.verify_get` 只认老链 `producer-entry-http-get-1` 收据、把全池 observed-get-2 收据误判不匹配的核验断点。采集成功仅到待审，QC/发布另行；运行记录见 `verify_results/consumer-muxtly-wiki-6w-20261109-r01/`，实时数量以其 `deliveries/20261109-muxtly-wiki-6w/progress.json` 为准。
+
+2026-11-09 消费者证据校验性能修复已集中实现：新动作证据 v2 只比较必要目标局部，启动校验与收尾重建在同次处理中复用，旧收据按原版本解释。未运行集成测试或原件回放；唯一 high/high 固定目标研发尝试在首屏导航超时，未派发 GLM、未产生正式 attempt 或样本，真实性能尚未验收。原账和历史计时已由用户删除，无法核验实际节省；批量保持停止。[设计与本轮收据](docs/消费者证据校验性能修复-20261109.md)。
+
 2026-11-09 本轮2条生产者真实验证结束：0保存，批量修复尚未通过；普通候选动作级接线和独立预检删除已实际生效，剩余断点为首帧装饰动画范围与文档级动作complete门槛。未追加测试/样本/QC，详见[真实结果](verify_results/consumer-batch-repair-two-live-20261109-r01/report.md)。
 
 2026-11-09 消费者批量接线与短流程修复已集中实现：普通新候选复用动作级取证，V11新标签返回接通，资格不足有界停止，删除重复入口/独立预检；并发入口支持每轮--workers与独立总--limit。用户要求不测试，直接使用2条原生产者数据high/high验证。[本轮计划及结果](docs/消费者批量接线与短流程修复计划-20261109.md)。
@@ -419,7 +425,7 @@ QC 安装包的需求原文、日期优先关系及摘要由 `contract-authority
 
 2026-11-09 用户确认登录入口直接排除：生产者与消费者首帧复用 `webcollect-login-entry-exclusion-1` 判断，登录页有公开链接也不进入规划。消费者以 abandon 保留原观察和 claim；正式 attempt/模型派发前终止。生产者收据升级为 `producer-login-page-exclusion-2`，旧收据不改。验证记录见 `verify_results/login-page-exclusion-20261109-r01/`。
 
-消费者可用 `webcollect.consumer_roster` 配置正整数 worker 数并通过 `--launch` 启动；总 `--limit` 独立限定数据量，`--recovery-version` 与固定名单 `--cohort` 互斥（仅准备时不调整原账上限）；准备阶段诊断写在每条 execution 的 `preparation-timings.jsonl`。参见[工程说明](docs/工程说明.md#消费者清单与准备计时2026-11-09)。
+消费者可用 `webcollect.consumer_roster` 配置正整数 worker 数并通过 `--launch` 启动；并发由实际启动的 worker 数控制，启动入口在原账登记取消作业、全局执行和同站执行上限，保留原 config/policy 字节。新实现每次领取读取动态设置，旧进程须自然收尾后换用新实现。总 `--limit` 独立限定数据量，`--recovery-version` 与固定名单 `--cohort` 互斥；仅准备不调整原账、不启动进程。参见[工程说明](docs/工程说明.md#消费者清单与准备计时2026-11-09)。
 
 
 ### 2026-11-09 双基线定向生产者批次
@@ -435,3 +441,43 @@ QC 安装包的需求原文、日期优先关系及摘要由 `contract-authority
 ### 消费者入口 10 秒规则（2026-11-09）
 
 用户要求消费者初始入口导航 10 秒未加载成功即舍弃本次消费：`entry_session` 显式使用 10000ms，明确发生在 observation 阶段的入口导航超时记为 failed，默认不重领，批次继续下一页。保留原 visit、claim 与首帧失败证据；真正 UNKNOWN、取消及执行阶段超时仍按原规则对账。共享导航默认 30 秒及生产者、业务导航不变，历史 30 秒运行结论保留。本次仅改入口时限和已知失败分类，未做测试、集成或实采，未改历史账。
+
+
+### 显式站内持续扩展（2026-11-09）
+
+生产者新批次可启用 `--site-expansion`（`entry-tools-13`，必须提供精确 `--allowed-host`，可重复），配合 `--discovery-mode expand`、`--application-pending-cap` 与净新增 `--target`。首次使用调用方指定的真实首页 URI 取证（例如维基百科中文首页），不强制改取根路径。站内 HTML 链接按 URI 去重并跨站轮转；每个单元的队列、已读取 URI 和已进入筛选的 URI 写入不可覆盖的 prepared checkpoint，中断继续复用原单元与原请求。站内队列优先，耗尽或达到该站 pending 上限后才使用已配置的搜索补方向；搜索不可用不阻塞已有队列。达到批次净新增目标停止。
+
+此开关冻结为 `first-party-queue-1`，旧批次不能追加开启；沿用原首帧资格、登录排除、用途模型、来源验证及发布链路。取源失败保留原证据，不在新账内自动重发 UNKNOWN 请求。本次按用户指令未运行测试、集成或回归；新工程双站真实生产已完成，净新增、URL 去重口径、语言分布及失败保留见[运行结果与修复记录](verify_results/producer-baselines-deep-20261109-r01/report.md)。
+
+
+MD5 可见文字提取已完成背景效果误判的局部修复，尚未测试或重新实采。实现范围和未验证边界见[修复记录](docs/消费者批量接线与短流程修复计划-20261109.md#md5-可见文字提取修复代码已实现未实采)。
+
+
+生产者业务响应兼容修订 `reason-default-1`：说明性 `reason` 可省略，宿主机械记录原业务判定、原引用编号与核验结果；主营判断、主区内容引用及来源校验不放宽。恢复同一原批次时，对已结算且仅缺此说明字段的原回包重新核验，追加修订缓存与选择收据，沿正常发布入口写入原批次计数。原 invalid_response、拒绝缓存及 NOT_SELECTED scope 结论保留；不重发原模型请求。此修订未执行测试，真实恢复由运行收据确认。
+
+
+新站内扩展批次可加 `--prefer-simplified-chinese`：将 `/zh-CN/`、`/zh-hans/`、`/wiki/` 路由优先于普通未知中文路由，`/zh-TW/`、`/zh-hant/`、`/zh-hk/`、`/zh-mo/` 后排（大小写不敏感）。队列和待筛选链接均稳定排序，保留原同级顺序；只改变顺序，不排除繁体页面。规则冻结为 `route-order-1`，旧批次和已有 prepared 不修改。跨站仍按已有单元运行；需要先完成一站时使用同工程的单站范围新批次。
+
+
+新批次参数 `--application-new-target 500` 冻结每站工程累计净新增上限：在本工程专库内关联 `data_candidates` 与 `candidate_batch_rows`，跨批统计该站 `result=NEW` 的 DISTINCT candidate_id，不受 pending/consuming/failed 状态转换影响。队列派发、预检与最终发布共用 `min(pending余量, 累计NEW目标余量)`；原批次未设置时保持原pending限制，不能原地增加或变更累计目标。消费者仍独立运行，不修改其状态与记录。
+
+
+显式 `producer_concurrency` 原账授权允许不同生产者 job 并行：各自仍通过 SQLite 事务 claim 和原模型 request 唯一身份独占，运行中的其他 job 不再被误当作全账 UNKNOWN；同账户同模型的生产者请求也按授权总 job 槽并行。原 job 的 reserved/UNKNOWN 禁止重发，同来源未决仍隔离；仅明确不同站点的生产者来源可继续，无法确定来源的未决仍阻断。账户授权故障、供应商限流及原 session/request 检查不变。两个单站进程共用原工程池、原生产账及各站累计NEW上限，无新增账本。
+
+
+站内扩展对原页面用途请求的明确 HTTP 400 / provider code 1301 内容拒绝追加 `content-refusal-1301` HELD 收据：绑定原 scope、请求、来源、响应及预留费用，跳过该组继续不同页面；重启先读原账和该收据，不重发。原请求仍为 UNKNOWN，原站点分配 scope 保持未决，不写 NOT_SELECTED、PASS 或已完成。其他未知错误与无法匹配来源的拒绝仍按原阻断规则。
+
+未决页面检查只打开未核销 probe 事实实际引用的原生产/消费账，继续核验账本白名单和原工程绑定；formal 事实仍从原 registry 解析。此修复消除生产者读取无关消费者账所引起的 SQLite 锁阻塞，被引用账及 UNKNOWN 不跳过。生产者异常另存带哈希的完整堆栈原件，便于按实际断点恢复。
+
+- 2026-11-09 消费者本轮最小修复：soft 截止贯通模型纠错，额度耗尽及明确 hard 截止接回既有前缀收尾；同文档中文证据复用、可见文字 paint 适用、Esc/全选作用域及输入/前缀实值描述同步调整。仅静态修改与查看 diff，未运行测试或真实调用；实现与未验证边界见[四项修复说明](docs/消费者四项最小修复-20261109.md)。
+
+
+### 按站点并发与共享保存目标（2026-11-09）
+
+`webcollect.consumer_campaign` 接收原 `--scope`、重复的 `--site`、`--workers-per-site`、`--target`、新 `--output`、`--delivery-root` 和 `--prefix`。站点从原候选池 applications.host 解析，同站各 worker 跨生产批次动态领取原 pending；pool、consumer_db、registry、history_set 和执行输出绑定不变。worker 数不受保存目标压缩。
+
+共享文件锁串行化目标检查与原池原子领取；每次完整保存收据核验、原客户候选哈希一致且标准客户格式导出通过后，立即写独立时间戳目录。证据及运行日志写在客户目录之外。共享目标达到后禁止新领取，总控向仍在途 worker 发 SIGINT 并等待原执行取消/原账收尾，不重置 UNKNOWN 或重发。并发多保存的原件保留，客户输出锁内最多目标条数；以原账另报保存超额。目标表示新增保存待审且格式有效，不表示独立 AI 审核、人工终审、发布或客户验收。
+
+Agent 只复用同站页面结构、控件语义、动作能力及绑定/重规划知识；各条依据当页内容及具体目标独立组合动作，禁止复制历史完整链、换文章套链、固定滚动点击返回模板或用无关动作制造差异。滚动、点击、返回后从最新观察绑定，目标失效或歧义时只重规划剩余步骤。
+
+新累计有效集合可显式声明 `application_capacity_policy: flexible-total-200000-v1`（或通过 `build_set_manifest(..., application_capacity_policy=...)`），取消每应用上限，各站数量弹性；20万为交付目标，不作为新增容量门禁。未声明的冻结集合仍使用原 `legacy-per-application-500-v1`，不重解释旧结果。该策略不代表 QC 或发布通过，也不设每站2000配额。本轮遵用户要求不运行集成、回归或模拟验收，只静态语法检查后直接有界实采。
