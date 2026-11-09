@@ -780,7 +780,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
                     search_engine=None, stall_threshold=2, per_direction_cap=None, batch_key=None,
                     excluded_applications=(), model_protocol=None, discovery_mode=None, feedback_scope=None,
                     search_count=10, entry_selection='rule', categories=(), probe_search_hold=None, dispatch_holds=None,
-                    producer_pipeline=None):
+                    producer_pipeline=None, producer_optimization=None):
     """Entry/target candidate producer on webcollect-data-candidate-2.
 
     Per-response-row publication with stable identities; interruption resumes
@@ -851,10 +851,12 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             stall_threshold=stall_threshold,per_direction_cap=per_direction_cap,batch_key=batch_key,
             excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
             search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories,
-            probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds,producer_pipeline=producer_pipeline)
+            probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds,producer_pipeline=producer_pipeline,
+            producer_optimization=producer_optimization)
     if categories: raise ValueError('Category planning requires entry-tools-3 or entry-tools-4')
     if producer_pipeline == 'overlap-1':
         raise ValueError('producer_pipeline=overlap-1 requires an entry-tools grounded protocol')
+    if producer_optimization is not None:raise ValueError('producer_optimization requires entry-tools-13')
     optimized = bool(previous_batch.get('selection_version')) if previous_batch else (
         discovery_mode is not None or model_protocol == selection.TOOL_PROTOCOL)
     if discovery_mode is not None and discovery_mode not in ('new-sites','expand','mixed'):
@@ -1464,6 +1466,8 @@ def main(argv=None):
                        help='Scheduling mode only; default serial keeps the original observe->judge->publish order. '
                             'overlap-1 additionally moves the app pending-cap preflight ahead of browser/model and '
                             'prefetches the next chunk screen behind the current classify/publish (same prepared unit).')
+    entry.add_argument('--producer-optimization', choices=['observation-feedback-1'],
+                       help='Opt-in for a new entry-tools-13 batch: bounded readiness, confirmed HTTP failure receipts and query feedback.')
     entry.add_argument('--feedback-scope',type=Path,help='Explicit original consumer scope; read-only feedback frozen for this batch')
     entry.add_argument('--batch-key')
     entry.add_argument('--search-count',type=int,default=10,help='Requested results per distinct search, 1–50')
@@ -1486,7 +1490,7 @@ def main(argv=None):
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,model_protocol=a.model_protocol,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
             search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else (),
-            producer_pipeline=a.producer_pipeline),
+            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization),
             ensure_ascii=False));return
     print(json.dumps(produce(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,
         queries=a.query,sources=load_json(a.sources) if a.sources else (),target=a.target,max_searches=a.max_searches,

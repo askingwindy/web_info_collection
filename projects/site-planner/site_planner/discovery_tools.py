@@ -151,12 +151,16 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
 
 
 class DiscoveryBrowser:
-    def __init__(self, pool, ledger, run_id, output, *, image_screen=False, capture_document=False, fresh_pages=False):
+    def __init__(self, pool, ledger, run_id, output, *, image_screen=False, capture_document=False, fresh_pages=False, read_policy=None):
         self.pool, self.ledger, self.run_id = pool, ledger, run_id
         self.output = Path(output)
         self.image_screen = image_screen
         self.capture_document, self.fresh_pages = capture_document, fresh_pages
         if capture_document and not (image_screen and fresh_pages):raise ValueError('Shared document capture requires fresh anonymous image-screen pages')
+        from .producer_read_policy import VERSION
+        if read_policy not in (None,VERSION) or (read_policy and not capture_document):
+            raise ValueError('Readiness policy requires a shared anonymous document observation')
+        self.read_policy=read_policy
 
     async def __aenter__(self):
         from playwright.async_api import async_playwright
@@ -247,12 +251,32 @@ class DiscoveryBrowser:
                 nav_code = codes[0] if codes else 'UNKNOWN'
             if self.image_screen and nav_error:
                 raise OutcomeUnknown('Original image-screen navigation unresolved: '+nav_error)
+            if self.read_policy and response and type(status) is int and 400<=status<600:
+                from .producer_read_policy import FAILURE_VERSION
+                receipt={'schema_version':FAILURE_VERSION,'read_policy':self.read_policy,
+                    'uri':uri,'response_uri':response.url,'landed_uri':page.url,
+                    'http_status':status,'method':response.request.method,'navigation_error':None,
+                    'job_id':jid,'visit_id':visit['id'],'tool_request_id':rid,'observed_at':time.time(),
+                    'reason':'confirmed_http_failure_before_capture','redirect_observations':redirects}
+                path=directory/'http-failure.json';save_json(path,receipt)
+                result={'uri':uri,'landed_uri':page.url,'http_status':status,'readable':False,
+                    'navigation_error':None,'job_id':jid,'visit_id':visit['id'],
+                    'http_failure':reference(path),'read_policy':self.read_policy}
+                self.ledger.settle_visit(visit,state='failed',response_status=status,landed_uri=page.url,
+                    error=ValueError('Confirmed HTTP '+str(status)),metrics={'http_failure_policy':FAILURE_VERSION})
+                self.pool.settle_tool(rid,'failed',result)
+                self.ledger.finish(job,result=result)
+                return result
             # Same-page bounded observation, no form entry, button dispatch or replay.
             try:
                 await page.locator('body').wait_for(state='visible', timeout=5000)
             except Exception:
                 pass
-            await page.wait_for_timeout(1200)
+            timing=None
+            if self.read_policy:
+                from .producer_read_policy import wait_ready
+                timing=await wait_ready(page)
+            else:await page.wait_for_timeout(1200)
             observation = await page.evaluate('''() => ({
                 title: document.title, landed_uri: location.href,
                 text: document.body ? document.body.innerText : '',
@@ -272,8 +296,19 @@ class DiscoveryBrowser:
                 observation['image_view']=await page.evaluate(image_script)
             image = directory / 'viewport.png'; await page.screenshot(path=str(image), timeout=10000)
             if self.image_screen:
-                await page.wait_for_timeout(1200)
+                delay=1200
+                if self.read_policy:
+                    from .producer_read_policy import image_recheck_delay,PENDING_IMAGES_SCRIPT
+                    pending_images=await page.evaluate(PENDING_IMAGES_SCRIPT)
+                    delay,reason=image_recheck_delay(observation['image_view'],pending_images)
+                    timing['pending_visible_images_at_recheck']=pending_images
+                    started=time.monotonic()
+                if delay:await page.wait_for_timeout(delay)
                 observation['image_view_after']=await page.evaluate(image_script)
+                if timing is not None:
+                    timing.update(image_recheck_delay_ms=delay,image_recheck_reason=reason,
+                        image_recheck_seconds=round(time.monotonic()-started,4))
+                    observation['read_timing']=timing
             observation.update({'requested_uri': uri, 'http_status': status if status is not None else 'UNKNOWN',
                 'navigation_error': nav_error, 'redirect_observations': redirects, 'blocked_requests': blocked,
                 'navigation_error_code': nav_code, 'landed_public_http': landed_public,
@@ -282,12 +317,14 @@ class DiscoveryBrowser:
             if self.capture_document:
                 if not response or response.request.method!='GET':raise ValueError('No original browser GET response')
                 from .entry_access import wire_uri
-                if wire_uri(response.url)!=wire_uri(observation['landed_uri']):raise ValueError('Observed page moved beyond the captured GET response')
+                if wire_uri(response.url)!=wire_uri(observation['landed_uri']):
+                    raise (OutcomeUnknown if self.read_policy else ValueError)('Observed page moved beyond the captured GET response')
                 raw=await asyncio.wait_for(response.body(),timeout=5)
                 if len(raw)>4_000_000:raise ValueError('Original browser response exceeds evidence bound')
                 raw_path=directory/'response-body.bin';raw_path.write_bytes(raw)
                 dom_path=directory/'rendered-dom.html';dom_path.write_text(await page.content(),encoding='utf-8')
-                if page.url!=observation['landed_uri']:raise ValueError('Page route changed during shared capture')
+                if page.url!=observation['landed_uri']:
+                    raise (OutcomeUnknown if self.read_policy else ValueError)('Page route changed during shared capture')
                 encoding=await page.evaluate('document.characterSet')
                 document={'document_policy':'producer-shared-observation-1','uri':uri,'request_uri':uri,
                     'landed_uri':observation['landed_uri'],'encoding':encoding,'content_type':response.headers.get('content-type',''),
@@ -316,10 +353,14 @@ class DiscoveryBrowser:
             self.ledger.finish(job, result=result)
             return result
         except BaseException as error:
+            # A real V1 baseline hit a second navigation while evaluating the
+            # page. Its visible outcome is unresolved, not a confirmed failure.
+            navigation_unsettled=bool(self.read_policy and 'Execution context was destroyed' in str(error))
+            if navigation_unsettled:nav_error=type(error).__name__;nav_code='UNKNOWN'
             failure = {'uri': uri, 'error_type': type(error).__name__, 'charge': 'UNKNOWN',
                        **({'navigation_error':nav_error,'navigation_error_code':nav_code} if self.image_screen else {})}
             if visit and any(v['id'] == visit['id'] and v['state'] == 'reserved_for_dispatch' for v in self.ledger.visits()):
-                self.ledger.settle_visit(visit, state='unknown' if self.image_screen and isinstance(error,(OSError,TimeoutError,asyncio.CancelledError,OutcomeUnknown)) else 'failed', error=error)
+                self.ledger.settle_visit(visit, state='unknown' if self.image_screen and (navigation_unsettled or isinstance(error,(OSError,TimeoutError,asyncio.CancelledError,OutcomeUnknown))) else 'failed', error=error)
             self.pool.settle_tool(rid, 'unknown' if self.image_screen else 'failed', failure)
             if job:
                 self.ledger.finish(job, 'review_required', result=failure, error=type(error).__name__)

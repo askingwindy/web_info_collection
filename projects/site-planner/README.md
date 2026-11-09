@@ -130,3 +130,7 @@ S1新增可选`budget.max_top_level_visits`：每次主动来源fetch/page.goto�
 
 
 2026-11-04 显式entry-tools-11的新100页真实验证已完成并停止。独立业务与自然任务、参考完整度分别验收；业务达本轮工程门槛，整体独立验收尚未通过，失败/缺项/UNKNOWN按原件保留。原工程原账和旧标签不变，不自动续产，不启动消费者或轨迹QC。工程、Agent与token/耗时归因见 [V11真实验证与复盘](../../docs/生产者V11新100页业务与自然任务独立验收-20261104.md)。
+
+## 显式观察与失败反馈优化
+
+新 `entry-tools-13` 批次可增加 `--producer-optimization observation-feedback-1`：有界就绪等待、明确 HTTP 4xx/5xx 提前收束、近期页面失败摘要进入找站拟词 Agent；兼容 `serial` 与 `overlap-1`。缺省不改变旧路径，同 run 不切换，旧 URI/UNKNOWN 不重发。成功文档和图片证据、V13 业务资格及 Table2 契约保持原义。当前正式 1000 页批次不启用。实现及实际验证状态以[实施记录](../../docs/生产者固定等待优化与明确失败前置及Agent反馈实施方案-20261109.md)为准。

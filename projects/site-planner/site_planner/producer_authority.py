@@ -65,7 +65,7 @@ def disjoint_requests(ledger, *, scope=None, urls=(), categories=(), independent
                 if row['error']!='TimeoutError' and code not in ('1113','1301','1302','1305'):
                     continue
                 original=json.loads(row['payload']).get('input',{})
-                if row['kind']=='ai-search-plan' and original.get('version')=='producer-category-query-2':
+                if row['kind']=='ai-search-plan' and original.get('version') in ('producer-category-query-2','producer-category-query-4'):
                     if not set(categories).intersection(original['categories']):
                         allowed.add(row['id'])
                 elif row['kind']=='ai-application-site-classification-1' and original.get('protocol') in ('producer-site-classification-3','producer-site-classification-4'):
