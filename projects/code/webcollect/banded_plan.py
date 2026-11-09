@@ -129,12 +129,18 @@ V10_CHOICE_ADDENDUM = (
 )
 V11_READING_LINK_PREFERENCE = (
     '浏览型任务在任务契约允许范围内，路径可自由组合向上或向下滚动、不同页内点击和跨页访问；点击不限相关词条，不设点击次数配额，每步仍需实际浏览目的。'
+    '当前页面证据存在与目标相关的目录章节或正文链接时，首轮计划自然包含至少一次有独立查阅目的的点击；纯滚动只在页面确无目标相关可读链接时才是合理选择，不强制每条轨迹含点击或返回。'
     '计划含跨页访问时安排核验落地并阅读，再返回来源继续剩余计划；可先完成已计划的落地阅读，不要求立即back。'
     '预期的跨页和返回本身不要求重规划，原计划仍有目的且可执行的剩余步骤继续；真正办理型跳转按办理目标继续，不强制返回。'
 )
 V11_PLANNING_GUIDANCE = (
-    '首轮规划自然可行的至少5个有用动作；已接受且仍有目的的剩余步骤继续，实际目标提前完成不足5步照实short_flow，不补动作。'
+    '默认按至少5个有独立业务用途的有效动作规划完整路径；执行中自然提前完成不足5步仍照实short_flow，不为长度补动作。'
+    '自然规划不足5步时先不提交短计划：在原目标范围内扩展仍有独立用途的步骤（结果读取、关联词条核验、章节定位、补充核对），凑足有证据用途的5步；确无可扩展时才规划短路径，并在short_reason写出首帧证据依据，不得把惯用的"打开加一次滚动"当作充分阅读，也不得添加无关动作凑数。'
+    '结果型页面要把交互拆成原子动作，不把“修改参数并计算”压成一步。狗狗年龄等计算页有两种可参考的5步组合：已输入值确需更正时，用“输入→全选→删除→输入更正值→点击计算”；原目标允许比较两组输入时，用“输入首个值→点击计算→全选并替换为新值前按宿主规则分步执行→再次点击计算”，使完整路径达到至少5个有效动作，再读取并核对本次结果。'
+    '不得凭空制造错误输入或重复无效操作；只有观察到原值确需更正时才做全选、删除、重输。结果读取和最终核验写入checks/finish_when，不冒充有效动作；第二个输入组必须有原目标内的比较或补充核验用途，并分别核对两组真实结果。'
+    '原目标为空需要自选自然任务时，默认选择需要至少5个有效动作、终态结果可核验的任务；阅读页自选能由正文证据回答的具体问题，必要时包含关联词条核验，不选仅打开或一次滚动即可完成的目标。'
     'url预期必须填写当前证据已知的完整href；页面或词条标题用visible_text，不把短名称猜作URL。'
+    '首帧已成立的说明性终点在计划走完时同样不能作为完成依据：声明的结果项未核验时，宿主将要求补充使结果可见并读取的步骤、把终点绑定动作后的新结果证据，或如实停止。'
 ) + V11_READING_LINK_PREFERENCE
 # 2026-11-07 goal semantics: first and follow-up rounds share one meaning —
 # the endpoint must prove the requested result, never a pre-existing keyword.
@@ -1550,6 +1556,35 @@ class Controller:
         result['session_objective']=objective
         return result
 
+    def weak_endpoint_unverified(self,s):
+        """A generalized finish_when already established on the first frame
+        cannot complete a result-bearing goal on its own, including when the
+        planned route is exhausted. Contracted goal-evidence endpoints are
+        exempt: proved() already demands action-produced evidence for them.
+        PENDING auxiliary checks keep their existing non-blocking semantics;
+        only UNVERIFIED declared result checks block the endpoint."""
+        if not getattr(self,'endpoint_established_at_first_frame',False):return []
+        contract=contract_for(s.task)
+        if contract and self.plan['finish_when']['kind'] in ('goal_evidence','search_results','document_changed'):return []
+        facts=self.fact_progress(s)
+        return [{'field':c.get('field'),'status':c.get('status')}
+                for c in (facts.get('checks') or []) if c.get('status')=='UNVERIFIED']
+
+    async def offer_weak_endpoint(self,s,unverified):
+        key=(s.current['observation_id'],s.actual_dispatches)
+        if getattr(self,'_weak_endpoint_feedback',None)==key:
+            from .react_session import ReactStop
+            raise ReactStop('blocked','首帧即成立的终点谓词不能证明目标结果；同一状态重规划后仍无动作新证据，如实结束','collector')
+        self._weak_endpoint_feedback=key
+        feedback={'reason':'终点条件在首帧已成立，且声明的结果检查项仍未由已执行动作核验；计划步数走完不等于目标结果完成',
+                  'predicate':deepcopy(self.plan['finish_when']),'unverified_checks':unverified}
+        s.event('plan-weak-endpoint',**feedback)
+        options=[{'choice':'replan','meaning':'终点谓词首帧已成立且结果未核验：补充使目标结果可见并读取的剩余步骤，或把终点绑定动作后新产生的结果证据',
+                  'weak_endpoint':feedback},
+                 *self.image_option(s,object_sha256(self.plan['finish_when']),'当前同帧原分辨率图'),
+                 {'choice':'stop','meaning':'如实结束，不声称目标结果已达成'}]
+        await self.request(s,options)
+
     async def finish(self,s,reason,endpoint=True):
         s.goal_evidence=self.fact_progress(s)
         s.event('goal-evidence', **s.goal_evidence)
@@ -1635,6 +1670,9 @@ class Controller:
             s._range_close(limit_kind(limit),f'达到{limit}次原子尝试，结束已证连续片段');return
         if self.position>=len(self.plan['steps']):
             if self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False):
+                unverified=self.weak_endpoint_unverified(s)
+                if unverified:
+                    await self.offer_weak_endpoint(s,unverified);return
                 await self.finish(s,'条件路径终点及同步可见末态已核验；不声明完整业务完成');return
             meaning = ('目标仍缺证；有可见且未执行的业务动作时按剩余额度修订，否则停止'
                        if contract else '终点条件未证实，重规划')
@@ -1848,6 +1886,13 @@ class Controller:
                 # completion of the remaining route.
                 await self.finish(s,'当前目标已在原轨迹和本帧得到验证，结束剩余计划')
             elif self.position>=len(self.plan['steps']):
+                unverified=self.weak_endpoint_unverified(s)
+                if unverified:
+                    # The route is exhausted but the first-frame predicate still
+                    # cannot prove the declared result: let the model add the
+                    # result-producing/reading steps or stop honestly.
+                    await self.offer_weak_endpoint(s,unverified)
+                    return
                 await self.finish(s,'已证实计划可见终点；自然提前完成不凑步')
             elif getattr(self,'endpoint_established_at_first_frame',False):
                 # A generalized finish_when that already held on the first frame

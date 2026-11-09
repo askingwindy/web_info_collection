@@ -20,6 +20,9 @@
 **/dist/
 *.sqlite3
 *.sqlite3-*
+/delivery/
+/deliveries/
+/deliveries
 
 # Keep run plans, reports and collected data out of source history; pure tests are tracked.
 /m1-sample/

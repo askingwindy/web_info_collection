@@ -199,6 +199,10 @@ def validate_observation(record):
     observed=project(load_json(anchor['state']['path']),anchor)
     if binding.get('application_registry')!=claim.get('application_registry'):
         raise ValueError('Original application aliases changed')
+    if (binding.get('site_id_version')!=claim.get('site_id_version')
+            or binding.get('site_id')!=claim.get('site_id')
+            or claim.get('site_id') is not None and claim.get('site_id_version')!='table1-rowid-site-id-1'):
+        raise ValueError('Original Table1 delivery site ID changed')
     if binding.get('sources', claim.get('sources')) != claim.get('sources'):
         raise ValueError('Original frozen candidate sources changed')
     if not observed['capture_verified'] or not observed['document_identity'] or not application_matches(claim['snapshot']['entry_url'],observed['url'],claim.get('application_registry')):
@@ -221,7 +225,9 @@ def capability(claim, anchor, claim_reference, mode, *, category=None, name=None
         'capabilities':[{'page_uri':state['url'],'title':state.get('title') or candidate.get('name',name),'page_anchor':anchor}],
         'candidate_observation':{'schema_version':VERSION,'candidate_id':claim['candidate_id'],'claim_id':claim['claim_id'],
             'version':claim['version'],'candidate':deepcopy(candidate),'claim_reference':claim_reference,
-            'application_registry':claim.get('application_registry')}}
+            'application_registry':claim.get('application_registry'),
+            **({'site_id_version':'table1-rowid-site-id-1','site_id':claim['site_id']}
+               if claim.get('site_id') else {})}}
     if candidate.get('schema_version') == 'webcollect-data-candidate-2':
         result['candidate_observation']['sources'] = deepcopy(claim.get('sources', []))
     result['classification'] = {'status': 'pending' if result['site_category'] == 'UNKNOWN' else 'source_provided',
@@ -241,6 +247,10 @@ def validate_task_binding(task, record=None):
         raise ValueError('Frozen claim target changed')
     if binding.get('application_registry')!=claim.get('application_registry'):
         raise ValueError('Frozen application aliases changed')
+    if (binding.get('site_id_version')!=claim.get('site_id_version')
+            or binding.get('site_id')!=claim.get('site_id')
+            or claim.get('site_id') is not None and claim.get('site_id_version')!='table1-rowid-site-id-1'):
+        raise ValueError('Frozen Table1 delivery site ID changed')
     if binding.get('sources', claim.get('sources')) != claim.get('sources'):
         raise ValueError('Frozen candidate sources changed')
     if task['fragment'].get('candidate_attempt')!=binding['claim_id']:

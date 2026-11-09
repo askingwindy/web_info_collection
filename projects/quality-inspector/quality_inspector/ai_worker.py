@@ -424,6 +424,15 @@ def validate_review(value, step_ids):
                 or check['status']!='REVIEW_REQUIRED' and not check['evidence_steps']):
             raise ValueError('Unbound semantic evidence: '+name)
     scope = value.get('failure_assessment')
+    if scope and not scope.get('evidence_steps') and all(
+            check['status']=='PASS' for check in value['checks'].values()):
+        # Deterministic equivalence: an all-PASS review carrying an extra
+        # "no failure" assessment with empty evidence_steps is the same
+        # verdict as omitting the field. Normalize it away instead of
+        # demanding failure frames that by definition do not exist. The
+        # original provider reply stays untouched in the settled ledger;
+        # any review with a non-PASS check keeps the strict locality rule.
+        value.pop('failure_assessment',None);scope=None
     if scope and (not scope.get('reason', '').strip() or not scope.get('evidence_steps')
                   or not set(scope['evidence_steps']) <= set(step_ids)):
         raise ValueError('Failure locality must cite actually reviewed original frames')

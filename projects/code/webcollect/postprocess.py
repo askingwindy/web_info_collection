@@ -510,6 +510,21 @@ def terminal_outcome(task, record, final_state):
         return 'failed', description
     if terminal.get('stop_reason') not in ('ready', 'budget'):
         return 'failed', description
+    if task['fragment'].get('ending_policy'):
+        checks=(terminal.get('goal_evidence') or {}).get('checks') or []
+        unverified=[str(c.get('field') or '未命名检查项') for c in checks if c.get('status')=='UNVERIFIED']
+        if unverified:
+            # Declared result checks that remain UNVERIFIED can never export as
+            # success. PENDING auxiliary checks keep their established
+            # non-blocking semantics and stay for later evidence binding work.
+            return 'failed','目标声明的结果检查项未核验：'+'、'.join(unverified)+'；'+description
+        verified=[c for c in checks if c.get('status')=='VERIFIED' and str(c.get('visible_text') or '').strip()]
+        if verified:
+            # The delivery summary quotes host-verified goal facts first,
+            # never arbitrary viewport prose such as FAQ or page descriptions.
+            facts='；'.join(str(c.get('field') or '已核验项')+'「'+str(c['visible_text']).strip()[:120]+'」'
+                           for c in verified[:3])
+            description='已核验目标事实：'+facts+'。'+description
     return 'success', description
 
 

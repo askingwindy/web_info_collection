@@ -874,7 +874,9 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             'version': bound_claim['version'], 'candidate': deepcopy(bound_claim['snapshot']),
             'sources': deepcopy(bound_claim.get('sources', [])),
             'claim_reference': react_candidate['claim_reference'],
-            'application_registry': bound_claim.get('application_registry')}
+            'application_registry': bound_claim.get('application_registry'),
+            **({'site_id_version':'table1-rowid-site-id-1','site_id':bound_claim['site_id']}
+               if bound_claim.get('site_id') else {})}
         if react_candidate.get('session_objective'):
             from .session_objective import apply
             apply(task,react_candidate['session_objective'])

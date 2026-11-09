@@ -647,7 +647,9 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
             'candidate_id':claim['candidate_id'],'version':claim['version']})
         objective_binding={**objective_binding,'reference':local_reference}
     claim = {**current, 'pool':str(pool.path),
-        'application_registry':supplied_policy.get('site_failure_guard',{}).get('application_registry')}
+        'application_registry':supplied_policy.get('site_failure_guard',{}).get('application_registry'),
+        'site_id_version':'table1-rowid-site-id-1',
+        'site_id':pool.delivery_site_id(claim['candidate_id'])}
     claim_ref = exclusive(root/'claim.json', claim)
     pool.stage(claim, 'observation', {'claim_reference':claim_ref})
     async def renew():

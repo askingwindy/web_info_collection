@@ -527,7 +527,8 @@ class RuntimeStore:
                 day = datetime.fromtimestamp(current, ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
                 from .react_protocol import VERSION as native_protocol
                 ids = allocate_in_transaction(con, allocation_uri(task), task['site_category'], 'real', day, batch_id,
-                    category_metadata=task.get('fragment',{}).get('decision_protocol') == native_protocol)
+                    category_metadata=task.get('fragment',{}).get('decision_protocol') == native_protocol,
+                    required_site_id=(task.get('candidate_binding') or {}).get('site_id'))
                 if _fault:
                     _fault('after_allocation_before_attempt')
                 attempt_id, token = str(uuid.uuid4()), str(uuid.uuid4())

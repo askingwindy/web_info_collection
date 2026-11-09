@@ -26,11 +26,13 @@ def ensure_registry_schema(con):
     ''')
 
 
-def allocate_in_transaction(con, uri, category, sample_kind='integration', day=None, batch_id=None, *, category_metadata=False):
+def allocate_in_transaction(con, uri, category, sample_kind='integration', day=None, batch_id=None, *, category_metadata=False, required_site_id=None):
     """Reserve an ID inside an existing write transaction, without committing.
 
     Runtime callers persist the task/attempt mapping in this same transaction.
     A committed reservation is never recycled, including an unstarted attempt.
+    Candidate tasks may freeze the producer-maintained Table1 site ID; legacy
+    tasks retain the original registry-local allocation when it is absent.
     """
     if not con.in_transaction:
         raise ValueError('编号分配必须处于调用方写事务中')
@@ -40,6 +42,8 @@ def allocate_in_transaction(con, uri, category, sample_kind='integration', day=N
         raise ValueError('站点必须提供 HTTP(S) URI 和类目')
     if sample_kind not in ('integration', 'real'):
         raise ValueError('未知样本性质')
+    if required_site_id is not None and (not re.fullmatch(r'S\d{6}', required_site_id) or required_site_id == 'S000000'):
+        raise ValueError('Table1 站点编号格式不正确')
     day = day or datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d')
     if not re.fullmatch(r'\d{8}',day): raise ValueError('日期编号须为 YYYYMMDD')
     if batch_id is not None and not re.fullmatch(r'B\d{8}_\d{3,}',batch_id):
@@ -56,9 +60,14 @@ def allocate_in_transaction(con, uri, category, sample_kind='integration', day=N
         site_number,old_category,kind,seq=row
         if kind != sample_kind or (old_category != category and not category_metadata):
             raise ValueError('已有 URI 的类目或样本性质不同，不允许静默变更')
+        if required_site_id is not None and site_number != int(required_site_id[1:]):
+            raise ValueError('Table1 站点编号与现有交付账本不一致')
     else:
-        site_number=max(con.execute('SELECT COALESCE(MAX(id),0) FROM sites').fetchone()[0],floors.get('site',0))+1
+        site_number=(int(required_site_id[1:]) if required_site_id is not None else
+                     max(con.execute('SELECT COALESCE(MAX(id),0) FROM sites').fetchone()[0],floors.get('site',0))+1)
         if site_number > 999999: raise ValueError('站点编号已超出六位范围')
+        if site_number <= floors.get('site',0) or con.execute('SELECT 1 FROM sites WHERE id=?',(site_number,)).fetchone():
+            raise ValueError('Table1 站点编号已被其他站点或历史编号下限占用')
         seq=1
         con.execute('INSERT INTO sites VALUES(?,?,?,?,?)',(site_number,uri,category,sample_kind,seq))
     site_id=f'S{site_number:06}'

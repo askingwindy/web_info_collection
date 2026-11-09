@@ -231,6 +231,15 @@ class CandidatePool:
         with self.pool.connect() as con:
             return self._concurrency_contract(con)
 
+    def delivery_site_id(self, candidate_id):
+        """Freeze the producer-maintained Table1 row number as the delivery site ID."""
+        with self.pool.connect() as con:
+            row = con.execute('''SELECT a.rowid FROM data_candidates c
+                JOIN applications a ON a.id=c.application_id WHERE c.candidate_id=?''', (candidate_id,)).fetchone()
+        if not row or type(row[0]) is not int or not 1 <= row[0] <= 999999:
+            raise ValueError('Table1 delivery site number missing or outside the six-digit range')
+        return f'S{row[0]:06}'
+
     @property
     def entry_protocol_installed(self):
         return self.extension_version == EXTENSION2
