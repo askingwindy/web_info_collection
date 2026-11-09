@@ -385,7 +385,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
     feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger,
         candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
-    if task.get('fragment', {}).get('ending_policy') != 'webcollect-continuous-attempt-ending-4' and feedback_context['unresolved']:
+    if task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5') and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
     from .banded_plan import enabled as banded_plan_enabled
@@ -422,7 +422,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
             evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
-        if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') != 'webcollect-continuous-attempt-ending-4':
+        if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5'):
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         return {'status': 'rejected', 'failure_class': failure_class,
@@ -432,8 +432,17 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     verified_session=None
     from .trusted_prefix import VERSION as PREFIX_VERSION, V2_VERSION as PREFIX_V2, candidate_end, project_prefix
     prefix_rule=task['fragment'].get('trusted_prefix_protocol')
+    from .postprocess import ready_requires_prefix
+    from .closing_policy import EFFECTIVE_VERSION
+    ready_with_missing_checks=False
+    if (task['fragment'].get('ending_policy')==EFFECTIVE_VERSION
+            and summary.get('stop_reason')=='ready'):
+        # Use the sealed terminal, not the model summary or a fresh inference.
+        from .planning import verify_evidence
+        verify_evidence([summary['terminal']])
+        ready_with_missing_checks=ready_requires_prefix(task,read_json(Path(summary['terminal']['path'])))
     prefix_requested=(prefix_rule in (PREFIX_VERSION, PREFIX_V2) and
-        (summary['unknown'] or summary.get('host_failure') or
+        (summary['unknown'] or summary.get('host_failure') or ready_with_missing_checks or
          (ending and ending.get('flagged')) or summary.get('stop_reason') in ('blocked','no_path','budget')))
     if prefix_requested:
         try:
@@ -454,6 +463,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                         'original_failure_class':summary['failure_class'],
                         'original_host_failure':summary.get('host_failure'),
                         'original_collection_ending':ending,'original_goal_completed':False,
+                        'ready_with_unverified_required_checks':ready_with_missing_checks,
                         'original_request_ledger_unchanged':True})
         except (ValueError,KeyError,TypeError,OSError) as prefix_error:
             prefix_end=None

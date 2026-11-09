@@ -156,9 +156,52 @@ def research_duplicate_basis(task, registry):
         raise ValueError('Research duplicate exception lacks original saved authorization')
     original_binding = json.loads(original['binding'])
     if (Path(original_binding['registry']).resolve() != Path(registry).resolve()
-            or Path(live['binding']['registry']).resolve() != Path(registry).resolve()
-            or load_json(Path(original_binding['output'])/'session-objective.json') != load_json(descriptor['objective']['path'])):
+            or Path(live['binding']['registry']).resolve() != Path(registry).resolve()):
         raise ValueError('Research duplicate exception changes the registry or original goal')
+    verify_evidence([descriptor['objective']])
+    original_objective=Path(original_binding['output'])/'session-objective.json'
+    if original_objective.is_file():
+        from .batch_core import file_sha
+        if (file_sha(original_objective)!=descriptor['objective']['sha256']
+                or load_json(original_objective)!=load_json(descriptor['objective']['path'])):
+            raise ValueError('Research duplicate exception changes original objective bytes or goal')
+    else:
+        # V1 may freeze its first model-proposed research objective when the
+        # settled original had none. The live research_claimed event above is
+        # mandatory; task prose alone never authorizes duplicate acceptance.
+        from .session_objective import bind
+        expected=bind(descriptor['objective'],frozen)
+        objective_task=task
+        current=task.get('fragment',{}).get('session_objective')
+        spec_objective=task.get('workflow_proposal',{}).get('spec',{}).get('session_objective')
+        if current is None and spec_objective is None:
+            # A customer fragment may omit its execution-only objective. Read
+            # the original task only from this live claim's sealed output,
+            # retaining the exact candidate/claim-reference binding.
+            from .batch_core import file_sha
+            output=live['binding'].get('output')
+            matches=[]
+            for boundary_path in (Path(output)/'execution/capture/evidence').glob('*/raw/boundary.json') if output else []:
+                receipt=load_json(boundary_path.parent/'raw-receipt.json')
+                boundary_ref=receipt.get('boundary') or {}
+                verify_evidence([boundary_ref])
+                if (Path(boundary_ref['path']).resolve()!=boundary_path.resolve()
+                        or receipt.get('files_sha256',{}).get('boundary.json')!=file_sha(boundary_path)):
+                    raise ValueError('Research original task lacks sealed boundary binding')
+                original_task=load_json(boundary_path).get('task',{})
+                if original_task.get('candidate_binding')==binding:
+                    matches.append(original_task)
+            if len(matches)!=1:
+                raise ValueError('Research duplicate exception lacks unique sealed original objective task')
+            objective_task=matches[0]
+            current=objective_task.get('fragment',{}).get('session_objective')
+            spec_objective=objective_task.get('workflow_proposal',{}).get('spec',{}).get('session_objective')
+        if (descriptor.get('objective_origin')!='model-proposed-research'
+                or not isinstance(current,dict) or current!=spec_objective
+                or bind(current['reference'],frozen)!=current
+                or current.get('objective')!=expected['objective']
+                or load_json(current['reference']['path'])!=load_json(descriptor['objective']['path'])):
+            raise ValueError('Research duplicate exception lacks frozen model-proposed objective binding')
     saved = json.loads(result['record'])
     return {'schema_version':'candidate-research-duplicate-1', 'research_claim_id':binding['claim_id'],
             'original_claim_id':descriptor['original_claim_id'], 'original_sample_id':saved['sample_id'],

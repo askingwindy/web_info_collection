@@ -83,6 +83,30 @@ def state_key(state, kind):
     return object_sha256(body)
 
 
+def content_anchor_corroborated(anchor, observed):
+    """Retain substantive rendered article sentences in the same live document.
+
+    Capture text blocks separate article prose from navigation, edit widgets and
+    announcements. Match original complete sentences literally (including
+    numbers), without requiring identical viewport clipping or UI hydration.
+    """
+    if (not anchor.get('document_identity')
+            or anchor.get('document_identity') != observed.get('document_identity')
+            or anchor.get('url') != observed.get('url')
+            or anchor.get('title') != observed.get('title')):
+        return False
+    from .dynamic_regions import projection
+    def sentences(state):
+        state=projection(state)
+        ids={e.get('element_id') for e in state.get('elements', [])}
+        return {re.sub(r'\s+', '', sentence) for block in state.get('text_blocks', [])
+                if block.get('element_id') in ids
+                for sentence in block.get('complete_sentences', [])
+                if isinstance(sentence,str) and len(re.sub(r'\s+', '', sentence)) >= 40}
+    shared=sentences(anchor) & sentences(observed)
+    return sum(map(len,shared)) >= 80
+
+
 def validate_identity(task, *, observed_states=None):
     value = task.get('pilot_identity')
     if value is None:
@@ -171,8 +195,10 @@ def validate_identity(task, *, observed_states=None):
                 and _normalized(row.get('title', '')) == _normalized(state.get('title', ''))
                 and _contains_in_order(original, _normalized(row.get('visible_text', '')))
                 for row in observed_states)
+        from .action_stability import ACTION_SCOPED_VERSION
         if (not corroborated and page['kind']=='content' and 'candidate_binding' in task
-                and task.get('fragment',{}).get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4')):
+                and task.get('fragment',{}).get('action_stability_protocol') in
+                    ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4',ACTION_SCOPED_VERSION)):
             from .action_stability import reading_projection
             mains=[e for e in state.get('elements',[]) if e.get('native_role')=='main' and e.get('visible')]
             if len(mains)==1:
@@ -184,6 +210,10 @@ def validate_identity(task, *, observed_states=None):
                         except ValueError:continue
                         if corroborated:break
                 except ValueError:pass
+        if (not corroborated and page['kind']=='content' and 'candidate_binding' in task):
+            if task.get('fragment',{}).get('action_stability_protocol') == ACTION_SCOPED_VERSION:
+                corroborated=any(page_url(row['url']) in aliases and content_anchor_corroborated(state,row)
+                                 for row in observed_states)
         _require(corroborated, 'actual task page does not corroborate original content/function anchor')
     return {'binding_sha256': object_sha256(value), 'application_uri': app['canonical_uri'],
             'application_key': page_url(app['canonical_uri']), 'task_page_urls': sorted(aliases),
@@ -195,9 +225,9 @@ def require_actions(task, count, *, final=False, required=False):
         return
     from .react_session import is_react_task
     if is_react_task(task):
-        # The react protocol has no product step cap: delivery length is
-        # judged at derivation and QC (>=5 effective or a documented short
-        # flow). Only actually executed actions reach a final proof.
+        # This count describes actual dispatches. V5's effective-action cap
+        # is checked by its ending/derivation protocol; no-effect dispatches
+        # remain accounted for without counting as effective business steps.
         if type(count) is not int or (final and count < 1):
             raise ValueError('REACT_EXECUTION_BOUNDS: react final proof requires at least one real action')
         return

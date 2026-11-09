@@ -2,6 +2,15 @@
 ({selector = null, index = 0, assertions = [], protected_selectors = []} = {}) => {
   if(!document.body)throw new Error('DOCUMENT_NOT_READY: body absent during navigation');
   const width = innerWidth, height = innerHeight;
+  // This observer is synchronous and read-only. Cache repeated native style
+  // reads only inside this evaluation; a later observation gets fresh values.
+  const styleCache=new WeakMap();
+  const styleOf=(node,pseudo=null)=>{
+    let entries=styleCache.get(node);
+    if(!entries){entries=new Map();styleCache.set(node,entries);}
+    if(!entries.has(pseudo))entries.set(pseudo,getComputedStyle(node,pseudo));
+    return entries.get(pseudo);
+  };
   const target = selector ? document.querySelectorAll(selector)[index] : null;
   if(target?.matches('iframe,frame'))throw new Error('UNSUPPORTED_FRAME: task targets inside embedded frames require frame-aware execution');
   const records = [], nodes = [];
@@ -12,7 +21,7 @@
   const axisScale = element => {
     if(!element)return {a:1,b:0,c:0,d:1};
     if(scaleCache.has(element))return scaleCache.get(element);
-    const style=getComputedStyle(element),matrix=new DOMMatrixReadOnly(style.transform==='none'?undefined:style.transform);
+    const style=styleOf(element),matrix=new DOMMatrixReadOnly(style.transform==='none'?undefined:style.transform);
     const rotation=style.rotate||'none';
     const factors=(style.scale==='none'||!style.scale?[1,1]:style.scale.split(/\s+/).map(Number));
     const sx=factors[0],sy=factors[1]??sx;
@@ -36,11 +45,14 @@
                   c:parent.a*c+parent.c*d,d:parent.b*c+parent.d*d};
     scaleCache.set(element,result);return result;
   };
+  const clipCache=[new WeakMap(),new WeakMap()];
   const clipFor = (element,includeSelf=false) => {
+    const cache=clipCache[Number(includeSelf)];
+    if(cache.has(element))return cache.get(element);
     let left=0,top=0,right=width,bottom=height;
     for(let parent=element;parent;parent=parent.parentElement) {
       if(parent===document.documentElement||parent===document.scrollingElement)continue;
-      const style=getComputedStyle(parent),r=parent.getBoundingClientRect(),scale=axisScale(parent);
+      const style=styleOf(parent),r=parent.getBoundingClientRect(),scale=axisScale(parent);
       // Signed axis permutations (including exact quarter/half turns) still
       // map local rectangles to viewport rectangles. Use actual floating
       // border-box dimensions; offset/client dimensions are integer CSS px.
@@ -68,7 +80,7 @@
       // CSS propagates BODY overflow to the viewport when the root overflow
       // is visible. Its scrolled border box is then not a clipping ancestor.
       if(parent===document.body) {
-        const rootStyle=getComputedStyle(document.documentElement);
+        const rootStyle=styleOf(document.documentElement);
         if(rootStyle.overflowX==='visible'&&rootStyle.overflowY==='visible')continue;
       }
       // clientWidth/Height and offsetWidth/Height are integer CSS pixels;
@@ -89,13 +101,13 @@
         else {left=Math.max(left,Math.min(a.x,b.x));right=Math.min(right,Math.max(a.x,b.x));}
       }
     }
-    return {left,top,right,bottom};
+    const result={left,top,right,bottom};cache.set(element,result);return result;
   };
   const transparentInlineCache=new WeakMap();
   const emptyInlineAt = (element,x,y) => {
     let data=transparentInlineCache.get(element);
     if(!data) {
-      const style=getComputedStyle(element);
+      const style=styleOf(element);
       const noPaint=s=>s.backgroundColor==='rgba(0, 0, 0, 0)'&&s.backgroundImage==='none'&&
         ['Top','Right','Bottom','Left'].every(side=>parseFloat(s[`border${side}Width`])===0)&&
         s.boxShadow==='none'&&s.textShadow==='none'&&s.filter==='none'&&s.backdropFilter==='none'&&s.transform==='none';
@@ -103,7 +115,7 @@
       // it (e.g. a padded section link). Do not generalize this exception to
       // positioned overlays, painted backgrounds, borders or pseudo content.
       const empty=style.display==='inline'&&style.position==='static'&&noPaint(style)&&
-        ['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(element,p).content));
+        ['::before','::after'].every(p=>['none','normal'].includes(styleOf(element,p).content));
       const range=document.createRange();range.selectNodeContents(element);
       data={empty,rects:empty?[...range.getClientRects()]:[]};transparentInlineCache.set(element,data);
     }
@@ -144,7 +156,7 @@
     // DOM values are not visible strings when their actual text fill merges
     // into the provable background. The same paint rule applies to prose and
     // labels; background effects alone do not make foreground text invisible.
-    if(!frameworkLabelPaint(node,emptyPlaceholder?getComputedStyle(node,'::placeholder'):null))return false;
+    if(!frameworkLabelPaint(node,emptyPlaceholder?styleOf(node,'::placeholder'):null))return false;
     // Preserve the existing complete-control occlusion gate for value evidence.
     // A target placeholder is instead bound to its fully measured glyph area;
     // a sibling's shared border does not paint over that text.
@@ -158,7 +170,7 @@
       const control=node.getBoundingClientRect(),clip=clipFor(node);
       if(control.width<=0||control.height<=0||control.left<clip.left||control.top<clip.top||
          control.right>clip.right||control.bottom>clip.bottom)return false;
-      const text=node.placeholder,style=getComputedStyle(node),placeholder=getComputedStyle(node,'::placeholder');
+      const text=node.placeholder,style=styleOf(node),placeholder=styleOf(node,'::placeholder');
       // Native placeholder glyphs have no DOM Text Range. Measure their actual
       // computed font, reject invisible/unsupported paint, then hit-test the
       // complete measured text rectangle. A visible input box alone is not proof.
@@ -174,11 +186,11 @@
       if(!foreground||!fill||foreground[3]!==1||fill[3]!==1)return false;
       let background=null;
       for(let owner=node;owner;owner=owner.parentElement) {
-        const paint=getComputedStyle(owner);
+        const paint=styleOf(owner);
         if(paint.opacity!=='1'||paint.filter!=='none'||paint.mixBlendMode!=='normal'||
            paint.maskImage!=='none'||paint.contentVisibility==='hidden')return false;
         for(const pseudo of ['::before','::after']) {
-          if(!['none','normal'].includes(getComputedStyle(owner,pseudo).content))return false;
+          if(!['none','normal'].includes(styleOf(owner,pseudo).content))return false;
         }
         if(!background) {
           const color=rgba(paint.backgroundColor);
@@ -215,7 +227,7 @@
       }
     }
     if(node.tagName==='SELECT') {
-      const style=getComputedStyle(node),canvas=document.createElement('canvas').getContext('2d');
+      const style=styleOf(node),canvas=document.createElement('canvas').getContext('2d');
       if(!canvas||!style.font)return false;
       canvas.font=style.font;
       const text=[...node.selectedOptions].map(o=>o.label||o.textContent).join(' ');
@@ -226,6 +238,7 @@
   const textCache=new WeakMap(),textEdges=new WeakMap();
   const segmenter=new Intl.Segmenter(undefined,{granularity:'grapheme'});
   const measureContext=document.createElement('canvas').getContext('2d');
+  const inkMetrics=new Map();
   const inkRect = (rect,text,style) => {
     // Range rectangles describe the fallback font cell, including blank
     // ascent/descent. A 21px line may have a 22px cell with fully visible ink.
@@ -233,7 +246,10 @@
     // actual range's font cell; unsupported layout keeps the stricter Range.
     if(!measureContext||!text.trim()||style.writingMode!=='horizontal-tb'||style.transform!=='none'||style.textTransform!=='none'||!style.font)return rect;
     measureContext.font=style.font;
-    const m=measureContext.measureText(text),cell=m.fontBoundingBoxAscent+m.fontBoundingBoxDescent;
+    const key=JSON.stringify([style.font,text]);
+    let m=inkMetrics.get(key);
+    if(!m){m=measureContext.measureText(text);inkMetrics.set(key,m);}
+    const cell=m.fontBoundingBoxAscent+m.fontBoundingBoxDescent;
     if(!Number.isFinite(cell)||Math.abs(cell-rect.height)>0.01||m.actualBoundingBoxAscent+m.actualBoundingBoxDescent<=0)return rect;
     const baseline=rect.top+m.fontBoundingBoxAscent;
     const top=Math.max(rect.top,baseline-m.actualBoundingBoxAscent),bottom=Math.min(rect.bottom,baseline+m.actualBoundingBoxDescent);
@@ -243,7 +259,7 @@
     if(textCache.has(node))return textCache.get(node);
     if(node.nodeType===Node.COMMENT_NODE)return '';
     if(node.nodeType===Node.ELEMENT_NODE) {
-      const style=getComputedStyle(node);
+      const style=styleOf(node);
       if(style.display==='none'||style.visibility!=='visible'||Number(style.opacity)===0)return '';
       const text=[...node.childNodes].map(visibleText).join(' ');
       textCache.set(node,text);return text;
@@ -253,8 +269,14 @@
     if(owner.checkVisibility&&!owner.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return '';
     const range=document.createRange();range.selectNodeContents(node);
     const rectangles=[...range.getClientRects()];
+    // Long articles contain thousands of offscreen text nodes. Reject these
+    // before walking clipping/paint ancestors, and retain the empty result for
+    // the subsequent visible-text, block and dynamic-region passes.
+    if(!rectangles.some(r=>r.right>0&&r.bottom>0&&r.left<width&&r.top<height)){
+      textCache.set(node,'');return '';
+    }
     const clip=clipFor(owner,true);
-    const textStyle=getComputedStyle(owner);
+    const textStyle=styleOf(owner);
     if(!frameworkLabelPaint(owner,textStyle))return '';
     if(!rectangles.some(r=>r.right>clip.left&&r.bottom>clip.top&&r.left<clip.right&&r.top<clip.bottom))return '';
     let result='',gap=false,startsVisible=false,endsVisible=false,hasText=false;
@@ -363,12 +385,12 @@
        pseudo.transitionDuration.split(',').some(v=>parseFloat(v)!==0)||
        ['Top','Right','Bottom','Left'].some(side=>!zero(pseudo['margin'+side])||!zero(pseudo['padding'+side])||!zero(pseudo['border'+side+'Width'])))return null;
     for(let p=owner;p;p=p.parentElement) {
-      const c=getComputedStyle(p);
+      const c=styleOf(p);
       if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||
          parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;
     }
     const scale=axisScale(owner);if(scale.a!==1||scale.d!==1||scale.b!==0||scale.c!==0)return null;
-    const style=getComputedStyle(owner),r=owner.getBoundingClientRect(),w=px(pseudo.width),h=px(pseudo.height);
+    const style=styleOf(owner),r=owner.getBoundingClientRect(),w=px(pseudo.width),h=px(pseudo.height);
     if(w===null||h===null||w<=0||h<=0||owner.getClientRects().length!==1||
        ['Top','Right','Bottom','Left'].some(side=>!zero(style['padding'+side])||!zero(style['border'+side+'Width']))||
        !['auto','1'].includes(style.columnCount)||style.columnWidth!=='auto')return null;
@@ -385,10 +407,10 @@
       // Last in-flow block: a bottom-sticky empty tail cannot paint above
       // either the preceding block's bottom or scrollport.bottom-height.
       if([...owner.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent)))return null;
-      const children=[...owner.children].filter(n=>getComputedStyle(n).display!=='none');
+      const children=[...owner.children].filter(n=>styleOf(n).display!=='none');
       if(!children.length)return null;
       for(const child of children) {
-        const c=getComputedStyle(child);
+        const c=styleOf(child);
         if(!['block','flow-root','list-item'].includes(c.display)||!['static','relative'].includes(c.position)||
            c.float!=='none'||c.transform!=='none'||c.translate!=='none'||c.rotate!=='none'||c.scale!=='none'||
            parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb'||
@@ -406,10 +428,10 @@
       owner_bbox:[r.left,r.top,r.right,r.bottom],pseudo:which};
   };
   const boundedGraphicPseudo=(owner,which)=>{
-    const p=getComputedStyle(owner,which),s=getComputedStyle(owner),px=v=>/^-?(?:\d+(?:\.\d*)?|\.\d+)px$/.test(v)?parseFloat(v):null;
+    const p=styleOf(owner,which),s=styleOf(owner),px=v=>/^-?(?:\d+(?:\.\d*)?|\.\d+)px$/.test(v)?parseFloat(v):null;
     if(['none','normal'].includes(p.content)||clean(p.content.replace(/^(['"])([\s\S]*)\1$/,'$2'))||p.position!=='absolute'||p.display!=='block'||s.position==='static'||owner.getClientRects().length!==1)return null;
     if([p,s].some(c=>c.boxShadow!=='none'||c.textShadow!=='none'||c.filter!=='none'||c.backdropFilter!=='none'||c.perspective!=='none'||c.offsetPath!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.mixBlendMode!=='normal'||c.maskImage!=='none'||c.clipPath!=='none'||c.outlineStyle!=='none'&&parseFloat(c.outlineWidth)>0))return null;
-    for(let n=owner;n;n=n.parentElement){const c=getComputedStyle(n);if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;}
+    for(let n=owner;n;n=n.parentElement){const c=styleOf(n);if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;}
     if(['Top','Right','Bottom','Left'].some(k=>px(p['padding'+k])!==0||px(p['border'+k+'Width'])!==0||px(s['padding'+k])!==0||px(s['border'+k+'Width'])!==0))return null;
     const w=px(p.width),h=px(p.height),left=px(p.left),top=px(p.top),ml=px(p.marginLeft),mt=px(p.marginTop),origin=p.transformOrigin.split(' ').map(px);
     if([w,h,left,top,ml,mt,...origin].some(v=>v===null)||w<=0||h<=0||origin.length!==2)return null;
@@ -438,7 +460,7 @@
       const text=walker.currentNode;if(!clean(text.textContent))continue;
       const range=document.createRange();range.selectNodeContents(text);
       for(const r of range.getClientRects())if(r.width>0&&r.height>0) {
-        const ink=inkRect(r,text.textContent,getComputedStyle(text.parentElement));
+        const ink=inkRect(r,text.textContent,styleOf(text.parentElement));
         rects.push([ink.left,ink.top,ink.right,ink.bottom]);
       }
     }
@@ -448,11 +470,11 @@
     disjointPseudoProofs.set(JSON.stringify(row),row);return true;
   };
   const frameworkLabelPaint = (label,foregroundStyle=null,minContrast=3) => {
-    const style=foregroundStyle||getComputedStyle(label),fill=frameworkColor(style.webkitTextFillColor);
+    const style=foregroundStyle||styleOf(label),fill=frameworkColor(style.webkitTextFillColor);
     if(!fill||fill[3]===0||style.backgroundClip==='text')return false;
     const layers=[];let background=null,complexBackground=false;
     for(let owner=label;owner;owner=owner.parentElement) {
-      const paint=getComputedStyle(owner);
+      const paint=styleOf(owner);
       if(Number(paint.opacity)!==1||paint.filter!=='none'||
          paint.mixBlendMode!=='normal'||paint.maskImage!=='none'||paint.webkitMaskImage!=='none'||
          paint.contentVisibility==='hidden')return false;
@@ -461,7 +483,7 @@
       // every glyph without adding a foreign DOM rectangle. Its geometry is
       // unproven here. Empty transparent framework clearfixes paint nothing.
       for(const which of ['::before','::after']) {
-        const pseudo=getComputedStyle(owner,which);
+        const pseudo=styleOf(owner,which);
         if(['none','normal'].includes(pseudo.content)||pseudo.display==='none'||
            pseudo.visibility!=='visible'||Number(pseudo.opacity)===0)continue;
         const own=clean(pseudo.content.replace(/^(['"])([\s\S]*)\1$/,'$2'));
@@ -493,7 +515,7 @@
     // The unpainted CSS canvas is white only in the known light rendering
     // mode. A dark/unknown canvas is unsupported by this contrast calculation.
     if(!background) {
-      const scheme=getComputedStyle(document.documentElement).colorScheme;
+      const scheme=styleOf(document.documentElement).colorScheme;
       if(matchMedia('(prefers-color-scheme: dark)').matches||!['normal','light','light dark'].includes(scheme))return false;
       background=[255,255,255,1];
     }
@@ -505,7 +527,7 @@
   const frameworkAreaExposed = (rect,owner,compatibleOwners=[]) => {
     const owners=[owner,...compatibleOwners];
     if(!frameworkSurfaces)frameworkSurfaces=[...document.querySelectorAll('body *')].filter(node=>
-      !node.matches('script,style,noscript,template')).map(node=>({node,style:getComputedStyle(node),rects:[...node.getClientRects()]}));
+      !node.matches('script,style,noscript,template')).map(node=>({node,style:styleOf(node),rects:[...node.getClientRects()]}));
     for(const {node,style,rects} of frameworkSurfaces) {
       if(owners.some(known=>node===known||node.contains(known)||known.contains(node))||style.display==='none'||style.visibility!=='visible')continue;
       for(const other of rects) {
@@ -529,7 +551,7 @@
             ['Top','Right','Bottom','Left'].some(side=>parseFloat(style['border'+side+'Width'])>0&&
               (frameworkColor(style['border'+side+'Color'])?.[3]??1)>0)||
             [...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&clean(child.textContent))||
-            ['::before','::after'].some(p=>!['none','normal'].includes(getComputedStyle(node,p).content));
+            ['::before','::after'].some(p=>!['none','normal'].includes(styleOf(node,p).content));
           if(painted)return false;
         }
       }
@@ -540,7 +562,7 @@
     if(!label?.matches('label.layui-form-label')||label.children.length!==2)return null;
     const button=[...label.children].find(e=>e.matches('button.layui-btn[type=button]'));
     const file=[...label.children].find(e=>e.matches('input.layui-upload-file[type=file]'));
-    if(!button||!file||getComputedStyle(file).display!=='none'||
+    if(!button||!file||styleOf(file).display!=='none'||
        [...button.children].some(e=>!e.matches('i.layui-icon')||e.children.length))return null;
     const own=[...label.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE);
     const source=clean(own.map(n=>n.textContent).join(' '));
@@ -555,7 +577,7 @@
     const upload=frameworkUploadLabel(label),own=[...label.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent));
     const exposed=own.every(node=>{
       const range=document.createRange();range.selectNodeContents(node);
-      return [...range.getClientRects()].every(rect=>frameworkAreaExposed(inkRect(rect,node.textContent,getComputedStyle(label)),label));
+      return [...range.getClientRects()].every(rect=>frameworkAreaExposed(inkRect(rect,node.textContent,styleOf(label)),label));
     });
     const value=(!label.children.length||upload)&&frameworkLabelPaint(label)&&exposed?
       upload?.text||visibleText(label):'';
@@ -595,7 +617,7 @@
   const quarantinedRoots=[];
   const inQuarantine = element => quarantinedRoots.some(root => root.contains(element));
   const boundedDecoration = element => {
-    const st=getComputedStyle(element),r=element.getBoundingClientRect();
+    const st=styleOf(element),r=element.getBoundingClientRect();
     if(element===target||!element.matches('img[alt=""][aria-hidden="true"]')||
        !['presentation','none'].includes(element.getAttribute('role'))||st.pointerEvents!=='none'||
        !element.complete||element.naturalWidth<=0||element.naturalHeight<=0||
@@ -603,7 +625,7 @@
        st.filter!=='none'||st.boxShadow!=='none'||st.clipPath!=='none'||st.maskImage!=='none'||
        r.left<0||r.top<0||r.right>width||r.bottom>height)return null;
     for(let p=element.parentElement;p;p=p.parentElement) {
-      const a=getComputedStyle(p);
+      const a=styleOf(p);
       if(p.matches('a,button,label,figure,[tabindex],[contenteditable=true],[role=img]')||
          [...p.attributes].some(x=>/^on/i.test(x.name))||a.transform!=='none'||
          (a.rotate&&a.rotate!=='none')||a.perspective!=='none'||
@@ -636,7 +658,7 @@
   // they contain stay strict and keep the honest UNSUPPORTED_GEOMETRY failure.
   const quarantineUnsupported = (element,error) => {
     if(element===target||element.contains(target))return null;
-    const st=getComputedStyle(element),r=element.getBoundingClientRect();
+    const st=styleOf(element),r=element.getBoundingClientRect();
     if(clean(element.textContent)||['aria-label','aria-labelledby','title','placeholder'].some(k=>element.hasAttribute(k)))return null;
     if(element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,video,canvas,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio],[role=img]')
        ||element.hasAttribute('onclick')||st.cursor==='pointer')return null;
@@ -668,7 +690,7 @@
   for (const element of document.querySelectorAll('body *')) {
     if (element.matches('script,style,noscript,template,svg,svg *')) continue;
     if (inQuarantine(element)) continue;
-    const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+    const style = styleOf(element), rect = element.getBoundingClientRect();
     if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0 ||
         rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= height || rect.left >= width) continue;
     if (element.checkVisibility && !element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) continue;
@@ -774,11 +796,11 @@
       const box=n=>{const r=n.getBoundingClientRect();return [r.left,r.top,r.right,r.bottom];};
       const painted=n=>{
         if(!n?.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||n.closest('[inert],[aria-hidden=true]'))return false;
-        for(let p=n;p;p=p.parentElement){const s=getComputedStyle(p),a=axisScale(p);
+        for(let p=n;p;p=p.parentElement){const s=styleOf(p),a=axisScale(p);
           if(s.visibility!=='visible'||Number(s.opacity)!==1||s.filter!=='none'||s.clipPath!=='none'||
              s.borderImageSource!=='none'||s.maskImage!=='none'||s.webkitMaskImage!=='none'||
              (s.maskBorderSource&&s.maskBorderSource!=='none')||
-             !['::before','::after'].every(pseudo=>['none','normal'].includes(getComputedStyle(p,pseudo).content))||
+             !['::before','::after'].every(pseudo=>['none','normal'].includes(styleOf(p,pseudo).content))||
              a.a!==1||a.b!==0||a.c!==0||a.d!==1)return false;}
         const r=n.getBoundingClientRect(),c=clipFor(n,true);
         return r.width>0&&r.height>0&&r.left>=c.left&&r.top>=c.top&&r.right<=c.right&&r.bottom<=c.bottom;
@@ -796,7 +818,7 @@
         return m?[Number(m[1]),Number(m[2]),Number(m[3]),m[4]===undefined?1:Number(m[4])]:null;
       };
       const background=n=>{
-        for(let p=n;p;p=p.parentElement){const s=getComputedStyle(p),c=color(s.backgroundColor);
+        for(let p=n;p;p=p.parentElement){const s=styleOf(p),c=color(s.backgroundColor);
           if(s.backgroundImage!=='none'||!c||c[3]!==0&&c[3]!==1)return null;
           if(c[3]===1)return c;
         }
@@ -805,7 +827,7 @@
       const luminance=c=>c.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
         .reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
       const contrast=(a,b)=>{const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);};
-      const border=n=>{const s=getComputedStyle(n),bg=background(n),selected=n.matches('.tg__cell_selected');
+      const border=n=>{const s=styleOf(n),bg=background(n),selected=n.matches('.tg__cell_selected');
         if(!bg)return false;
         return ['Top','Right','Bottom','Left'].every(side=>{
           const c=color(s['border'+side+'Color']),expected=selected?[145,207,255]:[207,207,207];
@@ -875,7 +897,7 @@
                Math.abs(b[2]-menuBox[2]-5)>1||Math.abs((menuBox[1]+menuBox[3]-b[1]-b[3])/2)>1)return null;
           }
           if(!surface(area,helper)||clean(visibleText(area))!==clean(area.textContent))return null;
-          if(area.textContent){const style=getComputedStyle(area);
+          if(area.textContent){const style=styleOf(area);
             const fg=color(style.webkitTextFillColor),bg=background(area);
             if(parseFloat(style.fontSize)<10||style.textTransform!=='none'||
                !fg||fg[3]!==1||!bg||contrast(fg,bg)<3)return null;}
@@ -912,7 +934,7 @@
     if(buttons.some(other=>other!==button&&[other,...other.querySelectorAll('*')].some(
         node=>[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&clean(child.textContent)===text))))return null;
     for(const node of leaves) {
-      const owner=node.parentElement,style=getComputedStyle(owner);
+      const owner=node.parentElement,style=styleOf(owner);
       if(!owner.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||
          parseFloat(style.fontSize)<18||Number(style.fontWeight)<600||style.textTransform!=='none'||
          !frameworkLabelPaint(owner,style,2.2))continue;
@@ -990,7 +1012,7 @@
         const hints=[...group.children].filter(e=>e!==label&&e!==parent);
         if(hints.length>1||hints.some(e=>!e.matches('div.layui-form-mid.layui-word-aux')||
            e.children.length||e.hasAttribute('onclick')||e.hasAttribute('role')||
-           e.hasAttribute('tabindex')||getComputedStyle(e).cursor==='pointer'))return '';
+           e.hasAttribute('tabindex')||styleOf(e).cursor==='pointer'))return '';
         if(label.hasAttribute('for')&&label.control!==target)return '';
         if([...parent.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&clean(n.textContent)))return '';
       } else if(parent?.matches('div.layui-input-res')&&parent.parentElement?.matches('div.layui-form-resItem')) {
@@ -1007,11 +1029,11 @@
         if(backing.getClientRects().length||backing.selectedOptions.length!==1||units.length!==1||
            !units[0].readOnly||clean(units[0].value)!==clean(backing.selectedOptions[0].textContent))return '';
         unitCompanions=[backing,units[0]];
-        const hint=parent.querySelector('label.res-label'),hs=getComputedStyle(hint),hr=hint.getBoundingClientRect(),tr=target.getBoundingClientRect();
+        const hint=parent.querySelector('label.res-label'),hs=styleOf(hint),hr=hint.getBoundingClientRect(),tr=target.getBoundingClientRect();
         if(target.value===''&&clean(hint.textContent).length<=40&&
            frameworkColor(hs.backgroundColor)?.[3]===0&&hs.backgroundImage==='none'&&hs.boxShadow==='none'&&hs.filter==='none'&&
            ['Top','Right','Bottom','Left'].every(side=>parseFloat(hs['border'+side+'Width'])===0)&&
-           ['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(hint,p).content))&&
+           ['::before','::after'].every(p=>['none','normal'].includes(styleOf(hint,p).content))&&
            hr.left>=tr.left&&hr.right<=tr.right&&hr.top>=tr.top&&hr.bottom<=tr.bottom&&hr.width<=0.8*tr.width)
           fieldCompanions=[hint]; // Transparent text hint over its own empty field.
       } else if(parent?.children.length===2) {
@@ -1049,12 +1071,12 @@
       const source=uploadLabel?.source||(valueButton?clean(valueButton.value):clean(label.textContent)),
             text=uploadLabel?.text||(valueButton?source:clean(visibleText(label)));
       if(!source||text!==source)return '';
-      const style=getComputedStyle(label);
+      const style=styleOf(label);
       if(parseFloat(style.fontSize)<10||style.textTransform!=='none'||
          !frameworkLabelPaint(label)||
-         !['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(label,p).content)))return '';
+         !['::before','::after'].every(p=>['none','normal'].includes(styleOf(label,p).content)))return '';
       for(let parent=label;parent;parent=parent.parentElement) {
-        const painted=getComputedStyle(parent);
+        const painted=styleOf(parent);
         if(Number(painted.opacity)!==1||painted.filter!=='none')return '';
       }
       const a=label.getBoundingClientRect(),b=target.getBoundingClientRect();
@@ -1181,7 +1203,7 @@
     const node=document.querySelectorAll(condition.selector)[condition.index||0];
     if(!node)return null;
     if(node.matches('iframe,frame'))throw new Error('UNSUPPORTED_FRAME: task completion cannot rely on an unread embedded document');
-    const rect=node.getBoundingClientRect(),style=getComputedStyle(node),hit=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);
+    const rect=node.getBoundingClientRect(),style=styleOf(node),hit=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);
     const control=node.tagName==='LABEL'?node.control:node;
     let tableEvidence=null;
     if('html_table_matrix' in condition&&condition.selector==='#content > .tbl__container > table.tbl'&&
@@ -1238,7 +1260,7 @@
         exclusion_reasons:['transformed_image_pixels_must_remain_exact'],geometry_proof:unrelatedTransforms.get(image)});
       continue;
     }
-    const b=rawBox(image),reasons=[],s=getComputedStyle(image),clip=clipFor(image);
+    const b=rawBox(image),reasons=[],s=styleOf(image),clip=clipFor(image);
     if(image.getAttribute('alt')!==''||image.getAttribute('aria-hidden')!=='true'||
        !['presentation','none'].includes(image.getAttribute('role'))||s.pointerEvents!=='none'||
        image.hasAttribute('title')||image.hasAttribute('aria-label')||image.hasAttribute('aria-labelledby'))reasons.push('not_explicitly_decorative');
@@ -1248,14 +1270,14 @@
     if(!b.every(Number.isInteger)||r.left<0||r.top<0||r.right>width||r.bottom>height||
        r.left<clip.left||r.top<clip.top||r.right>clip.right||r.bottom>clip.bottom)reasons.push('clipped_or_fractional_geometry');
     for(let p=image;p;p=p.parentElement) {
-      const a=getComputedStyle(p),scale=axisScale(p);
+      const a=styleOf(p),scale=axisScale(p);
       if(p.matches('a,button,input,textarea,select,label,summary,figure,[tabindex],[contenteditable=true],[role=button],[role=link],[role=img]')||
          [...p.attributes].some(x=>/^on/i.test(x.name))||a.cursor==='pointer')reasons.push('interactive_or_semantic_ancestor');
       if(a.transform!=='none'||scale.a!==1||scale.b!==0||scale.c!==0||scale.d!==1||a.filter!=='none'||
          a.clipPath!=='none'||a.maskImage!=='none'||Number(a.opacity)!==1||a.mixBlendMode!=='normal'||
          a.boxShadow!=='none'||a.textShadow!=='none'||a.borderImageSource!=='none'||
          (parseFloat(a.outlineWidth)>0&&a.outlineStyle!=='none')||
-         !['::before','::after'].every(pseudo=>['none','normal'].includes(getComputedStyle(p,pseudo).content)))reasons.push('unsupported_paint');
+         !['::before','::after'].every(pseudo=>['none','normal'].includes(styleOf(p,pseudo).content)))reasons.push('unsupported_paint');
     }
     if(protectedNodes.some(n=>n===image||n.contains(image)||image.contains(n)||intersects(b,rawBox(n))))reasons.push('task_or_result_related');
     if(textRects.some(t=>intersects(b,t))||records.some((e,i)=>nodes[i]!==image&&!nodes[i].contains(image)&&
@@ -1272,10 +1294,10 @@
     const unboundedPaintSources=[];
     for(const n of document.querySelectorAll('*')) {
       if(n===image||n.contains(image)||!n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
-      const paint=getComputedStyle(n),effects={box_shadow:paint.boxShadow,text_shadow:paint.textShadow,
+      const paint=styleOf(n),effects={box_shadow:paint.boxShadow,text_shadow:paint.textShadow,
         filter:paint.filter,backdrop_filter:paint.backdropFilter||'none',border_image:paint.borderImageSource,
         outline:parseFloat(paint.outlineWidth)>0?paint.outlineStyle:'none',reflection:paint.webkitBoxReflect||'none',
-        before:getComputedStyle(n,'::before').content,after:getComputedStyle(n,'::after').content};
+        before:styleOf(n,'::before').content,after:styleOf(n,'::after').content};
       const opaque=n instanceof SVGElement||!!n.shadowRoot||n.localName.includes('-');
       if(opaque||Object.entries(effects).some(([key,value])=>!['none','normal'].includes(value)))
         unboundedPaintSources.push({tag:n.localName,id:n.id||'',bbox:rawBox(n),opaque,effects});
@@ -1305,15 +1327,15 @@
   const captureMedia=[];
   for(const video of document.querySelectorAll('aside video,[role="complementary"] video,video[aria-hidden="true"]')) {
     if(!video.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
-    const b=rawBox(video),c=getComputedStyle(video),clip=clipFor(video);
+    const b=rawBox(video),c=styleOf(video),clip=clipFor(video);
     const controls=[...document.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]')];
     const guards=[...protectedNodes,...controls].filter(n=>n!==video&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
     const guardBoxes=guards.map(rawBox).concat(textRects.map(r=>Array.isArray(r)?r:[r.left,r.top,r.right,r.bottom]));
     const unknownPaint=[...document.querySelectorAll('*')].some(n=>{
       if(n===video||n.contains(video)||!n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
-      const s=getComputedStyle(n);
+      const s=styleOf(n);
       return intersects(b,rawBox(n))||s.boxShadow!=='none'||s.filter!=='none'||!!n.shadowRoot||n instanceof SVGElement||
-        !['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(n,p).content));
+        !['::before','::after'].every(p=>['none','normal'].includes(styleOf(n,p).content));
     });
     const hits=[];
     for(const x of [b[0]+.5,(b[0]+b[2])/2,b[2]-.5])for(const y of [b[1]+.5,(b[1]+b[3])/2,b[3]-.5])
@@ -1335,20 +1357,20 @@
   const paintBorders=[];
   const unknownBorderPaint=[...document.querySelectorAll('*')].some(n=>{
     if(!n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
-    const c=getComputedStyle(n);
+    const c=styleOf(n);
     return n instanceof SVGElement||!!n.shadowRoot||n.localName.includes('-')||
       c.boxShadow!=='none'||c.filter!=='none'||c.textShadow!=='none'||
-      !['::before','::after'].every(p=>['none','normal'].includes(getComputedStyle(n,p).content));
+      !['::before','::after'].every(p=>['none','normal'].includes(styleOf(n,p).content));
   });
   for(const node of document.querySelectorAll('input,button,select,textarea')) {
-    const b=rawBox(node),c=getComputedStyle(node);
+    const b=rawBox(node),c=styleOf(node);
     if(unknownBorderPaint||!b.every(Number.isInteger)||!node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||
        node===document.activeElement||node.checked||node.disabled||
        protectedNodes.some(n=>n===node||n.contains(node)||node.contains(n))||
        c.transform!=='none'||c.filter!=='none'||c.boxShadow!=='none'||c.borderImageSource!=='none'||
        c.borderRadius!=='0px'||c.outlineStyle!=='none'||c.backgroundImage!=='none'||
        !['Top','Right','Bottom','Left'].every(side=>c['border'+side+'Style']==='solid'&&c['border'+side+'Width']==='1px')||
-       !['::before','::after'].every(pseudo=>['none','normal'].includes(getComputedStyle(node,pseudo).content)))continue;
+       !['::before','::after'].every(pseudo=>['none','normal'].includes(styleOf(node,pseudo).content)))continue;
     const edges=[[b[0],b[1],b[2],b[1]+1],[b[0],b[3]-1,b[2],b[3]],
                  [b[0],b[1],b[0]+1,b[3]],[b[2]-1,b[1],b[2],b[3]]];
     if(edges.some(edge=>textRects.some(t=>intersects(edge,t))))continue;
@@ -1375,7 +1397,7 @@
   const dynamicVersion='webcollect-dynamic-regions-1';
   const selectorOf=n=>{const parts=[];for(;n&&n.nodeType===1;n=n.parentElement){const sib=n.parentElement?[...n.parentElement.children].filter(x=>x.localName===n.localName):[n];parts.unshift(n.localName+':nth-of-type('+(sib.indexOf(n)+1)+')');}return parts.join(' > ');};
   const regionAttributes=n=>Object.fromEntries(['id','class','role','aria-label','aria-roledescription','title'].map(k=>[k,n.getAttribute(k)]));
-  const nativeImagePaint=n=>{const c=getComputedStyle(n);return n.children.length===0&&!clean(n.textContent)&&(c.backgroundImage!=='none'||c.maskImage!=='none')?{leaf:true,visible_text:'',background_image:c.backgroundImage,mask_image:c.maskImage}:null;};
+  const nativeImagePaint=n=>{const c=styleOf(n);return n.children.length===0&&!clean(n.textContent)&&(c.backgroundImage!=='none'||c.maskImage!=='none')?{leaf:true,visible_text:'',background_image:c.backgroundImage,mask_image:c.maskImage}:null;};
   const categoryOf=n=>{
     const a=regionAttributes(n),words=Object.values(a).filter(Boolean).join(' ').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase();
     if(/(?:^|[\s_-])(?:ad|ads|advert|advertisement|advertising|sponsored)(?:$|[\s_-])|广告|廣告/.test(words))return 'advertisement';
@@ -1439,7 +1461,7 @@
     // region's paint box under any clipping ancestor. Property-only paint
     // (ad/announcement/image categories keep their stricter rule) is not a
     // rejection here because the popup's own pixels are what may change.
-    const clippedInside=x=>{for(let a=x.parentElement;a&&popup.contains(a);a=a.parentElement){const c=getComputedStyle(a),r=rawBox(a);if((/(?:^| )paint(?: |$)/.test(c.contain)||['hidden','clip'].includes(c.overflowX)&&['hidden','clip'].includes(c.overflowY)||['auto','scroll'].includes(c.overflowX)||['auto','scroll'].includes(c.overflowY))&&r[0]>=paintBox[0]&&r[1]>=paintBox[1]&&r[2]<=paintBox[2]&&r[3]<=paintBox[3])return true;}return false;};
+    const clippedInside=x=>{for(let a=x.parentElement;a&&popup.contains(a);a=a.parentElement){const c=styleOf(a),r=rawBox(a);if((/(?:^| )paint(?: |$)/.test(c.contain)||['hidden','clip'].includes(c.overflowX)&&['hidden','clip'].includes(c.overflowY)||['auto','scroll'].includes(c.overflowX)||['auto','scroll'].includes(c.overflowY))&&r[0]>=paintBox[0]&&r[1]>=paintBox[1]&&r[2]<=paintBox[2]&&r[3]<=paintBox[3])return true;}return false;};
     for(const x of members){const r=rawBox(x);if(!x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
       const clipped=[[Math.max(r[0],clip.left),Math.max(r[1],clip.top),Math.min(r[2],clip.right),Math.min(r[3],clip.bottom)]];
       if(!clippedInside(x)&&clipped.some(b=>b[0]<paintBox[0]||b[1]<paintBox[1]||b[2]>paintBox[2]||b[3]>paintBox[3]))reasons.push('descendant_paint_outside_region');
@@ -1475,12 +1497,12 @@
     const box=[Math.max(0,Math.floor(paintBox[0])),Math.max(0,Math.floor(paintBox[1])),Math.min(width,Math.ceil(paintBox[2])),Math.min(height,Math.ceil(paintBox[3]))];
     if(box[0]>=box[2]||box[1]>=box[3])continue;
     const reasons=[],category=categoryOf(n);
-    const clippedInside=(x,own=false)=>{for(let a=own?x:x.parentElement;a&&n.contains(a);a=a.parentElement){const c=getComputedStyle(a),r=rawBox(a);if((/(?:^| )paint(?: |$)/.test(c.contain)||['hidden','clip'].includes(c.overflowX)&&['hidden','clip'].includes(c.overflowY))&&r[0]>=paintBox[0]&&r[1]>=paintBox[1]&&r[2]<=paintBox[2]&&r[3]<=paintBox[3])return true;}return false;};
+    const clippedInside=(x,own=false)=>{for(let a=own?x:x.parentElement;a&&n.contains(a);a=a.parentElement){const c=styleOf(a),r=rawBox(a);if((/(?:^| )paint(?: |$)/.test(c.contain)||['hidden','clip'].includes(c.overflowX)&&['hidden','clip'].includes(c.overflowY))&&r[0]>=paintBox[0]&&r[1]>=paintBox[1]&&r[2]<=paintBox[2]&&r[3]<=paintBox[3])return true;}return false;};
     // Native clipping bounds transformed/animated descendants, including SVG.
-    for(const x of members){const st=getComputedStyle(x),r=rawBox(x);if(!x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+    for(const x of members){const st=styleOf(x),r=rawBox(x);if(!x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
       if(!clippedInside(x)&&(st.transform!=='none'||st.filter!=='none'||st.boxShadow!=='none'||st.textShadow!=='none'||st.clipPath!=='none'||st.maskImage!=='none'&&!nativeImagePaint(x)||st.mixBlendMode!=='normal'||st.outlineStyle!=='none'&&parseFloat(st.outlineWidth)>0||x instanceof SVGElement||x.shadowRoot))reasons.push('unbounded_paint');
       if(!clippedInside(x)&&(r[0]<paintBox[0]||r[1]<paintBox[1]||r[2]>paintBox[2]||r[3]>paintBox[3]))reasons.push('descendant_paint_outside_region');
-      for(const ps of ['::before','::after']){const stp=getComputedStyle(x,ps);if(!clippedInside(x,true)&&!['none','normal'].includes(stp.content))reasons.push('unbounded_pseudo_paint');}
+      for(const ps of ['::before','::after']){const stp=styleOf(x,ps);if(!clippedInside(x,true)&&!['none','normal'].includes(stp.content))reasons.push('unbounded_pseudo_paint');}
     }
     const intrinsic=[...n.querySelectorAll('input,textarea,select,output,[contenteditable=true]')];
     if(n.matches('input,textarea,select,output,[contenteditable=true]'))intrinsic.push(n);
@@ -1500,7 +1522,7 @@
     // Actual action/assertion and intrinsic business evidence are protected below.
     const externalControls=nodes.filter((x,i)=>!memberSet.has(x)&&!x.contains(n)&&(records[i].clickable||records[i].inputable||records[i].element_type==='image'||records[i].element_type==='window')&&intersects(box,records[i].bbox));
     // Unselected controls remain visible inventory; overlap alone is not task relevance.
-    const externalPaint=[...document.querySelectorAll('*')].filter(x=>!memberSet.has(x)&&!x.contains(n)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&intersects(box,rawBox(x))).filter(x=>{const c=getComputedStyle(x);return c.backgroundImage!=='none'||!['rgba(0, 0, 0, 0)','transparent'].includes(c.backgroundColor)||c.maskImage!=='none'||c.filter!=='none'||x instanceof SVGElement||x.shadowRoot;});
+    const externalPaint=[...document.querySelectorAll('*')].filter(x=>!memberSet.has(x)&&!x.contains(n)&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&intersects(box,rawBox(x))).filter(x=>{const c=styleOf(x);return c.backgroundImage!=='none'||!['rgba(0, 0, 0, 0)','transparent'].includes(c.backgroundColor)||c.maskImage!=='none'||c.filter!=='none'||x instanceof SVGElement||x.shadowRoot;});
     // Unrelated painted backgrounds are not business evidence. Preserve their
     // overlap for audit; actual target/result/assertion guards above remain.
     if(target&&!memberSet.has(target)&&!target.contains(n)&&intersects(box,rawBox(target)))reasons.push('overlaps_action_target');

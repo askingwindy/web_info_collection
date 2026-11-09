@@ -210,7 +210,7 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
     the same entry is a new transparent version, never a silent duplicate.
     """
     if plan_protocol is not None and ending_policy is None:
-        from .closing_policy import VERSION as CURRENT_ENDING,V2_VERSION as LEGACY_ENDING
+        from .closing_policy import EFFECTIVE_VERSION as CURRENT_ENDING,V2_VERSION as LEGACY_ENDING
         ending_policy=CURRENT_ENDING if plan_protocol=='webcollect-banded-conditional-plan-11' else LEGACY_ENDING
     if site_category is None:
         site_category = 'UNKNOWN' if decision_protocol == NATIVE_VERSION else '综合'
@@ -282,6 +282,9 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         if decision_protocol != NATIVE_VERSION or plan_protocol not in VERSIONS:
             raise ValueError('Unknown conditional plan protocol')
         for part in (spec, task['fragment']): part['plan_protocol'] = plan_protocol
+        if spec.get('ending_policy') == 'webcollect-five-ten-effective-ending-5':
+            for part in (spec, task['fragment']):
+                part['reading_completion_policy'] = 'webcollect-reading-plan-completion-1'
     if action_stability_protocol is not None:
         from .action_stability import VERSIONS as focus_versions
         if action_stability_protocol not in focus_versions or plan_protocol is None:
@@ -319,7 +322,7 @@ def build_candidate_task(capability, task_version, budgets=None):
     actions = sorted(set(capability.get('supported_actions') or []) & set(ALLOWED_TOOL_ACTIONS))
     if not actions:
         raise ValueError('Candidate capability supports none of the react actions')
-    from .closing_policy import VERSION as CLOSE_POLICY
+    from .closing_policy import EFFECTIVE_VERSION as CLOSE_POLICY
     from .banded_plan import VERSION as PLAN_PROTOCOL
     from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
     from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
@@ -406,7 +409,7 @@ def validate_task(task):
     if not isinstance(actions, list) or not actions or any(action not in ALLOWED_TOOL_ACTIONS for action in actions):
         raise ValueError('React task needs a nonempty supported action whitelist')
     spec = (task.get('workflow_proposal') or {}).get('spec') or {}
-    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol'):
+    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol','reading_completion_policy'):
         if spec.get(extension) != fragment.get(extension):
             raise ValueError('Mismatched frozen React extension: ' + extension)
     if fragment.get('session_objective'):
@@ -421,6 +424,11 @@ def validate_task(task):
     from .banded_plan import VERSIONS
     if fragment.get('plan_protocol') not in (None, *VERSIONS) or (fragment.get('plan_protocol') and fragment.get('decision_protocol') != NATIVE_VERSION):
         raise ValueError('Invalid frozen plan protocol')
+    if fragment.get('reading_completion_policy') is not None:
+        if (fragment['reading_completion_policy'] != 'webcollect-reading-plan-completion-1'
+                or fragment.get('plan_protocol') != 'webcollect-banded-conditional-plan-11'
+                or fragment.get('ending_policy') != 'webcollect-five-ten-effective-ending-5'):
+            raise ValueError('Unknown frozen reading completion policy or incompatible task')
     from .action_stability import VERSIONS as focus_versions
     if fragment.get('action_stability_protocol') not in (None, *focus_versions):
         raise ValueError('Unknown frozen action stability protocol')
@@ -431,9 +439,9 @@ def validate_task(task):
             raise ValueError('reasoning_effort_profile requires a native conditional-plan task')
         if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
             raise ValueError('Invalid frozen reasoning effort profile')
-    from .closing_policy import VERSION as CLOSE_POLICY, V3_VERSION as BANDED_CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
+    from .closing_policy import VERSION as CLOSE_POLICY, EFFECTIVE_VERSION, V3_VERSION as BANDED_CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
     if fragment.get('plan_protocol'):
-        expected_close=(CLOSE_POLICY, BANDED_CLOSE_POLICY) if fragment['plan_protocol']=='webcollect-banded-conditional-plan-11' else (LEGACY_CLOSE_POLICY,)
+        expected_close=(CLOSE_POLICY, EFFECTIVE_VERSION, BANDED_CLOSE_POLICY) if fragment['plan_protocol']=='webcollect-banded-conditional-plan-11' else (LEGACY_CLOSE_POLICY,)
         if fragment.get('ending_policy') not in expected_close:
             raise ValueError('Conditional plan and atomic ending policy versions do not match')
     from .reading_progress import END_POLICY
@@ -573,7 +581,7 @@ class ReactSession:
         self.phase_ledger = Path(phase_ledger) if phase_ledger else None
         self.active_reference = None
         self.budgets = (dict.fromkeys(BUDGET_KEYS)
-            if self.task['fragment'].get('ending_policy') == 'webcollect-continuous-attempt-ending-4'
+            if self.task['fragment'].get('ending_policy') in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5')
             else deepcopy(self.task['fragment']['budgets']))
         self.glm_session_id = getattr(choose, 'glm_session_id', None)
         self.glm_http_requests = None
@@ -604,7 +612,7 @@ class ReactSession:
         self.navigation_count = 0
         self.actual_dispatches = 0
         self.started = time.monotonic()
-        self.host_limits = None if self.task['fragment'].get('ending_policy') == 'webcollect-continuous-attempt-ending-4' else deepcopy(host_limits)
+        self.host_limits = None if self.task['fragment'].get('ending_policy') in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5') else deepcopy(host_limits)
         self.page_urls = list(self.task['fragment']['page_urls'])
         self.dialogs = []
         self.excluded_links_seen = set()
@@ -1018,7 +1026,7 @@ class ReactSession:
 
     def _range_close(self, kind, reason, *, unknown=False, force_pending=False):
         """Host finish without another model request or browser action."""
-        from .closing_policy import attempt_limit
+        from .closing_policy import attempt_limit, EFFECTIVE_VERSION, no_effect_proven
         POLICY=self.task['fragment']['ending_policy']
         band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
         limit=attempt_limit(self.task,band)
@@ -1053,7 +1061,17 @@ class ReactSession:
         tail_known = (bool(attempts) and accounted == self.actual_dispatches
                       and all(a['outcome'] != 'EFFECT_UNKNOWN' for a in attempts)
                       and not unknown and not self.unknown)
-        if safe and tail_dispatches and not tail_known:
+        if POLICY==EFFECTIVE_VERSION:
+            raws=[load_json(ref['path']) for attempt in attempts for ref in attempt.get('raw_steps',[])]
+            dispatched=[raw for raw in raws if raw.get('dispatched') is True]
+            omitted=[raw for raw in dispatched if not (raw.get('action_executed') is True
+                and raw.get('postconditions_checked') is True
+                and raw.get('react',{}).get('effect_evidence',{}).get('verified') is True)]
+            tail_known=(tail_known and len(dispatched)==self.actual_dispatches
+                and len(omitted)==tail_dispatches
+                and all(no_effect_proven(raw,self.observation_records) for raw in omitted))
+            if tail_dispatches and not tail_known:safe=False
+        if POLICY!=EFFECTIVE_VERSION and safe and tail_dispatches and not tail_known:
             tail=attempts[-1].get('raw_steps',[]) if attempts else []
             raw=load_json(tail[-1]['path']) if tail else {}
             safe=(tail_dispatches==1 and raw.get('operation',{}).get('action_type')=='scroll'
@@ -1063,7 +1081,7 @@ class ReactSession:
         unknown=bool(unknown or self.unknown or (tail_dispatches and not safe and not tail_known))
         flagged=kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
         self.collection_ending={'protocol':POLICY,'kind':kind,'flagged':flagged,'reason':reason,
-            **({'attempt_limit':limit,'attempt_band':band} if POLICY in ('webcollect-banded-attempt-ending-3','webcollect-continuous-attempt-ending-4') else {}),
+            **({'attempt_limit':limit,'attempt_band':band} if POLICY in ('webcollect-banded-attempt-ending-3','webcollect-continuous-attempt-ending-4','webcollect-five-ten-effective-ending-5') else {}),
             'business_attempts':len(refs),'actual_atomic_dispatches':self.actual_dispatches,
             'verified_effective_steps':len(self.trajectory),'unverified_tail_dispatches':tail_dispatches,
             'zero_dispatch_attempts':sum(a['actual_dispatches_delta']==0 for a in attempts),
@@ -1084,7 +1102,7 @@ class ReactSession:
             'last_attempt':attempts[-1] if attempts else None,
             'raw_only_pending':not safe}
         self.event('range-finish',collection_ending=self.collection_ending)
-        self.stop_reason='budget' if kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') else 'ready' if kind in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN') else 'blocked'
+        self.stop_reason='budget' if kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT') else 'ready' if kind in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN') else 'blocked'
         self.stop_summary=reason
         self.unknown=self.unknown or unknown
         self.state='finished' if safe else 'closed_pending_reconciliation'
@@ -1096,11 +1114,20 @@ class ReactSession:
         dispatch_delta=self.actual_dispatches-before_dispatch;effective_delta=len(self.trajectory)-before_effective
         harmless_no_effect=False
         if dispatch_delta>effective_delta and raw_refs and self.current:
-            from .reading_progress import same_view
-            tail=load_json(raw_refs[-1]['path'])
-            harmless_no_effect=(tail.get('operation',{}).get('action_type')=='scroll'
-                and tail.get('action_executed') is True and tail.get('react',{}).get('after_observation_id')==self.current['observation_id']
-                and same_view(tail['state'],load_json(self.current['evidence']['state']['path'])))
+            from .closing_policy import EFFECTIVE_VERSION, no_effect_proven
+            if self.task['fragment']['ending_policy']==EFFECTIVE_VERSION:
+                raws=[load_json(ref['path']) for ref in raw_refs]
+                omitted=[raw for raw in raws if raw.get('dispatched') is True
+                    and not (raw.get('action_executed') is True and raw.get('postconditions_checked') is True
+                             and raw.get('react',{}).get('effect_evidence',{}).get('verified') is True)]
+                harmless_no_effect=(len(omitted)==dispatch_delta-effective_delta
+                    and all(no_effect_proven(raw,self.observation_records) for raw in omitted))
+            else:
+                from .reading_progress import same_view
+                tail=load_json(raw_refs[-1]['path'])
+                harmless_no_effect=(tail.get('operation',{}).get('action_type')=='scroll'
+                    and tail.get('action_executed') is True and tail.get('react',{}).get('after_observation_id')==self.current['observation_id']
+                    and same_view(tail['state'],load_json(self.current['evidence']['state']['path'])))
         outcome=('EFFECT_UNKNOWN' if unknown else 'VERIFIED' if effective_delta==dispatch_delta and dispatch_delta>0 and not failure
                  else 'KNOWN_NO_EFFECT' if harmless_no_effect
                  else 'NOT_DISPATCHED' if dispatch_delta==0 else 'EFFECT_NOT_VERIFIED')
@@ -1112,10 +1139,13 @@ class ReactSession:
             actual_dispatches_delta=dispatch_delta,effective_steps_delta=effective_delta,outcome=outcome,reason=reason)
         if not hasattr(self,'business_attempt_refs'):self.business_attempt_refs=[]
         self.business_attempt_refs.append(ref)
-        from .closing_policy import attempt_limit,limit_kind
+        from .closing_policy import attempt_limit,limit_kind,effective_limit
         band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
         limit=attempt_limit(self.task,band)
-        if limit is not None and 5<=number<=limit and outcome!='VERIFIED':
+        if effective_limit(self.task) is not None:
+            if len(self.trajectory)>=limit and self.plan_controller is None:
+                self._range_close(limit_kind(limit),f'已达到{limit}个有效业务动作；保留真实末态，不追加动作')
+        elif limit is not None and 5<=number<=limit and outcome!='VERIFIED':
             self._range_close(outcome,reason,unknown=unknown)
         elif limit is not None and number==limit and self.plan_controller is None:
             self._range_close(limit_kind(limit),f'已达到{limit}次业务动作尝试；未获得目标完成确认，保存真实末态待审')
@@ -1512,11 +1542,12 @@ class ReactSession:
             return await self._perform_primitive(step,row,operation,observation,arguments,element,dispatch,executed,prior_raws)
         self._awaiting_primitive_attempt=False
         number=len(getattr(self,'business_attempt_refs',[]))+1
-        from .closing_policy import attempt_limit,limit_kind
+        from .closing_policy import attempt_limit,limit_kind,effective_limit
         band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
         limit=attempt_limit(self.task,band)
-        if limit is not None and number>limit:
-            self._range_close(limit_kind(limit),f'已达{limit}次业务动作尝试，不再派发第{limit+1}次')
+        reached = len(self.trajectory)>=limit if effective_limit(self.task) is not None else limit is not None and number>limit
+        if reached:
+            self._range_close(limit_kind(limit),f'已达本任务{limit}步上限，不再派发下一业务动作')
             return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
         self._active_business_attempt=number
         before_dispatch=self.actual_dispatches;before_effective=len(self.trajectory)
@@ -2003,7 +2034,7 @@ class ReactSession:
                 result['reading_progress'] = reading(states, self.current['observation_id'], self.trajectory)
                 result['ending_evidence'] = ending(len(self.trajectory), states[self.current['observation_id']])
             if self._v2():
-                from .closing_policy import system_prompt,attempt_limit
+                from .closing_policy import system_prompt,attempt_limit,effective_limit
                 POLICY=self.task['fragment']['ending_policy']
                 band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
                 limit=attempt_limit(self.task,band)
@@ -2011,7 +2042,11 @@ class ReactSession:
                 result['ending_evidence']={'protocol':POLICY,'business_attempts':len(getattr(self,'business_attempt_refs',[])),
                     'actual_atomic_dispatches':self.actual_dispatches,'verified_effective_steps':len(self.trajectory),
                     'unverified_tail_dispatches':self.actual_dispatches-len(self.trajectory),
-                    'finish_counted_as_action':False,'attempt_interval':None if limit is None else [5,limit]}
+                    'finish_counted_as_action':False,
+                    'attempt_interval':None if limit is None or effective_limit(self.task) else [5,limit]}
+                if effective_limit(self.task):
+                    result['ending_evidence'].update(effective_interval=[5,limit],
+                        remaining_effective_steps=max(0,limit-len(self.trajectory)))
                 result['reading_progress']['instruction']='按当前新正文与位置核对目标；达到目标就finish，不凑步；失败与未知结果照实保留。'
             if self.task['fragment'].get('planning_intent_protocol'):
                 result['planning_basis']={'site_primary_category':self.task.get('site_category','UNKNOWN'),
@@ -2364,11 +2399,12 @@ class ReactSession:
         self.short_flow, self.short_flow_reason = flow_classification(len(self.trajectory))
         if self._v2() and not getattr(self,'collection_ending',None):
             original_stop=self.stop_reason
-            from .closing_policy import attempt_limit
+            from .closing_policy import attempt_limit, effective_limit, no_effect_proven
             band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
             limit=attempt_limit(self.task,band)
+            counted=len(self.trajectory) if effective_limit(self.task) is not None else len(getattr(self,'business_attempt_refs',[]))
             budget_prefix=(limit is not None and original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
-                           and 5<=len(getattr(self,'business_attempt_refs',[]))<=limit and bool(self.trajectory))
+                           and 5<=counted<=limit and bool(self.trajectory))
             # Every dispatch accounted for by a definite attempt outcome keeps
             # the closeout definite: a known zero-effect tail never turns the
             # whole range into an effect UNKNOWN by closure default.
@@ -2376,6 +2412,16 @@ class ReactSession:
             definite_tail=(not self.unknown and bool(refs)
                 and sum(load_json(r['path'])['actual_dispatches_delta'] for r in refs)==self.actual_dispatches
                 and all(load_json(r['path'])['outcome']!='EFFECT_UNKNOWN' for r in refs))
+            if effective_limit(self.task) is not None and definite_tail:
+                raws=[load_json(raw_ref['path']) for ref in refs
+                      for raw_ref in load_json(ref['path']).get('raw_steps',[])]
+                dispatched=[raw for raw in raws if raw.get('dispatched') is True]
+                omitted=[raw for raw in dispatched if not (raw.get('action_executed') is True
+                    and raw.get('postconditions_checked') is True
+                    and raw.get('react',{}).get('effect_evidence',{}).get('verified') is True)]
+                definite_tail=(len(dispatched)==self.actual_dispatches
+                    and len(omitted)==self.actual_dispatches-len(self.trajectory)
+                    and all(no_effect_proven(raw,self.observation_records) for raw in omitted))
             self._range_close('MODEL_BUDGET_LIMIT' if budget_prefix else 'RAW_PENDING',
                               self.stop_summary or '未获得可保存的可信结束依据',unknown=self.unknown,
                               force_pending=not (budget_prefix or definite_tail))

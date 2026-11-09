@@ -176,8 +176,8 @@ def _refresh(registry,key,project):
 
 
 def reserve(registry,task,attempt):
-    from .closing_policy import VERSION as CONTINUOUS
-    if task.get('fragment',{}).get('ending_policy') == CONTINUOUS:
+    from .closing_policy import VERSION as CONTINUOUS, EFFECTIVE_VERSION
+    if task.get('fragment',{}).get('ending_policy') in (CONTINUOUS, EFFECTIVE_VERSION):
         return {'protocol':'continuous-consumer-1','assigned_band':None,'project':None,
                 'assignment_basis':'natural goal; no band quotas'}
     project=_project(registry);key=object_sha256(project)

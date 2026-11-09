@@ -10,7 +10,9 @@ from .reading_progress import same_view
 V2_VERSION = 'webcollect-five-eight-attempt-ending-2'
 V3_VERSION = 'webcollect-banded-attempt-ending-3'
 VERSION = 'webcollect-continuous-attempt-ending-4'
-VERSIONS = (V2_VERSION, V3_VERSION, VERSION)
+EFFECTIVE_VERSION = 'webcollect-five-ten-effective-ending-5'
+EFFECTIVE_MAXIMUM = 10
+VERSIONS = (V2_VERSION, V3_VERSION, VERSION, EFFECTIVE_VERSION)
 MINIMUM = 5
 MAXIMUM = 8
 LONG_MAXIMUM = 12
@@ -24,6 +26,8 @@ def enabled(task):
 def attempt_limit(task, band=None):
     """One ceiling shared by planning, dispatch, closure and saved evidence."""
     fragment=task.get('fragment',{})
+    if fragment.get('ending_policy') == EFFECTIVE_VERSION:
+        return EFFECTIVE_MAXIMUM
     if fragment.get('ending_policy') == VERSION:
         return None
     band=band or fragment.get('session_objective',{}).get('objective',{}).get('preferred_band')
@@ -34,7 +38,12 @@ def attempt_limit(task, band=None):
     return min(budget,limit) if budget is not None else limit
 
 
+def effective_limit(task):
+    return EFFECTIVE_MAXIMUM if task.get('fragment',{}).get('ending_policy') == EFFECTIVE_VERSION else None
+
+
 def limit_kind(limit):
+    if limit == EFFECTIVE_MAXIMUM:return 'TEN_EFFECTIVE_STEP_LIMIT'
     return 'TWELVE_ATTEMPT_LIMIT' if limit==LONG_MAXIMUM else 'EIGHT_ATTEMPT_LIMIT'
 
 
@@ -48,6 +57,13 @@ def system_prompt(base, task=None):
                 'observe/inspect/wait/finish不算有效业务动作。1–4步由宿主标记short_flow，零步不成样本。'
                 '同站仅复用页面和动作知识，禁止复用完整动作链。滚动、跳转、返回后依当前观察重绑，必要时重规划。'
                 '外部效果未知时保留原件，不重发、不拼接、不声称成功。')
+    if task is not None and effective_limit(task) is not None:
+        prompt=('先按原目标形成最短完整自然路径，通常控制在5–10个有效业务动作，累计最多10步。'
+                '自然路径不足5步时，只在原目标内补充仍有独立用途且能产生新证据的动作；没有就如实结束，'
+                '由宿主标记short_flow，零步不成样本。不得为数量另选繁琐目标、增加第二组输入或跨词条任务，'
+                '不得重复输入、重复计算或无效往返。分支只规划剩余有效步；无效果动作保留派发记账但不计有效步。'
+                '目标达到即finish；累计达到10步后结束，不再派发业务动作；必要结果缺证如实报告。'
+                'observe/inspect/wait/finish不算有效业务动作；UNKNOWN保留原件，不重发、不拼接。')
     if task is not None and attempt_limit(task)==LONG_MAXIMUM:
         prompt=(prompt.replace('5–8','5–12')
                 .replace('第8次之后宿主收口，不再追加第9次动作','第12次之后宿主收口，不再追加第13次动作'))
@@ -58,6 +74,86 @@ def state(record, oid):
     return load_json(record['observations'][oid]['state_path'])
 
 
+def no_effect_proven(raw, observations, *, action_scoped=False):
+    """Prove an omitted dispatch harmless using its original before/after states.
+
+    A definite outcome label alone is insufficient. Values and business elements
+    must be unchanged; action-scoped text/geometry equality cannot erase inputs.
+    Observation values may be raw states or sealed observation rows.
+    """
+    react=raw.get('react',{})
+    if (raw.get('unknown') is True or react.get('unknown') is True
+            or raw.get('dispatched') is not True or raw.get('action_executed') is not True
+            or react.get('zero_effect') is not True
+            or react.get('effect_evidence',{}).get('verified') is True
+            or react.get('after_observation_id') not in observations):
+        return False
+    before=raw.get('state');after=observations[react['after_observation_id']]
+    if 'state_path' in after:after=load_json(after['state_path'])
+    elif 'evidence' in after:after=load_json(after['evidence']['state']['path'])
+    if not isinstance(before,dict) or not before.get('document_identity'):
+        return False
+    return (before.get('document_identity') == after.get('document_identity')
+            and same_view(before,after))
+
+
+def validate_reading_completion(record, basis):
+    """Recompute the flag's early-end coverage from its sealed plan and facts."""
+    from .plan_evidence import READING_COMPLETION_POLICY, facts, remaining_plan_coverage
+    if record['task']['fragment'].get('reading_completion_policy')!=READING_COMPLETION_POLICY:return
+    from pathlib import Path
+    from types import SimpleNamespace
+    from .agent_observation import project
+    from .react_session import struct_goal
+    receipt=basis.get('reading_plan_completion') or {}
+    if receipt.get('protocol')!=READING_COMPLETION_POLICY:
+        raise ValueError('Reading endpoint is missing frozen remaining-plan completion receipt')
+    root=Path(record['receipt']['boundary']['path']).parent
+    sealed=record['receipt']['files_sha256']
+    plans=sorted(name for name in sealed if name.endswith(('-conditional-plan.json','-conditional-plan-revision.json')))
+    if not plans:raise ValueError('Reading endpoint has no sealed source plan')
+    loaded=[]
+    for key,expected_name,expected_kind in (('original_plan',plans[0],'conditional-plan'),
+                                         ('current_plan',plans[-1],None)):
+        ref=receipt.get(key) or {};path=Path(ref.get('path',''))
+        if path.parent!=root or path.name!=expected_name or sealed.get(path.name)!=ref.get('sha256'):
+            raise ValueError('Reading completion plan reference is outside the sealed original route')
+        verify_evidence([ref]);event=load_json(path)
+        if expected_kind is not None and event.get('kind')!=expected_kind:
+            raise ValueError('Reading completion original-plan kind mismatch')
+        loaded.append(event)
+    original,current=loaded;plan=current['plan'];position=receipt.get('position')
+    if (receipt.get('original_plan_sha256')!=object_sha256(original['plan'])
+            or receipt.get('current_plan_sha256')!=object_sha256(plan)
+            or type(position) is not int or not 0<=position<=len(plan['steps'])):
+        raise ValueError('Reading completion plan hash or remaining position mismatch')
+    # A supplied position cannot silently discard unexecuted plan slots.
+    effects=[]
+    after_ids={r['after_observation_id'] for r in record['trajectory']}
+    for name in sorted(sealed):
+        if name<=plans[-1] or not name.endswith('-plan-effect.json'):continue
+        event=load_json(root/name);actual=event.get('actual') or {}
+        if actual.get('actual_effective_delta')!=1:continue
+        index=actual.get('position')
+        if (type(index) is not int or not 0<=index<len(plan['steps'])
+                or event.get('expected')!=plan['steps'][index]['expected']
+                or actual.get('observation_id') not in after_ids):
+            raise ValueError('Reading completed-step evidence differs from the sealed plan')
+        effects.append(index)
+    if effects!=list(range(position)):
+        raise ValueError('Reading remaining-plan position skips unexecuted or unresolved actions')
+    observations={}
+    for oid,row in record['observations'].items():
+        observations[oid]=project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')})
+    session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],observation_records=observations,
+        requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
+    evidence=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}))
+    expected=remaining_plan_coverage(session,plan,position,evidence)
+    if expected!=receipt.get('coverage') or expected['status']!='COVERED':
+        raise ValueError('Reading remaining purposes are not covered by sealed body goal facts')
+    return receipt
+
+
 def validate_record(record):
     """Recompute tail accounting from immutable attempt/raw references."""
     marker=record['terminal'].get('collection_ending')
@@ -65,8 +161,8 @@ def validate_record(record):
     if not enabled(record['task']) or not marker or marker.get('protocol')!=policy:
         raise ValueError('Missing versioned closure binding')
     band=marker.get('attempt_band')
-    limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION) else MAXIMUM
-    if policy in (V3_VERSION, VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
+    limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) else MAXIMUM
+    if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
         raise ValueError('V3 closure attempt ceiling differs from its frozen task/band')
     attempts=[];raws=[];raw_refs=[]
     for ref in marker['attempt_refs']:
@@ -76,10 +172,14 @@ def validate_record(record):
         attempts.append(attempt)
         for raw_ref in attempt.get('raw_steps',[]):
             verify_evidence([raw_ref]);raws.append(load_json(raw_ref['path']));raw_refs.append(raw_ref)
-    if ([a['number'] for a in attempts]!=list(range(1,len(attempts)+1)) or (limit is not None and len(attempts)>limit)
+    if ([a['number'] for a in attempts]!=list(range(1,len(attempts)+1)) or (limit is not None and policy!=EFFECTIVE_VERSION and len(attempts)>limit)
             or marker['business_attempts']!=len(attempts)):
         raise ValueError('Versioned business-attempt count changed')
     kind=marker.get('kind')
+    if policy==EFFECTIVE_VERSION and marker.get('verified_effective_steps',0)>EFFECTIVE_MAXIMUM:
+        raise ValueError('Effective-step ceiling exceeded')
+    if kind=='TEN_EFFECTIVE_STEP_LIMIT' and (policy!=EFFECTIVE_VERSION or marker.get('verified_effective_steps')!=EFFECTIVE_MAXIMUM):
+        raise ValueError('Effective-step limit closure differs from verified count')
     if kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') and (len(attempts)!=limit or kind!=limit_kind(limit)):
         raise ValueError('Attempt-limit closure kind differs from the actual ceiling/count')
     dispatched=[r for r in raws if r.get('dispatched') is True]
@@ -106,12 +206,15 @@ def validate_record(record):
               and (state(record,final).get('visible_text') or '').strip())
     if safe and len(dispatched)>len(verified):
         tail=[r for r in dispatched if r not in verified]
-        safe=(len(tail)==1 and tail[0]['operation']['action_type']=='scroll'
-              and tail[0].get('action_executed') is True
-              and tail[0].get('react',{}).get('after_observation_id') in record['observations'])
-        if safe:
-            raw=tail[0]; before=raw['state']; after=state(record,raw['react']['after_observation_id'])
-            safe=same_view(before,after) and same_view(after,state(record,final))
+        if policy==EFFECTIVE_VERSION:
+            safe=all(no_effect_proven(raw,record['observations']) for raw in tail)
+        else:
+            safe=(len(tail)==1 and tail[0]['operation']['action_type']=='scroll'
+                  and tail[0].get('action_executed') is True
+                  and tail[0].get('react',{}).get('after_observation_id') in record['observations'])
+            if safe:
+                raw=tail[0]; before=raw['state']; after=state(record,raw['react']['after_observation_id'])
+                safe=same_view(before,after) and same_view(after,state(record,final))
     if safe:
         from .action_stability import ACTION_SCOPED_VERSIONS, action_scoped_view_stable
         if record['task']['fragment'].get('action_stability_protocol') in ACTION_SCOPED_VERSIONS:
@@ -147,6 +250,7 @@ def validate_record(record):
                 or marker.get('plan_protocol') not in PLAN_VERSIONS):
             raise ValueError('Host endpoint is not bound to the original plan task')
         basis=marker.get('endpoint_evidence') or {}
+        validate_reading_completion(record,basis)
         final_evidence=record['observations'][final]['evidence']
         if basis.get('image')!=final_evidence['image']:
             raise ValueError('Endpoint image differs from sealed final observation')
@@ -221,12 +325,13 @@ def annotation_errors(annotation):
     marker=annotation.get('steps',[{}])[-1].get('tool_result',{}).get('return_value',{}).get('collection_ending')
     if not marker:return []
     policy=marker.get('protocol')
-    limit=None if policy==VERSION else marker.get('attempt_limit',MAXIMUM) if policy==V3_VERSION else MAXIMUM
+    limit=EFFECTIVE_MAXIMUM if policy==EFFECTIVE_VERSION else None if policy==VERSION else marker.get('attempt_limit',MAXIMUM) if policy==V3_VERSION else MAXIMUM
     effective=sum(s.get('action',{}).get('action_type') not in ('wait','complete') for s in annotation['steps'])
     errors=[]
     if (policy not in VERSIONS or marker.get('verified_effective_steps')!=effective
             or type(marker.get('business_attempts')) is not int or marker['business_attempts']<0
-            or (limit is not None and marker['business_attempts']>limit)
+            or (limit is not None and policy!=EFFECTIVE_VERSION and marker['business_attempts']>limit)
+            or (policy==EFFECTIVE_VERSION and (marker.get('attempt_limit')!=EFFECTIVE_MAXIMUM or effective>EFFECTIVE_MAXIMUM))
             or (policy==VERSION and marker.get('attempt_limit') is not None)
             or (policy==V3_VERSION and (marker.get('attempt_limit') not in (MAXIMUM,LONG_MAXIMUM)
                                     or marker.get('attempt_band') not in ('five','long','short',None)))
@@ -245,10 +350,11 @@ def annotation_errors(annotation):
             or marker.get('finish_origin') not in ('host','agent')
             or marker.get('finish_is_business_action') is not False or marker.get('wait_is_business_action') is not False
             or len(marker.get('attempt_refs',[]))!=attempts
-            or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED')
-                or attempts < (1 if policy==VERSION else 5) or (limit is not None and attempts>limit)))
+            or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED')
+                or attempts < (1 if policy in (VERSION,EFFECTIVE_VERSION) else 5) or (limit is not None and policy!=EFFECTIVE_VERSION and attempts>limit)))
             or (kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') and (attempts!=limit or kind!=limit_kind(limit)))
-            or (marker.get('unverified_tail_dispatches',0)>0 and kind!='KNOWN_NO_EFFECT')):
+            or (kind=='TEN_EFFECTIVE_STEP_LIMIT' and (policy!=EFFECTIVE_VERSION or effective!=EFFECTIVE_MAXIMUM))
+            or (policy!=EFFECTIVE_VERSION and marker.get('unverified_tail_dispatches',0)>0 and kind!='KNOWN_NO_EFFECT')):
         errors.append('Versioned exceptional closure kind/range/attempt references are inconsistent')
     if kind=='HOST_BOUNDARY_RETURN':
         from .consumer_page_policy import VERSION as PAGE_POLICY, PLAN_PROTOCOL

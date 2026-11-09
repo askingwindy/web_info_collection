@@ -94,6 +94,10 @@ def system_with_attempt_limit(text, limit):
         }
         for old,new in replacements.items():text=text.replace(old,new)
         return text+'\n不设模型调用次数、动作次数、固定档位、重规划次数或会话总时长配额。自然完成即结束，无法继续照实停止；不为数量补动作。'
+    if limit==10:
+        text=text.replace(V11_PLANNING_GUIDANCE,'').replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；','').replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。','').replace('先核算完整路径的8步额度：','先核算累计10个有效业务动作的额度：')
+        text += V11_READING_LINK_PREFERENCE.replace('计划含跨页访问时安排核验落地并阅读，再返回来源继续剩余计划；可先完成已计划的落地阅读，不要求立即back。','跨页访问只为核对原问题所需事实，核验落地并读取正文；仅原剩余计划确需来源页时返回，不为组合动作跨页或返回。') + '阅读以原问题及具体正文事实为目标；标题、年份或目录卡片出现不等于正文问题已回答。没有与原问题相关的可见链接时可纯滚动，不固定点击次数、顺序或往返模板。'
+        return text+'\n先按原目标形成完成所需的最短完整自然路径，通常控制在5–10个有效业务动作。自然路径不足5步时，仅在原目标范围内补充仍有独立业务用途、能产生新证据的有效动作；没有就直接提交短路径，由宿主标记short_flow。不得为达到5步另选繁琐目标、增加第二组输入或跨词条任务，也不得重复输入、重复计算、无效往返或制造错误。累计最多10步，重规划只提交剩余步骤且不重置总额。目标所需结果已可见时结束，不追逐预想文案。checks.page用实际URL/page_id，region优先正文或已证明区域，引用由宿主回算。'
     if limit!=LONG_PLAN_ATTEMPT_CEILING:return text
     return (text.replace('6–8步','6–12步').replace('8步额度','12步额度')
             .replace('长档的八个槽位','长档的十二个槽位'))
@@ -300,6 +304,8 @@ def plan_schema(grounded=False, *, wire=False, pending_checks=False, max_steps=C
         schema['properties']['steps'].pop('maxItems',None)
     else:
         schema['properties']['steps']['maxItems']=max_steps
+        if max_steps==10:
+            schema['properties']['steps']['description']='先给最短完整自然路径，通常5–10步；不足5步只补原目标内仍有独立用途的动作，无则短流程。重规划只列剩余动作，共享累计10步上限。'
     if pending_checks:
         item=schema['properties']['checks']['items']
         item['required']=['field']
@@ -1072,6 +1078,9 @@ class Controller:
         limit=attempt_limit(s.task,planning_band(s.task,s.context) if first else getattr(self,'frozen_band',None))
         payload['system'] = system_with_attempt_limit(
             payload['system'] + (FIRST_GOAL_SEMANTICS if first else BRANCH_GOAL_SEMANTICS),limit)
+        if limit==10:
+            payload['planning_range']={'ordinary_minimum':5,'cumulative_maximum':10,'remaining_effective_steps':remaining_step_allowance(s),'short_flow':'自然1–4步保留，不凑步'}
+            payload.setdefault('replan_contract',{}).update(remaining_effective_limit=remaining_step_allowance(s),attempt_limit=10,budget_instruction='仅规划剩余有效动作，累计最多10步；重规划不重置。不要重放已完成或无效果的动作。')
         if limit is None:
             payload.pop('bands',None)
             contract_payload=payload.get('replan_contract',{})
@@ -1079,6 +1088,11 @@ class Controller:
                 contract_payload.pop(key,None)
             if 'fields' in contract_payload:
                 contract_payload['fields']='steps必填；其他字段继承原目标与证据，不设步数额度'
+        from .plan_evidence import READING_COMPLETION_POLICY
+        if s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY:
+            payload['system']+='提前完成必须由宿主逐项证明剩余计划目的已被真实正文目标证据覆盖；finish_when命中和一句冗余说明均不充分。歧义时继续原计划中的有用动作或如实停止，不添加审核调用。'
+            if getattr(self,'remaining_plan_feedback',None):
+                payload['remaining_plan_feedback']=deepcopy(self.remaining_plan_feedback)
         return payload
 
     def _executed_summary(self,s):
@@ -1147,7 +1161,15 @@ class Controller:
 
     def endpoint_basis(self,s):
         key=self.visual_key(self.plan['finish_when'],s)
-        return {'source':('host_goal_evidence' if self.plan['finish_when']['kind']=='goal_evidence' else
+        from .plan_evidence import READING_COMPLETION_POLICY, remaining_plan_coverage
+        completion={}
+        if s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY:
+            completion={'reading_plan_completion':{'protocol':READING_COMPLETION_POLICY,
+                'original_plan':self.original_plan_event,'current_plan':self.plan_event,
+                'original_plan_sha256':object_sha256(self.frozen_plan),'current_plan_sha256':object_sha256(self.plan),
+                'position':self.position,
+                'coverage':remaining_plan_coverage(s,self.plan,self.position,self.fact_progress(s))}}
+        return {**completion,'source':('host_goal_evidence' if self.plan['finish_when']['kind']=='goal_evidence' else
                           'model_visual' if key in self.visual_confirmations else 'host_rendered_state'),
                 'predicate':self.plan['finish_when'],'image':s.current['evidence']['image'],
                 'visual_confirmation':self.visual_confirmations.get(key),
@@ -1176,9 +1198,17 @@ class Controller:
         name='request_original_image' if s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS else 'original'
         return [{'choice':name,'meaning':meaning}]
 
+    def remaining_coverage(self,s):
+        from .plan_evidence import READING_COMPLETION_POLICY, remaining_plan_coverage
+        if s.task['fragment'].get('reading_completion_policy')!=READING_COMPLETION_POLICY:return None
+        if not self.plan or self.position>=len(self.plan['steps']):return None
+        return remaining_plan_coverage(s,self.plan,self.position,self.fact_progress(s))
+
     def continue_reading(self,s):
         """A citation does not cancel legal remaining work for the original goal."""
         if s.task.get('fragment',{}).get('plan_protocol') not in IMAGE_CHOICE_PROTOCOLS:return False
+        coverage=self.remaining_coverage(s)
+        if coverage is not None and coverage['status']!='COVERED':return True
         contract=contract_for(s.task)
         from .direct_article import VERSION as DIRECT_VERSION
         if (contract or {}).get('version')==DIRECT_VERSION:return False
@@ -1359,7 +1389,9 @@ class Controller:
             s.goal_updates.append({'description':plan['goal'],'basis_observation_id':s.current['observation_id'],
                                   'reason':'frozen conditional plan','applied_at_decision':s.used['max_decisions']})
             s._last_decision=s.event('conditional-plan',plan=plan,provider_response=response,plan_sha256=object_sha256(plan),
-                                     before_first_business_dispatch=s.actual_dispatches==0)
+                                     before_first_business_dispatch=s.actual_dispatches==0,
+                                     **({'check_page_urls':deepcopy(self.check_page_urls)} if s.task['fragment'].get('reading_completion_policy')=='webcollect-reading-plan-completion-1' else {}))
+            self.original_plan_event=self.plan_event=s._last_decision
             # Provider call stays archived above; it is never sent in text-mode history.
             return
         from jsonschema import Draft202012Validator
@@ -1474,10 +1506,19 @@ class Controller:
                     or getattr(self,'endpoint_established_at_first_frame',False)
                     or contract_for(s.task)):
                 raise ValueError('FINISH_EARLY_REJECTED: 提前完成必须绑定由已执行动作产生且当前同步末帧仍证实的终点，并有剩余计划确属冗余的确认')
+            coverage=self.remaining_coverage(s)
+            if coverage is not None:
+                s.event('remaining-plan-coverage',**coverage)
+                if coverage['status']!='COVERED':
+                    self.remaining_plan_feedback=coverage
+                    self.early_finish_declined=True
+                    self._early_finish_asked=False
+                    return
             self.early_finish={'decision':s.used['max_decisions'],
                 'remaining_planned_steps':len(self.plan['steps'])-self.position,
                 'finish_when':deepcopy(self.plan['finish_when']),
-                'basis':'agent_requested_action_produced_endpoint',
+                'basis':'host_verified_remaining_purposes' if coverage is not None else 'agent_requested_action_produced_endpoint',
+                **({'remaining_plan_coverage':coverage} if coverage is not None else {}),
                 'goal_completion':'UNCONFIGURED_pending_independent_QC'}
             await self.finish(s,'Agent申请提前完成：剩余计划确属冗余，当前同步末帧已证实终点；目标完成状态待独立QC',endpoint=True)
         elif response['choice']=='continue':
@@ -1526,7 +1567,7 @@ class Controller:
             self.plan=plan;self.position=0;self.selection=None;self.recovery_prefix=False;self.pending_effect=None
             self.last_document=deepcopy(s.current['document_identity'])
             s.working_goal=plan['goal']
-            s.event('conditional-plan-revision',plan=plan,original_requested_goal=s.requested_goal)
+            self.plan_event=s.event('conditional-plan-revision',plan=plan,original_requested_goal=s.requested_goal)
         elif response['choice']=='stop':
             await self.finish(s,'模型选择如实结束当前片段',endpoint=False)
 
@@ -1574,12 +1615,12 @@ class Controller:
         key=(s.current['observation_id'],s.actual_dispatches)
         if getattr(self,'_weak_endpoint_feedback',None)==key:
             from .react_session import ReactStop
-            raise ReactStop('blocked','首帧即成立的终点谓词不能证明目标结果；同一状态重规划后仍无动作新证据，如实结束','collector')
+            raise ReactStop('blocked','必要结果检查未核验；同一状态重规划后仍无动作新证据，如实结束','collector')
         self._weak_endpoint_feedback=key
-        feedback={'reason':'终点条件在首帧已成立，且声明的结果检查项仍未由已执行动作核验；计划步数走完不等于目标结果完成',
+        feedback={'reason':'声明的必要结果检查项仍未核验；终点命中或计划走完不等于目标完成',
                   'predicate':deepcopy(self.plan['finish_when']),'unverified_checks':unverified}
         s.event('plan-weak-endpoint',**feedback)
-        options=[{'choice':'replan','meaning':'终点谓词首帧已成立且结果未核验：补充使目标结果可见并读取的剩余步骤，或把终点绑定动作后新产生的结果证据',
+        options=[{'choice':'replan','meaning':'必要结果检查未核验：在剩余额度内补充使目标结果可见的步骤，或如实停止；不重复已完成动作',
                   'weak_endpoint':feedback},
                  *self.image_option(s,object_sha256(self.plan['finish_when']),'当前同帧原分辨率图'),
                  {'choice':'stop','meaning':'如实结束，不声称目标结果已达成'}]
@@ -1587,6 +1628,27 @@ class Controller:
 
     async def finish(self,s,reason,endpoint=True):
         s.goal_evidence=self.fact_progress(s)
+        coverage=self.remaining_coverage(s) if endpoint else None
+        if coverage is not None:
+            s.event('remaining-plan-coverage',**coverage)
+            if coverage['status']!='COVERED':
+                self.remaining_plan_feedback=coverage
+                self.early_finish_declined=True
+                if remaining_step_allowance(s) is None or remaining_step_allowance(s)>0:
+                    await self.request(s,[{'choice':'continue','meaning':'剩余目的尚未被正文证据覆盖，继续原计划中有用步骤'},
+                        {'choice':'replan','meaning':'保持原问题，按实际已见事实修订剩余有用路径'},
+                        {'choice':'stop','meaning':'如实保留短流程或未完成片段，不声称原目标全部完成'}])
+                    return
+                endpoint=False
+                reason='有效动作额度已用完，剩余阅读目的未全部核验；如实保留片段'
+        from .plan_evidence import unverified_required_checks
+        unverified=unverified_required_checks(s.goal_evidence)
+        if endpoint and attempt_limit(s.task,getattr(self,'frozen_band',None))==10 and unverified:
+            if remaining_step_allowance(s)>0:
+                await self.offer_weak_endpoint(s,unverified)
+                return
+            endpoint=False
+            reason='累计10个有效动作已用完，必要结果检查尚未核验；如实保留片段'
         s.event('goal-evidence', **s.goal_evidence)
         result=await s._native_finish({'observation_id':s.current['observation_id'],'stop_reason':'ready' if endpoint else 'no_path',
                                      'summary':reason,'evidence_refs':[s.current['observation_id']]})
@@ -1664,10 +1726,13 @@ class Controller:
                      {'choice':'replan','meaning':'新文档需要修订剩余路径'},
                      *self.image_option(s,'document_change','当前同帧原清晰图'), {'choice':'stop','meaning':'如实结束'}]
             await self.request(s,options);return
-        from .closing_policy import limit_kind
+        from .closing_policy import limit_kind, effective_limit
         limit=attempt_limit(s.task,getattr(self,'frozen_band',None))
-        if limit is not None and len(getattr(s,'business_attempt_refs',[]))>=limit:
-            s._range_close(limit_kind(limit),f'达到{limit}次原子尝试，结束已证连续片段');return
+        effective_ceiling=effective_limit(s.task)
+        consumed=(len(s.trajectory) if effective_ceiling is not None else len(getattr(s,'business_attempt_refs',[])))
+        if limit is not None and consumed>=limit:
+            unit='个有效业务动作' if effective_ceiling is not None else '次原子尝试'
+            s._range_close(limit_kind(limit),f'达到{limit}{unit}，结束已证连续片段');return
         if self.position>=len(self.plan['steps']):
             if self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False):
                 unverified=self.weak_endpoint_unverified(s)

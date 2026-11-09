@@ -1,20 +1,119 @@
 """Observation-bound fact coverage and earned navigation for conditional plan v2."""
-from urllib.parse import urldefrag, urlsplit
+from urllib.parse import urldefrag, urlsplit, unquote
+import re
+import unicodedata
 from .batch_core import load_json
 
-VERSION = 'webcollect-plan-facts-1'
+LEGACY_VERSION = 'webcollect-plan-facts-1'
+VERSION = 'webcollect-plan-facts-2'
 
 
 def same_url(a,b):
     return bool(a and b and urldefrag(a)[0] == urldefrag(b)[0])
 
 
-def region_matches(state, cid, region):
+def page_label(value, *, decorative_year=False):
+    """Only presentation aliases; never infer a business destination."""
+    value=unicodedata.normalize('NFKC',unquote(str(value or ''))).replace('_',' ')
+    value=re.sub(r'\s+编辑\s*$','',value)
+    # Decorative symbols and a trailing current-year title badge are not names.
+    value=''.join(c for c in value if unicodedata.category(c) not in ('So','Cf'))
+    if decorative_year:
+        value=re.sub(r'\s+[（(]?20\d{2}[）)]?\s*$','',value)
+    return re.sub(r'\s+','',value).strip()
+
+
+def page_matches(page,state,navigation=()):
+    embedded=re.findall(r'https?://[^\s)）]+',page)
+    if embedded:
+        return any(same_url(u,state['url']) or any(same_url(u,n.get('clicked_href'))
+                   and same_url(n.get('landed_url'),state['url']) for n in navigation) for u in embedded)
+    if same_url(page,state['url']):return True
+    label=page_label(page)
+    parsed=urlsplit(state['url'])
+    candidates=[state.get('title','')]
+    candidates += [e.get('text','') for e in state.get('elements',[])
+                   if e.get('visible') is True and e.get('native_role') == 'h1']
+    if parsed.path.startswith('/wiki/'):
+        candidates.append(unquote(parsed.path[len('/wiki/'):]))
+    decoration=parsed.hostname in ('www.muxtly.com','muxtly.com')
+    if label and label in {page_label(c,decorative_year=decoration) for c in candidates}:return True
+    # A captured click label and its actual synchronized landing prove redirects.
+    return any(page_label(n.get('actual_visible_target'))==label
+               and same_url(n.get('landed_url'),state['url']) for n in navigation)
+
+
+def unverified_required_checks(evidence):
+    """PENDING semantic auxiliary checks retain their non-blocking meaning."""
+    return [{'field':c.get('field'),'status':c.get('status'),
+             'page':c.get('page'),'region':c.get('region')}
+            for c in evidence.get('checks',[]) if c.get('status')=='UNVERIFIED']
+
+
+READING_COMPLETION_POLICY = 'webcollect-reading-plan-completion-1'
+
+
+def remaining_plan_coverage(s, plan, position, evidence):
+    """Prove exact remaining purposes from earned body observations only.
+
+    Free purpose paraphrases, navigation labels and heading matches cannot
+    establish semantic redundancy. Unknown mappings keep the useful route.
+    """
+    rows=[]
+    after_ids={r.get('after_observation_id') for r in s.trajectory}
+    for index,step in enumerate(plan.get('steps',[])[position:],position+1):
+        predicate=step.get('expected') or {}
+        purpose=str(step.get('purpose') or '').strip()
+        proofs=[]
+        if predicate.get('kind')=='visible_text' and predicate.get('text') and purpose:
+            for check in evidence.get('checks',[]):
+                if check.get('status')!='VERIFIED' or purpose not in (
+                        str(check.get('field') or '').strip(),str(check.get('purpose') or '').strip()):
+                    continue
+                for proof in check.get('evidence',[]):
+                    oid=proof.get('observation_id');obs=s.observation_records.get(oid)
+                    if oid not in after_ids or not obs or not obs.get('capture_verified'):continue
+                    state=load_json(obs['evidence']['state']['path'])
+                    node=next((e for e in state.get('elements',[]) if e['element_id']==proof.get('node')),None)
+                    # A heading, link, input echo or isolated year is not a body
+                    # answer. Reading it may still end as an honest short flow.
+                    text=(node or {}).get('text') or ''
+                    if (not node or node.get('visible') is not True
+                            or node.get('native_role') not in ('p','li','dd','dt','td','th','blockquote','pre')
+                            or not re.search(r'[A-Za-z\u4e00-\u9fff]',text)
+                            or predicate['text'] not in text):continue
+                    region=predicate.get('region') or check.get('region')
+                    if not region_matches(state,node['element_id'],region,business_aliases=True):continue
+                    proofs.append({'field':check.get('field'),'observation_id':oid,'node':node['element_id'],
+                        'quote':text,'url':state['url'],
+                        'action_refs':[{'operation_id':r['operation_id'],'after_observation_id':oid}
+                                       for r in s.trajectory if r.get('after_observation_id')==oid]})
+        rows.append({'plan_step':index,'purpose':purpose,'expected':predicate,
+                     'status':'COVERED' if proofs else 'UNRESOLVED','evidence':proofs,
+                     'reason':None if proofs else 'No exact purpose-to-verified-body-fact binding; keep remaining useful work'})
+    return {'protocol':READING_COMPLETION_POLICY,'status':'COVERED' if all(r['status']=='COVERED' for r in rows) else 'UNRESOLVED',
+            'remaining_steps':rows,'model_semantic_review':False}
+
+
+def region_matches(state, cid, region, *, business_aliases=False):
     if not region: return True
     elements={e['element_id']:e for e in state.get('elements',[])}
     bindings={b['element_id']:b for b in state.get('capture_controls',[])}
     e=elements.get(cid,{})
     selector=bindings.get(cid,{}).get('selector','')
+    # A free result-area name is not proof that an arbitrary main paragraph
+    # contains this execution's result. Demand captured semantic containment.
+    if business_aliases and region in ('结果区','结果区域','计算结果','计算结果/正文','计算结果/业务区域','IRS计算器结果区'):
+        visited=set();node=e
+        while node and node.get('element_id') not in visited:
+            visited.add(node['element_id'])
+            if (node.get('visible') is True and node.get('native_role') in ('table','output','status')
+                    and re.search(r'\d',node.get('text') or '')):
+                return True
+            node=elements.get(node.get('parent_id'),{})
+        # Canonical selectors record real tag ancestry even when a container
+        # has no independent rendered node. Match tag tokens, never CSS names.
+        return bool(re.search(r'(?:^| > )(?:table|output)(?=:| > |$)',selector))
     if region in ('正文','main','article'):
         if any(x in selector for x in ('main','article','#content','.article','.content')):return True
         # Canonical selectors deliberately omit classes/IDs. Use a unique
@@ -97,6 +196,9 @@ def observed_basis(s, objective_evidence):
 
 def facts(s,plan, *, page_urls=None, objective_evidence=None):
     checks=plan.get('checks',[]); rows=[]
+    modern=s.task.get('fragment',{}).get('ending_policy')=='webcollect-five-ten-effective-ending-5' if hasattr(s,'task') else True
+    basis=observed_basis(s,objective_evidence) if modern else None
+    navigation=basis['navigation'] if basis else []
     for check in checks:
         if not all(check.get(key) for key in ('page','region','visible_text')):
             rows.append({**check,'status':'PENDING','evidence':[], 'seen_outside_allowed_source':[],
@@ -112,9 +214,11 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None):
             state=load_json(obs['evidence']['state']['path'])
             headings=[e.get('text') for e in state.get('elements',[]) if e.get('visible') is True and e.get('native_role') in ('h1','h2','h3')]
             if bound_url is not None:
-                page_ok = same_url(bound_url, state['url'])
+                page_ok = (page_matches(bound_url,state,navigation) if modern
+                           else same_url(bound_url,state['url']))
             else:
-                page_ok = same_url(check['page'], state['url']) or check['page'] in headings
+                page_ok = (page_matches(check['page'],state,navigation) if modern else
+                           same_url(check['page'], state['url']) or check['page'] in headings)
             values={v['element_id']:v for v in state.get('values',[])}
             for e in state.get('elements',[]):
                 quote=e.get('text') or ''
@@ -131,12 +235,14 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None):
                        'image':obs['evidence']['image'],'state':obs['evidence']['state'],
                        'node':e['element_id'],'bbox':e.get('bbox'),'quote':quote,
                        'source':source}
-                (proofs if page_ok and region_matches(state,e['element_id'],check['region']) else other).append(proof)
+                if modern:
+                    proof['action_refs']=[{'operation_id':r['operation_id'],'before_observation_id':r['before_observation_id'],'after_observation_id':r['after_observation_id']} for r in s.trajectory if oid in (r.get('before_observation_id'),r.get('after_observation_id'))]
+                (proofs if page_ok and region_matches(state,e['element_id'],check['region'],business_aliases=modern) else other).append(proof)
         rows.append({**check,**({'resolved_page':bound_url} if bound_url is not None else {}),
                      'status':'VERIFIED' if proofs else 'UNVERIFIED',
                      'evidence':proofs,'seen_outside_allowed_source':other})
     done=sum(r['status']=='VERIFIED' for r in rows)
-    return {'protocol':VERSION,'requested_goal':s.requested_goal,'working_goal':s.working_goal,
+    return {'protocol':VERSION if modern else LEGACY_VERSION,'requested_goal':s.requested_goal,'working_goal':s.working_goal,
             'checks':rows,'verified':done,'total':len(rows),
             **({'host_observed_basis':observed_basis(s, objective_evidence)} if any(r['status']=='PENDING' for r in rows) else {}),
             'business_goal_status':('VERIFIED' if done==len(rows) else 'PARTIAL' if done else 'UNVERIFIED') if rows else 'NOT_SPECIFIED',

@@ -245,6 +245,26 @@ def flow_classification(effective):
     return short, (f'最终保存轨迹包含 {effective} 个有效业务操作，少于 5 步，自动标记为短流程。' if short else None)
 
 
+def validate_effective_limit(task, count):
+    """V5 freezes a ten-effective-action ceiling, including derived prefixes."""
+    from .closing_policy import effective_limit
+    limit=effective_limit(task)
+    if limit is not None and count>limit:
+        raise ValueError('V5 saved interval exceeds ten effective business actions')
+
+
+def required_result_checks(terminal):
+    """The same evidence gate as the online conditional-plan finish."""
+    from .plan_evidence import unverified_required_checks
+    return unverified_required_checks(terminal.get('goal_evidence') or {})
+
+
+def ready_requires_prefix(task, terminal):
+    from .closing_policy import EFFECTIVE_VERSION
+    return (task.get('fragment',{}).get('ending_policy')==EFFECTIVE_VERSION
+            and terminal.get('stop_reason')=='ready' and bool(required_result_checks(terminal)))
+
+
 def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
     """Recount native atomic dispatches from sealed evidence, never model labels.
 
@@ -346,6 +366,7 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
             raise ValueError('末帧导航缺少原点击与延迟落地绑定')
     from .direct_article import verify_record
     verify_record(record, _verified=_verified)
+    validate_effective_limit(record['task'],len(rows))
     return rows
 
 
@@ -492,9 +513,20 @@ def terminal_outcome(task, record, final_state):
     terminal = record['terminal']
     if record.get('trusted_prefix') and lines and not blocked:
         values=[str(v['value']) for v in final_state.get('values',[]) if v.get('value_visible') and v.get('value') not in (None,'')]
-        actual=('末帧输入字段实际显示'+ '、'.join('「'+v+'」' for v in values)) if values else '末帧保留已执行区间及其可见内容'
-        result=visible_result_description(final_state)
-        return 'success', '本段历史边界已验证，完整原目标未确认完成；' + actual + ('；'+result if result else '')
+        first_state=_observation_state(record,record['trajectory'][0]['before_observation_id'])
+        prior=set((first_state.get('visible_text') or '').splitlines())
+        facts=list(dict.fromkeys(line.strip() for line in lines
+            if line.strip() and line not in prior and re.search(r'\d',line)
+            and re.search(r'[\u4e00-\u9fffA-Za-z]',line)))
+        if facts:
+            actual='末帧可见'+ '、'.join('「'+line[:160]+'」' for line in facts[:6])
+        elif values:
+            actual='末帧输入字段实际显示'+ '、'.join('「'+v+'」' for v in values)
+        else:
+            actual=description or '末帧保留已执行区间及其可见内容'
+        # A verified historical interval is not proof that the original goal
+        # completed. Keep that distinction in the customer-facing status.
+        return 'controlled_exception', actual
     if task['fragment'].get('ending_policy') and not lines:
         return 'failed', description
     from .closing_policy import enabled as v2
@@ -512,7 +544,7 @@ def terminal_outcome(task, record, final_state):
         return 'failed', description
     if task['fragment'].get('ending_policy'):
         checks=(terminal.get('goal_evidence') or {}).get('checks') or []
-        unverified=[str(c.get('field') or '未命名检查项') for c in checks if c.get('status')=='UNVERIFIED']
+        unverified=[str(c.get('field') or '未命名检查项') for c in required_result_checks(terminal)]
         if unverified:
             # Declared result checks that remain UNVERIFIED can never export as
             # success. PENDING auxiliary checks keep their established
@@ -580,6 +612,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     if not trajectory:
         return {'status': 'no_actions', 'effective_steps': 0}
     effective = len(trajectory)
+    validate_effective_limit(task,effective)
     short, reason = flow_classification(effective)
     length_qualified = effective > 0
     result = {'status': 'length_unqualified' if not length_qualified else 'deriving',
@@ -669,7 +702,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     if final_id not in record['observations']:
         final_id = trajectory[-1]['after_observation_id']
     final_state = _observation_state(record, final_id)
-    final_description = observed_frame_description(final_state, instruction)
+    final_description = final_result if native else observed_frame_description(final_state, instruction)
     # Byte-stable completion timestamp: derived from the raw terminal capture
     # itself so re-derivation reproduces identical delivery artifacts.
     final_capture = _observation_capture(record, final_id)
@@ -700,22 +733,10 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                   'next_step_rationale': final_description,
                   'step_result': '最终页面已确认，' + final_goal,
                   'exception_evidence': []})
-    if record['terminal'].get('goal_evidence'):
-        steps[-1]['tool_result']['return_value']['goal_evidence']=deepcopy(record['terminal']['goal_evidence'])
-    from .dynamic_regions import enabled as dynamic_enabled, summary as dynamic_summary
-    used_observations={oid for row in record['trajectory'] for oid in
-        (row.get('before_observation_id'),row.get('after_observation_id')) if oid}
-    used_observations.add(record['terminal'].get('final_observation_id'))
-    dynamic_evidence={oid:{'contract':dynamic_summary(_observation_state(record,oid)),
-        'original_evidence':deepcopy(record['observations'][oid]['evidence'])}
-        for oid in sorted(used_observations-{None}) if dynamic_enabled(_observation_state(record,oid))}
-    if dynamic_evidence:
-        evidence=steps[-1]['tool_result']['return_value'].setdefault('goal_evidence',
-            {'protocol':'webcollect-plan-facts-1','is_ai_review':False,'checks':[],'business_goal_status':'NOT_SPECIFIED'})
-        evidence['dynamic_region_evidence']=dynamic_evidence
+    if record.get('trusted_prefix'):
+        steps[-1]['exception_evidence']=['原始执行未确认完整目标完成；本样本仅保留连续可信操作区间，按可控异常交付。']
     if record['terminal'].get('collection_ending'):
-        marker=deepcopy(record['terminal']['collection_ending'])
-        steps[-1]['tool_result']['return_value']['collection_ending']=marker
+        marker=record['terminal']['collection_ending']
         if marker['flagged']:
             steps[-1]['exception_evidence']=["本段按原始异常收尾依据结束；目标未确认完成，尾部原件已单独保留。",
                 f"业务动作尝试{marker['business_attempts']}次，真实原子派发{marker['actual_atomic_dispatches']}次，已验证有效步{effective}，未验证尾步{marker['unverified_tail_dispatches']}。"]
@@ -809,6 +830,8 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         record = project_prefix(record, raw_root, prefix_end_step, ids,
                                 rule=prefix_rule or PREFIX_RULE_V1, _verified=verified)
     task = record['task']
+    if prefix_end_step is not None:
+        validate_effective_limit(task,len(record['trajectory']))
     derivations_path = evidence_root / 'derivations.jsonl'
     prior = []
     if derivations_path.is_file():

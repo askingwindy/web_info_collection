@@ -13,6 +13,10 @@ import time
 from zoneinfo import ZoneInfo
 
 
+CAMPAIGN_VERSION = 'consumer-site-campaign-3'
+ORDINARY_COUNTING = 'ordinary-complete-five-ten-1'
+
+
 @contextmanager
 def locked(path):
     path = Path(path)
@@ -27,8 +31,40 @@ def write_state(path, state):
     temporary.replace(path)
 
 
+def target_count(state):
+    if state.get('schema_version') == CAMPAIGN_VERSION:
+        if state.get('counting_policy') != ORDINARY_COUNTING:
+            raise ValueError('Unknown ordinary campaign counting policy')
+        return sum(row.get('ordinary_target_eligible') is True for row in state['deliveries'])
+    return len(state['deliveries'])
+
+
 def target_reached(state):
-    return state.get('target') is not None and len(state['deliveries']) >= state['target']
+    return state.get('target') is not None and target_count(state) >= state['target']
+
+
+def ordinary_completion(saved):
+    """Count only ordinary complete samples; keep all other exports intact."""
+    from .batch_core import load_json, file_sha
+    receipt=load_json(saved['save_receipt']['path'])
+    annotation_path=Path(saved['result_location'])/'annotation.json'
+    if file_sha(annotation_path)!=receipt['sample_files_sha256']['annotation.json']:
+        raise ValueError('Campaign annotation differs from the saved receipt')
+    annotation=load_json(annotation_path)
+    effective=sum(step.get('action',{}).get('action_type') not in ('wait','finish','complete')
+                  for step in annotation.get('steps',[]))
+    raw=receipt.get('raw_execution',{})
+    complete=(annotation.get('completion_status')=='success'
+              and not annotation.get('short_flow') and not raw.get('trusted_prefix')
+              and saved.get('original_goal_completed') is not False
+              and not raw.get('collection_ending',{}).get('flagged')
+              and not annotation.get('steps',[{}])[-1].get('exception_evidence'))
+    return {'counting_policy':ORDINARY_COUNTING,'effective_steps':effective,
+            'completion_status':annotation.get('completion_status'),
+            'original_goal_completed':bool(complete),
+            'ordinary_target_eligible':bool(complete and 5<=effective<=10),
+            'target_count_status':'ordinary_goal_completed_pending_review' if complete and 5<=effective<=10 else 'retained_outside_ordinary_target',
+            'target_count_is_QC_pass':False}
 
 
 def reached(path):
@@ -67,6 +103,7 @@ def publish_pending(path, pool):
             return
         pending = dict(state['pending_deliveries'][0])
         output, evidence_root = Path(state['delivery_root']), Path(state['evidence_root'])
+        ordinary_counting=state.get('schema_version')==CAMPAIGN_VERSION
     # The coordinator is the sole publisher for this campaign. Other campaigns
     # using the same minute serialize only package updates in the exporter.
     result = None
@@ -79,6 +116,7 @@ def publish_pending(path, pool):
             receipt = capture.parent / 'candidate-receipt.json'
             if not source.is_dir() or not receipt.is_file():
                 raise ValueError('Saved sample awaits its customer export receipt')
+            qualification=ordinary_completion(saved) if ordinary_counting else {}
             expected = json.loads(receipt.read_text())['files_sha256']
             append_client_package(Path(__file__).resolve().parents[3], source, output,
                                   files_sha256=expected, staging_root=evidence_root)
@@ -88,6 +126,7 @@ def publish_pending(path, pool):
                 'source_receipt':{'path':str(receipt), 'sha256':file_sha(receipt)},
                 'format_status':'EXPORTED_FORMAT_VALID', 'independent_AI_QC':'NOT_RUN',
                 'human_review':'NOT_RUN', 'published':False}
+            result.update(qualification)
             sidecar = evidence_root / (saved['sample_id'] + '.json')
             sidecar.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
         with locked(path) as state:
@@ -114,7 +153,7 @@ def main():
     p.add_argument('--scope', type=Path, required=True)
     p.add_argument('--site', action='append', required=True, help='original applications.host; repeat for sites')
     p.add_argument('--workers-per-site', type=int, required=True)
-    p.add_argument('--target', type=int, help='optional explicit number of new exported samples; otherwise continuous')
+    p.add_argument('--target', type=int, help='optional target of complete ordinary samples with 5–10 effective actions; otherwise continuous')
     p.add_argument('--output', type=Path, required=True, help='new campaign state/log directory')
     p.add_argument('--delivery-root', type=Path, default=Path('delivery'))
     p.add_argument('--prefix', required=True)
@@ -138,7 +177,7 @@ def main():
     evidence = a.output / 'delivery-evidence'; evidence.mkdir()
     launch_delivery = a.delivery_root.resolve() / datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d%H%M')
     state = a.output / 'campaign.json'
-    write_state(state, {'schema_version':'consumer-site-campaign-2', 'target':a.target,
+    write_state(state, {'schema_version':CAMPAIGN_VERSION, 'counting_policy':ORDINARY_COUNTING, 'target':a.target,
         'delivery_root':str(launch_delivery), 'evidence_root':str(evidence.resolve()),
         'scope':str(a.scope.resolve()), 'sites':a.site, 'deliveries':[],
         'pending_deliveries':[], 'dispatch_stopped':False})
@@ -165,39 +204,74 @@ def main():
         worker.update(application_id=application,pid=process.pid,command=command,generation=generation)
         (a.output / 'roster.json').write_text(json.dumps(roster, ensure_ascii=False, indent=2) + '\n')
 
+    interrupted=False
     try:
         for worker, application in zip(roster['workers'], applications):
             launch(worker, application)
-        while not stopped(state):
+        while True:
             publish_pending(state, pool)
-            if stopped(state): break
-            for worker, application in zip(roster['workers'], applications):
-                if processes[worker['number']].poll() is not None:
-                    launch(worker, application)
+            with locked(state) as current:
+                external_stop=bool(current.get('dispatch_stopped') and current.get('stop_reason')!='ORDINARY_TARGET_REACHED')
+                dispatch_closed=bool(current.get('dispatch_stopped') or target_reached(current))
+                if target_reached(current) and not current.get('dispatch_stopped'):
+                    current.update(dispatch_stopped=True,stop_reason='ORDINARY_TARGET_REACHED')
+                    write_state(state,current)
+            if external_stop:
+                interrupted=True
+                break
+            if dispatch_closed:
+                # Reaching the target closes new claims. Already dispatched
+                # consumers finish their original evidence and exports naturally.
+                if all(process.poll() is not None for process in processes.values()):break
+            else:
+                for worker, application in zip(roster['workers'], applications):
+                    if processes[worker['number']].poll() is not None:
+                        launch(worker, application)
             time.sleep(0.2)
+    except KeyboardInterrupt:
+        interrupted=True
     finally:
         with locked(state) as current:
             current['dispatch_stopped'] = True
+            if interrupted:current['stop_reason']='INTERRUPTED_BY_USER'
             write_state(state, current)
-        for process in processes.values():
-            if process.poll() is None: process.send_signal(signal.SIGINT)
-        deadline=time.monotonic()+10
-        for process in processes.values():
-            if process.poll() is None:
-                try: process.wait(timeout=max(0,deadline-time.monotonic()))
-                except subprocess.TimeoutExpired: process.terminate()
-        for process in processes.values():
-            try: process.wait(timeout=5)
-            except subprocess.TimeoutExpired: process.kill(); process.wait()
+        if not interrupted:
+            try:
+                while any(process.poll() is None for process in processes.values()):
+                    publish_pending(state,pool)
+                    time.sleep(0.2)
+            except KeyboardInterrupt:
+                interrupted=True
+                with locked(state) as current:
+                    current['stop_reason']='INTERRUPTED_BY_USER'
+                    write_state(state,current)
+        if interrupted:
+            for process in processes.values():
+                if process.poll() is None: process.send_signal(signal.SIGINT)
+            deadline=time.monotonic()+10
+            for process in processes.values():
+                if process.poll() is None:
+                    try: process.wait(timeout=max(0,deadline-time.monotonic()))
+                    except subprocess.TimeoutExpired: process.terminate()
+            for process in processes.values():
+                try: process.wait(timeout=5)
+                except subprocess.TimeoutExpired: process.kill(); process.wait()
         # Dispatch is closed; finish publishing already saved items only.
         # One shutdown pass leaves failed exports durably queued for resume.
         with locked(state) as current:
             pending_count=len(current.get('pending_deliveries',[]))
         for _ in range(pending_count):
             publish_pending(state,pool)
+        with locked(state) as current:
+            exported=len(current['deliveries'])
+            ordinary=target_count(current)
+            pending_count=len(current.get('pending_deliveries',[]))
         (a.output / 'launch-result.json').write_text(json.dumps({
             'returncodes':[process.returncode for process in processes.values()],
-            'target_reached':reached(state), 'statuses':'saved_pending_review; QC and publication separate'}, indent=2) + '\n')
+            'target_reached':reached(state), 'interrupted':interrupted,
+            'exported_pending_review':exported,'ordinary_goal_completed_pending_review':ordinary,
+            'retained_outside_ordinary_target':exported-ordinary,'pending_exports':pending_count,
+            'statuses':'saved_pending_review; QC and publication separate'}, indent=2) + '\n')
 
 
 if __name__ == '__main__':

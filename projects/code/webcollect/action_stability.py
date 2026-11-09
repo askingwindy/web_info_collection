@@ -352,8 +352,9 @@ def pair(before, after, png_before, png_after, scope):
 # existing per-action predicates in react_protocol/goal_evidence.
 ACTION_SCOPED_V1 = 'webcollect-action-scoped-evidence-1'
 ACTION_SCOPED_V2 = 'webcollect-action-scoped-evidence-2'
-ACTION_SCOPED_VERSION = 'webcollect-action-scoped-evidence-3'
-ACTION_SCOPED_VERSIONS = (ACTION_SCOPED_V1, ACTION_SCOPED_V2, ACTION_SCOPED_VERSION)
+ACTION_SCOPED_V3 = 'webcollect-action-scoped-evidence-3'
+ACTION_SCOPED_VERSION = 'webcollect-action-scoped-evidence-4'
+ACTION_SCOPED_VERSIONS = (ACTION_SCOPED_V1, ACTION_SCOPED_V2, ACTION_SCOPED_V3, ACTION_SCOPED_VERSION)
 VERSIONS = (*VERSIONS, *ACTION_SCOPED_VERSIONS)
 CLICK_POINT_VERSION = 'webcollect-click-dispatch-point-1'
 BACK_OBSERVED_VERSION = 'webcollect-back-observed-document-1'
@@ -496,6 +497,32 @@ def action_scoped_view_stable(before, after):
     return visible_texts(before) == visible_texts(after)
 
 
+def _observation_layout(state):
+    """Visible business layout, excluding classified motion and empty decoration.
+
+    Incidental hit-test ancestry on an untargeted box is not visible content.
+    Its raw witnesses remain in the receipt; target evidence stays complete.
+    """
+    from .dynamic_regions import projection
+    projected = projection(state)
+    target_id = (projected.get('target') or {}).get('element_id')
+    business = [row for row in projected.get('elements', [])
+                if row.get('text') or row.get('clickable') or row.get('inputable')
+                or row.get('element_id') == target_id]
+    keys = ('element_id', 'element_type', 'native_role', 'text', 'bbox',
+            'clickable', 'inputable', 'visible', 'enabled', 'state')
+    ids = {row.get('element_id') for row in business}
+    return {
+        **{key: projected.get(key) for key in
+           ('scroll', 'screen_resolution', 'visible_text', 'values', 'target')},
+        'business_elements': [{key: row.get(key) for key in keys} for row in business],
+        'business_geometry': [{key: row.get(key) for key in
+                               ('element_id', 'bbox', 'rendered_bbox')}
+                              for row in projected.get('geometry_witnesses', [])
+                              if row.get('element_id') in ids],
+    }
+
+
 def _action_scoped_pair(before, after, png_before, png_after, scope):
     from .browser import fingerprint
     action = scope.get('action')
@@ -559,11 +586,17 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
         elif observation_only:
             valid = (before.get('url') == after.get('url')
                      and before.get('document_identity') == after.get('document_identity'))
+            if valid and version == ACTION_SCOPED_VERSION:
+                # Observation-only means no dispatch permission, not permission
+                # to pair an earlier layout with a later screenshot. Keep the
+                # declared dynamic paint exclusions but retain business boxes,
+                # hit witnesses and text across the screenshot bracket.
+                valid = _observation_layout(before) == _observation_layout(after)
         else:
             raise ValueError('Unknown action-scoped proof')
         # Frozen V1/V2 retain exact target pixels. V3 admits up to 100
         # changed pixels only inside this existing protected target region.
-        tolerance = 100 if version == ACTION_SCOPED_VERSION else 0
+        tolerance = 100 if version in (ACTION_SCOPED_V3, ACTION_SCOPED_VERSION) else 0
         accepted = bool(valid and local <= tolerance) if local is not None else bool(valid)
     result = {'schema_version': version, 'action_scope': deepcopy(scope),
               'accepted': accepted, 'full_dom_stable': fingerprint(before) == fingerprint(after),

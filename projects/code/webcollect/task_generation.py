@@ -843,7 +843,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         task = build_capability_task(supplied, identities['pages'].get(url), task_version,
                                      registration=react_task_version)
     else:
-        from .closing_policy import VERSION as CLOSE_POLICY
+        from .closing_policy import EFFECTIVE_VERSION as CLOSE_POLICY
         from .banded_plan import VERSION as PLAN_PROTOCOL
         from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
         from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL

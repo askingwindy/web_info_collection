@@ -119,38 +119,18 @@ def candidate_end(raw_root, *, rule=VERSION, _verified=None):
 
 
 def natural_instruction(record):
-    """Describe actual visible activities, never intended or excluded actions."""
+    """Use the verified business goal, not a step-by-step replay of the trace."""
     from .task_instruction import generated_instruction
-    activities=[]
-    for row in record['trajectory']:
-        raw=load_json(row['raw_step']['path'])
-        before=load_json(record['observations'][row['before_observation_id']]['state_path'])
-        after=load_json(record['observations'][row['after_observation_id']]['state_path'])
-        label=(raw.get('target_element') or {}).get('text') or (row.get('target') or {}).get('label') or ''
-        action=row['action']
-        if action=='type':
-            node=(row.get('target') or {}).get('control_id')
-            value=next((v.get('value') for v in after.get('values',[]) if v.get('element_id')==node and v.get('value_visible')),None)
-            activities.append('在'+('「'+label+'」' if label else '当前输入框')+'键入「'+row['arguments']['text']+'」'
-                + ('，字段实际显示「'+str(value)+'」' if value is not None else ''))
-        elif action=='select':activities.append('选择「'+row['arguments']['option']+'」')
-        elif action=='scroll':activities.append('向'+{'down':'下','up':'上','left':'左','right':'右'}[row['arguments']['direction']]+'浏览「'+before['title']+'」的页面内容')
-        elif action=='back':activities.append('返回上一个页面')
-        elif action in ('click','double_click','open_url'):
-            activities.append(('打开' if before['url']!=after['url'] else '操作')+('「'+label+'」' if label else '当前可见页面控件'))
-        elif action=='hotkey':activities.append('使用快捷键修改当前文字选择或页面状态')
-        else:activities.append('操作'+('「'+label+'」' if label else '当前可见页面控件'))
-    actual=list(dict.fromkeys(activities))
-    final=load_json(record['observations'][record['terminal']['final_observation_id']]['state_path'])
-    final_values=[str(v['value']) for v in final.get('values',[]) if v.get('value_visible') and v.get('value') not in (None,'')]
-    result=('输入字段实际显示'+ '、'.join('「'+v+'」' for v in final_values)) if final_values else '保留末帧所示已执行片段，原目标完成未确认'
-    import re
-    first=load_json(record['observations'][record['trajectory'][0]['before_observation_id']]['state_path'])
-    prior=set((first.get('visible_text') or '').splitlines())
-    new=[line.strip() for line in (final.get('visible_text') or '').splitlines()
-         if line.strip() and line not in prior and re.search(r'\d',line) and re.search(r'[\u4e00-\u9fffA-Za-z]',line)]
-    if new:result+='，可见'+ '、'.join('「'+line[:160]+'」' for line in dict.fromkeys(new))
-    return generated_instruction('在「'+record['task']['app_name']+'」中'+'，'.join(actual)+'，查看结束页面：'+result)
+    focus=(record['terminal'].get('working_goal')
+           or record['trusted_prefix'].get('working_goal') or '').strip()
+    if focus:
+        return generated_instruction('在「'+record['task']['app_name']+'」上'+focus)
+    requested=record['trusted_prefix'].get('requested_goal') or {}
+    if isinstance(requested,dict):
+        focus=str(requested.get('instruction') or requested.get('goal') or '').strip()
+        if focus:
+            return generated_instruction(focus)
+    raise ValueError('Trusted prefix has no verified business goal for customer instruction')
 
 
 def model_context(binding):

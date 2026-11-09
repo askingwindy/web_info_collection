@@ -22,7 +22,8 @@ from .storage import allocate_in_transaction, ensure_registry_schema
 
 
 def continuous_task(task):
-    return task.get('fragment', {}).get('ending_policy') == 'webcollect-continuous-attempt-ending-4'
+    return task.get('fragment', {}).get('ending_policy') in (
+        'webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5')
 
 
 DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_workers': 1,
