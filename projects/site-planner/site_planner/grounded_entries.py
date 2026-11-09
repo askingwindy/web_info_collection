@@ -457,7 +457,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             goals_path, target, max_searches, max_batches, batch_size, search_engine, stall_threshold,
             per_direction_cap, batch_key, excluded_applications, discovery_mode, feedback_scope, search_count,
             entry_selection='rule', model_protocol=PROTOCOL, categories=(), probe_search_hold=None, dispatch_holds=None,
-            producer_pipeline=None):
+            producer_pipeline=None, producer_optimization=None):
     target_categories=tuple(categories)
     from .site_pool import category
     for value in categories: category(value)
@@ -480,15 +480,18 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     root=Path(output).absolute() if output else (current_evidence_roots(chain)[0]/'producer-evidence'/object_sha256(run) if chain else None)
     if root is None:raise ValueError('Explicit output or history-set required')
     if chain:root=require_evidence_path(root,current_evidence_roots(chain))
-    if producer_pipeline=='overlap-1' and int((config.get('budget') or {}).get('max_concurrent_jobs',1))<2:
-        # The shared ledger's job slot serializes claims across threads; a
-        # prefetch worker racing the classify job would otherwise settle every
-        # probe as an immutable UNKNOWN (demonstrated in the 2026-11-09 r01
-        # baseline). Fail fast instead of poisoning original requests.
-        raise ValueError('overlap-1 requires budget.max_concurrent_jobs>=2 for browser/model concurrency')
     with pool.pool.connect() as con:
         prior=con.execute('SELECT config FROM runs WHERE id=?',(run,)).fetchone()
     previous=json.loads(prior[0]) if prior else {}
+    from .producer_read_policy import OPTIMIZATION, VERSION as READ_POLICY
+    if producer_optimization not in (None,OPTIMIZATION):raise ValueError('Unsupported producer_optimization')
+    if previous:
+        original_optimization=previous.get('producer_optimization')
+        if producer_optimization is not None and producer_optimization!=original_optimization:
+            raise ValueError('Frozen producer_optimization cannot change; start a new batch')
+        producer_optimization=original_optimization
+    if producer_optimization and PROTOCOL!='entry-tools-13':
+        raise ValueError('producer_optimization requires entry-tools-13')
     if producer_pipeline is not None and producer_pipeline not in ('serial','overlap-1'):
         raise ValueError('producer_pipeline must be serial or overlap-1')
     if previous:
@@ -500,6 +503,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         producer_pipeline=frozen_pipeline or producer_pipeline or 'serial'
     else:
         producer_pipeline=producer_pipeline or 'serial'
+    ledger=BatchLedger(ledger_path,config,initialize=per_task or not Path(ledger_path).exists())
+    if producer_pipeline=='overlap-1' and ledger.max_concurrent_jobs<2:
+        raise ValueError('overlap-1 requires effective max_concurrent_jobs>=2 for browser/model concurrency')
     max_batches=previous.get('max_batches') if previous and max_batches is None else max_batches
     max_searches=previous.get('max_searches') if previous and max_searches is None else max_searches
     feedback_ref=reference(feedback_scope) if feedback_scope else None
@@ -528,12 +534,13 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         'goals':goals_ref,'excluded_applications':list(excluded_applications),'output':str(root),'ledger':str(Path(ledger_path).resolve()),
         # Old runs stay byte-identical on resume; new runs always freeze their mode.
         **({'producer_pipeline':producer_pipeline} if not previous or 'producer_pipeline' in previous else {}),
+        **({'producer_optimization':producer_optimization} if producer_optimization else {}),
         **({'current_chain_manifest':chain['manifest']} if chain else {})}
     independent = bool(categories and discovery_mode=='new-sites' and not (queries or directions or sources or goals_path)
-                       and (not previous or previous.get('category_query_plan',{}).get('version') in ('producer-category-query-2','producer-category-query-3')))
-    public_business = independent and (not previous or previous['category_query_plan']['version']=='producer-category-query-3')
+                       and (not previous or previous.get('category_query_plan',{}).get('version') in ('producer-category-query-2','producer-category-query-3','producer-category-query-4')))
+    public_business = independent and (not previous or previous['category_query_plan']['version'] in ('producer-category-query-3','producer-category-query-4'))
     if categories:
-        plan_version = 'producer-category-query-3' if public_business else 'producer-category-query-2' if independent else 'producer-category-query-1'
+        plan_version = 'producer-category-query-4' if producer_optimization else 'producer-category-query-3' if public_business else 'producer-category-query-2' if independent else 'producer-category-query-1'
         frozen['category_query_plan']={'version':plan_version,
                                        'categories':list(categories)}
     if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
@@ -593,7 +600,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     baseline = pool.pool.freeze_run(run,frozen,inventory=independent)
     prior_apps = {a['id'] for a in baseline}
     root.mkdir(parents=True,exist_ok=True)
-    ledger=BatchLedger(ledger_path,config,initialize=per_task or not Path(ledger_path).exists())
     def counters():
         with ledger.connect() as con:
             result={'model':con.execute('SELECT COUNT(*) FROM model_requests').fetchone()[0],
@@ -749,7 +755,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 from .producer_observation import screen
             else:
                 from .page_consumption import screen
-            return screen(pool,ledger,links,root)
+            return screen(pool,ledger,links,root,**({'read_policy':READ_POLICY} if producer_optimization else {}))
         return links,None
 
     def timed_screen_stage(links):
@@ -861,6 +867,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     if target_categories and not queries and not directions:
                         from .producer_query_plan import next_query
                         decision=next_query(pool.pool,ledger,run,key,target_categories,state,failures,root,
+                                            **({'page_feedback':True} if producer_optimization else {}),
                                             **({'independent':True,'public_business':public_business} if independent else {}),
                                             **({'purpose_grounded':True,**({'purpose_protocol':PROTOCOL} if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else {})} if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else {}))
                     else:decision=policy.next_query(state)
@@ -1235,6 +1242,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         wall=time.monotonic()-pipeline_wall
         invocation_new=len(set(ids)-initial)
         pipeline_report={'mode':producer_pipeline,'metrics_version':'webcollect-producer-pipeline-metrics-1',
+            'effective_max_concurrent_jobs':ledger.max_concurrent_jobs,
+            'concurrency_decision':ledger.producer_concurrency,
             'this_invocation':True,'chunks_recorded':len(pipeline_metrics['chunks']),
             'wall_seconds':round(wall,3),
             'screen_seconds':round(sum(c.get('screen_seconds',0.0) for c in pipeline_metrics['chunks']),3),
@@ -1265,6 +1274,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         'discovery_mode':discovery_mode or 'mixed',
         'evidence_output':str(root),**({'current_chain_manifest':chain['manifest']} if chain else {}),
         'production_attempts':0,'collected':0,'pending_review':0,'QC_accepted':0,'published':0,'real_throughput':'NOT_TESTED',
+        **({'producer_optimization':producer_optimization} if producer_optimization else {}),
         **({'producer_pipeline':pipeline_report} if pipeline_report is not None else {})}
     path=root/('grounded-report-'+object_sha256(report)+'.json');save_json(path,report)
     if len(ids)>=target or (exhausted and not stopped and not unfinished):pool.pool.checkpoint(run,'grounded-final',reference(path))

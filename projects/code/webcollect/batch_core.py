@@ -264,6 +264,22 @@ class BatchLedger:
                     or self.producer_policy['run_id'] != self.config['run_id']
                     or self.producer_policy['config_sha256'] != object_sha256(self.config)):
                 raise ValueError('Producer budget decision does not match its original ledger')
+            concurrency = con.execute("SELECT detail FROM batch_events WHERE event='producer_concurrency' ORDER BY seq DESC LIMIT 1").fetchone()
+            self.producer_concurrency = json.loads(concurrency[0]) if concurrency else None
+            if self.producer_concurrency:
+                decision = self.producer_concurrency
+                if (decision.get('schema_version') != 'webcollect-producer-concurrency-1'
+                        or decision.get('ledger') != str(self.path)
+                        or decision.get('run_id') != self.config['run_id']
+                        or decision.get('config_sha256') != object_sha256(self.config)
+                        or type(decision.get('max_concurrent_jobs')) is not int
+                        or decision['max_concurrent_jobs'] < 1):
+                    raise ValueError('Producer concurrency decision does not match its original ledger')
+
+    @property
+    def max_concurrent_jobs(self):
+        """An explicit producer decision may override only this scheduler limit."""
+        return (self.producer_concurrency or {}).get('max_concurrent_jobs', self.config['budget']['max_concurrent_jobs'])
 
     def connect(self, create=False):
         con = sqlite3.connect(str(self.path) if create else self.path.as_uri() + '?mode=rw',
@@ -377,7 +393,7 @@ class BatchLedger:
                     raise BudgetStop('Parent already has an active decision; no parallel child')
             running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
                                   'AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)').fetchone()[0]
-            if parent_job is None and running >= self.config['budget']['max_concurrent_jobs']:
+            if parent_job is None and running >= self.max_concurrent_jobs:
                 raise BudgetStop('max_concurrent_jobs reached; queued work retained')
             if domain:
                 last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()

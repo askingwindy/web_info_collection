@@ -112,9 +112,9 @@ def screen(pool,ledger,links,root,*,probe=None):
         identity=object_sha256([SCREEN_RUN,'browser',entry_identity(uri)])
         with pool.pool.connect() as con:prior=con.execute('SELECT state,result FROM tool_requests WHERE id=?',(identity,)).fetchone()
         if prior:
-            if prior['state']!='succeeded':
+            result=json.loads(prior['result'] or '{}')
+            if prior['state']!='succeeded' and not (prior['state']=='failed' and result.get('http_failure')):
                 records.append({'uri':uri,'decision':{'status':'HELD','reason':'original_image_probe_unsettled','tool_request_id':identity}});continue
-            result=json.loads(prior['result'])
         else:
             if ledger.config.get('site_failure_guard'):
                 from webcollect.site_failure_stop import SiteFailureStore,SiteStopped
@@ -133,6 +133,12 @@ def screen(pool,ledger,links,root,*,probe=None):
                 if not failed or failed['state'] not in ('failed','unknown'):raise
                 records.append({'uri':uri,'decision':{'status':'HELD','reason':'original_image_probe_failed',
                     'original_state':failed['state'],'error_type':type(error).__name__,'tool_request_id':identity}});continue
+        if result.get('http_failure'):
+            from .producer_read_policy import validate_http_failure
+            verdict=validate_http_failure(pool,ledger,result,identity)
+            records.append({'uri':uri,'decision':verdict,'reused':bool(prior),
+                            'probe':{k:result[k] for k in ('job_id','visit_id','http_failure')}})
+            continue
         probe_refs={k:result[k] for k in ('job_id','visit_id','observation','image')}
         try:verdict=register(pool,ledger,result)
         except ObservationUnavailable:
