@@ -1,0 +1,63 @@
+看视觉审核请求是否把 schema 展示给了模型，以及差异审核的结论：
+
+看 `run` 对 review_required/unknown 作业的再入处理与人工队列内容：
+
+确认 invalid 的确切原因（供报告如实记录），并读取判重指纹与用量汇总：
+
+查 ai_worker 是否已有 invalid 回复的有界纠正重问机制（request 里有 correction 字段）：
+
+QC 网关对 QC 类作业明确“invalid 不自动替换、无超时重试”——两项阻断均按冻结规则终态。收尾：汇总最终数字并写验证目录 README：
+
+单次提交确认（同一 attempt 一次 `collected_pending_review`，恢复事件 1 次）。写验证目录 README 与文档条目：
+
+全部阶段完成。最终报告：
+
+---
+
+# 直接阅读主基线一轮——最终报告（2026-11-08）
+
+## 1. 代码改动（7 个源文件 + 1 个新测试套件 + 1 个基线文件，未提交，工作树含用户未跟踪文档原样保留）
+
+| 文件 | 改动 |
+| --- | --- |
+| `action_stability.py` | 新协议 `webcollect-action-scoped-evidence-1`：`action_scoped_scope`（click/type/hotkey 目标级：唯一身份/可见/启用/命中/遮挡 + 焦点/值 + 目标框±4px 像素护栏）、`document_scope`（scroll/back/open_url：url+身份[+滚动位置]）、`post_action_document_scope`（派发后观察只证新文档内部安定）、`action_scoped_view_stable`（收尾视图=同文档+同滚动+可见正文保留）；顶层 `pair()` 对新版本**先于动态区域路由** |
+| `browser.py` | `stability_pair` 同样先路由新版本 scope，不依赖任何区域分类 |
+| `react_session.py` | `_dispatch_compiled` 为新协议的每个普通动作构建动作级 scope；`_capture_observation` 派发后用文档级观察；`_range_close` 收尾按协议选择视图比较；`_run_preflight` 对 `direct_entry` 契约不强推搜索首击；旧首击分支排除新协议 |
+| `session_objective.py` | objective 可选 `evidence_policy`，经 `apply()` 写入 spec+fragment 并入 task_id；未知值拒绝 |
+| `goal_evidence.py` | goal-evidence-2 reading 契约可选 `direct_entry`：唯一可见 h1==subject 即入口词条、初始正文可作 passage、**任何搜索输入使 VERIFIED 不可达**（`direct_entry_search_forbidden`）；旧契约逐字节不变 |
+| `banded_plan.py` | V11 提示追加直接词条条款；`continue_reading` 在新协议下引用后继续执行剩余冻结计划（受 minimum 封顶），旧协议保持仅滚动规则 |
+| `postprocess.py`/`closing_policy.py` | 连续性缺口桥接与收尾校验同步接受新协议语义 |
+| 新增 | `tests/test_direct_reading_baseline_20261108.py`（42 例）；`request/consumer-baselines/zh-wikipedia-direct-reading.json` |
+
+四路判重（`duplicates.py`）、阈值、历史集合、有效样本接纳规则：**零改动**。
+
+## 2. 离线结果
+
+- 集中回归 `offline-integration/`：7 模块 **157 例 155 过**；2 失败（`test_closing_policy_v2` 两例）在 **HEAD 工作树逐例复现相同**（既有失败）。
+- r01/r02 真实断点修复后**受影响链路**复验：`affected-direct` **39/39**、`affected-mixed` **30/30**。
+- 真实 Chromium（本地站点）：未申报区域的建议浮层/轮换文本**持续 churn 下聚焦→输入→Enter 提交全链派发成功**；遮挡目标与跨文档失配 scope **仍拒绝**；真实滚动/链接/返回的文档级证明按预期（派发前位置稳定过、已滚动位置拒）。
+- 判重专项：动作不同但**共享首帧 → route1 命中**；动作序列相同 → route2 命中（与图像无关）。
+
+## 3. 真实 GLM 请求与动作（glm-5.3-flash，high/high，两会话共 6 请求全部 succeeded，0 invalid/UNKNOWN）
+
+- **r01**（3 请求，入 49,118/出 2,173 tokens，124s）：6 步长档规划；读 2 段真实正文+引用真实成因段后 VERIFIED，但两个宿主缺陷（无关装饰图消失使旧 `same_view` 端点判 pending；引用使剩余跨页计划作废）截断在 2 步。sealed rejected；候选经官方 `retry()` 复位。
+- **r02**（3 请求，入 49,084/出 1,915 tokens，161s）：**动作派发 5 / 后观察完整 5 / 效果未决 0 / 有效步 5 / 搜索动作 0**；5 次滚动全部暴露新正文（5 段向下阅读），引用真实“月全食…本影”段落，`session_objective=VERIFIED`，HOST_PLAN_ENDPOINT 正常完成（非可信前缀）。路线由模型按页面证据自主选择（全程滚动阅读），无脚本代选。
+- 会话后离线派生曾被 scope 误路由拒绝（“状态缺口”）；修复后经 `webcollect-offline-derivation-recovery-1` 对**同一密封字节** 0 模型/0 浏览器重派生提交。
+
+## 4. 保存 / QC / 发布状态
+
+| 项 | 状态 |
+| --- | --- |
+| 保存 | `S000001_sample_000002`：disk saved=1，Runtime **collected_pending_review**，单次提交（attempt_finished 恢复事件 1 次），密封 SHA256 回读一致（`rederive-r02-readback.json`，mismatch=[]） |
+| 机械检查（单包） | 19 项 **18 PASS**，唯一非 PASS = AI admission 待审（预期态） |
+| 机械检查（跨包） | **PASS**（研究 profile：类目占比 report-only + 显式 authority，其余含判重参数与交付合同逐字节一致）；四路判重 route1–4 **全 0 对**，穷举核验 PASS；6 帧截图 SHA256 两两不同 |
+| 独立 AI QC（AI 100%，同保存字节） | **未决，不是 PASS**：ai-visual 回复为完整逐帧审核且视觉对齐/终态语义/语言/隐私四项内容均 PASS，但每项缺 `evidence_steps` 字段 → `invalid_response`（QC 网关按冻结规则不自动替换）；ai-difference 完成（单样本无对照邻域 → NOT_APPLICABLE_EMPTY_SET）；ai-documents 传输超时 UNKNOWN（QC 作业无超时重试授权）。人工队列已生成，无真实人工记录 → 保持未决 |
+| 人工审核 / 发布 / 客户验收 | **NOT_RUN**（三项分别） |
+
+## 5. 结论与未验证边界
+
+- **直接阅读基线达标**：≥5 有效步、真实向下阅读、VERIFIED、正常完成、disk saved=1、Runtime collected_pending_review、单次提交、哈希一致——全部满足；搜索不再阻塞（实际搜索动作数 0）。
+- **验收 D 不满足**（独立 AI QC 未实际 PASS）→ **不建议启动 A/B，留证停止**；未启动任何 A/B 或生产。原搜索基线未通过事实不变；旧 r02（搜索工程）未结算未改动；`abandon_interrupted_research` 未实施。
+- 未验证边界：QC 审核 `evidence_steps` 缺省容忍（AGENTS“可确定等价可选缺省”）未实施——属 QC 接入口径变更，需单独决定；ai-documents 超时重试未授权；单条 PASS 不证明整体交付质量。
+
+完整证据：[verify_results/consumer-direct-reading-20261108-r01/README.md](verify_results/consumer-direct-reading-20261108-r01/README.md)（含离线日志、两次会话收据、重派生回读、QC 全套报告与人工队列）。

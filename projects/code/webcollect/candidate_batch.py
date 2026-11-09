@@ -149,6 +149,9 @@ def first_frame_disposition(state):
     quiz_reason=english_quiz_reason(state)
     if quiz_reason:
         return 'abandon', quiz_reason
+    from .page_language import assess
+    if assess(state)['excluded']:
+        return 'optimize', 'rendered_chinese_not_evidenced'
     # Letter ratios do not establish page/control language consistency.
     # The independent all-frame language review checks that visible relationship.
     return None

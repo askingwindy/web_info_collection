@@ -261,6 +261,11 @@ def search_focus_from_pair(before, after, proof):
 
 def reading_evidence(s, start, contract):
     typed, sources, opened, passages = [], [], [], []
+    from .direct_article import body, url_key
+    article_sources, return_source = [], None
+    def is_article(observation):
+        return any(source['document_identity'] == observation['document_identity']
+                   and url_key(source['url']) == url_key(observation['url']) for source in article_sources)
     # Sources carry (document_identity, url): a back-navigation revisits the
     # same result page under a new identity, and its result links stay sources.
     subject, aspects = contract['subject'], contract['aspects']
@@ -279,6 +284,7 @@ def reading_evidence(s, start, contract):
                          and region_matches(initial, e['element_id'], '正文') for e in initial.get('elements', []))
         if len(headings) == 1 and body_ready:
             landing_doc = start['document_identity']
+            article_sources.append(start)
             opened.append({'text': headings[0]['text'], 'href': start['url'], 'landing': start['url'],
                            'operation_id': None, 'source': 'direct_entry_article'})
             for e in initial.get('elements', []):
@@ -298,6 +304,21 @@ def reading_evidence(s, start, contract):
             continue
         cid = (step.get('target') or {}).get('control_id')
         source_doc = is_source_page(before)
+        if (is_article(before) and step['action'] in ('click', 'open_url')
+                and url_key(before['url']) != url_key(after['url'])):
+            return_source = before
+        if (step['action'] == 'back' and return_source
+                and url_key(before['url']) != url_key(return_source['url'])
+                and url_key(after['url']) == url_key(return_source['url'])):
+            origin, returned = state(return_source), state(after)
+            # Reuse the direct-article return proof: a real return to the same
+            # URL/title with corroborating body identity. The heading need not
+            # be in the restored viewport, and the whole page need not match.
+            if (returned.get('title') == origin.get('title')
+                    and {norm(p['quote']) for p in body(origin)} & {norm(p['quote']) for p in body(returned)}):
+                landing_doc = after['document_identity']
+                article_sources.append(after)
+                return_source = None
         if step['action'] == 'type':
             query = (step.get('arguments') or {}).get('text') or ''
             val = after['controls'].get(cid, {}).get('value') or {}
@@ -306,6 +327,7 @@ def reading_evidence(s, start, contract):
                 typed.append({'operation_id': step['operation_id'], 'query': query, 'field':cid,
                               'document_identity': after['document_identity']})
                 sources, opened, passages, landing_doc = [], [], [], None
+                article_sources, return_source = [], None
                 downward_reading=[]
                 if result_links(after, start, subject):
                     sources.append((after['document_identity'], after['url']))
@@ -361,6 +383,8 @@ def reading_evidence(s, start, contract):
                     passages.append({'node': e['element_id'], 'quote': quote, 'url': after['url'],
                                      'observation_id': after['observation_id'], 'operation_id': step['operation_id']})
         if landing_doc is not None and after['document_identity']==landing_doc and before['document_identity']!=landing_doc:
+            if not is_article(after):
+                article_sources.append(after)
             page=state(after)
             for e in page.get('elements',[]):
                 quote=e.get('text') or ''
@@ -370,8 +394,9 @@ def reading_evidence(s, start, contract):
                                      'observation_id':after['observation_id'],'operation_id':step['operation_id']})
     now = state(s.current)
     visible = {(e['element_id'], e.get('text')) for e in now.get('elements', []) if e.get('visible')}
+    on_article = is_article(s.current) and return_source is None
     candidates = [p for p in passages if (p['node'], p['quote']) in visible and same_url(p['url'], s.current['url'])
-                  and s.current['document_identity'] == landing_doc]
+                  and on_article]
     selected = None
     ref = getattr(s, 'answer_citation', None)
     if ref:
@@ -381,22 +406,16 @@ def reading_evidence(s, start, contract):
         origin = s.observation_records.get(reply.get('observation_id'))
         if (branch.get('kind') == 'plan-branch' and branch.get('boundary') == s.binding and origin
                 and (branch.get('provider_reply') or {}).get('choice') == reply.get('choice')
-                and reply.get('attempt_id') == s.attempt_id and origin['document_identity'] == landing_doc):
+                and reply.get('attempt_id') == s.attempt_id and is_article(origin)):
             archived = []
             if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') in ('webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11'):
-                # A selected passage remains evidence after useful reading in the
-                # same opened document; it is never relabelled as current text.
+                # A verified citation keeps its original observation/source
+                # through legal reading/link/return steps. A returned document
+                # is accepted only by the real navigation proof above.
                 for passage in passages:
-                    at=next((i for i,row in enumerate(s.trajectory) if row['operation_id']==passage['operation_id']),None)
-                    later=s.trajectory[at+1:] if at is not None else []
-                    if (later and all(row['action']=='scroll' and all(
-                            s.observation_records[row[key]].get('capture_verified') and
-                            s.observation_records[row[key]]['document_identity']==landing_doc
-                            for key in ('before_observation_id','after_observation_id')) and
-                            state(s.observation_records[row['before_observation_id']]).get('scroll') !=
-                            state(s.observation_records[row['after_observation_id']]).get('scroll')
-                            for row in later)
-                            and same_url(passage['url'],s.current['url']) and s.current['document_identity']==landing_doc):
+                    source = s.observation_records.get(passage['observation_id'])
+                    if (source and source.get('capture_verified') and is_article(source)
+                            and same_url(passage['url'], s.current['url']) and on_article):
                         archived.append(passage)
             for candidate in candidates + archived:
                 if any(option.get('choice') == reply.get('choice') == 'cite:' + candidate['node']

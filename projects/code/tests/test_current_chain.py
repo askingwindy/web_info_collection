@@ -16,6 +16,26 @@ from webcollect.task_generation import read_customer_history, bind_formal_histor
 
 
 class CurrentChainTests(unittest.TestCase):
+    def test_research_v2_comparison_receipt_is_input_not_an_observation(self):
+        objective = self.root/'failed-objective.json'
+        receipt = self.root/'historical-save.json'
+        authorization = self.root/'v2-authorization.json'
+        save_json(objective, {'schema_version':'webcollect-session-objective-1','candidate_id':'c','version':1})
+        save_json(receipt, {'sample_id':'comparison'})
+        comparisons = [{'role':'comparison','claim_id':'old-other-goal','sample_id':'comparison',
+                        'save_receipt':reference(receipt)}]
+        save_json(authorization, {'scope':'fixed-baseline-research-only','candidate_id':'c','version':1,
+            'original_claim_id':'failed','objective':reference(objective),'comparisons':comparisons,
+            'pool':str(self.root/'pool.db'),'registry':str(self.registry),'production_counted':False})
+        descriptor = {'schema_version':'candidate-research-replay-2','original_claim_id':'failed',
+            'objective':reference(objective),'authorization':reference(authorization),
+            'comparisons':comparisons,'production_counted':False}
+        assert_current_evidence(self.scope,descriptor)
+        with self.assertRaisesRegex(ValueError,'out-of-chain'):
+            assert_current_evidence(self.scope,{'research_replay':descriptor,'observation':reference(receipt)})
+        with self.assertRaisesRegex(ValueError,'metadata'):
+            assert_current_evidence(self.scope,{**descriptor,'observation':reference(receipt)})
+
     def test_research_inputs_do_not_adopt_historical_observations(self):
         objective=self.root/'old-objective.json';authorization=self.root/'authorization.json'
         save_json(objective,{'schema_version':'webcollect-session-objective-1','candidate_id':'c','version':1})

@@ -571,14 +571,14 @@ async def viewport_png(page):
 
 
 async def _capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
-                   timeout=15, action_scope=None):
+                   timeout=15, action_scope=None, attempt_log=None):
     """Capture full original evidence with shared bounded dynamic-region comparison.
 
     retries remains the total number of attempts, including when explicitly
     supplied. The backoff requests at most eight seconds of sleep in total;
     screenshot/observation timeouts remain independent and unchanged.
     """
-    attempts=[]
+    attempts=attempt_log if attempt_log is not None else []
     delay_before=0.0
     requested_wait=0.0
     observed_wait=0.0
@@ -606,27 +606,45 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
                  **({'protected_selectors':protected_selectors} if protected_selectors else {}),
                  'timeout': timeout}
         timings={'before_dom_ms':None,'png_1_ms':None,'after_dom_ms':None,'png_2_ms':None,'final_dom_ms':None}
-        mark=time.monotonic()
-        before=await observe(page,selector,index,**options)
-        timings['before_dom_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
-        try:png,screenshot_evidence=await timed_png()
-        except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
-        timings['png_1_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
-        after=await observe(page,selector,index,**options)
-        timings['after_dom_ms']=round((time.monotonic()-mark)*1000,1)
-        extra={};v2='capture_readiness' in before
-        if v2:
+        try:
             mark=time.monotonic()
-            comparison,comparison_method=await timed_png()
-            timings['png_2_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
-            final=await observe(page,selector,index,**options)
-            timings['final_dom_ms']=round((time.monotonic()-mark)*1000,1)
-            stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
-            final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
-            extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
-                   'original_png_base64':base64.b64encode(png).decode('ascii'),
-                   'comparison_png_base64':base64.b64encode(comparison).decode('ascii'),
-                   'comparison_screenshot':comparison_method,'stability':stability,'final_stability':final_stability}
+            before=await observe(page,selector,index,**options)
+            timings['before_dom_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
+            try:png,screenshot_evidence=await timed_png()
+            except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
+            timings['png_1_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
+            after=await observe(page,selector,index,**options)
+            timings['after_dom_ms']=round((time.monotonic()-mark)*1000,1)
+            extra={};v2='capture_readiness' in before
+            if v2:
+                mark=time.monotonic()
+                comparison,comparison_method=await timed_png()
+                timings['png_2_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
+                final=await observe(page,selector,index,**options)
+                timings['final_dom_ms']=round((time.monotonic()-mark)*1000,1)
+                stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
+                final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
+                extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
+                       'original_png_base64':base64.b64encode(png).decode('ascii'),
+                       'comparison_png_base64':base64.b64encode(comparison).decode('ascii'),
+                       'comparison_screenshot':comparison_method,'stability':stability,'final_stability':final_stability}
+        except Exception as error:
+            transient = (isinstance(error, (TimeoutError, asyncio.TimeoutError))
+                or any(reason in str(error) for reason in (
+                    'Execution context was destroyed', 'DOCUMENT_NOT_READY',
+                    'Cannot find context with specified id')))
+            if not transient:
+                raise
+            attempts.append({'attempt':attempt_index+1, 'started_ns':started,
+                'ended_ns':time.time_ns(), 'dom_stable':False,
+                'rejected_reason':'transient_capture_error', 'error_type':type(error).__name__,
+                'error_message':str(error), 'action_replayed':False})
+            if attempt_index+1 >= retries:
+                error.capture={'accepted_as_formal_frame':False, 'attempts':attempts}
+                raise
+            delay_before=min(_CAPTURE_RETRY_DELAYS[min(attempt_index,len(_CAPTURE_RETRY_DELAYS)-1)],
+                max(0, _CAPTURE_WAIT_BUDGET-requested_wait))
+            continue
         ended=time.time_ns()
         recent_capture_ms=(ended-started)/1e6
         before_fingerprint=fingerprint(before)
@@ -687,9 +705,12 @@ class SnapshotFault(ValueError):
 
 
 async def capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
-                  timeout=15, action_scope=None):
+                  timeout=15, action_scope=None, total_timeout=None):
+    deadline = time.monotonic() + total_timeout if total_timeout is not None else None
+    attempts = []
     try:
-        return await _capture(page, selector, index, retries, assertions, protected_selectors, timeout=timeout, action_scope=action_scope)
+        pending = _capture(page, selector, index, retries, assertions, protected_selectors, timeout=timeout, action_scope=action_scope, attempt_log=attempts)
+        return await asyncio.wait_for(pending, total_timeout) if total_timeout is not None else await pending
     except Exception as error:
         # Preserve the exact comparison on EvidenceStale. A script exception may
         # precede any tree; retain the available PNG without claiming synchrony.
@@ -697,9 +718,13 @@ async def capture(page, selector=None, index=0, retries=8, assertions=None, prot
             raise
         diagnostic = {'schema_version': 'webcollect-capture-exception-1',
                       'accepted_as_formal_frame': False, 'action_executed': False,
-                      'error_type': type(error).__name__, 'error_message': str(error)}
+                      'error_type': type(error).__name__, 'error_message': str(error),
+                      'attempts': attempts}
         try:
-            png, method = await asyncio.wait_for(viewport_png(page), timeout=25)
+            remaining = 25 if deadline is None else min(25, deadline-time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError('Capture total time budget exhausted')
+            png, method = await asyncio.wait_for(viewport_png(page), timeout=remaining)
             diagnostic.update(diagnostic_png_base64=base64.b64encode(png).decode('ascii'), screenshot=method)
         except Exception as secondary:
             diagnostic['diagnostic_error_type'] = type(secondary).__name__

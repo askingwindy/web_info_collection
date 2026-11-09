@@ -145,8 +145,13 @@ def screen(pool,ledger,links,root,*,probe=None):
             records.append({'uri':uri,'decision':{'status':'HELD','reason':'original_image_observation_not_eligible',
                 'http_status':result.get('http_status'),'tool_request_id':identity},'reused':bool(prior),'probe':probe_refs})
             continue
+        if verdict['status'] != 'NO_CONSUME':
+            from webcollect.page_language import assess as assess_language
+            language = assess_language(load_json(result['observation']['path']))
+            if language['excluded']:
+                verdict = {**language, 'status':'REJECTED', 'references':[result['observation'],result['image']]}
         records.append({'uri':uri,'decision':verdict,'reused':bool(prior),'probe':probe_refs})
-        if verdict['status']!='NO_CONSUME':admitted.append(link)
+        if verdict['status'] not in ('NO_CONSUME','REJECTED'):admitted.append(link)
     return admitted,records
 
 

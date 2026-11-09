@@ -758,10 +758,10 @@ class RuntimeStore:
                         conflicts.append({'sha256': digest, 'current_image': path,
                                           'other_image': other['path'], 'other_sample_id': other['sample_id']})
                 if conflicts:
-                    from .candidate_contract import research_duplicate_basis
+                    from .candidate_contract import research_duplicate_basis, research_overlap_sample_ids
                     research = research_duplicate_basis(json.loads(row['task_json']), self.registry)
-                    blocked = [item for item in conflicts if not research
-                               or item['other_sample_id'] != research['original_sample_id']]
+                    overlaps = research_overlap_sample_ids(research)
+                    blocked = [item for item in conflicts if item['other_sample_id'] not in overlaps]
                     if blocked:
                         raise ImageCommitConflict(blocked)
                     self._event(con, 'research_original_image_overlap', current,

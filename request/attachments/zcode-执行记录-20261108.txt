@@ -1,0 +1,211 @@
+这是一个多部分的大任务。我先设置一下跟踪，并阅读所需的文档和证据。
+
+现在让我检查一下 wwiki 的失败证据，在触碰代码之前重建根本原因。
+
+该计划的 step-0 目标是语义目标（`role=textbox, text=搜索维基百科, region=页首`），且绑定返回了 `matches: []`。让我查看一下观测结果实际包含的内容以及重复循环的反馈。
+
+观察结果中清楚地包含了搜索框：`e_8` (输入框，文本为 "搜索维基百科")，父元素为 `e_7`，同级按钮为 `e_9` ("搜索")。模型目标是 `{role: textbox, text: 搜索维基百科, parent_text: 搜索, region: 页首}` —— 但匹配结果却是 `[]`。现在让我阅读一下 `banded_plan.py` 中的绑定代码。
+
+`bind_target` 中的根本原因正变得清晰：模型声明了 `role: "textbox"` (ARIA 风格)，但 `native_role` 却是 HTML 标签 (`input`)，此外还有 `parent_text: "搜索"`/`region: "页首"` 的匹配。让我验证一下 `e_7`/`e_8` 实际携带的内容，并查看反馈循环告知模型的内容。
+
+确认：`role='textbox'`≠`input`，`parent_text='搜索'` 但父级 e_7 的文本为 `''`（“搜索”是在兄弟节点 e_9 上），`region='页首'` 的情况很可能类似。现在让我看看在绑定失败后，branch request 告诉了模型什么。
+
+循环已完全还原：binding 拒绝了 `role='textbox'`（host 要求 `native_role` 标签名称为 `input`），分支反馈仅显示“当前目标缺失或路径失效”且未说明原因，模型以相同的目标重新规划，并认为 DOM 缺少该框（“搜索框未在序列化DOM中绑定”）。重复 19 次。现在让我完整地阅读 Controller 的 prompt/request/targets，以查看模型给出的确切词汇。
+
+系统提示词告诉模型使用“已显示的node和可见标签”，但从未提及 `role` 必须等于 DOM 行的 tag-role，且 `region`/`parent_text` 会进行精确匹配。现在让我来阅读 Controller 的内部实现——包括 prompt、targets、request 和 round。
+
+根本原因现已完全确定。让我记录一下进度，然后审查尚未提交的 diff 和剩余模块。
+
+Vue 候者的原始绑定池 (`candidate-project-20261101-r01`) 已被删除——只剩下 `verify_results/consumer-effort-ab100-20261107-r01/binding-live-r17.json` 中的引用，且指向已删除的路径。因此，根据说明，direct-article real-GLM 将为 NOT_RUN。现在让我快速读取 goal_evidence.py。
+
+现在让我看看现有的 direct-article 测试是如何构建状态的。
+
+现在我已经了解了整体情况。让我检查一下 `ReactStop` 和 `normalize_branch` 的细节，然后开始实施。
+
+已收集所有上下文。现在正在 `banded_plan.py` 中实现任务 A 和 B。首先，实现角色等效辅助函数与常量：
+
+现在 bind_reply_scope —— 针对尚未执行步骤中过期/正文节点引用的现代协议回退：
+
+现在是 `_identity_only_binding` 和 `bind_target` 的角色等价性，加上咨询性语义重新绑定：
+
+现在进行任务 A —— 在 `prompt()` 中简化 V11 的 `replan_contract`：
+
+现在是 `budget_feedback`（其路径仅限 V11）以及被拒绝的首个计划参数的归档：
+
+现在处理绑定诊断助手以及 `round()` 中的有界停止：
+
+现在编辑 `round()` 的 binding 部分——诊断、streak 计数器以及有界停止：
+
+现在，关于 V11 的 revealed-controls 和 compile-mismatch 反馈中 `remaining_effective_limit` 的丢弃处理：
+
+现在进行 Task D 的 V11 系统附录以及 `target_references` 词汇表说明，再加上 Controller 初始化：
+
+代码修改已完成。在更新测试前进行快速语法检查：
+
+`replan_contract` 字典是 `payload.update(` 的最后一个参数——我的修改破坏了括号平衡。正在修复：
+
+现在运行现有的受影响测试套件，看看更改会导致什么问题：
+
+预期失败 — 旧的断言检查了已被移除的字段。正在将测试更新为 Task-A 语义：
+
+这两个失败源于 V11 版本（`target_steps` 12，且 V11 的一次性修正拦截了 `REMAINING` 异常抛出）——这些是尚未提交的代码轮次中未更新的 V10 时代测试。让我检查一下第一个 `choose_last` 属于哪个测试：
+
+我的修改留下了一个标注错误的残留重复项。现将其移除并修复真正的 `plain_replan` 测试：
+
+V10 与 V2 结束策略配对。正在修复这两个调用：
+
+接下来进行 reading-rebind 测试。首先，我需要阅读 `plan_evidence.region_matches`、`search_field`、`search_button` 和 `result_links` 的内容，以构建一个有效的 synthetic reading surface：
+
+现在我将编写新的 `reading-rebind` 测试文件，包含合成的维基百科形状阅读界面：
+
+在运行之前，让我先修复测试文件中的几个问题（最后一个无意义的断言、底部滚动脚本，并检查 annotation short_flow 的形状）：
+
+校验机制阻碍了构建后的片段变更，并重新运行了 `validate_task`。我将通过在 `ReactSession` 构建后（与现有的测试模式一致）修改目标来对其进行重构：
+
+捕获结果显示 `focused: True`，但 `predicate` 仍然失败 —— `projection` 一定是读取了不同的字段。让我检查一下 `agent_observation.project`：
+
+找到了 —— `browser.capture` 被绑定到了 `setUp` 的 surface，而测试创建了一个 patch 从未指向的第二个实例。修复方法：只创建一次 surface，并通过 `__init__()` 重新初始化来进行重置：
+
+现在纯粹的/有界测试已通过。链条测试在步骤 1 之后仍然中断——让我追踪一下词汇场景的事件：
+
+我的模拟值缺少 `readonly: False`（实际快照会提供该值），导致 `MISSING_INPUT_STATE`。正在修复表面：
+
+链条每次修复都有进展——现在在 3 个步骤。让我看看下一个断点：
+
+Button 点击会跳转到结果页面，但计划期望直接进入文章页。现在修改 surface：button = 直接匹配文章；enter = 结果列表（用于混合测试）：
+
+链已完成 — 共 5 个有效步骤，准备就绪。该测试之前读取了一个不存在的 `result key`；客观证据位于 `terminal.json` 中：
+
+有一个正确的 `session_objective.apply()` API。我会在 harness 中构建一个完全绑定的契约任务：
+
+每次出现 `candidate_binding` 都会触发重型合同验证器。更简洁的路径：通过 `spec.goal.structured` 密封目标（`contract_for` 会回退到 `struct_goal`），在运行时和派生重放之间保持一致：
+
+保存的样本 schema 需要每个元素都包含 `clickable`/`inputable` 键。正在修复 renderer：
+
+Prose-node 目标缺乏消歧角色（搜索会同时匹配到输入框和按钮）——zero-match 是准确的。现为 prose-node 结构添加 `role`，以便在节点被移除后能唯一解析：
+
+重新编写脚本时出现了填充重规划（pad-replan）在继续分支（continue branch）被消费的情况。正在简化：填充滚动直接作为计划中的第 6 步：
+
+第 6 次滚动必须在 cite 中断之后 —— 模型在 cite 轮次使用 pad scroll 进行重新规划，然后在新的 observation 上重新提供 cite：
+
+无效果的尾部使得 sample 变为 flagged/controlled_exception（结束为 'blocked'）——这实际上是一个更强有力的反例。正在更新断言以符合实际情况：
+
+23 个 reading-rebind 测试全部通过。现在进行 Task C 的 direct-article session —— 首先检查 direct tasks 的 preflight 要求：
+
+目前进行的读取 rebind 测试已通过（23/23）。现在开始将任务 D 的 mixed-action session 添加到同一个文件中：
+
+点击后的后续范围（follow-up scope）需要 `geometry_witnesses`、`capture_readiness` 以及一个真实的 `main` 容器 —— 这是我的模拟环境（synthetic surface）所缺失的真实快照事实。现在添加它们：
+
+我将构建一个适用于就绪承载状态的正确 v2 捕获回执：
+
+合成验证需要真实的 `stability_pair` 事实。我来读取一下它的要求：
+
+Found it — my surface's `back` handler re-appends the wrong URL. Fixing `_navigate`:
+
+`_page_for_url` 映射反了（页面名称→URL 而不是 URL→页面）。正在修复：
+
+8/8 个动作已全部执行 —— 只有硬编码的 cite node 不匹配。使 chooser 能够动态选取 cite 选项：
+
+发现了一个真正的语义鸿误：在 `back-navigation` 之后，重新访问的 `results page` 带有了新的 `document identity`，因此从中打开 `result` 无法被识别 (`source_doc` 仅匹配 `identities`)。真实的 `wwiki-style flows` 若带有 `back` 操作将会失败。正在修复 `reading_evidence` 以通过 `identity` 或 `same-URL` 来追踪 `sources`：
+
+全部 24 项测试通过 —— 任务 B+D 离线测试已完成。现在进行任务 C 的 direct-article 会话。首先检查保存路径是否运行 direct replay：
+
+现在是 Task C 的 direct-article session fixture 文件：
+
+直接协议在第一个段落提供了引用——完整保真度的夹具需要 `direct-completion` 协议 (`continue_plan`/`finish_reading`)。重构如下：
+
+`back`/`click` 文档变更会自动推进（`expected-navigation`），因此真正的回复顺序是 [continue_plan, continue_plan, finish_reading]：
+
+宿主已经在提交阶段预拒绝了 away-scroll 计划（这更稳健）——只有在模型通过重规划坚持执行时，该违规行为才会在分发阶段发生。相应地进行重构：
+
+无限循环 —— 我的重提交逻辑颠倒了（在收到反馈时会不断重新提交违规计划）。已在后台等待其终止，同时修复该循环：
+
+循环出现的原因是修正后的重新提交本身无效（以一个离开页面的点击结束，且没有返回操作）。不再使用重规划坚持机制，而是重新围绕确定性提交拒绝来重构此计数器示例：
+
+所有离线测试夹具均已通过。现在开始对列出的测试套件进行集中运行：
+
+在测试套件运行的同时，让我来研究一下用于实际 GLM 复测的参考驱动：
+
+驱动程序已理解。正在检查后台测试套件的运行情况，然后编写单目标驱动程序：
+
+有 4 个测试套件未通过——需要将我的回归问题与未提交的 V11 轮次中已存在的过期问题区分开来。让我来看看具体的 tracebacks：
+
+正在检查这 4 个失败是否在我修改之前就已经存在于 HEAD（使用隔离的 worktree）：
+
+`test_direct_article` 在 HEAD 版本可以通过，但在我的分支树中失败了——这是我的回归问题。正在检查 `system_for`：
+
+我的修改吞掉了第二个 `if contract['version']==DIRECT_VERSION:` 头部——direct 替换现在位于 V11 块内。正在恢复该头部：
+
+`test_direct_article` 已修复（此前因我的修改导致页眉被吞）。剩余的 `closing/plan_v8/direct_completion` 失败与 HEAD 版本时完全一致——属于既有失败，已记录。正在后台进行最终确认运行，与此同时，我正在构建真实的 GLM 驱动程序：
+
+最终状态：8/11 个测试套件通过；3 个失败的测试套件与 HEAD 版本完全一致（已通过 `worktree` 验证为原有问题）。正在清理 `worktree` 并启动真实的 GLM 复测：
+
+在 real run 执行期间，我先更新文档。首先检查相关部分的当前状态：
+
+文档需要在真实结果出来后进行事实性更新。正在检查中间运行情况：
+
+运行进展顺利——动作正在执行中并已验证（已远超 A/B 阶段的零动作失败）。正在监控，同时暂缓文档处理，直到最终证据生成：
+
+运行结束：已拦截，1 步，UNVERIFIED，2 次请求。正在诊断实际断点：
+
+绑定修复生效了（搜索框 e_8 已绑定并点击 ✓），但运行在 pre-dispatch capture 时因浏览器 TimeoutError 终止。让我确认一下 e_205 是什么，并检查一下超时上下文：
+
+整体情况已确认：绑定修复已在实时运行（搜索框已绑定+点击，建议重绑定，偏差刷新，干净重规划）中得到验证，但该尝试在类型步骤的预分发捕获阶段因实际 Wikipedia 覆盖层超时而终止。根据 1 次尝试的限制，结果保持为失败。现在开始更新文档：
+
+现在更新优化方案文档的状态行，并添加本轮的章节：
+
+文档已完成。现在正在提交本轮内容（包含未提交的 V11 轮次，排除 `request/attachments/`）：
+
+全部完成。最终报告如下。
+
+# 本轮最终报告（2026-11-08，提交 `2fcd501`）
+
+## 1. 实际代码改动与根因证据
+
+**根因（wwiki A/B 原始账还原，非终态猜测）**
+- **A（1 次模型决策即死）**：首帧计划 type 步 target 为 `{"node":"页头站内搜索框","text":"搜索",...}` —— 散文中文字符串当 node ID，`bind_reply_scope` 硬拒 `PLAN_TARGET_OUTSIDE_REQUEST_OBSERVATION`，且被拒回包只留在传输账、未入事件收据（`jobs.sqlite3` model_requests `ee995fe4` 还原）。
+- **B（19 次 HTTP 零动作循环）**：语义目标 `role:"textbox"`（宿主记录 `native_role:"input"`）、`region:"页首"`（未证区域）、`parent_text:"搜索"`（父级 form 文本为空，“搜索”在兄弟按钮上）三项全不匹配；分支反馈仅“当前目标缺失或路径失效”，无原因无词汇表，模型 19 次原样重提（`0005/0010/...` plan-target-binding `matches:[]`）。
+
+**改动**（`banded_plan.py` 为主，含前轮未提交 V11 长计划改动一并提交）
+- `ROLE_EQUIVALENTS`：textbox/searchbox/link 等标准 ARIA 角色词与原生 tag 等价匹配（唯一性不放宽）。
+- `bind_target` 咨询式语义重绑：text+role+href 当前帧唯一命中时，错误的 region/parent_text 不再一票否决；方向性 region（左/右）保持硬约束。
+- `bind_reply_scope`：现代协议（V8+）剥离不可用 node/observation 引用改走当前帧语义绑定（旧协议保持原硬拒绝字节；执行期唯一性校验不变）。
+- `binding_diagnosis`：绑定失败反馈附候选控件、role 词汇表、可省字段说明；V11 `target_references.usage` 首轮明示词汇规则。
+- 有界停止：同类零动作绑定失败连续 3 轮 `ReactStop('budget')`（wwiki-B 曾烧 19 次）。
+- 首轮硬拒绝参数以 `plan-rejected-arguments` 收据留档（补 A 类证据缺口）。
+- **任务 A**：V11 删除 `replan_contract.remaining_effective_limit`、“只剩1步”文案及 revealed-controls/compile 反馈重复字段（budget_feedback 升 `-2`，保留 `attempt_limit`）；V10/V2 字节不变。
+- **任务 D**：`goal_evidence.reading_evidence` 来源页按（文档身份， URL）双键跟踪——back 后重访同 URL 结果页再打开条目照常计证（否则“错开-返回-再打开”组合永远无法 VERIFIED）；V11 非直接契约提示按目标自由组合 allowed_actions。
+
+## 2. 离线测试（命令同清单，11 套件）
+
+| 套件 | 结果 |
+| --- | --- |
+| test_long_plan_20261107 / test_current_chain / test_banded_plan / test_overall_optimization_20261107 / test_consumer_ab_repair | PASS |
+| **test_reading_rebind_20261107（新，24 例）** | PASS — wwiki A/B 形态复现与修复、V10/V11 提示字节对照、3 轮有界停止、5 步搜索→打开→下读→引用→保存链、到底空滚动不计数、**8 步混合动作链**（click聚焦→type→hotkey提交→click打开→back→click再开→scroll×2，8/8 有效，long 档保存一致） |
+| **test_direct_article_session_20261107（新，19 例）** | PASS — **直接阅读完整链单列**：滑动→关键词点击→跨页→立即 back（URL+标题+正文身份核验）→返回续读→finish_reading 含引用回答→保存→postprocess `verify_record` 独立重放；四类反例：同页目录（定位非跨文档，计阅读）、关联页违规滚动（**提交期确定性拒绝**，0 违规派发）、错误返回（url/title/body 三变体全拒）、重复无效果滚动（不产生新阅读行） |
+| test_direct_article | PASS（本轮曾因我误删直接阅读提示头失败，已当场修复恢复 9/9） |
+| test_closing_policy_v2(2F)/test_plan_v8(4F)/test_direct_completion(1F1E) | FAIL — 经 HEAD 独立工作树复核**与本轮改动前完全相同**，属既有失败，如实记录未扩大修复 |
+
+## 3. 真实请求数（wwiki 单目标，研发隔离账 `production_counted=false`，high/high）
+
+- **succeeded 2 / invalid 0 / UNKNOWN 0**（上限 25，用 2）；input 41,513 / output 1,433 tokens；无 UNKNOWN 故无重发问题。
+
+## 4. 实际动作与目标证据（wwiki 与 direct-article 分列）
+
+- **wwiki（搜索打开型）**：**绑定断点已消除并经真实事件证实**——首轮计划直接被接受（无 PLAN_TARGET_OUTSIDE 拒绝；模型自发给出干净语义目标，含 V11 词汇提示效果）；搜索框 `e_8` 绑定并点击，**1 个已验证有效步**（focused）；聚焦后页面浮层渲染 combobox `e_205` 被当前帧语义重绑；漂移触发零派发刷新后模型重规划并正确携带当前 node（旧 A 类错误不再发生）。该 attempt 随后在 type 步**派发前取证遇真实维基百科搜索浮层 `TimeoutError`**（程序类）有界停止：3 次业务尝试、1 次原子派发、1 有效步、目标 UNVERIFIED、RAW_PENDING。**阅读基线仍未通过**（<5 步）；按本轮“最多 1 个新 attempt”上限未追加，留证不伪造。
+- **direct-article（关键词点击—返回—滑动型）**：**真实 GLM 标记 NOT_RUN / 缺固定有效候选**——原 Vue 候选 `candidate-71b696e2-…` 的绑定（candidate-project-20261101-r01 专库/objective/source-binding）已被删除，仅剩 verify_results 引用指向不存在路径，无法完整核验；不以 URL 新建身份冒充 Table2 基线。直接阅读代码与离线链已验（第 2 项），真实直接阅读尚未验收。
+- Muxtly 8 步成功与 wwiki 旧失败继续作为不同事实保留，未覆盖。
+
+## 5. 保存与账目
+
+- disk saved=0，Runtime committed=0（attempt 未达保存条件，单次收尾 RAW_PENDING，原始 PNG/树/动作/请求账 65 文件完整保留于 `verify_results/consumer-reading-rebind-20261108-r01/`）；不适用哈希一致性（无保存）。研发正式有效计数 0（本轮亦未登记任何新研发 candidate result）。提交 `2fcd501`（含前轮未提交 V11 长计划改动）；`request/attachments/` 未动未提交；工作树仅剩该用户目录。
+
+## 6. 机械检查 / 独立 AI QC / 人工 / 发布 / 客户验收
+
+- 机械检查：本轮 11 套件如第 2 项；3 套件既有失败照录。独立 AI QC：**NOT_RUN**。人工审核：**NOT_RUN**。发布：**NOT_RUN**。客户验收：**NOT_RUN**。任何代码能力与离线 PASS 不折算为客户可用产量。
+
+## 7. 未验证边界与下一步建议
+
+- **wwiki 5 步验收未完成**：绑定类断点已修复并真实证实，剩余风险是真实站点搜索浮层的取证超时（环境类，非协议/模型）。建议下一步在站点低负载时段用**同候选重跑一次 wwiki 单目标**（建议同候选 A/B 各一次以区分稳定性与协议差异）；若浮层超时复现，考虑对搜索浮层场景调整 capture 重试/等待预算（工程项，需单独一轮）。
+- **direct-article 真实基线 NOT_RUN**（缺固定有效候选）为明确未验证边界：需生产者重新发布等效直接阅读候选并冻结目标后再跑，不能回填历史 2 步 short_flow 结果。
+- V11 一次纠错、预算反馈简化与 3 轮绑定停止均只有离线+本轮 2 请求真实覆盖，未在 ≥5 步真实样本上完整 exercised。

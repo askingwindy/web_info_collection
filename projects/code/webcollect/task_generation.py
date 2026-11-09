@@ -1441,7 +1441,8 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         with ledger.transaction() as con:
             con.execute("UPDATE jobs SET state='queued' WHERE id=? AND state='review_required'",(jid,))
             ledger.event(con,'collection_reconciliation_requested',{'job_id':jid})
-    job = ledger.claim('collection',job_id=jid)
+    from .consumer_lifecycle import claim_job
+    job = await claim_job(ledger, 'collection', job_id=jid)
     if not job:
         previous = ledger.get(jid)
         if previous['state'] == 'done':
@@ -1538,7 +1539,11 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         ledger.finish(job,'queued' if result.get('stopped') else 'done',result=result);return result
     except BudgetStop as error:
         ledger.finish(job,'review_required' if (output/'capture/bootstrap.json').exists() else 'queued',error=str(error));raise
-    except Exception as error:
+    except BaseException as error:
+        # CancelledError bypasses Exception. Release the local slot only after
+        # the Runtime worker has written its original cancellation outcome.
+        if not working.done(): working.cancel()
+        await asyncio.gather(working, return_exceptions=True)
         ledger.finish(job,'review_required',error=type(error).__name__); raise
     finally:
         for pending_task in (renewal,working):

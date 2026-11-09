@@ -1,0 +1,97 @@
+工作树在 `ee0239c` 处是干净的。在编辑之前，让我重新阅读一下当前模块的关键部分：
+
+现在开始实施这三个修复。首先进行 **P1：完整 Schema 预校验** — 替换 `classify_reply` 和未使用的 `_evidence_only_defect`：
+
+现在，在计划中补充 **P0-1 dispatch-needs computation**：
+
+现在重写 `_merge_part`（移除 never-dispatched 的分发分支）以及 `recover_visual`（预 claim 授权网关 + 账本派生调度审计）：
+
+现在开始重写核心 `recover_visual` —— 让我先读取它的当前完整内容：
+
+清理无用导入，并将原始错误详情添加到停止回执中：
+
+模块已更新。现在检查语法，然后扩展测试文件：
+
+现在，通过基于账本的回执计数来扩展二次尝试测试，并添加所有新的测试方法：
+
+现在在 `test_invalid_status_or_damaged_reply_is_unrecoverable` 之后添加新的测试块 —— P0-1 授权门控、P0-2 停止回执计数，以及 P1 全 Schema 负面用例：
+
+让我验证一下 stub 测试中 `reserve_request` 的签名：
+
+Stub 是兼容的。现在运行完整的恢复套件：
+
+该 stub 触发了 `min_model_interval_seconds` 速率限制（网关通常会循环等待）。模拟该最小行为：
+
+该 stub 必须模拟网关的 `purpose + ':' + identity` 结构：
+
+所有 26 项测试已通过。现在运行最小邻近测试集：
+
+两个文件均符合预期。现在基于 r01 真实凭证副本（只读，0 派发）重新运行真实回执 dry-run：
+
+对文档作业进行相同的 honest dry-run，并重新对真实副本进行核对：
+
+现在同步文档。首先是 QC README 部分：
+
+现在进行工程说明 — 在之前的条目上方添加 r02 段落：
+
+现在进行设计说明 —— 扩展这两行恢复表格：
+
+现在组装 r02 验证目录并保存日志：
+
+最终完整性检查 — 无悬空引用，主工作区未受影响，然后提交：
+
+已全部清理。正在提交：
+
+# r02 定向修复完成报告
+
+## Commit 与修改文件
+
+**`b13a086`** on `qc/ai-review-20261108`（基于 `ee0239c`，基线 `f4db1fe`）：
+
+| 文件 | 改动 |
+| --- | --- |
+| `projects/quality-inspector/quality_inspector/qc_recovery.py` | 三项修复主体（+226/−108 中大部分） |
+| `projects/quality-inspector/tests/test_qc_recovery_20261108.py` | 新增 7 例定向测试 |
+| `projects/quality-inspector/README.md`、`docs/工程说明.md`、`docs/设计说明.md` | 授权语义与回执字段同步 |
+
+开始前 `git status --short` 为空（干净的 `ee0239c`），无用户改动被覆盖。
+
+## 三项问题如何修复
+
+**P0-1 未授权 0 派发（全部路径）**：`recover_visual` 现在 **claim 之前**按 plan 判定派发需求，门禁顺序：unrecoverable → `never_dispatched_parts` → `consolidation_required` → correction_required → 执行。存在从未派发分段的作业（**无论是否 `--allow-correction`**）→ stopped 回执指回 normal worker；多段需要 whole-continuity 合并请求的作业 → stopped 如实说明“超出既有恢复授权”（不发明新授权协议）——两者均 0 派发、不创建 gateway、不改作业状态和请求账。**删除了**恢复代码里 never_dispatched 补跑与合并请求两条派发路径（上一轮的越权路径）；`--allow-correction` 现在唯一派发来源是 `_merge_part` 内惰性构造的纠正请求。完全可确定单段无授权完成保持不变（`model_requests_dispatched=0`）。
+
+**P0-2 终态回执实记派发**：新增 `_all_requests`/`_dispatch_audit_entry`/`_attach_dispatch_audit`——调用前快照请求 ID 集合，**所有**终态回执（成功/invalid/UNKNOWN/绑定失败/其他异常/授权停止）写盘前重读原账按新增行计数，不依赖内存 audits。每个新增请求列 request_id/purpose/state/usage/reserved_tokens/reserved_cost_micros（**UNKNOWN 保留 300000 micros 预留、usage=null，不记零**）；另列 `prior_recovery_requests` 区分本次新增与历史；审计读取失败记 `dispatch_audit_error` 并保留原始 `reason`/`reason_detail`（异常类型+消息前 300 字符）。
+
+**P1 整包 Schema 预校验**：`classify_reply` 先用原始 bound Schema 对**完整回复**跑 `Draft202012Validator`；`_recoverable_schema_error` 只放行 `checks.<name>.evidence_steps` 路径错误或该检查对象**仅缺** `evidence_steps` 的 required 错误——额外根字段（root additionalProperties）、`failure_assessment` 任何缺陷（如非法 scope）、`step_observations` 损坏、status/note 错误一律不可恢复。未删字段、未忽略 additionalProperties、未放宽 Schema；host 证据校验（空/越界/重复、REVIEW_REQUIRED、可确定分类）原样保留。
+
+## 新增测试结果（7/7 过）
+
+1. never_dispatched 双授权（False/True）→ 均 stopped、0 派发、作业与请求账**逐字段相等** ✅
+2. 多段 consolidation 双授权 → 均 stopped、0 派发、账中仅原有 2 请求 ✅
+3. 纠正 UNKNOWN（stub 网关真实落账 unknown 行）→ stopped 回执计数=1、state=unknown、usage=null、预留 300000、无自动重试 ✅
+4. 纠正 succeeded 后 `bind_result` 抛错 → 计数=1、state=succeeded、usage 可追踪、原始异常保留 ✅
+5. 被拒二次执行 → 本次新增=0、`prior_recovery_requests` 含第一次 invalid 请求 ✅
+6. 额外根字段 → 不可恢复、0 派发 ✅
+7. 非法 `failure_assessment.scope` → 不可恢复、0 派发 ✅（另：损坏 step_observations 不可恢复 ✅）
+
+## 实际运行命令与数字
+
+```sh
+PYTHONPATH=<worktree>/projects/code:<...>/site-planner:<...>/quality-inspector:<...>/tests \
+  /Users/hemiao/projects/2610/WebCollect/projects/code/.venv/bin/python \
+  -m unittest test_qc_recovery_20261108        # 26/26 OK（原 19 + 新 7）
+# 邻近最小回归
+  -m unittest test_review_frame_schema test_qc_current_semantics test_document_prompt_quotes  # 14/14 OK
+```
+
+日志存 [verify_results/qc-ai-review-20261108-r02/](/Users/hemiao/projects/2610/WebCollect/.worktrees/qc-20261108/verify_results/qc-ai-review-20261108-r02/README.md)（含主区 r01 真实回执副本复跑：dry-run 行为与 r01 一致——correction_required、language 待纠正、3 项可归一化、**0 派发**、副本 SHA `e789421a…` 不变）。
+
+## 声明
+
+- **真实 GLM 请求数：0**（全部 synthetic/离线夹具）。
+- **主工作区未修改**（status 与会话开始一致、QC 账本 SHA 复核不变）；**共享 `model_gateway.py` 未修改**；**A/B、生产者、消费者配置未动**。
+- documents UNKNOWN、difference 空集、人工/发布/delivery 门禁口径全部保持原样；无样本 AI_PASS、无 `release_ready=true`。
+
+## 未验证边界
+
+真实 GLM 纠正请求与真实 pipeline status 重跑（REAL_GLM_VALIDATION_PENDING，等 A/B 窗口通知，命令在 r01 验证目录 README）；多段真实账本恢复（本轮回执如实停止，如需支持须另行显式授权设计）；documents UNKNOWN 仅当原账出现迟到已结算答案时才可能解锁。

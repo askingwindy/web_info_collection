@@ -1,0 +1,105 @@
+按指令执行。先读 `CandidatePool.put()` 的公开签名与校验规则：
+
+put() 的最小分支清晰（无需 table_policy/entry_http）。清点 r01 生产者留下的真实工件（GET 观察文档、站点分类结果、caller goal）：
+
+真实工件齐全（站点分类文件、页面观察、文档、GET 原件）。确认 page-7c74… 观察的具体 URL：
+
+页面观察正是目标计算器页（真实 GET 200）。先做只读消费者隔离检查：
+
+消费者隔离干净。查 `_put_v2` 返回值后执行登记：
+
+origin 需用受限枚举——`baseline_import` 正是固定基线重登记的 sanctioned 值。重跑 put()：
+
+put() 已提交、仅返回值解包写错。读回登记结果并落盘：
+
+候选已登记（同站点 application 与原基线一致）。生成新身份 session objective（业务内容逐字保留）与授权记录：
+
+**consume 返回 succeeded + saved=true**。执行强制只读核验（11 项）：
+
+核心链路全部通过。补取 goal_evidence/finish_route（在 terminal 里）并目视关键帧：
+
+这是可信前缀保存而非正常完成。核对 prefix 绑定与原始 ending：
+
+保存是**可信前缀**形式：7 个已验证动作后模型 replan 超出剩余步数上限被拒，尾段 0 派发、无 UNKNOWN，前缀按规投影保存；但 session_objective **UNVERIFIED**（面积结果未产出）。补核心跳/轨迹/截图后如实报告：
+
+轨迹清晰：聚焦/全选/输入 12.5、聚焦/全选/输入 8.5、下滚找结果，第 8 步 replan 超上限被拒。目视关键帧（首帧、输入后、末帧）：
+
+**🌐 Z.ai Built-in Tool: analyze_image**
+
+**Input:**
+```json
+{"imageSource":"https://glm-file.bigmodel.cn/ccproxy/file-input/08fe122ef5f2fd82b5427371f227b9fc-82865?OSSAccessKeyId=LTAI5t8DUbn1sCxHej5djX4k&Expires=1794072313&Signature=lM3ViU%2FqP1tJDL1SbwRyky8G25Q%3D","prompt":"这是一个面积计算器网页截图。请描述：1) 长度和宽度输入框的当前默认值；2) 单位选择器当前显示的单位；3) 页面上是否已有计算结果显示区域及其数值。"}
+```
+*Executing on server...*
+
+
+**Output:**
+**analyze_image_result_summary:** [{"text": "\"根据截图内容：\\n\\n1) **长度和宽度输入框的默认值**：\\n   - 长度（长度）：**10**\\n   - 宽度（宽度）：**12**\\n\\n2) **单位选择器**：截图中“单位”标签刚显示在页面底部，**具体的单位选择下拉框内容被截断，无法看到当前显示的单位**。\\n\\n3) **计算结果显示区域**：截图中**没有显示计算结果区域**，页面可见部分只有标题、说明文字和表单输入项，尚未展示任何计算结果数值。\\n\\n另外，形状选择器当前默认选择的是“**矩形**”。如需确认单位和结果区域，需要查看页面下方未截入的部分。\"", "type...
+                                                
+
+**🌐 Z.ai Built-in Tool: analyze_image**
+
+**Input:**
+```json
+{"imageSource":"https://glm-file.bigmodel.cn/ccproxy/file-input/4f2c607a62d562a9daf3e5e59da60ee4-33430?OSSAccessKeyId=LTAI5t8DUbn1sCxHej5djX4k&Expires=1794072455&Signature=X72Fcoj4yNY%2FNRTiLWaCXnTB68A%3D","prompt":"这是同一面积计算器页面的后续截图。请描述：1) 长度和宽度输入框当前显示的数值；2) 是否能看到单位选择器及其当前单位；3) 是否出现了计算结果区域及具体数值文字。"}
+```
+*Executing on server...*
+
+**🌐 Z.ai Built-in Tool: analyze_image**
+
+**Input:**
+```json
+{"imageSource":"https://glm-file.bigmodel.cn/ccproxy/file-input/4f2c607a62d562a9daf3e5e59da60ee4-33430?OSSAccessKeyId=LTAI5t8DUbn1sCxHej5djX4k&Expires=1794072455&Signature=X72Fcoj4yNY%2FNRTiLWaCXnTB68A%3D","prompt":"这是同一面积计算器页面的后续截图。请描述：1) 长度和宽度输入框当前显示的数值；2) 是否能看到单位选择器及其当前单位；3) 是否出现了计算结果区域及具体数值文字。"}
+```
+*Executing on server...*
+
+
+**Output:**
+**analyze_image_result_summary:** [{"text": "\"根据截图描述如下：\\n\\n1) **长度和宽度输入框数值**：\\n- 长度输入框位于截图顶部边缘，显示数值 **12.5**（仅部分可见）\\n- 宽度输入框清晰可见，显示数值 **8.5**\\n\\n2) **单位选择器**：\\n- 可见，位于宽度输入框下方\\n- 当前选中的单位为 **平方英尺**\\n\\n3) **计算结果区域**：\\n- 截图中**未显示计算结果区域及具体结果数值**\\n- 页面中部仅有一个紫色的“计算面积”按钮，下方是折叠的说明区域（“这是什么工具？”、“运作原理”、“参考表”）\\n- 可能尚未点击计算按钮，或结果区域位于...
+                                                
+
+末帧目视确认：12.5/8.5 已输入、单位区可见（平方英尺），但「计算面积」按钮**未被点击**、无结果区——与 goal UNVERIFIED 一致。按规则不连续重试，更新验证目录报告（含用户要求的措辞更正）：
+
+本轮按您的指令完成。最终报告：
+
+## 执行结果：正规消费链一次打通并真实保存（可信前缀）；本会话目标计算未完成，按规则停止
+
+**措辞更正**（已写入验证目录 README 与工程说明）：~~“消费闭环必须有生产者发布行，故无法启动”~~ → **“生产者 AI 发布路径被 UNKNOWN 阻断；固定基线可尝试现有公开候选登记 API，消费者结果另列。”** 生产者 UNKNOWN `49ca187de0e54fa791b1a87bdc9a79ae` 原账保留、未结算、未重发，`producer_authority` 未改。
+
+**候选登记（公开 API）**：`CandidatePool.put()`（origin=`baseline_import`，该枚举为站点池仅有的三个合法来源之一）→ `candidate-c462c8e1-bbc4-4d4d-af80-91886f770158` v1（entry、requested_goal=None；application 与原基线同站点身份 `app-98bb7956…`）。源引用全部为 r01 生产者批次真实文件（站点分类、目标页 observation/document、该 URL 的 200 GET 收据、caller goal），逐文件实算 SHA256；未伪造 table_policy/entry_http/producer row/模型响应。session objective 以 put() 实际返回的新身份绑定，业务 objective/evidence contract/最少 5 步/long 档逐字继承。
+
+**只读消费者隔离预检**：消费者账独立（0 模型请求），`guard_request_scope`/`guard_candidate_dispatch`/`startup_check` 全部通过——生产者 UNKNOWN 不阻断消费者。
+
+**保存链与核验**（11 项全部执行，`verification-readonly.json`）：
+
+| 核验项 | 结果 |
+| --- | --- |
+| saved_sample/pilot_identity/derived/raw-receipt | ✓ 真实存在 |
+| Runtime 状态 | ✓ `collected_pending_review`（唯一 attempt `2ccc376e…`，样本 `S000001_sample_000001`） |
+| finish_attempt | ✓ 恰 1 次，无重复提交 |
+| 身份绑定 | ✓ sample/attempt/task(react-…)/candidate/claim/entry URL/objective 一致 |
+| 哈希 | ✓ 17 交付文件＋234 capture 文件全一致 |
+| 目标证据 | ✗ **UNVERIFIED**（见下） |
+| 轨迹口径 | ✓ effective_steps=7、short_flow=false（derived 同源重算）；可信前缀保存 `original_goal_completed=false` |
+| 心跳 | ✓ attempt `lease_extended` 事件存在、claim 未过期 |
+| 阶段计时 | ✓ capture_observation×15、model_wait×3、prefix_projection、react_postprocess、react_commit、attempt_feedback 等 |
+| 三方一致/研发隔离 | ✓ 池 effective=1/qc=pending_review；未计任何生产量 |
+| 截图目视 | ✓ 首帧默认 10/12；末帧 12.5/8.5 已输入、平方英尺单位可见、**「计算面积」按钮未点击、无结果区** |
+
+**为什么目标未完成**：单会话 7 步耗尽于两次输入的自然周期（聚焦→全选→输入 ×2 + 下滚露出单位/按钮），第 8 步 replan 超出剩余步数上限被拒（`PLAN_EXCEEDS_FROZEN_REMAINING_STEPS`），尾段 0 派发、无 UNKNOWN，按可信前缀规则保存。独立算术期望值（12.5×8.5=106.25 平方英尺）已记录，但页面未产出可比对结果。按“一条候选、不连续重试”授权边界停止；候选现为 succeeded/pending_review。
+
+## 分项进度
+
+| 项 | 值 |
+| --- | --- |
+| 研发会话/attempt | 1 / 1 |
+| 真实 GLM 请求 | 4（3 succeeded / 1 invalid_response / **0 UNKNOWN**） |
+| 有效动作 / short_flow | 7 / false |
+| 目标 VERIFIED | 否（UNVERIFIED，如实） |
+| disk saved | 1（`saved_sample.json`） |
+| Runtime committed / collected_pending_review | 1 / 1 |
+| 正常完成 / 可信前缀 | 0 / 1 |
+| 机械检查 / 独立 AI QC / 人工 / 发布 | NOT_RUN（保存待审≠合格） |
+| 正式生产计数及缺额 | 不变（研发隔离，production_counted=false） |
+
+**未验证边界**：目标完成的端到端口径（触发计算并读取结果）在本授权会话内未达成；可信前缀样本的后续 QC/AI/人工/发布均 NOT_RUN。文档与记忆已同步（commit `f1029dd`）；原始账本、样本与全部日志保留于 `results/candidate-project-muxtly-research-20261107-r01/` 与 `verify_results/consumer-runtime-muxtly-20261107-r01/`。

@@ -543,7 +543,7 @@ class ReactSession:
 
     def __init__(self, task, directory, choose, page, *, steps_directory=None, navigation=None,
                  url_check=None, preflight=None, frame_guard=None, site_context=None,
-                 entry_observation=None, attempt_id=None, phase_ledger=None):
+                 entry_observation=None, attempt_id=None, phase_ledger=None, host_limits=None):
         validate_task(task)
         self.task = deepcopy(task)
         self.native = self.task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
@@ -603,6 +603,7 @@ class ReactSession:
         self.navigation_count = 0
         self.actual_dispatches = 0
         self.started = time.monotonic()
+        self.host_limits = deepcopy(host_limits)
         self.page_urls = list(self.task['fragment']['page_urls'])
         self.dialogs = []
         self.excluded_links_seen = set()
@@ -611,6 +612,8 @@ class ReactSession:
             {'type': dialog.type, 'message': dialog.message}))
         self.binding = exclusive(self.root / 'boundary.json',
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
+             'language_exclusion_policy': __import__('webcollect.page_language',fromlist=['VERSION']).VERSION,
+             **({'host_limits': self.host_limits} if self.host_limits else {}),
              'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
              'decision_protocol': self.task['fragment']['decision_protocol'] if self.native else REACT_VERSION,
              **({'attempt_id': self.attempt_id} if contracted else {}),
@@ -666,10 +669,15 @@ class ReactSession:
     # ------------------------------------------------------------------ budget
 
     def _left(self, key):
+        if key == 'max_seconds':
+            remaining = (float('inf') if self.budgets[key] is None else
+                         self.budgets[key] - (time.monotonic() - self.started))
+            if self.host_limits:
+                remaining = min(remaining, self.host_limits['soft_seconds']
+                    - (time.monotonic() - self.host_limits['started_monotonic']))
+            return max(0.0, remaining)
         if self.budgets[key] is None:
             return float('inf')
-        if key == 'max_seconds':
-            return max(0.0, self.budgets[key] - (time.monotonic() - self.started))
         return self.budgets[key] - self.used[key]
 
     def _consume(self, key, amount=1):
@@ -716,19 +724,10 @@ class ReactSession:
             except ValueError:pass  # A missing narrow proof retains strict capture.
         options={'action_scope':action_scope} if action_scope else {}
         try:
-            try:
-                with self._phase('capture_observation', observation=self.used['max_observations'],
-                                 selector=selector):
-                    return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
-            except Exception as error:
-                if 'Execution context was destroyed' not in str(error):
-                    raise
-                ref=exclusive(self.root/f'capture-context-retry-{number:03}.json',
-                    {'error_type':type(error).__name__,'reason':str(error),'diagnostic':getattr(error,'capture',None),
-                     'action_replayed':False})
-                self.event('capture-context-retry',evidence=ref)
-                await self.page.wait_for_load_state('domcontentloaded')
-                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
+            with self._phase('capture_observation', observation=self.used['max_observations'],
+                             selector=selector):
+                return await capture(self.page, selector, index or 0, timeout=REACT_OBSERVE_TIMEOUT_SECONDS,
+                    total_timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
         except Exception as error:
             after_dispatch = bool(getattr(self,'_navigation_trigger',None))
             ref=exclusive(self.root/f'capture-rejection-{number:03}.json',
@@ -845,6 +844,12 @@ class ReactSession:
             url=observation['url'], page_host=urlsplit(observation['url']).hostname, evidence=evidence, duplicate_hint=duplicate_hint,
             effective_steps=len(self.trajectory))
         self.current = observation
+        from .page_language import assess
+        language = assess(captured['state'])
+        if language['excluded']:
+            self.event('language-excluded', assessment=language, evidence=evidence,
+                       action_replayed=False)
+            raise ReactStop('blocked', 'NON_CHINESE_PAGE: rendered Chinese not evidenced', 'collector')
         return observation
 
     # ------------------------------------------------------------------ tool results
@@ -1265,6 +1270,8 @@ class ReactSession:
     async def _dispatch_compiled(self, step, compiled, *, _refresh=0, _deadline=None):
         from .browser import EvidenceStale, execute, prepare_action, verify_execution_state
         from .collect import capture_before_action
+        if self.host_limits and self._left('max_seconds') <= 0:
+            raise ReactStop('budget', '宿主安全收尾时限已到，不再派发新动作')
         from .production_identity import before_action
         _deadline=_deadline or time.monotonic()+REACT_OBSERVE_TIMEOUT_SECONDS
         executed = []

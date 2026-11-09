@@ -339,7 +339,7 @@ def react_close_event(store, attempt, kind, now, payload):
 
 async def _react_collection(context, task, attempt, sample, evidence, output, store, *,
                             ledger, parent_job, registry, manifest, index, navigation=None,
-                            page=None, entry_observation=None):
+                            page=None, entry_observation=None, host_limits=None):
     """One react session in one browser context; raw first, derivation offline.
 
     The attempt is always finished here once the raw journal is saved: derived
@@ -399,7 +399,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     session = ReactSession(task, evidence / 'raw', chooser, page, steps_directory=evidence,
         navigation=navigation, url_check=url_check, preflight=preflight,
         frame_guard=frame_guard, site_context=feedback_context, attempt_id=attempt['attempt_id'],
-        phase_ledger=phase_ledger,
+        phase_ledger=phase_ledger, host_limits=host_limits,
         **({'entry_observation': entry_observation} if entry_observation is not None else {}))
     with telemetry_phase(phase_ledger, 'react_session_run', scope=meter_identity):
         summary = await session.run()
@@ -484,10 +484,10 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return []
     def dedup_validator(delivery_root):
         conflicts = index.conflicts(delivery_root)
-        from .candidate_contract import research_duplicate_basis
+        from .candidate_contract import research_duplicate_basis, research_overlap_sample_ids
         research = research_duplicate_basis(task, store.registry)
-        blocked = [item for item in conflicts if not research
-                   or Path(item['other_sample']).name != research['original_sample_id']]
+        overlaps = research_overlap_sample_ids(research)
+        blocked = [item for item in conflicts if Path(item['other_sample']).name not in overlaps]
         write_json(evidence / 'producer_dedup.json', {'exact_conflicts': conflicts,
             'research_original_overlap': research, 'blocking_conflicts': blocked,
             'other_routes': 'independent_QC_required', 'not_qualified': True})
@@ -785,7 +785,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 store, ledger=controller_ledger, parent_job=controller_parent_job,
                                 registry=registry, manifest=manifest, index=index,
                                 navigation=navigation,
-                                **({'page': entry_session['page'], 'entry_observation': entry_session['entry_observation']}
+                                **({'page': entry_session['page'], 'entry_observation': entry_session['entry_observation'],
+                                    'host_limits': entry_session.get('host_limits')}
                                    if entry_session is not None else {}))
                             if react_result['status'] == 'collected_pending_review':
                                 meter.ensure_recorded()

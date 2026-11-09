@@ -710,6 +710,22 @@ def application_pending_remaining(pool, batch, application_id):
 
 
 def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *, application_id=None):
+    prior = pool.batch_row_identity(header['row_id'])
+    if prior:
+        if prior[0] != header['response_sha256']:
+            raise ValueError('Frozen entry response changed')
+        return prior[1]
+    # Reuse the original rendered observation; never issue a replacement GET.
+    from .producer_observation import from_pool
+    shared_language = from_pool(pool, ledger, candidate['entry_url'])
+    if shared_language is not None:
+        from webcollect.page_language import assess as assess_language
+        from webcollect.batch_core import load_json
+        language = assess_language(load_json(shared_language[1]['observation']['path']))
+        if language['excluded']:
+            return pool.record_row_conclusion(header, result='REJECTED',
+                reason='rendered_chinese_not_evidenced', original_row={**row,
+                    'language_exclusion':language,'observation':shared_language[1]['observation']})
     if pool.consumption(candidate['entry_url'],kind=candidate.get('candidate_kind')):
         return pool.record_row_conclusion(header,result='REJECTED',reason='NO_CONSUME: producer image-only page exclusion',original_row=row)
     over = _app_pending_over_limit(pool, batch, application_id, header, row)

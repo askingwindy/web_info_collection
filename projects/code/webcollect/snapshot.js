@@ -914,17 +914,23 @@
     }
     return null;
   };
+  const dispatchPoint=(node,bbox)=>{
+    // A wrapped inline link's bounding rectangle includes empty line gaps.
+    // Use a real visible client-rectangle point if its overall center misses.
+    const rectangles=[{left:bbox[0],top:bbox[1],right:bbox[2],bottom:bbox[3]},...node.getClientRects()];
+    const candidates=rectangles.map(r=>({left:Math.max(r.left,bbox[0]),top:Math.max(r.top,bbox[1]),right:Math.min(r.right,bbox[2]),bottom:Math.min(r.bottom,bbox[3])}))
+      .filter(r=>r.right>r.left&&r.bottom>r.top)
+      .map(r=>[Math.floor((r.left+r.right-1)/2),Math.floor((r.top+r.bottom-1)/2)]);
+    const canHit=([x,y])=>{const hit=document.elementFromPoint(x,y);return !!hit&&(hit===node||node.contains(hit));};
+    const coordinate=candidates.find(canHit)||candidates[0];
+    return {schema_version:'webcollect-click-dispatch-point-1',coordinate,hit_valid:canHit(coordinate),
+            visible_text:visibleText(node)};
+  };
   let targetInfo=null;
   if (targetIndex>=0) {
     const e=records[targetIndex];
-    // A wrapped inline link's bounding rectangle includes empty line gaps.
-    // Use a real visible client-rectangle point if its overall center misses.
-    const rectangles=[{left:e.bbox[0],top:e.bbox[1],right:e.bbox[2],bottom:e.bbox[3]},...target.getClientRects()];
-    const candidates=rectangles.map(r=>({left:Math.max(r.left,e.bbox[0]),top:Math.max(r.top,e.bbox[1]),right:Math.min(r.right,e.bbox[2]),bottom:Math.min(r.bottom,e.bbox[3])}))
-      .filter(r=>r.right>r.left&&r.bottom>r.top)
-      .map(r=>[Math.floor((r.left+r.right-1)/2),Math.floor((r.top+r.bottom-1)/2)]);
+    const {coordinate}=dispatchPoint(target,e.bbox);
     const canHit=([x,y])=>{const hit=document.elementFromPoint(x,y);return !!hit&&(hit===target||target.contains(hit));};
-    const coordinate=candidates.find(canHit)||candidates[0];
     // Evidence for the narrower M4 text-target adapter. Accessible names stay
     // in tree.text, but aria-label/title alone never prove a readable label.
     const labelSources=[];
@@ -1521,11 +1527,18 @@
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
     disjoint_pseudo_paint_proofs:[...disjointPseudoProofs.values()],
     unrelated_transform_proofs:transformProofs, capture_images:captureImages,capture_media:captureMedia,paint_borders:paintBorders,capture_controls:captureControls,
-    geometry_witnesses:nodes.map((node,i)=>{const b=records[i].bbox;
-      const samples=[];for(const x of [b[0]+.5,(b[0]+b[2])/2,b[2]-.5])for(const y of [b[1]+.5,(b[1]+b[3])/2,b[3]-.5]){
+    geometry_witnesses:nodes.map((node,i)=>{const r=node.getBoundingClientRect(),clip=clipFor(node);
+      // Annotation boxes deliberately round outwards. Hit witnesses must stay
+      // inside the actual rendered rectangle, including fractional inline links.
+      const b=[Math.max(0,r.left,clip.left),Math.max(0,r.top,clip.top),
+               Math.min(width,r.right,clip.right),Math.min(height,r.bottom,clip.bottom)];
+      const dx=Math.min(.5,(b[2]-b[0])/4),dy=Math.min(.5,(b[3]-b[1])/4);
+      const samples=[];for(const x of [b[0]+dx,(b[0]+b[2])/2,b[2]-dx])for(const y of [b[1]+dy,(b[1]+b[3])/2,b[3]-dy]){
         const hit=document.elementFromPoint(x,y);samples.push({point:[x,y],ancestor:!!hit&&(node===hit||node.contains(hit)),
           hit_tag:hit?.localName||null,hit_id:hit?.id||''});}
-      return {element_id:records[i].element_id,bbox:b,samples};}),
+      return {schema_version:'webcollect-rendered-rect-hit-samples-2',element_id:records[i].element_id,
+              bbox:records[i].bbox,rendered_bbox:b,samples,
+              ...(records[i].clickable?{dispatch_point:dispatchPoint(node,records[i].bbox)}:{})};}),
     document_identity:{url_without_fragment:location.href.split('#')[0],performance_time_origin:performance.timeOrigin},
     scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,

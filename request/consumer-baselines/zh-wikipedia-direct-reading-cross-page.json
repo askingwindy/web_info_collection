@@ -1,0 +1,23 @@
+{
+ "schema_version": "webcollect-session-objective-1",
+ "version": 1,
+ "entry_url": "https://zh.wikipedia.org/wiki/%E6%9C%88%E9%A3%9F",
+ "requested_goal": null,
+ "objective": {
+  "kind": "reading",
+  "description": "从中文维基百科「月食」词条直接开始阅读，不经过站内检索。往下阅读正文，依据当前页面证据自由组合滚动、目录或相关链接点击、返回等合法操作；阅读中依据当前页面可见的超链接，自主选择一个与阅读问题相关的链接点击查阅关联词条，核验后返回原词条续读，用月食词条正文说明发生月食时太阳、地球与月球的相对位置次序，以及月食为什么只发生在满月前后。",
+  "evidence_contract": {
+   "kind": "reading",
+   "subject": "月食",
+   "aspects": [
+    "月球",
+    "地球"
+   ],
+   "version": "webcollect-goal-evidence-2",
+   "direct_entry": true
+  },
+  "minimum_effective_steps": 5,
+  "preferred_band": "long",
+  "evidence_policy": "webcollect-action-scoped-evidence-1"
+ }
+}

@@ -352,9 +352,11 @@ def pair(before, after, png_before, png_after, scope):
 # existing per-action predicates in react_protocol/goal_evidence.
 ACTION_SCOPED_VERSION = 'webcollect-action-scoped-evidence-1'
 VERSIONS = (*VERSIONS, ACTION_SCOPED_VERSION)
+CLICK_POINT_VERSION = 'webcollect-click-dispatch-point-1'
+BACK_OBSERVED_VERSION = 'webcollect-back-observed-document-1'
 
 
-def action_scoped_projection(state, node, action):
+def action_scoped_projection(state, node, action, *, click_validation=None):
     """Target-level identity proof: unique node, visible/enabled, in-viewport
     box, loaded readiness and hit/obstruction samples; focus+value for inputs.
     Volatile unrelated DOM (suggestions, announcements) never enters it."""
@@ -373,13 +375,20 @@ def action_scoped_projection(state, node, action):
     samples = geometry.get('samples', [])
     geometry_ok = (len(samples) == 9 and (samples[4].get('ancestor') is True if action in ('type', 'hotkey')
                                           else all(p.get('ancestor') is True for p in samples)))
-    if (not element.get('visible') or not element.get('enabled')
-            or len(box) != 4 or len(viewport) != 2
-            or not (0 <= box[0] < box[2] <= viewport[0] and 0 <= box[1] < box[3] <= viewport[1])
-            or readiness.get('document_ready') != 'complete'
-            or readiness.get('fonts_ready') is not True or readiness.get('images_ready') is not True
-            or not geometry_ok):
-        raise ValueError('Action-scoped target lacks visible loaded hit proof')
+    if not element.get('visible') or not element.get('enabled') or len(box) != 4:
+        raise ValueError('Action-scoped target not visible/enabled in dispatch frame')
+    if (len(viewport) != 2
+            or not (0 <= box[0] < box[2] <= viewport[0] and 0 <= box[1] < box[3] <= viewport[1])):
+        raise ValueError('Action-scoped target outside current viewport; scroll it fully into view first')
+    if (readiness.get('document_ready') != 'complete'
+            or readiness.get('fonts_ready') is not True or readiness.get('images_ready') is not True):
+        raise ValueError('Action-scoped dispatch frame not fully loaded')
+    point_policy = action == 'click' and click_validation == CLICK_POINT_VERSION
+    if click_validation is not None and not point_policy:
+        raise ValueError('Unknown click validation policy')
+    if not point_policy and not geometry_ok:
+        raise ValueError('Action-scoped target hit samples partially obstructed or shifted; '
+                         'scroll it to a fully clear position or pick another visible link')
     if action == 'click' and not element.get('clickable'):
         raise ValueError('Action-scoped click target is not clickable')
     if action in ('type', 'hotkey'):
@@ -390,13 +399,28 @@ def action_scoped_projection(state, node, action):
     target = state.get('target')
     if target and (target.get('element_id') != node or target.get('hit_valid') is False):
         raise ValueError('Action-scoped target hit or identity changed')
+    if point_policy:
+        point = geometry.get('dispatch_point') or {}
+        coordinate = point.get('coordinate') or []
+        if (point.get('schema_version') != CLICK_POINT_VERSION or point.get('hit_valid') is not True
+                or len(coordinate) != 2 or not (box[0] <= coordinate[0] < box[2]
+                                                           and box[1] <= coordinate[1] < box[3])
+                or target and (target.get('hit_valid') is not True or target.get('coordinate') != coordinate)):
+            raise ValueError('Action-scoped actual click point is not proved on the current target')
     basis = {k: deepcopy(state.get(k)) for k in
              ('url', 'document_identity', 'scroll', 'screen_resolution', 'device_pixel_ratio')}
     basis['element'] = {k: element.get(k) for k in ('element_id', 'native_role', 'text', 'bbox',
                                                     'visible', 'enabled', 'clickable', 'inputable')}
     basis['binding'] = {k: binding.get(k) for k in ('tag', 'selector', 'index', 'href',
                                                     'input_type', 'form_index')}
-    basis['geometry'] = {'samples': deepcopy(samples)}
+    if point_policy:
+        # Nine-point bounding-box probes stay in the raw snapshot as diagnostic
+        # evidence. Actual clickability follows the exact dispatched point and
+        # the existing rendered-label/pixel proof, never an ancestor edge hit.
+        basis['dispatch_point'] = deepcopy(point)
+    else:
+        basis['geometry'] = {k: deepcopy(geometry[k]) for k in
+                             ('schema_version', 'rendered_bbox', 'samples') if k in geometry}
     if action in ('type', 'hotkey'):
         basis['value'] = {k: value.get(k) for k in ('focused', 'value', 'readonly', 'value_visible')}
     return basis
@@ -407,9 +431,13 @@ def action_scoped_scope(state, node, action):
         raise ValueError('Action-scoped node proof supports click/type/hotkey on a target')
     from .dynamic_regions import projection as content_projection
     projected = content_projection(state, protect=[node])
+    geometry = next((g for g in projected.get('geometry_witnesses', []) if g.get('element_id') == node), {})
+    validation = CLICK_POINT_VERSION if action == 'click' and (
+        geometry.get('dispatch_point') or {}).get('schema_version') == CLICK_POINT_VERSION else None
     return {'schema_version': ACTION_SCOPED_VERSION, 'action': action,
             'purpose': 'action_scoped_dispatch', 'node': node,
-            'basis': action_scoped_projection(projected, node, action)}
+            **({'click_validation': validation} if validation else {}),
+            'basis': action_scoped_projection(projected, node, action, click_validation=validation)}
 
 
 def document_scope(state, action):
@@ -418,11 +446,15 @@ def document_scope(state, action):
     if action not in ('scroll', 'back', 'open_url', 'hotkey'):
         raise ValueError('Document scope supports scroll/back/open_url/hotkey')
     readiness = state.get('capture_readiness') or {}
-    if readiness.get('document_ready') != 'complete':
+    observed_back = action == 'back'
+    if observed_back and (not state.get('url') or not state.get('document_identity')):
+        raise ValueError('Back requires the observed document URL and identity')
+    if readiness.get('document_ready') not in (('interactive', 'complete') if observed_back else ('complete',)):
         raise ValueError('Document scope requires a loaded document')
     keys = ('url', 'document_identity', 'scroll') if action == 'scroll' else ('url', 'document_identity')
     return {'schema_version': ACTION_SCOPED_VERSION, 'action': action,
             'purpose': 'document_scoped_dispatch', 'node': None,
+            **({'readiness_policy': BACK_OBSERVED_VERSION} if observed_back else {}),
             'basis': {k: deepcopy(state.get(k)) for k in keys}}
 
 
@@ -479,13 +511,17 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
         valid = False
         if purpose == 'action_scoped_dispatch' and action in ('click', 'type', 'hotkey') and scope.get('node'):
             try:
-                valid = (action_scoped_projection(before, scope['node'], action)
-                         == action_scoped_projection(after, scope['node'], action)
+                valid = (action_scoped_projection(before, scope['node'], action,
+                                                  click_validation=scope.get('click_validation'))
+                         == action_scoped_projection(after, scope['node'], action,
+                                                      click_validation=scope.get('click_validation'))
                          == scope['basis'])
             except ValueError:
                 valid = False
         elif purpose == 'document_scoped_dispatch' and action in ('scroll', 'back', 'open_url', 'hotkey'):
-            ready = all((s.get('capture_readiness') or {}).get('document_ready') == 'complete'
+            observed_back = action == 'back' and scope.get('readiness_policy') == BACK_OBSERVED_VERSION
+            ready_states = ('interactive', 'complete') if observed_back else ('complete',)
+            ready = all((s.get('capture_readiness') or {}).get('document_ready') in ready_states
                         for s in (before, after))
             valid = ready and all(before.get(k) == after.get(k) == scope['basis'][k]
                                   for k in scope['basis'])

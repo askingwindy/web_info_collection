@@ -197,6 +197,8 @@ def effective_trajectory(record, *, _audit_cancelled=False):
     A gap, unknown dispatch or ineffective operation rejects the whole chain;
     it cannot be dropped to join otherwise disconnected pieces.
     """
+    from .page_language import validate_range
+    validate_range(record)
     if record['task']['fragment'].get('decision_protocol') not in NATIVE_VERSIONS:
         return [r for r in record['trajectory'] if r['action'] not in ('observe','inspect','wait','finish','complete')]
     rows, seen = [], {}
@@ -460,6 +462,18 @@ def terminal_judgement(completion_status, final_result):
     return prefix + final_result
 
 
+def delivery_expectation(expected, action, element, label):
+    """Keep navigation URLs in the raw trace, not in customer-facing prose."""
+    if re.search(r'https?://|%[0-9A-Fa-f]{2}', expected):
+        if action == 'back':
+            return '预期返回已访问的页面'
+        if (element and element.get('native_role') == 'a' and label
+                and not re.search(r'https?://|%[0-9A-Fa-f]{2}', label)):
+            return '预期打开「' + label + '」页面'
+        return '预期打开所选页面'
+    return expected if re.search(r'[\u4e00-\u9fff]', expected) else '预期状态：「' + expected + '」'
+
+
 def _write_delivery_bytes(path, data):
     """Create-or-identical binary write; a failed derivation's own bytes may
     be rewritten only when they are exactly the bytes about to be written."""
@@ -549,8 +563,8 @@ def derive(task, record, delivery, ids, manifest, *, resume=False):
                   'precondition': f'当前页面为「{before["title"]}」' + (
                       f'，可见「{op["evidence"]["target_label"]}」目标控件'
                       if element and op['evidence'].get('target_label') else ''),
-                  'expected_result': (row['expected'] if re.search(r'[\u4e00-\u9fff]',row['expected'])
-                                      else '预期状态：「'+row['expected']+'」')}
+                  'expected_result': delivery_expectation(row['expected'], row['action'], element,
+                                                          op['evidence']['target_label'])}
         if element:
             action.update(target_bbox=element['bbox'], target_control_type=element['element_type'])
         step = {'step_id': index, 'image_path': image_path,

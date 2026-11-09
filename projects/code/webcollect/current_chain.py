@@ -351,6 +351,14 @@ def assert_current_evidence(scope, value):
             for entry in item:
                 walk(entry)
         elif isinstance(item, dict):
+            if item.get('schema_version') == 'candidate-research-replay-2':
+                from .candidate_contract import research_v2_inputs
+                authorization = research_v2_inputs(item)
+                _require(_path(authorization['registry']) == _path(scope['registry']),
+                         'research v2 registry differs from current chain')
+                # These are frozen task inputs and explicitly named comparison
+                # receipts, not observations or completed facts for the new run.
+                return
             if item.get('schema_version')=='candidate-research-replay-1':
                 required={'schema_version','original_claim_id','objective','authorization','production_counted'}
                 fields=set(item)

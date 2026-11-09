@@ -1,0 +1,140 @@
+现在让我检查 QC 分类账 SQLite 中的原始模型请求/响应记录：
+
+原始记录存在于 ledger 中。按照指示，在处理之前，我需要将原始记录复制到 worktree 并进行 SHA256 验证。让我来设置一下：
+
+所有 SHA256 已匹配。现在让我从复制过来的 ledger 中提取实际的模型响应：
+
+响应显示模型的输出中每项检查都缺少 `evidence_steps`。现在让我检查一下发送给模型的内容——即请求负载（request payload）：
+
+模式要求每个检查项都包含 `evidence_steps` —— 但模型在输出所有四项检查时都遗漏了它。让我检查一下系统/用户 prompt 是如何呈现该模式的：
+
+现在让我检查一下 QC worker 代码。让我找一下相关的模块：
+
+现在让我读取 model gateway：
+
+我现在已经完整掌握了网关路径的情况。让我追踪一下具体的拒绝点，并检查剩余的 QC 模块。首先，是 `ai-documents` 的 UNKNOWN 详情以及 `difference` 作业的结果：
+
+让我看看流水线是如何从检查状态计算每个样本的状态的——即有效载荷报告：
+
+我来检查一下 `claim` 是如何选择作业的，并查看所使用的 qc-model-config：
+
+一个关键的交互需要检查 —— 在视觉恢复完成后，AI 故障单据路径是否仍然会覆盖该样本：
+
+设计现在已经明确了。在编写代码之前，让我先检查一下 QC worker 的现有测试夹具：
+
+我来查看一下现有的 QC 测试是如何配置 synthetic ledger 的：
+
+所有检查已完成 —— 设计已完全确定。现在我将开始编写恢复模块。首先，让我将 `do_visual` 中的两个字面规则字符串提取为模块常量，以便恢复提示能够逐字节复用它们（对 `prompt dict` 的恒等安全性）：
+
+现在在 `report()` 记录中添加小的 `evidence_recovery` 透传：
+
+现在是主恢复模块：
+
+我的草稿中存在几个结构性 bug（网关线程处理、`extract_evidence_references` 混乱、settled-part 分类缺失、脆弱的导入）。让我首先对 `ai_worker.do_visual` 进行最小化重构，以暴露 part-prompt 构建器：
+
+现在重新干净地重写 `qc_recovery.py`，并应用所有修复：
+
+现在让我对该模块进行语法检查，并使用其真实的 notes，对照实际的 r01 模型响应来验证提取规则：
+
+提取结果符合预期。现在对复制的账本进行一次完整的 dry-run（不进行分发，不授权修正）：
+
+`_part_states` 中的 Bug — `recoverable` 分支在分类计算前就去读取它了。正在修复：
+
+空运行（dry-run）正常。请验证账本副本保持字节一致，然后测试 `documents UNKNOWN` 的 `reconcile` 条目：
+
+两个条目均已在真实凭证上完成验证。现在让我检查一下 `enqueue` 的语义，以便编写集成测试：
+
+现在编写离线测试套件：
+
+测试配置需要 `currency`/`rates`（匹配真实的 QC 配置格式）。正在修复：
+
+修复测试代码和模块中发现的问题：
+
+现在修复以下两个损坏的测试——有界二次尝试测试（使用一个真正无效的修正）以及对账插入的唯一约束：
+
+所有 18 项测试已通过。现在添加一个完整的 pipeline 集成测试 (prepare → invalid → recover → report export)，以证明恢复的 job 正确通过现有的 worker report 路径：
+
+集成测试通过。现在运行受影响的相邻回归测试套件（由于我修改了 `ai_worker.py`）：
+
+出现了失败——我必须对照原始的 f4db1fe 进行对比，以区分出预先存在的失败：
+
+在基准线上失败情况完全相同。我来精确验证一下失败的测试集是否一致：
+
+所有 17 个失败均是 f4db1fe 版本中预先存在的（完全相同的集合）。现在运行完整的 QC 测试套件并在两侧进行 diff：
+
+确认：worktree 473 运行 / baseline 454，相同的 2F+33E 全部预先存在。现在验证 prompt-refactor 是否保持 byte-identity 与实际 r01 请求一致（确保后续分发缓存正确性）：
+
+只有 `required_checks` 的排序有差异 —— `do_visual` 保留了 `VISUAL_CHECKS` 的顺序，而我的代码进行了排序。正在恢复该顺序：
+
+基于真实凭证的溯源回执已实现字节级完全一致。现在在真实账本副本上彩练修正请求的构建逻辑（不进行调度，不写入）：
+
+在修复顺序后增加一个安全防护（收据必须在候选数据包之外，而不仅仅是样本目录），然后重新运行测试：
+
+所有 28 项测试均已通过。现在同步文档。让我查找 工程说明.md 和 设计说明.md 中的相关章节：
+
+现在更新 `工程说明` 和 `设计说明` 中的模块表格：
+
+现在更新 QC README —— 在 AI worker 章节后添加恢复条目：
+
+现在组装包含日志和 README 的验证目录：
+
+最终清理——移除测试中残留的冗余代码，然后进行全面重新验证：
+
+`verify_results` 已被 `.gitignore` 忽略 —— 验证产物保留在本地。`model_gateway.py` 未被改动。在提交之前，对 `ai_worker` 的 diff 进行最终检查：
+
+Diff 内容精简且正确。正在该分支提交：
+
+已提交 `ee0239c`。最终完整性检查 — 确认主工作区未被改动：
+
+完成。主工作区未动（同样的未跟踪文件集，QC 账本 SHA `e78942…` 不变），全部开发在 worktree `qc/ai-review-20261108` 分支完成。
+
+# 交付报告
+
+## Commit
+
+**`ee0239c`** on `qc/ai-review-20261108`（基线 `f4db1fe`）。**只改了 `projects/quality-inspector`，`model_gateway.py` 零改动**（调查证明共享网关无 QC 专属接入缺陷：模型确实漏了 `evidence_steps`，网关在 `Draft202012Validator` 校验点拒绝并按冻结规则保留 invalid，行为正确——缺的是合法的可审计恢复入口）。
+
+## 原始回执事实（先查证，复制件 SHA256 前后核对一致）
+
+- **ai-visual** 请求 `1a0316e9…`：模型回执 = 6 帧完整 step_observations + 四项结论（逐帧观察/对齐/终态/语言/隐私判断俱全），**仅每项缺 `evidence_steps`**。请求侧 Schema 与 system prompt 均已要求该字段（GLM 视觉无服务端结构化强制）。
+- **ai-documents** 请求 `69c7aa96…`：180s 墙钟超时，headers 未返回，usage UNKNOWN，预留 300000 micros。
+- **ai-difference**：done / `NOT_APPLICABLE_EMPTY_SET`（单样本冻结集合无对照邻域）。
+
+## 实际改动
+
+1. **新模块 `quality_inspector/qc_recovery.py`**：
+   - `visual-recover`：先重校原 Schema，确认缺陷**仅限 evidence_steps**（结构损坏/枚举错误判不可恢复）；可确定项按 `qc-evidence-reference-normalization-1` 从原 note 提取（`帧a至帧b`/`帧n`/`第n步`/与供应帧数完全相等的“N帧”全称；越界/计数不符/无引用一律不可确定）。不可确定项仅凭显式 `--allow-correction` 发**一次**有界纠正请求（新 purpose `visual-part-N-evidence-recovery`，原 prompt 重建字节一致 + 同帧同 SHA 原图 + 模型自己的原回执，只重述指定检查；失败/UNKNOWN 不重发）。恢复前核验样本快照、规则版本、合同、作业身份。
+   - `reconcile`：只读对账原账请求行 SHA、迟到已结算答案、UNKNOWN/费用预留。
+2. **`ai_worker.py` 最小改动**：分段 prompt 提取为 `visual_part_prompt`（对 r01 原请求验证**字节一致**）；报告记录透传 `evidence_recovery` 审计。`PROMPT_VERSION`/`PIPELINE_RULES_VERSION` 不变，既有收据链兼容。
+3. 文档同步：QC README、工程说明（顶部条目+模块表）、设计说明（审核影响表两行）。
+
+## 真实回执上的演练结果（0 模型请求、0 写入，worktree 副本）
+
+- 归一化分类：`visual_alignment`=[2..6]（帧2至帧6）、`terminal_semantics`=[6]、`privacy`=[1..6]（六帧）可确定；**`language` 不可确定 → 需纠正请求**（诚实边界，不填空）。
+- 纠正请求构造演练：原 prompt 重建字节一致、同帧路径+SHA 与原请求完全一致、schema 枚举=[1..6]。
+- documents reconcile：无迟到答案 → UNKNOWN+费用预留保留，resend=0。
+
+## 离线结果
+
+- `tests/test_qc_recovery_20261108.py` **19/19 过**（含 prepare→invalid→恢复→report 全链：qc-review 导出含 `evidence_recovery`，difference 空集保持 REVIEW_REQUIRED）。
+- quality-inspector 全量：**worktree 473 例 vs 基线 f4db1fe 454 例；35 个失败（2F+33E）逐名 diff 完全一致 = 全部预存**，新增全过。
+- 验证目录（worktree 本地，不入 git）：`.worktrees/qc-20261108/verify_results/qc-ai-review-20261108/`（含原件 SHA 清单、演练回执、全部日志）。
+
+## 保留与对账
+
+- 旧 invalid/UNKNOWN **原字节永不改写**（测试断言恢复后原行 state/response 不变）；纠正请求是**新独立请求行**、单次上限、与原 invalid 在 `evidence_recovery` 审计和 `qc_visual_evidence_recovered` 事件中对账；UNKNOWN 费用预留不动、不记零、不当 PASS。
+
+## 何种结果才算独立 AI QC 实际 PASS
+
+- ai-visual：恢复收据 `done` + 四项均有合法帧引用（3 项归一化 + language 来自模型真实重述）+ `semantic_result_bound`。
+- ai-difference：保持 `NOT_APPLICABLE_EMPTY_SET`（如实，不造 PASS）。
+- ai-documents：仅迟到答案可解锁，否则 UNKNOWN → HUMAN_REQUIRED。
+- **样本级**：即使 visual 恢复，`substantive_difference` 仍是如实的 REVIEW_REQUIRED → 样本保持 HUMAN_REQUIRED、`release_ready=false`；单样本冻结集合下达不到“五项全 PASS 的 AI_PASS”，这是如实边界，需真实人工记录或用户对空集政策的显式决定（我未擅自改）。
+
+## REAL_GLM_VALIDATION_PENDING——后续精确命令
+
+见 [验证目录 README](/Users/hemiao/projects/2610/WebCollect/.worktrees/qc-20261108/verify_results/qc-ai-review-20261108/README.md)（三步：`reconcile` → 无授权 `visual-recover` 看分类 → `--allow-correction` 单次纠正 → `delivery_pipeline status` 重跑取完整结论）。**等待另一执行者通知 A/B 窗口结束后再执行。**
+
+## 未验证边界
+
+真实 GLM 纠正请求与真实 pipeline status 重跑；多段（>24 帧）作业恢复路径仅原理等价（r01 单段）；`delivery_pipeline` 对主区账本的 verify 重验（避免对主区账本开写句柄，PIPELINE_RULES_VERSION 未变结构兼容，由窗口期步骤 3 实测关闭）。未启动任何 A/B、生产、人工代签或发布。

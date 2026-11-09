@@ -7,13 +7,93 @@ from .batch_core import load_json
 from .planning import object_sha256, verify_evidence, validate_capability
 
 VERSION = 'webcollect-candidate-consumption-1'
+RESEARCH_V2 = 'candidate-research-replay-2'
+
+
+def research_v2_inputs(descriptor):
+    """Frozen development inputs, never historical page/action evidence."""
+    required = {'schema_version', 'original_claim_id', 'objective', 'authorization',
+                'comparisons', 'production_counted'}
+    if (set(descriptor) != required or descriptor['schema_version'] != RESEARCH_V2
+            or not descriptor['original_claim_id'] or descriptor['production_counted'] is not False):
+        raise ValueError('Invalid research v2 input metadata')
+    verify_evidence([descriptor['objective'], descriptor['authorization']])
+    objective = load_json(descriptor['objective']['path'])
+    authorization = load_json(descriptor['authorization']['path'])
+    comparisons = descriptor['comparisons']
+    if (objective.get('schema_version') != 'webcollect-session-objective-1'
+            or authorization.get('scope') != 'fixed-baseline-research-only'
+            or authorization.get('candidate_id') != objective.get('candidate_id')
+            or authorization.get('version') != objective.get('version')
+            or authorization.get('original_claim_id') != descriptor['original_claim_id']
+            or authorization.get('objective') != descriptor['objective']
+            or authorization.get('comparisons') != comparisons
+            or authorization.get('production_counted') is not False
+            or not authorization.get('pool') or not authorization.get('registry')
+            or not isinstance(comparisons, list)):
+        raise ValueError('Research v2 authorization and original objective differ')
+    seen = set()
+    for item in comparisons:
+        if (set(item) != {'role', 'claim_id', 'sample_id', 'save_receipt'}
+                or item['role'] != 'comparison' or not item['claim_id'] or not item['sample_id']
+                or item['sample_id'] in seen):
+            raise ValueError('Research v2 requires uniquely named comparison samples')
+        verify_evidence([item['save_receipt']])
+        if load_json(item['save_receipt']['path']).get('sample_id') != item['sample_id']:
+            raise ValueError('Research comparison save receipt differs')
+        seen.add(item['sample_id'])
+    return authorization
+
+
+def validate_research_v2(descriptor, pool, original, registry=None):
+    """Recheck failed source and individually authorized saved comparisons."""
+    authorization = research_v2_inputs(descriptor)
+    old = original.get('binding') or {}
+    objective = load_json(descriptor['objective']['path'])
+    if (original['claim_id'] != descriptor['original_claim_id'] or original['state'] != 'failed'
+            or (original['candidate_id'], original['version']) !=
+               (objective.get('candidate_id'), objective.get('version'))
+            or any(not old.get(k) for k in ('output', 'registry', 'ledger', 'history_set'))):
+        raise ValueError('Research v2 requires the settled failed original execution')
+    from .batch_core import file_sha
+    original_objective = Path(old['output']) / 'session-objective.json'
+    if file_sha(original_objective) != descriptor['objective']['sha256']:
+        raise ValueError('Research v2 cannot change original objective bytes')
+    if (Path(authorization['pool']).resolve() != pool.path.resolve()
+            or Path(authorization['registry']).resolve() != Path(old['registry']).resolve()
+            or registry is not None and Path(registry).resolve() != Path(old['registry']).resolve()):
+        raise ValueError('Research v2 changes the original pool or registry')
+    with pool.pool.connect() as con:
+        for comparison in descriptor['comparisons']:
+            row = con.execute('''SELECT r.record,c.binding,c.state FROM candidate_results r
+                JOIN candidate_claims c USING(candidate_id,claim_id)
+                WHERE r.claim_id=? AND r.sample_id=? AND r.effective=1''',
+                (comparison['claim_id'], comparison['sample_id'])).fetchone()
+            saved = json.loads(row['record']) if row else {}
+            binding = json.loads(row['binding'] or '{}') if row else {}
+            if (not row or row['state'] != 'succeeded'
+                    or saved.get('sample_id') != comparison['sample_id']
+                    or saved.get('save_receipt') != comparison['save_receipt']
+                    or Path(saved.get('registry', '')).resolve() != Path(old['registry']).resolve()
+                    or Path(binding.get('registry', '')).resolve() != Path(old['registry']).resolve()):
+                raise ValueError('Research comparison lacks its same-pool/registry historical save')
+    return authorization
+
+
+def research_overlap_sample_ids(basis):
+    if not basis:
+        return set()
+    if basis['schema_version'] == 'candidate-research-duplicate-1':
+        return {basis['original_sample_id']}
+    return {item['sample_id'] for item in basis['comparisons']}
 
 
 def research_duplicate_basis(task, registry):
-    """Only the original saved sample may overlap an authorized research replay.
+    """Only explicitly bound saved samples may overlap a research replay.
 
     A task field alone grants nothing: frozen claim, live pool event, original
-    effective result, objective and registry must all describe the same replay.
+    result, objective and registry must all describe the same replay. V1 permits
+    its same-target original save; V2 permits individually named comparisons.
     """
     if not task.get('candidate_binding'):
         return None
@@ -37,6 +117,16 @@ def research_duplicate_basis(task, registry):
         result = con.execute('SELECT * FROM candidate_results WHERE claim_id=? AND effective=1',
             (descriptor['original_claim_id'],)).fetchone()
         events = [json.loads(r[0]) for r in con.execute("SELECT record FROM candidate_events WHERE claim_id=? AND kind='research_claimed'", (binding['claim_id'],))]
+    if descriptor.get('schema_version') == RESEARCH_V2:
+        if (not original or not any(all(event.get(k) == v for k, v in descriptor.items()) for event in events)
+                or Path(live['binding']['registry']).resolve() != Path(registry).resolve()):
+            raise ValueError('Research v2 lacks frozen/live original authorization')
+        validate_research_v2(descriptor, pool, pool._claim(original), registry)
+        return {'schema_version': 'candidate-research-duplicate-2', 'research_claim_id': binding['claim_id'],
+                'original_claim_id': descriptor['original_claim_id'], 'comparisons': descriptor['comparisons'],
+                'claim_reference': binding['claim_reference'], 'authorization': descriptor['authorization'],
+                'production_counted': False, 'production_duplicate_acceptance': False,
+                'automatic_review': False}
     if (not original or original['state'] != 'succeeded' or not result
             or not any(all(event.get(k)==v for k,v in descriptor.items()) for event in events)):
         raise ValueError('Research duplicate exception lacks original saved authorization')

@@ -304,7 +304,8 @@ def verified_saved(claim):
 def finish_or_reconcile(pool, claim, *, reconciliation=False):
     """Expired token never commits; explicit reconciler derives facts from original stores."""
     original=pool.get_claim(claim['claim_id'])
-    research=bool(pool.research_claim(original))
+    descriptor=pool.research_claim(original)
+    research=bool(descriptor)
     with pool.pool.connect() as con:
         latest=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1',(claim['candidate_id'],)).fetchone()
     if latest[0]!=claim['claim_id']:
@@ -320,6 +321,8 @@ def finish_or_reconcile(pool, claim, *, reconciliation=False):
                 pool.event(con,claim['candidate_id'],claim['claim_id'],'lease_expired',{})
             original=pool.get_claim(claim['claim_id'])
         return {'state':original['state'],'saved':False,'reason':'No committed complete save; inspect original model/visit/runtime ledgers; no resend'}
+    if research and descriptor.get('schema_version') == 'candidate-research-replay-2':
+        result = {**result, 'research_replay': descriptor, 'production_counted': False}
     with pool.transaction() as con:
         latest=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1',(claim['candidate_id'],)).fetchone()
         own_result=con.execute('SELECT effective FROM candidate_results WHERE candidate_id=? AND claim_id=?',
@@ -446,7 +449,8 @@ async def entry_session(ledger, pool, claim, root):
     previous = ledger.get(jid)
     if previous['state'] != 'queued' or previous['attempts']:
         raise OutcomeUnknown('Original entry observation already started; reconcile without dispatch')
-    job = ledger.claim('candidate-observation', job_id=jid)
+    from .consumer_lifecycle import claim_job
+    job = await claim_job(ledger, 'candidate-observation', job_id=jid)
     if not job:
         raise OutcomeUnknown('Original entry observation not claimable')
     browser = context = None
@@ -611,8 +615,12 @@ def tasked_entry_index(registry_path):
         con.close()
 
 
-async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None):
+async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
+                  session_soft_seconds=720, session_hard_seconds=900):
     """Exactly one original claim, one goal and at most one saved result."""
+    if not 0 < session_soft_seconds < session_hard_seconds:
+        raise ValueError('Session limits require 0 < soft < hard')
+    session_started = time.monotonic()
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
     current=pool.get_claim(claim['claim_id'])
     if current['token']!=claim['token'] or current['snapshot']!=claim['snapshot']:
@@ -675,6 +683,8 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
         session = None
         if snapshot.get('schema_version') == 'webcollect-data-candidate-2':
             session = await stack.enter_async_context(entry_session(ledger, pool, claim, root))
+            session['host_limits'] = {'soft_seconds':session_soft_seconds,
+                'hard_seconds':session_hard_seconds, 'started_monotonic':session_started}
             from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
             route = first_frame_disposition(load_json(session['anchor']['state']['path']))
             if route:
@@ -745,17 +755,25 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
                 await asyncio.gather(keeper, return_exceptions=True)
     keeper=asyncio.create_task(renew()); working=asyncio.create_task(work())
     try:
-        done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED)
+        done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED,
+            timeout=max(0, session_hard_seconds-(time.monotonic()-session_started)))
+        if not done:
+            raise TimeoutError('consumer_session_hard_deadline')
         if keeper in done and not keeper.cancelled():
             keeper.result()
             raise ValueError('Candidate heartbeat stopped')
         return await working
     except BaseException as error:
+        # Drain Runtime and collection close-out before deriving the claim outcome.
+        if not working.done(): working.cancel()
+        await asyncio.gather(working, return_exceptions=True)
         # Cross-process failure is conservative. Original requests/attempts are never reset.
         try:
             reconciled=finish_or_reconcile(pool,claim)
-            if reconciled.get('saved') and not isinstance(error, asyncio.CancelledError): return reconciled
-            state='reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError)) else 'failed'
+            if reconciled.get('saved'):
+                if isinstance(error, asyncio.CancelledError): raise
+                return reconciled
+            state='reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError,TimeoutError)) else 'failed'
             pool.finish(claim,state=state,stage=stage,reason=type(error).__name__+': '+str(error))
             from .navigation import NavigationHTTPError
             if stage=='observation' and isinstance(error,NavigationHTTPError) and error.status==403:
@@ -908,6 +926,31 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     return {'processing_limit':limit, 'processed':len(results), 'stop_reason':stop_reason, 'stop_details':stop_details, 'results':results, 'summary':summary}
 
 
+def guard_original_dispatch(original):
+    """Read the original execution accounts; no retry or state transition."""
+    binding = original.get('binding') or {}
+    candidate_id = original['candidate_id']
+    for row,task in _original_attempts(original):
+        if list(unverified_original_actions(row)):
+            raise OutcomeUnknown('Original dispatched action has no verified after observation; no retry or replacement attempt')
+        if row['status'] in ('reserved','running','interrupted') or row.get('failure_class') in ('unknown','interrupted'):
+            from .request_quarantine import accounted_rejected_focus
+            if not accounted_rejected_focus(binding['registry'],row['attempt_id']):
+                raise ValueError('Original runtime attempt unresolved; no retry')
+    if binding.get('ledger'):
+        with closing(sqlite3.connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+            config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
+            jobs=con.execute("""SELECT j.state,j.payload,json_extract(p.payload,'$.registry') FROM jobs j
+                LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
+                WHERE j.state IN ('running','review_required') AND j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')""").fetchall()
+        ledger=BatchLedger(binding['ledger'],config)
+        uri=original['snapshot']['entry_url']
+        guard_candidate_dispatch(ledger,uri,candidate_id=candidate_id)
+        for state,raw,registry in jobs:
+            if job_conflicts(ledger,uri,candidate_id,json.loads(raw),running=state=='running',registry=registry):
+                raise ValueError('Original planning/decision unresolved for this scope; no retry')
+
+
 def retry(pool, candidate_id, *, reason, recovery=None):
     """Explicit retry only after reconciling original requests, visits and saves."""
     if not reason: raise ValueError('Explicit retry reason required')
@@ -929,25 +972,7 @@ def retry(pool, candidate_id, *, reason, recovery=None):
     if saved: finish_or_reconcile(pool,original,reconciliation=True)
     binding=original.get('binding') or {}
     if binding.get('registry'): sync_candidate_qc(pool.path,binding['registry'])
-    for row,task in _original_attempts(original):
-        if list(unverified_original_actions(row)):
-            raise OutcomeUnknown('Original dispatched action has no verified after observation; no retry or replacement attempt')
-        if row['status'] in ('reserved','running','interrupted') or row.get('failure_class') in ('unknown','interrupted'):
-            from .request_quarantine import accounted_rejected_focus
-            if not accounted_rejected_focus(binding['registry'],row['attempt_id']):
-                raise ValueError('Original runtime attempt unresolved; no retry')
-    if binding.get('ledger'):
-        with closing(sqlite3.connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
-            config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
-            jobs=con.execute("""SELECT j.state,j.payload,json_extract(p.payload,'$.registry') FROM jobs j
-                LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
-                WHERE j.state IN ('running','review_required') AND j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')""").fetchall()
-        ledger=BatchLedger(binding['ledger'],config)
-        uri=original['snapshot']['entry_url']
-        guard_candidate_dispatch(ledger,uri,candidate_id=candidate_id)
-        for state,raw,registry in jobs:
-            if job_conflicts(ledger,uri,candidate_id,json.loads(raw),running=state=='running',registry=registry):
-                raise ValueError('Original planning/decision unresolved for this scope; no retry')
+    guard_original_dispatch(original)
     with pool.transaction() as con:
         disposition = pool.disposition(con, candidate_id)
         if recovery:

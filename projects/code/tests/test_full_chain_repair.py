@@ -195,3 +195,180 @@ class FollowupProof(unittest.TestCase):
             if mode=='document':changed['document_identity']={'id':2}
             self.assertFalse(pair(state,changed,a,a,readscope)['accepted'],mode)
         self.assertFalse(pair(state,state,a,png(local=True),readscope)['accepted'])
+
+
+class ResearchV2(unittest.TestCase):
+    """Failed fixed baseline + named comparison; original rows stay unchanged."""
+    def setUp(self):
+        Research.setUp(self)
+        from webcollect.batch_core import BatchLedger
+        from webcollect.current_chain import initialize_chain
+        from webcollect.planning import canonical
+        self.registry = self.root/'registry'
+        self.manifest = self.root/'chain/manifest.json'
+        self.scope = initialize_chain(self.manifest, self.registry, chain_id='local',
+                                      current_result_roots=[self.root/'results'])
+        config = json.loads((Path(__file__).resolve().parents[1]/'config/batch-no-model.json').read_text())
+        self.ledger = BatchLedger(self.root/'ledger.sqlite3', config, initialize=True)
+        self.receipt = exclusive(self.root/'results/old/saved_sample.json', {'sample_id':'old'})
+        body = {'schema_version':'webcollect-data-candidate-2','candidate_kind':'entry',
+                'entry_url':'https://example.org/comparison','requested_goal':None}
+        source = exclusive(self.root/'comparison-source.json', {'fixture':True})
+        comparison_id = self.pool.put(body, {'origin':'codex_session','run_id':'comparison',
+            'references':[source],'category_hint':'在线工具','application_hint':'本地'})
+        self.comparison_claim = self.pool.claim_next('w','comparison',candidate_id=comparison_id,
+                                                     protocols=('webcollect-data-candidate-2',))
+        self.result = {**self.result, 'registry':str(self.registry), 'save_receipt':self.receipt,
+                       'result_location':str(self.root/'results/samples/old')}
+        old_binding = {'output':str(self.root),'registry':str(self.registry),
+                       'history_set':str(self.manifest),'ledger':str(self.ledger.path)}
+        with self.pool.transaction() as con:
+            con.execute('DELETE FROM candidate_results WHERE claim_id=?',(self.old['claim_id'],))
+            con.execute("UPDATE candidate_claims SET state='failed',binding=?,reason='known_failure' WHERE claim_id=?",
+                        (canonical(old_binding), self.old['claim_id']))
+            con.execute("UPDATE data_candidates SET state='failed' WHERE candidate_id=?",(self.cid,))
+            con.execute("UPDATE candidate_claims SET state='succeeded',binding=? WHERE claim_id=?",
+                        (canonical({'registry':str(self.registry)}),self.comparison_claim['claim_id']))
+            con.execute("UPDATE data_candidates SET state='succeeded' WHERE candidate_id=?",(comparison_id,))
+            con.execute("INSERT INTO candidate_results VALUES(?,?,?,?,?,NULL,1)",
+                        (comparison_id,self.comparison_claim['claim_id'],'old',canonical(self.result),'pending_review'))
+        self.comparisons = [{'role':'comparison','claim_id':self.comparison_claim['claim_id'],
+                             'sample_id':'old','save_receipt':self.receipt}]
+        self.auth = self.authorization(self.obj)
+
+    def authorization(self, objective, comparisons=None, name='v2-authorization.json'):
+        return exclusive(self.root/name, {'scope':'fixed-baseline-research-only','candidate_id':self.cid,
+            'version':self.old['version'],'original_claim_id':self.old['claim_id'],'objective':objective,
+            'pool':str(self.pool.path),'registry':str(self.registry),'production_counted':False,
+            'comparisons':self.comparisons if comparisons is None else comparisons})
+
+    def claim(self, **kwargs):
+        values = dict(candidate_id=self.cid,version=self.old['version'],original_claim_id=self.old['claim_id'],
+                      objective=self.obj,authorization=self.auth,comparisons=self.comparisons,
+                      replay_version='candidate-research-replay-2')
+        values.update(kwargs)
+        return self.pool.claim_research('w','v2',**values)
+
+    def original_rows(self):
+        with self.pool.pool.connect() as con:
+            return [tuple(con.execute('SELECT * FROM data_candidates WHERE candidate_id=?',(self.cid,)).fetchone()),
+                    tuple(con.execute('SELECT * FROM candidate_claims WHERE claim_id=?',(self.old['claim_id'],)).fetchone()),
+                    [tuple(row) for row in con.execute('SELECT * FROM candidate_results WHERE claim_id IN (?,?)',
+                        (self.old['claim_id'],self.comparison_claim['claim_id']))]]
+
+    def task(self, claim):
+        from webcollect.candidate_contract import VERSION
+        from webcollect.react_session import build_url_task
+        task = build_url_task(url=claim['snapshot']['entry_url'],task_version='v2-fixture')
+        task['fragment']['candidate_attempt'] = claim['claim_id']
+        reference = exclusive(self.root/'chain/research-claim.json', {**claim,'pool':str(self.pool.path)})
+        task['candidate_binding'] = {'schema_version':VERSION,'candidate_id':self.cid,'claim_id':claim['claim_id'],
+            'version':claim['version'],'candidate':claim['snapshot'],'claim_reference':reference}
+        return task
+
+    def test_failed_source_and_comparison_save_keep_effective_zero_and_original_rows(self):
+        from webcollect.candidate_contract import research_duplicate_basis, research_overlap_sample_ids
+        before = self.original_rows(); claim = self.claim()
+        self.assertEqual(claim,self.claim())
+        basis = research_duplicate_basis(self.task(claim),self.registry)
+        self.assertEqual(research_overlap_sample_ids(basis), {'old'})
+        self.assertNotIn('original_sample_id',basis)  # comparison is not a same-target success
+        new = {**self.result,'sample_id':'research','scope_id':'research','task_key':'research'}
+        with patch('webcollect.candidate_consumer.verified_saved',return_value=new), \
+             patch('webcollect.site_pool_sync.sync_candidate_qc'):
+            result = finish_or_reconcile(self.pool,claim)
+            self.assertEqual(result,finish_or_reconcile(self.pool,claim,reconciliation=True))
+        self.assertFalse(result['result']['production_counted'])
+        self.assertEqual(before,self.original_rows())
+        with self.pool.pool.connect() as con:
+            self.assertEqual(con.execute('SELECT effective FROM candidate_results WHERE claim_id=?',
+                                        (claim['claim_id'],)).fetchone()[0],0)
+        from webcollect.site_pool_sync import sync_candidate_qc
+        report = exclusive(self.root/'explicit-review.json', {'fixture':True})
+        # Projection reads explicit QC facts; it neither dispatches review nor
+        # promotes the research result into the production effective set.
+        def snapshot(registry,scope):
+            return {'tasks':[{'task_key':scope,'production_status':'collected_pending_review',
+                             'qc':{'report':report,'status':'PASS'} if scope=='research' else None}]}
+        with patch('webcollect.site_pool_sync._snapshot',side_effect=snapshot), \
+             patch('webcollect.runtime._bound_quality_report'):
+            sync_candidate_qc(self.pool.path,self.registry)
+        with self.pool.pool.connect() as con:
+            self.assertEqual(tuple(con.execute('SELECT effective,qc_state FROM candidate_results WHERE claim_id=?',
+                (claim['claim_id'],)).fetchone()),(0,'accepted'))
+        self.assertEqual(before,self.original_rows())
+
+    def test_objective_bytes_authorization_and_unknown_are_not_bypassed(self):
+        from webcollect.batch_core import file_sha, OutcomeUnknown
+        changed = self.root/'same-json-different-bytes.json'
+        changed.write_bytes(Path(self.obj['path']).read_bytes()+b'\n')
+        ref = {'path':str(changed),'sha256':file_sha(changed)}
+        with self.assertRaisesRegex(ValueError,'objective bytes'):
+            self.claim(objective=ref,authorization=self.authorization(ref,name='changed-auth.json'))
+        with self.assertRaisesRegex(ValueError,'authorization'):
+            self.claim(comparisons=[])
+        with self.ledger.connect() as con:
+            con.execute("INSERT INTO model_requests(id,job_id,purpose,attempt,state,reserved_tokens,reserved_cost,started,request_json) "
+                        "VALUES('unresolved','old-job','fixture',1,'unknown',0,0,0,'{}')")
+            con.commit()
+        with self.assertRaises(OutcomeUnknown):
+            self.claim()
+        with self.pool.pool.connect() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM candidate_claims WHERE request_id='v2'").fetchone()[0],0)
+
+    def runtime_commit_fixture(self, third=False):
+        from m4_runtime_fixtures import NOW, make_plan
+        from webcollect.runtime import RuntimeStore
+        from webcollect.production_quality import sha, ExactImageIndex
+        from webcollect.candidate_contract import research_duplicate_basis, research_overlap_sample_ids
+        from webcollect.planning import canonical
+        claim = self.claim(); task = self.task(claim)
+        store = RuntimeStore(self.registry,'research')
+        store.initialize({'campaign_id':'local','attempt_cap':10,'target_total':1000},now=NOW)
+        plan, publication = make_plan(self.root/'runtime-plan',1)
+        # make_plan is a legacy synthetic admission fixture, not a current-chain
+        # page-identity fixture. Isolate that unrelated enqueue prerequisite;
+        # the real v2 binding and exact-image commit below remain unmocked.
+        with patch('webcollect.current_chain.require_plan',return_value=False):
+            store.enqueue_plan(plan,publication,now=NOW)
+        row = store.claim_next('runtime-worker',request_id='runtime',now=NOW+1)
+        store.start_attempt(row['attempt_id'],'runtime-worker',row['lease_token'],now=NOW+1)
+        with store._transaction() as con:
+            con.execute('UPDATE m4_tasks SET task_json=? WHERE task_key=?',(canonical(task),row['task_key']))
+        def image(sid):
+            path = self.root/'results/samples'/sid/'images/step_001.png'
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'controlled-identical-image')
+            return path
+        old = image('old'); originals = {str(old):sha(old)}
+        if third:
+            other=image('third');originals[str(other)]=sha(other)
+        store.register_exact_baseline(originals,now=NOW+1)
+        current = image(row['sample_id'])
+        conflicts = ExactImageIndex([self.root/'results']).conflicts(current.parent.parent)
+        overlaps = research_overlap_sample_ids(research_duplicate_basis(task,self.registry))
+        blocked = [c for c in conflicts if Path(c['other_sample']).name not in overlaps]
+        self.assertEqual({Path(c['other_sample']).name for c in blocked}, {'third'} if third else set())
+        return store,row,{str(current):sha(current)}
+
+    def test_runtime_commit_records_named_overlap_without_production_acceptance(self):
+        from m4_runtime_fixtures import NOW
+        store,row,images = self.runtime_commit_fixture()
+        evidence = exclusive(self.root/'runtime-proof.json',{'fixture':True})
+        with patch('webcollect.production_identity.verify_saved'):
+            saved = store.finish_attempt(row['attempt_id'],'runtime-worker',row['lease_token'],
+                'collected_pending_review',evidence=[evidence],exact_images=images,now=NOW+2)
+        self.assertEqual(saved['status'],'collected_pending_review')
+        overlaps = [e for e in store.snapshot()['events'] if e['event_type']=='research_original_image_overlap']
+        self.assertEqual(len(overlaps),1)
+        self.assertEqual(len(overlaps[0]['payload']['exact_conflicts']),1)
+        self.assertFalse(overlaps[0]['payload']['basis']['production_duplicate_acceptance'])
+
+    def test_runtime_third_sample_blocks_even_with_authorized_comparison(self):
+        from m4_runtime_fixtures import NOW
+        from webcollect.runtime import ImageCommitConflict
+        store,row,images = self.runtime_commit_fixture(third=True)
+        evidence = exclusive(self.root/'runtime-proof.json',{'fixture':True})
+        with patch('webcollect.production_identity.verify_saved'), self.assertRaises(ImageCommitConflict):
+            store.finish_attempt(row['attempt_id'],'runtime-worker',row['lease_token'],
+                'collected_pending_review',evidence=[evidence],exact_images=images,now=NOW+2)
+        self.assertEqual(store.snapshot()['attempts'][0]['status'],'running')
