@@ -480,12 +480,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     root=Path(output).absolute() if output else (current_evidence_roots(chain)[0]/'producer-evidence'/object_sha256(run) if chain else None)
     if root is None:raise ValueError('Explicit output or history-set required')
     if chain:root=require_evidence_path(root,current_evidence_roots(chain))
-    if producer_pipeline=='overlap-1' and int((config.get('budget') or {}).get('max_concurrent_jobs',1))<2:
-        # The shared ledger's job slot serializes claims across threads; a
-        # prefetch worker racing the classify job would otherwise settle every
-        # probe as an immutable UNKNOWN (demonstrated in the 2026-11-09 r01
-        # baseline). Fail fast instead of poisoning original requests.
-        raise ValueError('overlap-1 requires budget.max_concurrent_jobs>=2 for browser/model concurrency')
     with pool.pool.connect() as con:
         prior=con.execute('SELECT config FROM runs WHERE id=?',(run,)).fetchone()
     previous=json.loads(prior[0]) if prior else {}
@@ -500,6 +494,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         producer_pipeline=frozen_pipeline or producer_pipeline or 'serial'
     else:
         producer_pipeline=producer_pipeline or 'serial'
+    ledger=BatchLedger(ledger_path,config,initialize=per_task or not Path(ledger_path).exists())
+    if producer_pipeline=='overlap-1' and ledger.max_concurrent_jobs<2:
+        raise ValueError('overlap-1 requires effective max_concurrent_jobs>=2 for browser/model concurrency')
     max_batches=previous.get('max_batches') if previous and max_batches is None else max_batches
     max_searches=previous.get('max_searches') if previous and max_searches is None else max_searches
     feedback_ref=reference(feedback_scope) if feedback_scope else None
@@ -593,7 +590,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     baseline = pool.pool.freeze_run(run,frozen,inventory=independent)
     prior_apps = {a['id'] for a in baseline}
     root.mkdir(parents=True,exist_ok=True)
-    ledger=BatchLedger(ledger_path,config,initialize=per_task or not Path(ledger_path).exists())
     def counters():
         with ledger.connect() as con:
             result={'model':con.execute('SELECT COUNT(*) FROM model_requests').fetchone()[0],
@@ -1235,6 +1231,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         wall=time.monotonic()-pipeline_wall
         invocation_new=len(set(ids)-initial)
         pipeline_report={'mode':producer_pipeline,'metrics_version':'webcollect-producer-pipeline-metrics-1',
+            'effective_max_concurrent_jobs':ledger.max_concurrent_jobs,
+            'concurrency_decision':ledger.producer_concurrency,
             'this_invocation':True,'chunks_recorded':len(pipeline_metrics['chunks']),
             'wall_seconds':round(wall,3),
             'screen_seconds':round(sum(c.get('screen_seconds',0.0) for c in pipeline_metrics['chunks']),3),

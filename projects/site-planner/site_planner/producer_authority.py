@@ -128,15 +128,48 @@ def authorize(scope_path, deferred_requests, reason):
     return record
 
 
+def authorize_concurrency(scope_path, maximum, reason):
+    """Append a producer-only scheduler decision; keep frozen config and all work."""
+    if type(maximum) is not int or maximum < 1 or not reason.strip():
+        raise ValueError('Positive max_concurrent_jobs and an operator instruction are required')
+    scope = load_json(scope_path)
+    chain = read_chain_scope(Path(scope['history_set']).absolute())
+    if not check_project_pool(chain, SitePool(scope['pool'], readonly=True)):
+        raise ValueError('A bound candidate project is required')
+    config = load_json(scope['producer_config'])
+    check_project_guard(chain, config.get('site_failure_guard'), scope['producer_db'], role='producer')
+    if config['run_id'] != chain['chain_id'] + '-producer':
+        raise ValueError('The original project producer is required')
+    ledger = BatchLedger(scope['producer_db'], config)
+    record = {'schema_version':'webcollect-producer-concurrency-1',
+              'run_id':config['run_id'], 'ledger':str(ledger.path),
+              'config_sha256':object_sha256(config), 'manifest':chain['manifest'],
+              'frozen_max_concurrent_jobs':config['budget']['max_concurrent_jobs'],
+              'max_concurrent_jobs':maximum, 'reason':reason}
+    with ledger.transaction() as con:
+        if con.execute("SELECT 1 FROM jobs WHERE state='running' LIMIT 1").fetchone():
+            raise ValueError('Wait for the original active job or recover its expired lease first')
+        previous = con.execute("SELECT detail FROM batch_events WHERE event='producer_concurrency' ORDER BY seq DESC LIMIT 1").fetchone()
+        if not previous or json.loads(previous[0]) != record:
+            ledger.event(con, 'producer_concurrency', record)
+    return record
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scope', required=True, type=Path)
     parser.add_argument('--defer-request', action='append', default=[])
+    parser.add_argument('--max-concurrent-jobs', type=int,
+                        help='Append a producer scheduler limit without changing its frozen config or requests')
     parser.add_argument('--closed-entry-get-uri-scope', action='store_true',
                         help='Bind the original project to URI-only isolation of finished, zero-model entry GETs')
     parser.add_argument('--reason', required=True)
     args = parser.parse_args()
-    if args.closed_entry_get_uri_scope:
+    if args.max_concurrent_jobs is not None:
+        if args.defer_request or args.closed_entry_get_uri_scope:
+            parser.error('Concurrency and request quarantine are separate decisions')
+        record = authorize_concurrency(args.scope, args.max_concurrent_jobs, args.reason)
+    elif args.closed_entry_get_uri_scope:
         if args.defer_request:
             parser.error('URI-only GET isolation and model request quarantine are separate decisions')
         from webcollect.site_failure_stop import SiteFailureStore

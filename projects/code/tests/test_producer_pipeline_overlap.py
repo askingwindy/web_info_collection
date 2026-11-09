@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 
 import test_producer_business_value as fixtures
 import test_producer_task_value as task_fixtures
@@ -433,16 +433,12 @@ class PipelineOverlap(unittest.TestCase):
     def test_overlap_requires_budget_concurrency_headroom(self):
         home = self.home()
         opener = self.f.f.b.f.f.provider.opener
-        original = self.f.f.f.f.cfg['budget']['max_concurrent_jobs']
-        self.f.f.f.f.cfg['budget']['max_concurrent_jobs'] = 1
-        try:
+        with patch.object(BatchLedger, 'max_concurrent_jobs', new_callable=PropertyMock, return_value=1):
             with patch.object(observed, 'screen', side_effect=self.settle_screen), \
                  patch.object(opener, 'open', side_effect=self.provider):
                 # Fail fast before any probe can be poisoned as UNKNOWN.
                 with self.assertRaisesRegex(ValueError, 'max_concurrent_jobs'):
                     self.run_overlap(home, key='budget')
-        finally:
-            self.f.f.f.f.cfg['budget']['max_concurrent_jobs'] = original
 
     def test_old_run_without_field_stays_serial_and_rejects_overlap(self):
         home = self.home()
