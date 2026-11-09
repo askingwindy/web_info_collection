@@ -55,9 +55,9 @@ def schema(value, *, max_steps=8):
             props['checks']['contains']={'type':'object','properties':{'evidence_kind':{'const':'reading'}},'required':['evidence_kind']}
             check=props['checks']['items'];check['properties'].update(
                 evidence_kind={'enum':['reading','actions']},
-                required_step_indices={'type':'array','maxItems':max_steps,'uniqueItems':True,
+                required_step_indices={'type':'array',**({'maxItems':max_steps} if max_steps is not None else {}),'uniqueItems':True,
                     'description':'reading is empty and may be omitted; actions requires original zero-based click/back indices',
-                    'items':{'type':'integer','minimum':0,'maximum':max_steps-1}})
+                    'items':{'type':'integer','minimum':0,**({'maximum':max_steps-1} if max_steps is not None else {})}})
             check['required']=list(dict.fromkeys([*[k for k in check.get('required',[]) if k!='required_step_indices'],'evidence_kind']))
             check['properties']['visible_text']['minLength']=0
             check.setdefault('allOf',[]).append({'if':{'properties':{'evidence_kind':{'const':'reading'}},'required':['evidence_kind']},

@@ -669,7 +669,8 @@
                       "protocol": {
                         "enum": [
                           "webcollect-five-eight-attempt-ending-2",
-                          "webcollect-banded-attempt-ending-3"
+                          "webcollect-banded-attempt-ending-3",
+                          "webcollect-continuous-attempt-ending-4"
                         ]
                       }
                     },

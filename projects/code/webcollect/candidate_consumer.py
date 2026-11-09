@@ -28,9 +28,6 @@ def guard_request_scope(ledger, uri, *, candidate_id=None):
     scoped = guard.get('dispatch_rules')==PROJECT_RULES
     isolated = []
     with ledger.connect() as con:
-        from .provider_recovery import holds
-        if holds(con):
-            raise OutcomeUnknown('Original provider authorization hold; no dispatch')
         requests = con.execute("""SELECT m.id,m.state,m.error,j.payload,
                 json_extract(m.request_json,'$.dispatch_attempt_id') AS dispatch_attempt,
                 json_extract(p.payload,'$.registry') AS registry
@@ -42,18 +39,18 @@ def guard_request_scope(ledger, uri, *, candidate_id=None):
                 continue  # Original UNKNOWN usage remains; its bounded retry supplied a response.
             payload = json.loads(row['payload']) if row['payload'] else {}
             site = payload.get('site_uri')
-            if str(row['error']).startswith(('HTTPError:401', 'HTTPError:403')) or job_conflicts(
+            if job_conflicts(
                     ledger,uri,candidate_id,payload,running=row['state']=='reserved',
-                    registry=row['registry'],dispatched_attempt=row['dispatch_attempt']):
+                    registry=row['registry'],dispatched_attempt=row['dispatch_attempt'],candidate_only=True):
                 raise OutcomeUnknown('Original model request unresolved for this scope; no dispatch: ' + row['id'])
             isolated.append({'kind':'model_request','id':row['id'],'site_uri':site,'state':row['state']})
         if con.execute("SELECT 1 FROM sqlite_master WHERE name='top_level_visits'").fetchone():
             for row in con.execute("SELECT id,state,target_uri FROM top_level_visits WHERE state IN ('reserved_for_dispatch','unknown')"):
                 target = row['target_uri']
                 if scoped:
-                    blocked = not target or bool(uri and endpoint(target,aliases)==endpoint(uri,aliases))
+                    blocked = False  # Original job/purpose is fenced by reserve_visit.
                 else:
-                    blocked = row['state']=='reserved_for_dispatch' or not target or bool(uri and canonical_key(target,aliases)==canonical_key(uri,aliases))
+                    blocked = False  # Never turn another navigation into a batch hold.
                 if blocked:
                     raise OutcomeUnknown('Original navigation unresolved for this scope; no dispatch: '+row['id'])
                 isolated.append({'kind':'navigation','id':row['id'],'site_uri':row['target_uri'],'state':row['state']})
@@ -64,9 +61,6 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
     """Read-only preflight shared by candidate selection, collection and targeted recovery."""
     isolated = guard_request_scope(ledger, uri, candidate_id=candidate_id)
     guard = ledger.config.get('site_failure_guard')
-    if guard:
-        from .site_failure_stop import SiteFailureStore
-        SiteFailureStore(guard).guard(uri, candidate_id=candidate_id)
     # Formal planning also checks unfinished decision jobs, including those
     # without a reserved HTTP request. Use the same owner resolver here before
     # selection/first visit rather than discover this only after claim.
@@ -77,7 +71,7 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
             AND j.state IN ('queued','running','review_required')""").fetchall()
     for row in jobs:
         if job_conflicts(ledger, uri, candidate_id, json.loads(row['payload']),
-                         running=row['state']=='running', registry=row['registry']):
+                         running=row['state']=='running', registry=row['registry'],candidate_only=True):
             raise OutcomeUnknown('Original planning job unresolved for this scope; no dispatch: '+row['id'])
     # Site facts may not yet have ingested a just-interrupted formal attempt.
     # Consult its owning original registry read-only, as formal site_context does.
@@ -94,7 +88,7 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
                 (scope['chain_id'],)).fetchall()
         for attempt_id,raw in attempts:
             task=json.loads(raw);owner=(task.get('candidate_binding') or {}).get('candidate_id')
-            conflict=owner==candidate_id if owner else canonical_key(task['site_uri'],guard.get('application_registry'))==canonical_key(uri,guard.get('application_registry'))
+            conflict=bool(owner and owner==candidate_id)
             if conflict:
                 from .request_quarantine import accounted_rejected_focus
                 if accounted_rejected_focus(registry,attempt_id):continue
@@ -602,11 +596,9 @@ def tasked_entry_index(registry_path):
 
 
 async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
-                  session_soft_seconds=720, session_hard_seconds=900):
+                  session_soft_seconds=None, session_hard_seconds=None):
     """Exactly one original claim, one goal and at most one saved result."""
-    if not 0 < session_soft_seconds < session_hard_seconds:
-        raise ValueError('Session limits require 0 < soft < hard')
-    session_started = time.monotonic()
+    # Historical duration arguments are accepted but no longer stop consumption.
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
     current=pool.get_claim(claim['claim_id'])
     if current['token']!=claim['token'] or current['snapshot']!=claim['snapshot']:
@@ -622,7 +614,7 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     # as a paused duplicate. Close it now with zero browser and model cost, before
     # the claim stage advances. Legitimate research/recovery re-runs carry prior
     # claims on the same candidate and pass.
-    if (not pool.has_prior_claims(claim['candidate_id'], claim['claim_id'])
+    if (snapshot.get('requested_goal') and not pool.has_prior_claims(claim['candidate_id'], claim['claim_id'])
             and (normalize_entry_url(snapshot.get('entry_url')), canonical(snapshot.get('requested_goal')))
                 in tasked_entry_index(registry)):
         reason = 'TASKED_URL_DUPLICATE: 该入口 URL 与目标在注册库已存在任务（task_key 重复）'
@@ -665,12 +657,12 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     async def work_in(stack):
         nonlocal stage
         snapshot = claim['snapshot']
+        for source in claim.get('sources',[]):
+            verify_evidence(source['references'])
         from .task_generation import generate, execute
         session = None
         if snapshot.get('schema_version') == 'webcollect-data-candidate-2':
             session = await stack.enter_async_context(entry_session(ledger, pool, claim, root))
-            session['host_limits'] = {'soft_seconds':session_soft_seconds,
-                'hard_seconds':session_hard_seconds, 'started_monotonic':session_started}
             from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
             route = first_frame_disposition(load_json(session['anchor']['state']['path']))
             if route:
@@ -743,17 +735,14 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
                 await asyncio.gather(keeper, return_exceptions=True)
     keeper=asyncio.create_task(renew()); working=asyncio.create_task(work())
     try:
-        done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED,
-            timeout=max(0, session_hard_seconds-(time.monotonic()-session_started)))
-        if not done:
-            raise TimeoutError('consumer_session_hard_deadline')
+        done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED)
         if keeper in done and not keeper.cancelled():
             keeper.result()
             raise ValueError('Candidate heartbeat stopped')
         return await working
     except BaseException as error:
         # Drain Runtime and collection close-out before deriving the claim outcome.
-        if not working.done(): working.cancel('consumer_session_hard_deadline' if isinstance(error, TimeoutError) and str(error)=='consumer_session_hard_deadline' else None)
+        if not working.done(): working.cancel()
         await asyncio.gather(working, return_exceptions=True)
         # Cross-process failure is conservative. Original requests/attempts are never reset.
         try:
@@ -819,8 +808,6 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     skipped = []
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError('Processing limit must be a positive integer')
-    if limit is None and not producer_batch and not campaign:
-        limit = 1  # The unscoped entry point claims a single candidate.
     if poll_seconds is not None and (type(poll_seconds) is not int or poll_seconds < 1):
         raise ValueError('Polling interval must be a positive number of seconds')
     results=[]
@@ -831,109 +818,97 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     if recovery_version and not producer_batch:
         raise ValueError('Recovery requires an explicit producer batch')
     from .candidate_batch import report, record_outcome
-    from .current_chain import PROJECT_RULES
-    from .site_failure_stop import SiteStopped
-    project_worker = (ledger.config.get('site_failure_guard') or {}).get('dispatch_rules') == PROJECT_RULES
     stop_reason = 'processing_limit'
-    stop_details = None
-    poll = 0
-    while limit is None or len(results) < limit:
+    poll = processed = 0
+    bounded = limit is not None or rows is not None or target is not None
+    delay = poll_seconds or 2
+    events = Path(kwargs['output']) / (worker_id + '-events.jsonl')
+    events.parent.mkdir(parents=True, exist_ok=True)
+
+    def record(event, **value):
+        with events.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps({'at':time.time(), 'event':event, **value}, ensure_ascii=False) + '\n')
+
+    while limit is None or processed < limit:
         if campaign:
-            from .consumer_campaign import reached
-            if reached(campaign):
-                stop_reason = 'campaign_target_reached'
+            from .consumer_campaign import stopped
+            if stopped(campaign):
+                stop_reason = 'campaign_stopped'
                 break
-        if rows is not None and poll == len(rows):
+        if rows is not None and poll >= len(rows):
             stop_reason = 'cohort_exhausted'
             break
         if target is not None and report(pool, producer_batch, target=target, basis=target_basis)['shortfall'] == 0:
             stop_reason = 'target_reached'
             break
-        try:
-            checked = startup_check(ledger, pool=pool, before_claim=True, **kwargs)
-            if producer_batch or project_worker:
-                guard_request_scope(ledger, None)
-        except (BudgetStop, OutcomeUnknown) as error:
-            if target is None and rows is None:
-                raise
-            stop_reason = 'resource_pause' if isinstance(error, BudgetStop) else 'account_reconciliation'
-            stop_details = {'error_type':type(error).__name__, 'reason':str(error)}
-            break
-        if 'resource_stop' in checked:
-            if target is None and rows is None:
-                results.append({'state':'paused', **checked})
-            stop_reason = 'resource_pause'
-            stop_details = checked['resource_stop']
-            break
-        kwargs.update(checked)
+        claim = None
         selected = rows[poll] if rows is not None else None
-        row_batch = selected.get('producer_batch',producer_batch) if selected else producer_batch
-        def claim_next():
-            return pool.claim_next(worker_id,f'{request_prefix}/{poll}',categories=categories,application_id=application_id,
-                              protocols=protocols, **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
-                              **({'producer_batch': row_batch} if row_batch else {}),
-                              **({'recovery_version':recovery_version} if recovery_version else {}))
-        if campaign:
-            from .consumer_campaign import claim_if_open
-            claim = claim_if_open(campaign, claim_next)
-            if claim is None:
-                stop_reason = 'campaign_target_reached'
-                break
-        else:
-            claim = claim_next()
-        poll += 1
-        if selected and claim['state'] in ('EMPTY','ALREADY_CLAIMED'):
-            skipped.append({'candidate_id':selected['candidate_id'],'reason':claim['state']})
-            continue
-        if claim['state']=='EMPTY':
-            if producer_batch and pool.producer_batch_drained(producer_batch, **({'recovery_version':recovery_version} if recovery_version else {})):
-                stop_reason = 'candidates_exhausted'
-                break
-            if poll_seconds is None:
-                if target is None: results.append(claim)
-                stop_reason = 'inventory_empty_producer_open'
-                break
-            await asyncio.sleep(poll_seconds)
-            continue
         try:
-            result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,**({'effort_profile':effort_profile} if effort_profile else {}),**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
-        except BudgetStop as error:
-            if target is None and rows is None and not campaign: raise
-            current = pool.get_claim(claim['claim_id'])
-            if current['state'] == 'consuming':
-                pool.finish(claim,state='reconcile',stage=current['stage'],reason=str(error))
-            result = {'state':'reconcile','resource_stop':{'reason':str(error)}}
+            kwargs.update(startup_check(ledger, pool=pool, before_claim=True, **kwargs))
+            row_batch = selected.get('producer_batch',producer_batch) if selected else producer_batch
+            request_id = f'{request_prefix}/{poll}'
+            def claim_next():
+                return pool.claim_next(worker_id,request_id,categories=categories,application_id=application_id,
+                    protocols=protocols, **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
+                    **({'producer_batch':row_batch} if row_batch else {}),
+                    **({'recovery_version':recovery_version} if recovery_version else {}))
+            if campaign:
+                from .consumer_campaign import claim_if_open
+                claim = claim_if_open(campaign, claim_next)
+                if claim is None:
+                    stop_reason = 'campaign_stopped'
+                    break
+            else:
+                claim = claim_next()
+            poll += 1
+            if selected and claim['state'] in ('EMPTY','ALREADY_CLAIMED'):
+                skipped.append({'candidate_id':selected['candidate_id'],'reason':claim['state']})
+                continue
+            if claim['state']=='EMPTY':
+                record('inventory_empty', application_id=application_id)
+                await asyncio.sleep(delay)
+                continue
+            try:
+                result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+                    **({'effort_profile':effort_profile} if effort_profile else {}),
+                    **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+            except Exception as error:
+                current=pool.get_claim(claim['claim_id'])
+                if current['state']=='consuming':
+                    pool.finish(claim,state='reconcile',stage=current['stage'],reason=type(error).__name__+': '+str(error))
+                    current=pool.get_claim(claim['claim_id'])
+                result={'state':current['state'],'stage':current['stage'],
+                        'reason':current.get('reason') or str(error)}
+            # A saved item is queued before optional disposition write-back, so
+            # a reporting failure never loses its independent export work.
+            if campaign:
+                from .consumer_campaign import deliver
+                result['campaign_delivery']=deliver(campaign,pool,claim)
+            if producer_batch or campaign:
+                record_outcome(pool,claim,result)
+            result={**result,'claim_id':claim['claim_id'],'candidate_id':claim['candidate_id']}
+            processed += 1
+            record('candidate_finished',result=result)
+            if bounded:results.append(result)
         except Exception as error:
-            if not (producer_batch or campaign) and not (project_worker and isinstance(error,(SiteStopped,OutcomeUnknown))):
-                raise
-            current = pool.get_claim(claim['claim_id'])
-            if current['state'] == 'consuming' and current['stage'] == 'claimed' and isinstance(error,(SiteStopped,OutcomeUnknown)):
-                pool.finish(claim, state='reconcile', stage='claimed', reason=str(error))
-                current = pool.get_claim(claim['claim_id'])
-            if current['state'] not in ('failed','reconcile'):
-                raise
-            result = {'state':current['state'], 'stage':current['stage'], 'reason':current.get('reason') or str(error)}
-        if campaign:
-            from .consumer_campaign import deliver
-            result['campaign_delivery'] = deliver(campaign, pool, claim)
-        if producer_batch or campaign:
-            record_outcome(pool, claim, result)
-        results.append({**result, 'claim_id':claim['claim_id'], 'candidate_id':claim['candidate_id']} if producer_batch or campaign else result)
-        if result.get('resource_stop') or (result['state']=='reconcile' and not (producer_batch or campaign or project_worker)):
-            stop_reason = 'resource_pause' if result.get('resource_stop') else 'account_reconciliation'
-            break
+            record('consumer_error',claim_id=claim.get('claim_id') if claim else None,
+                   error_type=type(error).__name__,reason=str(error))
+            # Original claims/requests remain fenced. A failed candidate never
+            # restarts under a new identity here; the loop takes independent work.
+            if claim and claim.get('claim_id'):
+                processed += 1
+                if bounded:results.append({'state':'reconcile','claim_id':claim['claim_id'],'reason':str(error)})
+            elif selected:
+                skipped.append({'candidate_id':selected['candidate_id'],'reason':str(error)})
+                poll += 1
+            await asyncio.sleep(delay)
     if rows is not None:
-        return {'denominator':len(rows), 'processed':len(results), 'results':results, 'skipped':skipped,
-                'unexamined':len(rows)-poll, 'stop_reason':stop_reason, 'stop_details':stop_details}
-    if target is None:
-        return results
-    summary = report(pool, producer_batch, target=target, basis=target_basis)
-    if summary['shortfall'] == 0: stop_reason = 'target_reached'
-    elif target_basis == 'qualified' and summary['pending_review'] and stop_reason == 'candidates_exhausted':
-        stop_reason = 'awaiting_review'
-    elif summary['states'].get('reconcile') and stop_reason == 'candidates_exhausted':
-        stop_reason = 'account_reconciliation'
-    return {'processing_limit':limit, 'processed':len(results), 'stop_reason':stop_reason, 'stop_details':stop_details, 'results':results, 'summary':summary}
+        return {'denominator':len(rows),'processed':processed,'results':results,'skipped':skipped,
+                'unexamined':len(rows)-poll,'stop_reason':stop_reason,'stop_details':None}
+    if target is not None:
+        return {'processing_limit':limit,'processed':processed,'stop_reason':stop_reason,'results':results,
+                'summary':report(pool,producer_batch,target=target,basis=target_basis)}
+    return results if bounded else {'processed':processed,'stop_reason':stop_reason,'events':str(events)}
 
 
 def guard_original_dispatch(original):
@@ -1060,8 +1035,8 @@ def main(argv=None):
     runp.add_argument('--first-plan-effort',choices=('low','high','max'))
     runp.add_argument('--branch-effort',choices=('low','high','max'))
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
-    runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default exits on EMPTY')
-    runp.add_argument('--producer-batch',help='Consume only newly published V2 rows from this producer batch; stop when its report is committed and its queue is empty')
+    runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default waits continuously (2 seconds between empty claims)')
+    runp.add_argument('--producer-batch',help='Consume only newly published V2 rows from this producer batch; wait when inventory is empty')
     runp.add_argument('--protocol',choices=['legacy','entry'],help='legacy=webcollect-data-candidate-1 only (default); entry declares webcollect-data-candidate-2')
     import sys
     argv = list(sys.argv[1:] if argv is None else argv)

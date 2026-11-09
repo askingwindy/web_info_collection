@@ -18,6 +18,10 @@ import uuid
 from .planning import canonical, object_sha256
 
 
+CONSUMER_KINDS = frozenset(('candidate-observation', 'collection', 'react-native-decision',
+                            'react-decision', 'fragment-decision', 'task-generation', 'frozen-plan'))
+
+
 class BudgetStop(ValueError):
     pass
 
@@ -208,8 +212,6 @@ def validate_config(value, *, credentials=False, require_model=False):
             raise ValueError('Real calls need credential environment name, a nonzero accounting reservation')
         if not token_only and (not rates['input'] or not rates['output']):
             raise ValueError('Real calls need nonzero verified input/output rates')
-        if budget['min_model_interval_seconds']<1:
-            raise ValueError('Real model dispatch requires an explicit nonzero rate interval')
         if credentials:
             from .model_credentials import credential
             credential(model)
@@ -401,7 +403,7 @@ class BatchLedger:
             row = con.execute(query + ' ORDER BY created,id LIMIT 1', params).fetchone()
             if not row:
                 return None
-            attempt_cap = self.config['budget'].get('max_job_attempts')
+            attempt_cap = None if kind in CONSUMER_KINDS else self.config['budget'].get('max_job_attempts')
             continued_claim=False
             if kind=='ai-difference' and attempt_cap is not None and row['attempts']>=attempt_cap:
                 # Explicit continuation owns one additional claim of the exact
@@ -434,10 +436,10 @@ class BatchLedger:
                     raise BudgetStop('Parent already has an active decision; no parallel child')
             running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
                                   'AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)').fetchone()[0]
-            job_limit = self._job_concurrency_limit(con)
+            job_limit = None if kind in CONSUMER_KINDS else self._job_concurrency_limit(con)
             if parent_job is None and job_limit is not None and running >= job_limit:
                 raise BudgetStop('max_concurrent_jobs reached; queued work retained')
-            if domain:
+            if domain and kind not in CONSUMER_KINDS:
                 last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
                 if last and time.time() - last[0] < self.config['budget']['min_domain_interval_seconds']:
                     raise BudgetStop('domain rate limit; queued work retained')
@@ -536,20 +538,22 @@ class BatchLedger:
         unknown attempt. Redirects/subresources are separately observed metrics.
         Unique page reservations remain in resources and are never rewritten.
         """
-        if self.config['mode'] == 'real' and not self.config.get('site_failure_guard'):
+        consumer = job['kind'] in CONSUMER_KINDS
+        if not consumer and self.config['mode'] == 'real' and not self.config.get('site_failure_guard'):
             raise BudgetStop('Real website dispatch requires the original whole-site failure guard; no request sent')
-        self.sync_visit_failures()
+        if not consumer:
+            self.sync_visit_failures()
         guard = self.config.get('site_failure_guard')
-        if guard:
+        if guard and not consumer:
             from .site_failure_stop import SiteFailureStore
             SiteFailureStore(guard).guard(target_uri)
         with self.transaction() as con:
             self._owned(con, job)
             self._ensure_visit_schema(con)
-            if not con.execute('SELECT history_complete FROM visit_accounting_meta WHERE id=1').fetchone()[0]:
+            if not consumer and not con.execute('SELECT history_complete FROM visit_accounting_meta WHERE id=1').fetchone()[0]:
                 raise BudgetStop('Legacy top-level visit history UNKNOWN; reconcile original visits before dispatch')
             from .current_chain import PROJECT_RULES
-            if guard and guard.get('dispatch_rules')==PROJECT_RULES:
+            if not consumer and guard and guard.get('dispatch_rules')==PROJECT_RULES:
                 from .request_quarantine import endpoint
                 aliases=guard.get('application_registry')
                 target=endpoint(target_uri,aliases)
@@ -560,10 +564,14 @@ class BatchLedger:
                         WHERE state IN ('reserved_for_dispatch','unknown')"""):
                     if endpoint(previous['target_uri'],aliases)==target:
                         raise OutcomeUnknown('Original visit unresolved for this endpoint; no dispatch: '+previous['id'])
+            if consumer and con.execute(
+                    "SELECT 1 FROM top_level_visits WHERE job_id=? AND purpose=? AND state IN ('reserved_for_dispatch','unknown')",
+                    (job['id'], purpose)).fetchone():
+                raise OutcomeUnknown('Original consumer visit unresolved; no replacement dispatch')
             now = time.time()
             last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
             delay = last[0] + self.config['budget']['min_domain_interval_seconds'] - now if last else 0
-            if delay > 0:
+            if delay > 0 and not consumer:
                 raise VisitRateWait(delay)
             index = con.execute('SELECT COUNT(*)+1 FROM top_level_visits WHERE job_id=? AND purpose=?', (job['id'],purpose)).fetchone()[0]
             rid = uuid.uuid4().hex
@@ -602,7 +610,9 @@ class BatchLedger:
                  canonical(metrics or {}),visit['id']))
             self.event(con,'top_level_visit_finished',{'id':visit['id'],'job_id':row['job_id'],'state':state,
                 'response_status':response_status,'landed_uri':landed_uri})
-        self.sync_visit_failures()
+            consumer = con.execute('SELECT kind FROM jobs WHERE id=?', (row['job_id'],)).fetchone()['kind'] in CONSUMER_KINDS
+        if not consumer:
+            self.sync_visit_failures()
 
     def sync_visit_failures(self):
         """Reconcile immutable visit facts before every source/probe/goto dispatch.
@@ -783,7 +793,7 @@ class BatchLedger:
             (timeout_retry_root, timeout_retry_root, timeout_retry_root, timeout_retry_root,
              attempt_id, attempt_id, self.config['mode']=='real')).fetchone()
 
-    def bind_model_session(self, session_id):
+    def bind_model_session(self, session_id, *, consumer=False):
         """Select/recover once under the existing short SQLite write lock."""
         from .model_credentials import credential, account_id
         with self.transaction() as con:
@@ -797,7 +807,7 @@ class BatchLedger:
             else:
                 original = old[0]
             ordinal = con.execute('SELECT COALESCE(MAX(rowid),0) FROM model_sessions').fetchone()[0] if original is None else 0
-            secret = credential(self.config['model'], excluded_accounts=self._unavailable_model_accounts(con),
+            secret = credential(self.config['model'], excluded_accounts=() if consumer else self._unavailable_model_accounts(con),
                                 required_account=original, selection_index=ordinal)
             con.execute('INSERT OR IGNORE INTO model_sessions VALUES(?,?)', (session_id, account_id(secret)))
             return secret
@@ -809,6 +819,7 @@ class BatchLedger:
         tokens = model['reserve_input_tokens'] + model['max_completion_tokens']
         with self.transaction() as con:
             owned = self._owned(con, job)
+            consumer = owned['kind'] in CONSUMER_KINDS
             old = con.execute('SELECT * FROM model_requests WHERE job_id=? AND purpose=? AND attempt=?',
                               (job['id'], purpose, attempt)).fetchone()
             if old:
@@ -817,9 +828,13 @@ class BatchLedger:
                 if old['state'] in ('reserved', 'unknown'):
                     raise OutcomeUnknown('Prior request may have been billed; no automatic resend')
                 return dict(old)
+            if consumer and con.execute(
+                    "SELECT 1 FROM model_requests WHERE job_id=? AND purpose=? AND state IN ('reserved','unknown')",
+                    (job['id'], purpose)).fetchone():
+                raise OutcomeUnknown('Original consumer request unresolved; no replacement dispatch')
             timeout_root = self._timeout_retry_root(con, job, purpose, attempt, request_json or {})
             from .provider_recovery import holds, permits_probe
-            if holds(con) and not permits_probe(con,job['id'],request_json,attempt):
+            if not consumer and holds(con) and not permits_probe(con,job['id'],request_json,attempt):
                 raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
             native_http = request_json and request_json.get('protocol') in ('native-tool-1','banded-plain-json-1') and request_json.get('http_dispatch')
             aid = request_json.get('dispatch_attempt_id') if native_http else None
@@ -834,16 +849,16 @@ class BatchLedger:
                 if not isinstance(session_id, str) or not session_id.strip():
                     raise ValueError('Invalid attempt identity')
                 prior = self.session_http_usage(con, session_id, timeout_retry_root=timeout_root)
-                if prior['held']:
+                if not consumer and prior['held']:
                     raise OutcomeUnknown('Original attempt request/decision unresolved; no replacement dispatch')
-                if self.real_glm and (react or prior['has_react']) and prior['used'] >= SessionGLMCallLimit.limit:
+                if not consumer and self.real_glm and (react or prior['has_react']) and prior['used'] >= SessionGLMCallLimit.limit:
                     unresolved = self.session_http_usage(con, session_id)['unresolved']
                     if unresolved:
                         raise OutcomeUnknown('Original session dispatch unresolved at the GLM call limit: ' + unresolved)
                     raise SessionGLMCallLimit(session_id, prior['used'])
             if native_http:
                 cap = request_json.get('dispatch_max_requests')
-                if aid is not None:
+                if aid is not None and not consumer:
                     if cap is not None and (type(cap) is not int or cap < 1):
                         raise ValueError('Invalid attempt request budget')
                     if prior['native_calls'] and (prior['min_cap'] != cap or prior['max_cap'] != cap):
@@ -853,7 +868,7 @@ class BatchLedger:
                             raise OutcomeUnknown('Original timeout unresolved at the attempt request limit')
                         raise BudgetStop('max_requests reached for original attempt')
                 account = request_json.get('account_id')
-                if account in self._unavailable_model_accounts(con):
+                if not consumer and account in self._unavailable_model_accounts(con):
                     raise OutcomeUnknown('Original account/model hold; no replacement request')
                 producer_kinds=('ai-application-site-classification-1','ai-target-page-purpose-1',
                                 'ai-grounded-entry-ids-1','ai-candidate-entry-tool-1','ai-search-plan')
@@ -862,7 +877,7 @@ class BatchLedger:
                 active=con.execute("SELECT r.job_id,j.kind FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE r.state='reserved' "
                     "AND json_extract(r.request_json,'$.account_id')=? "
                     "AND json_extract(r.request_json,'$.model')=?", (account, model['model']))
-                if any(not (parallel_producer and r['job_id']!=job['id'] and r['kind'] in producer_kinds) for r in active):
+                if not consumer and any(not (parallel_producer and r['job_id']!=job['id'] and r['kind'] in producer_kinds) for r in active):
                     raise ModelRateWait(1)
                 # A known/unknown request pins its attempt to one account. A new
                 # independent attempt may select another healthy authorized key.
@@ -871,7 +886,7 @@ class BatchLedger:
                     "AND json_extract(request_json,'$.account_id')<>?", (aid, account)).fetchone():
                     raise OutcomeUnknown('Original attempt account differs; no account rotation')
             last=con.execute('SELECT MAX(started) FROM model_requests').fetchone()[0]
-            if last is not None:
+            if last is not None and not consumer:
                 delay=last+budget['min_model_interval_seconds']-time.time()
                 if delay>0:raise ModelRateWait(delay)
             rid = uuid.uuid4().hex

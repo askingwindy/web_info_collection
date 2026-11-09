@@ -1,42 +1,30 @@
 {
   "schema_version": "webcollect-delivery-progress-1",
-  "round": "consumer-muxtly-wiki-6w-20261109-r01",
-  "cohort_total": 865,
+  "round": "consumer-muxtly-wiki-rollback-20261109-r01",
+  "cohort_total": 1000,
   "sites": [
     "www.muxtly.com",
     "zh.wikipedia.org"
   ],
-  "updated_at": 1794234308.631234,
+  "updated_at": 1794238725.869813,
   "counts": {
-    "claimed": 43,
-    "in_progress": 5,
-    "failed": 4,
-    "reconcile": 33,
-    "saved_pending_review": 1,
-    "cohort_remaining": 822
+    "claimed": 0,
+    "in_progress": 0,
+    "failed": 0,
+    "reconcile": 0,
+    "saved_pending_review": 0,
+    "cohort_remaining": 1000
   },
   "saved_by_site": {
-    "www.muxtly.com": 1,
+    "www.muxtly.com": 0,
     "zh.wikipedia.org": 0
   },
-  "saved_by_worker": {
-    "1": 1,
-    "2": 0,
-    "3": 0,
-    "4": 0,
-    "5": 0,
-    "6": 0
-  },
-  "model_requests": {
-    "invalid_response": 12,
-    "reserved": 3,
-    "succeeded": 14,
-    "unknown": 2
-  },
+  "saved_by_worker": {},
+  "model_requests": {},
   "tokens": {
-    "input": 224651,
-    "output": 60770,
-    "cached_input": 20288
+    "input": 0,
+    "output": 0,
+    "cached_input": 0
   },
-  "note": "采集成功仅到 collected_pending_review；QC/人工终审/发布另行进行，不计入合格交付。"
+  "note": "两站全部候选已回滚到尚未进入领取；这是新一轮当前视图。历史领取、旧保存、UNKNOWN 与证据保留在原账及回滚归档中，QC/人工终审/发布另行进行。"
 }

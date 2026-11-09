@@ -83,14 +83,14 @@ def accounted_rejected_focus(registry, attempt_id):
     return False
 
 
-def job_conflicts(ledger, uri, candidate_id, payload, *, running, registry=None, dispatched_attempt=None):
+def job_conflicts(ledger, uri, candidate_id, payload, *, running, registry=None, dispatched_attempt=None, candidate_only=False):
     """Match work to its original attempt, or to the narrowest provable URL scope."""
     from .current_chain import PROJECT_RULES
     guard = ledger.config.get('site_failure_guard') or {}
     aliases = guard.get('application_registry')
     site = payload.get('site_uri')
     if guard.get('dispatch_rules') != PROJECT_RULES:
-        return running or not site or bool(uri and canonical_key(site, aliases) == canonical_key(uri, aliases))
+        return False if candidate_only else running or not site or bool(uri and canonical_key(site, aliases) == canonical_key(uri, aliases))
     attempt_id = payload.get('attempt_id')
     if attempt_id and dispatched_attempt in (None, attempt_id):
         registry = registry or ledger.path.with_name('production-registry.sqlite3')
@@ -100,6 +100,8 @@ def job_conflicts(ledger, uri, candidate_id, payload, *, running, registry=None,
             if candidate_id and owner['candidate_id']:
                 return candidate_id == owner['candidate_id']
             return bool(uri and endpoint(uri, aliases) == endpoint(owner['uri'], aliases))
+    if candidate_only:
+        return False  # Unrelated/ownerless history cannot suspend a new candidate.
     if not site:
         return True
     if not uri:

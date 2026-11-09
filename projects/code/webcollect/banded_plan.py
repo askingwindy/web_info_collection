@@ -75,10 +75,25 @@ def attempt_limit(task, band=None):
 def remaining_step_allowance(s):
     """Remaining replan steps inside this session's frozen band ceiling."""
     band=getattr(s.plan_controller,'frozen_band',None) if s.plan_controller else None
-    return max(0,attempt_limit(s.task,band)-len(s.trajectory))
+    limit=attempt_limit(s.task,band)
+    return None if limit is None else max(0,limit-len(s.trajectory))
 
 
 def system_with_attempt_limit(text, limit):
+    if limit is None:
+        replacements = {
+            '5步档自然5步，长档6–8步且第6步之后有具体业务用途；':'',
+            '首轮规划自然可行的至少5个有用动作':'首轮规划完成目标所需的自然动作',
+            '按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。':'band只描述计划长度，不限制动作数。',
+            '先核算完整路径的8步额度：':'依据完整目标规划路径：',
+            '继承原档与总额度，不重新申请short流程':'保持原目标，按当前证据修订剩余路径',
+            '原band与总额度不变':'保持原目标，不设动作额度',
+            '及剩余预算':'', '原会话调用预算继续累计。':'原会话用量继续记账。',
+            '同一观察的同一情境最多提供一次，已提供后该选项不再出现；':'按当前证据需要请求原图；',
+            '（每帧每情境一次）':'', '按剩余额度修订':'修订剩余路径',
+        }
+        for old,new in replacements.items():text=text.replace(old,new)
+        return text+'\n不设模型调用次数、动作次数、固定档位、重规划次数或会话总时长配额。自然完成即结束，无法继续照实停止；不为数量补动作。'
     if limit!=LONG_PLAN_ATTEMPT_CEILING:return text
     return (text.replace('6–8步','6–12步').replace('8步额度','12步额度')
             .replace('长档的八个槽位','长档的十二个槽位'))
@@ -275,7 +290,10 @@ CHOICE = obj({'attempt_id':text(200),'observation_id':text(200),'choice':text(40
 
 def plan_schema(grounded=False, *, wire=False, pending_checks=False, max_steps=CLOSING_POLICY_ATTEMPT_CEILING):
     schema=deepcopy(PLAN);schema['required'].append('checks')
-    schema['properties']['steps']['maxItems']=max_steps
+    if max_steps is None:
+        schema['properties']['steps'].pop('maxItems',None)
+    else:
+        schema['properties']['steps']['maxItems']=max_steps
     if pending_checks:
         item=schema['properties']['checks']['items']
         item['required']=['field']
@@ -401,14 +419,14 @@ def band_for_steps(n):
     return 'short' if n < 5 else 'five' if n == 5 else 'long'
 
 
-def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recovery=False, grounded=False, inherited_band=None,pending_checks=False,direct_completion=False,max_steps=CLOSING_POLICY_ATTEMPT_CEILING):
+def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recovery=False, grounded=False, inherited_band=None,pending_checks=False,direct_completion=False,max_steps=CLOSING_POLICY_ATTEMPT_CEILING,replanning=False):
     from jsonschema import Draft202012Validator
     schema=plan_schema(grounded,pending_checks=pending_checks,max_steps=max_steps)
     if direct_completion:
         from .direct_completion import schema as completion_schema,validate_plan as validate_direct
         schema=completion_schema(schema,max_steps=max_steps)
     Draft202012Validator(schema).validate(plan)
-    if direct_completion and remaining is None:validate_direct(plan)
+    if direct_completion and remaining is None and not replanning:validate_direct(plan)
     if plan['attempt_id']!=attempt or plan['observation_id']!=observation:
         raise ValueError('PLAN_STALE_OR_WRONG_ATTEMPT')
     if plan['finish_when']['kind'] in ('scroll_changed','list_changed','value'):
@@ -422,7 +440,7 @@ def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recove
     elif not recovery:
         # The band label is generated from step facts. Only V11 long tasks may
         # raise max_steps to twelve; every historical task keeps its eight cap.
-        if n>max_steps:raise ValueError('PLAN_BAND_LENGTH')
+        if max_steps is not None and n>max_steps:raise ValueError('PLAN_BAND_LENGTH')
         plan['band']=band_for_steps(n)
     elif plan['band']=='short' and n>=5:
         raise ValueError('SHORT_PLAN_LENGTH')
@@ -434,7 +452,7 @@ def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recove
         if action not in allowed or fields!=required:
             raise ValueError('PLAN_ACTION_FIELDS')
     result = deepcopy(plan)
-    if inherited_band is not None:
+    if max_steps is not None and inherited_band is not None:
         result['band'] = inherited_band
     return result
 
@@ -1048,6 +1066,13 @@ class Controller:
         limit=attempt_limit(s.task,planning_band(s.task,s.context) if first else getattr(self,'frozen_band',None))
         payload['system'] = system_with_attempt_limit(
             payload['system'] + (FIRST_GOAL_SEMANTICS if first else BRANCH_GOAL_SEMANTICS),limit)
+        if limit is None:
+            payload.pop('bands',None)
+            contract_payload=payload.get('replan_contract',{})
+            for key in ('remaining_effective_limit','budget_instruction','attempt_limit'):
+                contract_payload.pop(key,None)
+            if 'fields' in contract_payload:
+                contract_payload['fields']='steps必填；其他字段继承原目标与证据，不设步数额度'
         return payload
 
     def _executed_summary(self,s):
@@ -1140,7 +1165,7 @@ class Controller:
         provision the option disappears and the feedback says so explicitly.
         """
         self._image_context=context
-        if (s.current['observation_id'],context) in self.provided_original_for:
+        if attempt_limit(s.task) is not None and (s.current['observation_id'],context) in self.provided_original_for:
             return []
         name='request_original_image' if s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS else 'original'
         return [{'choice':name,'meaning':meaning}]
@@ -1203,7 +1228,7 @@ class Controller:
 
     async def request(self,s,options=None):
         from .react_session import ReactStop, DecisionRequestError, BudgetStop, OutcomeUnknown
-        if s._left('max_seconds') <= 0 or (self.submitted and remaining_step_allowance(s) <= 0):
+        if s._left('max_seconds') <= 0 or (self.submitted and remaining_step_allowance(s) is not None and remaining_step_allowance(s) <= 0):
             raise ReactStop('budget','宿主时间或剩余动作额度耗尽，保留已执行区间','collector')
         s._check_request_budget()
         prompt=self.prompt(s,options)
@@ -1267,7 +1292,7 @@ class Controller:
                         and self.proved(plan['finish_when'], s)):
                     raise ValueError('ENDPOINT_VISIBLE_ON_FIRST_FRAME')
                 assigned=s.context.get('band_budget',{}).get('assigned_band')
-                if assigned and plan['band'] not in (assigned,'short'):
+                if limit is not None and assigned and plan['band'] not in (assigned,'short'):
                     if not (assigned=='long' and plan['band']=='five' and plan.get('band_reason')):
                         raise ValueError('PLAN_DIFFERS_FROM_HOST_LOCKED_BAND')
             except (ValueError,ValidationError) as error:
@@ -1310,13 +1335,13 @@ class Controller:
             self.endpoint_established_at_first_frame=bool((self.initial_feedback or {}).get('weak_first_frame_endpoint')) \
                 and self.proved(plan['finish_when'], s)
             self.last_document=deepcopy(s.current['document_identity'])
-            self.frozen_band=plan['band'] if assigned=='long' and plan['band']=='five' else assigned or plan['band']
-            if s.context.get('band_budget',{}).get('project'):
+            self.frozen_band=plan['band'] if limit is None else plan['band'] if assigned=='long' and plan['band']=='five' else assigned or plan['band']
+            if limit is not None and s.context.get('band_budget',{}).get('project'):
                 from .band_budget import freeze
                 freeze(s.context['band_budget']['project']['registry'],s.task,s.attempt_id,self.frozen_band,plan.get('band_reason') or plan.get('short_reason') or '当前首帧支持预排档')
             self.recovery_prefix=error_page
             self.target_steps=5 if self.frozen_band=='five' else (max(6,len(plan['steps'])) if self.frozen_band=='long' else len(plan['steps']))
-            if (self.frozen_band == plan['band'] == 'long' and contract
+            if (limit is not None and self.frozen_band == plan['band'] == 'long' and contract
                     and contract['version'] == GOAL_EVIDENCE_VERSION):
                 # Contracted long plans may reserve the whole current band for
                 # focus/type/scroll/trigger evidence, not merely the first draft.
@@ -1358,7 +1383,7 @@ class Controller:
             # V10 carries no continue-by-choice semantics, so the frozen
             # historical name maps determinably to the image request.
             response={**response,'choice':'request_original_image'}
-        if (response['choice']=='request_original_image'
+        if (limit is not None and response['choice']=='request_original_image'
                 and (s.current['observation_id'],self._image_context) in self.provided_original_for
                 and 'request_original_image' not in allowed):
             raise ValueError('ORIGINAL_IMAGE_ALREADY_PROVIDED: 同一观察同一情境的原图已提供且无新增信息；请replan或stop')
@@ -1420,9 +1445,9 @@ class Controller:
             self.selection=None
         elif response['choice'] in ('original','request_original_image'):
             key=(s.current['observation_id'],self._image_context)
-            if response['choice']=='request_original_image' and key in self.provided_original_for:
+            if limit is not None and response['choice']=='request_original_image' and key in self.provided_original_for:
                 raise ValueError('ORIGINAL_IMAGE_ALREADY_PROVIDED: 同一观察同一情境的原图已提供，重复请求无新增信息；请replan或stop')
-            if key in self.provided_original_for:
+            if limit is not None and key in self.provided_original_for:
                 # Re-viewing an already-provided frame counts against the
                 # session's no-progress budget, never the 25-call ceiling.
                 s._consume('max_no_progress')
@@ -1470,7 +1495,7 @@ class Controller:
                 proposed={**{k:deepcopy(v) for k,v in self.plan.items() if k not in ('steps','attempt_id','observation_id')},**proposed}
             try:
                 plan=validate_plan(proposed,s.attempt_id,s.current['observation_id'],s.task['fragment']['allowed_actions'],remaining=remaining,grounded=grounded,
-                    inherited_band=self.frozen_band if modern else None,pending_checks=modern,direct_completion=direct_completion,max_steps=limit)
+                    inherited_band=self.frozen_band if modern else None,pending_checks=modern,direct_completion=direct_completion,max_steps=limit,replanning=True)
             except ValueError as error:
                 context_key=(s.current['observation_id'],object_sha256(options))
                 if (str(error)!='PLAN_EXCEEDS_FROZEN_REMAINING_STEPS'
@@ -1490,7 +1515,7 @@ class Controller:
                 s.event('plan-budget-feedback',feedback=self.budget_feedback,
                         rejected_decision=s._last_decision,no_browser_action_dispatched=True)
                 return
-            if plan['band'] not in (self.frozen_band,'short'):raise ValueError('REPLAN_CANNOT_CHANGE_FROZEN_BAND')
+            if limit is not None and plan['band'] not in (self.frozen_band,'short'):raise ValueError('REPLAN_CANNOT_CHANGE_FROZEN_BAND')
             self.budget_feedback=None
             self.plan=plan;self.position=0;self.selection=None;self.recovery_prefix=False;self.pending_effect=None
             self.last_document=deepcopy(s.current['document_identity'])
@@ -1570,7 +1595,7 @@ class Controller:
                 self.completion_offered_at=s.current['observation_id']
                 options=[{'choice':'finish_reading','meaning':'全部首次问题及待核事项已有原文/真实动作支持，提交reading_answer；引用本身不证明完成'}]
                 if self.position<len(self.plan['steps']):options.append({'choice':'continue_plan','meaning':'保留已选引用，继续当前剩余原计划'})
-                if remaining_step_allowance(s)>0:options.append({'choice':'replan','meaning':'保持原问题，修订剩余阅读路线'})
+                if (remaining_step_allowance(s) is None or remaining_step_allowance(s)>0):options.append({'choice':'replan','meaning':'保持原问题，修订剩余阅读路线'})
                 options.append({'choice':'stop','meaning':'如实结束但不声称问题已全部回答'})
                 await self.request(s,options);return
             if evidence['status'] == 'PASSAGE_AVAILABLE' and getattr(self, 'citation_offered_at', None) != s.current['observation_id']:
@@ -1581,7 +1606,7 @@ class Controller:
                     options.append({'choice':'finish_reading','meaning':'全部原问题已有实际证据时，可直接提交完整reading_answer及其中当前可见原文；无需另发单独cite'})
                 if direct_completion and self.position<len(self.plan['steps']):
                     options.append({'choice':'continue_plan','meaning':'新段落尚未覆盖全部原问题，继续当前剩余原计划'})
-                if remaining_step_allowance(s) > 0:
+                if (remaining_step_allowance(s) is None or remaining_step_allowance(s)>0):
                     options.append({'choice':'replan','meaning':'引文未解答问题，另提剩余路径'})
                 options.append({'choice':'stop','meaning':'缺乏回答问题的正文证据'})
                 await self.request(s, options)
@@ -1606,7 +1631,7 @@ class Controller:
             await self.request(s,options);return
         from .closing_policy import limit_kind
         limit=attempt_limit(s.task,getattr(self,'frozen_band',None))
-        if len(getattr(s,'business_attempt_refs',[]))>=limit:
+        if limit is not None and len(getattr(s,'business_attempt_refs',[]))>=limit:
             s._range_close(limit_kind(limit),f'达到{limit}次原子尝试，结束已证连续片段');return
         if self.position>=len(self.plan['steps']):
             if self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False):
@@ -1663,7 +1688,7 @@ class Controller:
                     'original_image_provided':not image,
                     'diagnosis':binding_diagnosis(s.current,step['target']),
                     'note':'未执行任何动作；按diagnosis修正target声明（当前帧role原值/node）或replan剩余路径，仍缺证据可先看原图（若在options中），无法有据继续请stop。'}
-                if self.binding_miss_streak>=REPEATED_BINDING_MISS_LIMIT:
+                if limit is not None and self.binding_miss_streak>=REPEATED_BINDING_MISS_LIMIT:
                     # wwiki-B burned 19 model requests re-submitting the same
                     # unbindable target. A repeated same-kind zero-action miss
                     # now stops bounded; no dispatch ever happened.
@@ -1711,7 +1736,7 @@ class Controller:
                 else:
                     self.qualification_no_progress_key=progress_key
                     self.qualification_no_progress_streak=1
-                if self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
+                if limit is not None and self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
                     from .react_session import ReactStop
                     raise ReactStop('budget','同一状态、目标和动作的资格证据未变化，连续反馈仍无派发，有界停止',
                                     'collector',qualification_no_progress_streak=self.qualification_no_progress_streak,
@@ -1751,7 +1776,7 @@ class Controller:
             if s.task['fragment'].get('plan_protocol') not in IMAGE_CHOICE_PROTOCOLS:
                 raise
             count=getattr(self,'compile_replans',0)
-            if count >= 1:
+            if limit is not None and count >= 1:
                 raise ValueError('PRE_DISPATCH_REPLAN_LIMIT: '+str(error)) from error
             s._consume('max_replans')
             self.compile_replans=count+1

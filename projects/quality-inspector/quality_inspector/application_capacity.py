@@ -2,7 +2,7 @@
 from collections import Counter
 from urllib.parse import urlsplit
 
-LIMIT = 500
+LIMIT = None
 
 
 def application_key(uri, registry=None):

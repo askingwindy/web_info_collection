@@ -755,8 +755,8 @@ class CandidatePool:
                     if object_sha256(ordered_sources) != frozen_row['sources_sha256']:
                         raise ValueError('Frozen candidate sources changed; no replacement claim')
                     verify_evidence([frozen_row['entry_http']])
-                for src in sources:
-                    verify_evidence(src['references'])
+                # The consumer verifies this claimed snapshot before browser IO.
+                # A broken source belongs to one candidate, not the entire queue.
                 cid = row['candidate_id']; claim = str(uuid.uuid4()); token = str(uuid.uuid4())
                 # The lease freezes id, version, body and the source references
                 # visible at claim time; later suggestions cannot alter it.

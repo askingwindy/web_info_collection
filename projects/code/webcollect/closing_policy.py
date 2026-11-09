@@ -8,8 +8,9 @@ from .planning import verify_evidence, object_sha256
 from .reading_progress import same_view
 
 V2_VERSION = 'webcollect-five-eight-attempt-ending-2'
-VERSION = 'webcollect-banded-attempt-ending-3'
-VERSIONS = (V2_VERSION, VERSION)
+V3_VERSION = 'webcollect-banded-attempt-ending-3'
+VERSION = 'webcollect-continuous-attempt-ending-4'
+VERSIONS = (V2_VERSION, V3_VERSION, VERSION)
 MINIMUM = 5
 MAXIMUM = 8
 LONG_MAXIMUM = 12
@@ -23,8 +24,10 @@ def enabled(task):
 def attempt_limit(task, band=None):
     """One ceiling shared by planning, dispatch, closure and saved evidence."""
     fragment=task.get('fragment',{})
+    if fragment.get('ending_policy') == VERSION:
+        return None
     band=band or fragment.get('session_objective',{}).get('objective',{}).get('preferred_band')
-    limit=(LONG_MAXIMUM if fragment.get('ending_policy')==VERSION
+    limit=(LONG_MAXIMUM if fragment.get('ending_policy')==V3_VERSION
            and fragment.get('plan_protocol')=='webcollect-banded-conditional-plan-11'
            and band=='long' else MAXIMUM)
     budget=fragment.get('budgets',{}).get('max_actions')
@@ -39,6 +42,12 @@ def system_prompt(base, task=None):
     start=base.index('通常争取至少五个真实有效操作。')
     end=base.index('\n只引用当前观察',start)
     prompt=PROMPT
+    if task is not None and attempt_limit(task) is None:
+        prompt=('按当前目标和页面证据自然执行，不设动作次数、规划轮次或会话时长配额。'
+                '目标达到即finish；无法继续时如实结束，不凑步。每个真实原子动作分别记账，'
+                'observe/inspect/wait/finish不算有效业务动作。1–4步由宿主标记short_flow，零步不成样本。'
+                '同站仅复用页面和动作知识，禁止复用完整动作链。滚动、跳转、返回后依当前观察重绑，必要时重规划。'
+                '外部效果未知时保留原件，不重发、不拼接、不声称成功。')
     if task is not None and attempt_limit(task)==LONG_MAXIMUM:
         prompt=(prompt.replace('5–8','5–12')
                 .replace('第8次之后宿主收口，不再追加第9次动作','第12次之后宿主收口，不再追加第13次动作'))
@@ -56,8 +65,8 @@ def validate_record(record):
     if not enabled(record['task']) or not marker or marker.get('protocol')!=policy:
         raise ValueError('Missing versioned closure binding')
     band=marker.get('attempt_band')
-    limit=attempt_limit(record['task'],band) if policy==VERSION else MAXIMUM
-    if policy==VERSION and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
+    limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION) else MAXIMUM
+    if policy in (V3_VERSION, VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
         raise ValueError('V3 closure attempt ceiling differs from its frozen task/band')
     attempts=[];raws=[];raw_refs=[]
     for ref in marker['attempt_refs']:
@@ -67,7 +76,7 @@ def validate_record(record):
         attempts.append(attempt)
         for raw_ref in attempt.get('raw_steps',[]):
             verify_evidence([raw_ref]);raws.append(load_json(raw_ref['path']));raw_refs.append(raw_ref)
-    if ([a['number'] for a in attempts]!=list(range(1,len(attempts)+1)) or len(attempts)>limit
+    if ([a['number'] for a in attempts]!=list(range(1,len(attempts)+1)) or (limit is not None and len(attempts)>limit)
             or marker['business_attempts']!=len(attempts)):
         raise ValueError('Versioned business-attempt count changed')
     kind=marker.get('kind')
@@ -211,12 +220,15 @@ def validate_record(record):
 def annotation_errors(annotation):
     marker=annotation.get('steps',[{}])[-1].get('tool_result',{}).get('return_value',{}).get('collection_ending')
     if not marker:return []
-    policy=marker.get('protocol');limit=marker.get('attempt_limit',MAXIMUM) if policy==VERSION else MAXIMUM
+    policy=marker.get('protocol')
+    limit=None if policy==VERSION else marker.get('attempt_limit',MAXIMUM) if policy==V3_VERSION else MAXIMUM
     effective=sum(s.get('action',{}).get('action_type') not in ('wait','complete') for s in annotation['steps'])
     errors=[]
     if (policy not in VERSIONS or marker.get('verified_effective_steps')!=effective
-            or type(marker.get('business_attempts')) is not int or not 0<=marker['business_attempts']<=limit
-            or (policy==VERSION and (marker.get('attempt_limit') not in (MAXIMUM,LONG_MAXIMUM)
+            or type(marker.get('business_attempts')) is not int or marker['business_attempts']<0
+            or (limit is not None and marker['business_attempts']>limit)
+            or (policy==VERSION and marker.get('attempt_limit') is not None)
+            or (policy==V3_VERSION and (marker.get('attempt_limit') not in (MAXIMUM,LONG_MAXIMUM)
                                     or marker.get('attempt_band') not in ('five','long','short',None)))
             or marker.get('actual_atomic_dispatches',-1)!=effective+marker.get('unverified_tail_dispatches',-1)
             or marker.get('safe_for_pending_sample') is not True or marker.get('external_effect_unknown') is not False
@@ -233,7 +245,8 @@ def annotation_errors(annotation):
             or marker.get('finish_origin') not in ('host','agent')
             or marker.get('finish_is_business_action') is not False or marker.get('wait_is_business_action') is not False
             or len(marker.get('attempt_refs',[]))!=attempts
-            or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED') or not 5<=attempts<=limit))
+            or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED')
+                or attempts < (1 if policy==VERSION else 5) or (limit is not None and attempts>limit)))
             or (kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') and (attempts!=limit or kind!=limit_kind(limit)))
             or (marker.get('unverified_tail_dispatches',0)>0 and kind!='KNOWN_NO_EFFECT')):
         errors.append('Versioned exceptional closure kind/range/attempt references are inconsistent')

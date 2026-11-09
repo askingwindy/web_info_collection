@@ -702,7 +702,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
         marker=deepcopy(record['terminal']['collection_ending'])
         steps[-1]['tool_result']['return_value']['collection_ending']=marker
         if marker['flagged']:
-            steps[-1]['exception_evidence']=[f"本段按异常尾步或{marker.get('attempt_limit',8)}次尝试上限结束；目标未确认完成，尾部原件已单独保留。",
+            steps[-1]['exception_evidence']=["本段按原始异常收尾依据结束；目标未确认完成，尾部原件已单独保留。",
                 f"业务动作尝试{marker['business_attempts']}次，真实原子派发{marker['actual_atomic_dispatches']}次，已验证有效步{effective}，未验证尾步{marker['unverified_tail_dispatches']}。"]
             steps[-1]['step_result']='异常收尾后保留可信末态；'+final_goal
     for position in range(len(steps) - 1):

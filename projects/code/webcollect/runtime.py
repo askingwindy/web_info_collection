@@ -21,6 +21,10 @@ from .planning import canonical, object_sha256, timestamp, verify_evidence, veri
 from .storage import allocate_in_transaction, ensure_registry_schema
 
 
+def continuous_task(task):
+    return task.get('fragment', {}).get('ending_policy') == 'webcollect-continuous-attempt-ending-4'
+
+
 DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_workers': 1,
                   'attempt_cap': None, 'pending_review_cap': None, 'max_retries': 2,
                   'lease_seconds': 120, 'task_interval_seconds': 1,
@@ -328,6 +332,9 @@ class RuntimeStore:
         con = self._connect(readonly=True)
         try:
             policy = self._policy(con)
+            tasks = [json.loads(row[0]) for row in con.execute('SELECT task_json FROM m4_tasks WHERE scope_id=?', (self.scope_id,))]
+            if tasks and all(continuous_task(task) for task in tasks):
+                return
         finally:
             con.close()
         if policy.get('site_failure_guard'):
@@ -338,7 +345,7 @@ class RuntimeStore:
 
     @staticmethod
     def _guard_site(policy, task):
-        if policy.get('site_failure_guard'):
+        if not continuous_task(task) and policy.get('site_failure_guard'):
             from .site_failure_stop import SiteFailureStore
             SiteFailureStore(policy['site_failure_guard']).guard(task)
 
@@ -481,26 +488,33 @@ class RuntimeStore:
             from .admission_cohort import guard_scope
             guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
             campaign = policy['campaign_id']
-            concurrency = self.consumer_concurrency(con)
+            concurrency = None
             live = list(con.execute("SELECT a.*,t.domain_key FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.status IN ('reserved','running') AND a.lease_expires_at>?", (current,)))
             if any(r['worker_id'] == worker_id for r in live):
-                return None
-            if (concurrency['max_workers'] is not None
-                    and sum(r['campaign_id'] == campaign for r in live) >= concurrency['max_workers']):
                 return None
             rows = list(con.execute("SELECT t.*,p.plan_sha256 FROM m4_tasks t JOIN m4_plan_tasks p ON p.task_key=t.task_key AND p.scope_id=t.scope_id WHERE t.scope_id=? AND t.status='queued' AND t.next_eligible_at<=? ORDER BY p.ordinal", (self.scope_id, current)))
             for row in rows:
                 if plan_sha256 is not None and row['plan_sha256'] != plan_sha256:
                     continue
-                if row['capability_expires_at'] <= current:
+                task = json.loads(row['task_json'])
+                continuous = continuous_task(task)
+                if not continuous and concurrency is None:
+                    concurrency = self.consumer_concurrency(con)
+                if not continuous and (concurrency['max_workers'] is not None
+                        and sum(r['campaign_id'] == campaign for r in live) >= concurrency['max_workers']):
+                    continue
+                if continuous and con.execute('SELECT 1 FROM m4_attempts WHERE task_key=? LIMIT 1', (row['task_key'],)).fetchone():
+                    con.execute("UPDATE m4_tasks SET status='needs_replan',quota_reserved=0 WHERE task_key=?", (row['task_key'],))
+                    continue  # A new candidate never resumes or replays an earlier attempt.
+                if not continuous and row['capability_expires_at'] <= current:
                     con.execute("UPDATE m4_tasks SET status='needs_replan',quota_reserved=0 WHERE task_key=?", (row['task_key'],))
                     self._event(con, 'capability_expired', current, task_key=row['task_key'])
                     continue
-                if (concurrency['max_domain_workers'] is not None
+                if (not continuous and concurrency['max_domain_workers'] is not None
                         and sum(r['domain_key'] == row['domain_key'] for r in live) >= concurrency['max_domain_workers']):
                     continue
                 domain = con.execute('SELECT next_start_at FROM m4_domains WHERE domain_key=?', (row['domain_key'],)).fetchone()
-                if domain and domain[0] > current:
+                if not continuous and domain and domain[0] > current:
                     continue
                 task = json.loads(row['task_json'])
                 from .site_failure_stop import SiteStopped
@@ -554,8 +568,10 @@ class RuntimeStore:
                        required=self._policy(con).get('pilot_identity_required', False))
             from .admission_cohort import guard_scope
             guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
-            if row['capability_expires_at'] <= current:
+            if not continuous_task(json.loads(row['task_json'])) and row['capability_expires_at'] <= current:
                 raise ValueError('能力已过期，不能开始真实执行')
+            if continuous_task(json.loads(row['task_json'])) and row['started_at'] is not None:
+                raise ValueError('Continuous candidate attempt already started; never resume its trajectory')
             if row['started_at'] is None:
                 con.execute("UPDATE m4_attempts SET status='running',started_at=? WHERE attempt_id=?", (current, attempt_id))
                 con.execute("UPDATE m4_tasks SET status='running' WHERE task_key=?", (row['task_key'],))
@@ -576,7 +592,8 @@ class RuntimeStore:
     def _failure_transition(self, con, row, current, policy):
         failures = con.execute('SELECT COUNT(*) FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.campaign_id=? AND t.task_id=? AND a.root_cause=? AND a.started_at IS NOT NULL AND a.finished_at IS NOT NULL',
                                (row['campaign_id'], row['task_id'], row['root_cause'])).fetchone()[0]
-        retry = row['failure_class'] in RETRYABLE and failures <= policy['max_retries']
+        retry = (not continuous_task(json.loads(row['task_json']))
+                 and row['failure_class'] in RETRYABLE and failures <= policy['max_retries'])
         status = 'queued' if retry else 'needs_replan'
         delay = policy['retry_backoff_seconds'] * (2 ** max(0, failures - 1)) if retry else 0
         con.execute('UPDATE m4_tasks SET status=?,quota_reserved=?,next_eligible_at=? WHERE task_key=?',
@@ -584,6 +601,8 @@ class RuntimeStore:
         return {'next_status': status, 'same_root_cause_failures': failures, 'retry_permitted': retry}
 
     def _domain_finished(self, con, row, current, policy):
+        if continuous_task(json.loads(row['task_json'])):
+            return
         next_at = current + policy['task_interval_seconds']
         con.execute('INSERT INTO m4_domains VALUES(?,?) ON CONFLICT(domain_key) DO UPDATE SET next_start_at=MAX(next_start_at,excluded.next_start_at)', (row['domain_key'], next_at))
 
@@ -1082,8 +1101,10 @@ class RuntimeStore:
                 if row['started_at'] is not None:
                     transition = self._failure_transition(con, saved, current, policy)
                 else:
-                    con.execute("UPDATE m4_tasks SET status='queued',next_eligible_at=? WHERE task_key=?", (current, row['task_key']))
-                    transition = {'next_status': 'queued', 'real_attempt': False}
+                    next_status = 'needs_replan' if continuous_task(json.loads(row['task_json'])) else 'queued'
+                    con.execute('UPDATE m4_tasks SET status=?,quota_reserved=?,next_eligible_at=? WHERE task_key=?',
+                                (next_status, int(next_status == 'queued'), current, row['task_key']))
+                    transition = {'next_status': next_status, 'real_attempt': False}
                 self._domain_finished(con, row, current, policy)
                 self._event(con, 'lease_recovered', current, {'reason': reason, 'status': status, **transition}, row['task_key'], attempt_id)
                 recovered.append(self._view(saved))

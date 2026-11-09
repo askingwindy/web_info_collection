@@ -1,8 +1,8 @@
-"""Bounded local congestion waits; retry only a never-dispatched queued job."""
+"""Wait for local congestion without discarding never-dispatched work."""
 import asyncio
 import time
 
-from .batch_core import BudgetStop
+from .batch_core import BudgetStop, CONSUMER_KINDS
 
 
 def recoverable_congestion(error):
@@ -12,8 +12,10 @@ def recoverable_congestion(error):
     )
 
 
-async def claim_job(ledger, kind, *, job_id, wait_seconds=120, **kwargs):
-    deadline = time.monotonic() + wait_seconds
+async def claim_job(ledger, kind, *, job_id, wait_seconds=None, **kwargs):
+    if wait_seconds is None and kind not in CONSUMER_KINDS:
+        wait_seconds = 120
+    deadline = None if wait_seconds is None else time.monotonic() + wait_seconds
     retries = 0
     while True:
         try:
@@ -21,10 +23,12 @@ async def claim_job(ledger, kind, *, job_id, wait_seconds=120, **kwargs):
         except BudgetStop as error:
             if not recoverable_congestion(error):
                 raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 raise
-            delay = min(2 ** min(retries + 1, 4), 10, remaining)
+            delay = min(2 ** min(retries + 1, 4), 10)
+            if remaining is not None:
+                delay = min(delay, remaining)
             with ledger.transaction() as con:
                 ledger.event(con, 'consumer_congestion_wait', {
                     'job_id': job_id, 'kind': kind, 'retry': retries + 1,

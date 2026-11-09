@@ -385,7 +385,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
     feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger,
         candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
-    if feedback_context['unresolved']:
+    if task.get('fragment', {}).get('ending_policy') != 'webcollect-continuous-attempt-ending-4' and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
     from .banded_plan import enabled as banded_plan_enabled
@@ -422,7 +422,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
             evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
-        if failure_class == 'program':
+        if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') != 'webcollect-continuous-attempt-ending-4':
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         return {'status': 'rejected', 'failure_class': failure_class,
@@ -569,7 +569,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
     from .planning import verify_publication, object_sha256
-    from .runtime import RuntimeStore
+    from .runtime import RuntimeStore, continuous_task
     from .scaffold import program_version
     from .evidence import audit_capture
     from .telemetry import NetworkMeter, phase, worker_measurement
@@ -580,6 +580,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     startup_frames = {}
     with frame_validation_scope(startup_frames), preparation_phase(timing, "runtime_validate"):
         plan = read_json(plan_path)
+        continuous = bool(plan.get('tasks')) and all(continuous_task(task) for task in plan['tasks'])
         history = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope') or {}
         if history.get('candidate_project'):
             from .current_chain import assert_current_result_path
@@ -748,7 +749,6 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     stopping_checkpoint = None
     async with worker_measurement(store, worker_id, output), _collection_browser(channel, headless, entry_session) as browser:
         manifest.update(browser_version=browser.version, playwright_version=version('playwright'))
-        idle_waited = 0
         try:
             while True:
                 verify_publication(plan, publication)
@@ -762,14 +762,12 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 if attempt is None:
                     latest = store.snapshot()
                     active = any(row['status'] in ('running', 'reserved') for row in latest['tasks'])
-                    if (idle_waited < 5 and latest['scope']['state'] == 'active' and not active
+                    if (latest['scope']['state'] == 'active' and not active
                             and any(row['status'] == 'queued' for row in latest['tasks'])):
                         # Briefly accommodate a scheduler/domain backoff.
                         await asyncio.sleep(1)
-                        idle_waited += 1
                         continue
                     break
-                idle_waited = 0
                 snapshot = sync_manifest(store, output, manifest)
                 attempt = store.start_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'])
                 if entry_session is not None:
@@ -814,7 +812,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                     candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'),
                                     generation=planning_context.get('history',[]),
                                     quality=[q['reference'] for q in planning_context.get('quality_feedback',[])])
-                                if feedback_context['unresolved']:
+                                if not continuous_task(task) and feedback_context['unresolved']:
                                     # Exclude only this already claimed attempt.
                                     if any(r.get('attempt_id') != attempt['attempt_id'] for r in feedback_context['unresolved']):
                                         raise CollectionFailure('Unresolved prior attempt blocks dynamic dispatch', 'program')
@@ -929,7 +927,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                  'cleanup_error_type': type(cleanup_error).__name__,
                                  'cleanup_error': str(cleanup_error), 'ledger_settled': True,
                                  'not_business_success_evidence': True})
-                        if classify_failure(error) == 'program':
+                        if classify_failure(error) == 'program' and not continuous:
                             store.set_scope_paused(True, 'Program validation failure; preserve rejected attempt and stop before another allocation')
                 try:
                     with phase(phase_ledger, 'attempt_runner', scope=meter_identity):
@@ -945,13 +943,14 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         current_attempt = next(row for row in store.attempt_ledger()['attempts']
                                                if row['attempt_id'] == attempt['attempt_id'])
                         measurement = meter.close(current_attempt['status'])
-                        if measurement['measurement_status'] != 'PASS':
+                        if measurement['measurement_status'] != 'PASS' and not continuous:
                             store.set_scope_paused(True, 'Network measurement incomplete; retain original attempt outcome')
                             raise ValueError('网络计量不完整；保留真实attempt结果并暂停后续任务')
                     snapshot = sync_manifest(store, output, manifest)
                 if entry_session is not None:
                     break  # A second formal attempt requires a fresh candidate session.
-                await asyncio.sleep(snapshot['policy']['task_interval_seconds'])
+                if not continuous:
+                    await asyncio.sleep(snapshot['policy']['task_interval_seconds'])
         finally:
             sync_manifest(store, output, manifest)
     # Include the durable worker-finish event in the derived snapshot too.

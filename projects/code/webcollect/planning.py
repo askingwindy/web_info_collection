@@ -312,7 +312,8 @@ def _build_publication(plan, capabilities, *, now=None, require_preflight=True):
             from .candidate_contract import validate_task_binding, guard_claim
             validate_task_binding(task, catalog[key]); guard_claim(task)
             capability = validate_capability(catalog[key], now=current, require_ready=False)
-            if timestamp(capability['expires_at']) <= current:
+            if (task.get('fragment',{}).get('ending_policy') != 'webcollect-continuous-attempt-ending-4'
+                    and timestamp(capability['expires_at']) <= current):
                 raise ValueError('Consumer observation expired')
         elif is_react_task(task):
             # React URL entries qualify inside their own session preflight;

@@ -516,6 +516,92 @@ def validate_client_layout(root):
     return {'structural_pass': True, 'samples': len(ids), 'steps': steps, 'customer_acceptance': 'UNKNOWN'}
 
 
+def append_client_package(repo, source, output, *, files_sha256, staging_root):
+    """Append an already exported item without recopying prior screenshots.
+
+    Source format and save receipts are established by the ordinary exporter.
+    Only the new payload is copied/hashed; package indexes and documents are
+    regenerated. The output lock is separate from consumer dispatch locks.
+    """
+    import fcntl
+    repo, source, output = Path(repo), Path(source), Path(output)
+    if files_sha256 != {p.relative_to(source).as_posix(): sha(p)
+                       for p in source.rglob('*') if p.is_file()}:
+        raise ValueError('Saved customer export changed before delivery')
+    source_sites = read_json(source / 'site-list.json')
+    with (source / 'metadata.csv').open(newline='', encoding='utf-8') as stream:
+        incoming = list(csv.DictReader(stream))
+    Path(staging_root).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=staging_root, prefix='publish-') as temporary:
+        stage = Path(temporary)
+        for name in ('samples', 'ground_truth'):
+            shutil.copytree(source / name, stage / name)
+        lock_dir = output.parent.parent / ('.' + output.parent.name + '-locks')
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with (lock_dir / (output.name + '.lock')).open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            output.mkdir(parents=True, exist_ok=True)
+            for name in ('samples', 'ground_truth'):
+                (output / name).mkdir(exist_ok=True)
+            current = read_json(output / 'site-list.json') if (output / 'site-list.json').exists() else {
+                'schema_version':'webcollect-site-list-1', 'sites':[], 'samples':[]}
+            sites = {row['site_id']:row for row in current['sites']}
+            members = {row['sample_id']:row['site_id'] for row in current['samples']}
+            for row in source_sites['sites']:
+                old = sites.get(row['site_id'])
+                if old and any(old[key] != row[key] for key in ('uri','site_category')):
+                    raise ValueError('Conflicting delivery site identity')
+                sites.setdefault(row['site_id'], {**row, 'sample_ids':[]})
+            for row in source_sites['samples']:
+                sid, site_id = row['sample_id'], row['site_id']
+                if sid in members and members[sid] != site_id:
+                    raise ValueError('Conflicting delivery sample owner')
+                # A publication interrupted between payload and index updates
+                # resumes from the same saved sample; it never recollects it.
+                for relative in (Path('samples') / sid, Path('ground_truth') / (sid + '.json')):
+                    destination = output / relative
+                    if destination.exists():
+                        paths = list(destination.rglob('*')) if destination.is_dir() else [destination]
+                        actual={path.relative_to(output).as_posix():sha(path) for path in paths if path.is_file()}
+                        prefix=relative.as_posix()
+                        expected={name:digest for name,digest in files_sha256.items()
+                                  if name==prefix or name.startswith(prefix+'/')}
+                        if actual!=expected:
+                            raise ValueError('Existing delivered sample is incomplete or differs from its original export')
+                    else:
+                        (stage / relative).replace(destination)
+                members[sid] = site_id
+            for site_id, row in sites.items():
+                row['sample_ids'] = [sid for sid, owner in members.items() if owner == site_id]
+            write_json(stage / 'site-list.json', {'schema_version':'webcollect-site-list-1',
+                'sites':list(sites.values()),
+                'samples':[{'sample_id':sid,'site_id':owner} for sid,owner in members.items()]})
+            metadata = {}
+            if (output / 'metadata.csv').exists():
+                with (output / 'metadata.csv').open(newline='', encoding='utf-8') as stream:
+                    metadata.update((row['sample_id'],row) for row in csv.DictReader(stream))
+            metadata.update((row['sample_id'],row) for row in incoming)
+            with (stage / 'metadata.csv').open('w', newline='', encoding='utf-8') as stream:
+                writer=csv.DictWriter(stream, fieldnames=COLUMNS); writer.writeheader()
+                writer.writerows(metadata.values())
+            records=[{'sample_id':sid, 'data':read_json(output/'samples'/sid/'annotation.json'),
+                      'site':sites[owner], 'manifest_path':None} for sid,owner in members.items()]
+            _documents(repo, stage, records)
+            hashes = {}
+            if (output / 'SHA256SUMS').exists():
+                for line in (output / 'SHA256SUMS').read_text().splitlines():
+                    digest, relative = line.split('  ',1); hashes[relative]=digest
+            hashes.update({relative:digest for relative,digest in files_sha256.items()
+                           if relative.startswith(('samples/','ground_truth/'))})
+            for name in sorted(ROOT_FILES - {'SHA256SUMS'}):
+                hashes[name] = sha(stage / name)
+                (stage / name).replace(output / name)
+            (stage / 'SHA256SUMS').write_text(''.join(
+                digest + '  ' + relative + '\n' for relative,digest in sorted(hashes.items())))
+            (stage / 'SHA256SUMS').replace(output / 'SHA256SUMS')
+    return {'customer_output':str(output), 'sample_ids':[row['sample_id'] for row in incoming]}
+
+
 def build_client_package(repo, source, output, *, reviews=None, approved_only=False,
                          evidence_output=None, review_output=None, facts=None, revisions=None,
                          selection_report=None, source_packages=None):

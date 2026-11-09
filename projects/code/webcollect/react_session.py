@@ -243,7 +243,6 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
                 spec['reference_protocol'] = reference_protocol
             if skip_wechat_articles:
                 spec['skip_wechat_articles'] = True
-        spec['glm_http_call_limit'] = SessionGLMCallLimit.limit
         spec['effective_action_rule'] = RULE_VERSION
         spec['rule_sources'] = rule_sources()
         spec['allow_controlled_exception'] = bool(allow_controlled_exception)
@@ -275,7 +274,6 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
                 task['fragment']['reference_protocol'] = spec['reference_protocol']
             if skip_wechat_articles:
                 task['fragment']['skip_wechat_articles'] = True
-        task['fragment']['glm_http_call_limit'] = spec['glm_http_call_limit']
         task['fragment']['effective_action_rule'] = RULE_VERSION
         task['fragment']['allow_controlled_exception'] = bool(allow_controlled_exception)
         task['fragment']['policy_version'] = 'legal-web-actions-react-native-2'
@@ -433,10 +431,10 @@ def validate_task(task):
             raise ValueError('reasoning_effort_profile requires a native conditional-plan task')
         if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
             raise ValueError('Invalid frozen reasoning effort profile')
-    from .closing_policy import VERSION as CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
+    from .closing_policy import VERSION as CLOSE_POLICY, V3_VERSION as BANDED_CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
     if fragment.get('plan_protocol'):
-        expected_close=CLOSE_POLICY if fragment['plan_protocol']=='webcollect-banded-conditional-plan-11' else LEGACY_CLOSE_POLICY
-        if fragment.get('ending_policy')!=expected_close:
+        expected_close=(CLOSE_POLICY, BANDED_CLOSE_POLICY) if fragment['plan_protocol']=='webcollect-banded-conditional-plan-11' else (LEGACY_CLOSE_POLICY,)
+        if fragment.get('ending_policy') not in expected_close:
             raise ValueError('Conditional plan and atomic ending policy versions do not match')
     from .reading_progress import END_POLICY
     if fragment.get('ending_policy') not in (None,END_POLICY,*CLOSE_POLICIES):
@@ -547,7 +545,8 @@ class ReactSession:
         validate_task(task)
         self.task = deepcopy(task)
         self.native = self.task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
-        from .banded_plan import enabled, Controller, SYSTEM as PLAN_SYSTEM, VERSION as PLAN_VERSION, MODERN_BRANCH_PROTOCOLS, tools as plan_tools, system_for
+        from .banded_plan import enabled, Controller, SYSTEM as PLAN_SYSTEM, VERSION as PLAN_VERSION, MODERN_BRANCH_PROTOCOLS, tools as plan_tools, system_for, system_with_attempt_limit
+        from .closing_policy import attempt_limit
         from .direct_article import protocol_schema
         from .goal_evidence import contract_for
         contracted = bool(contract_for(task))
@@ -573,7 +572,9 @@ class ReactSession:
         # session never creates or requires a platform of its own.
         self.phase_ledger = Path(phase_ledger) if phase_ledger else None
         self.active_reference = None
-        self.budgets = deepcopy(self.task['fragment']['budgets'])
+        self.budgets = (dict.fromkeys(BUDGET_KEYS)
+            if self.task['fragment'].get('ending_policy') == 'webcollect-continuous-attempt-ending-4'
+            else deepcopy(self.task['fragment']['budgets']))
         self.glm_session_id = getattr(choose, 'glm_session_id', None)
         self.glm_http_requests = None
         if self.native and self.glm_session_id:
@@ -603,7 +604,7 @@ class ReactSession:
         self.navigation_count = 0
         self.actual_dispatches = 0
         self.started = time.monotonic()
-        self.host_limits = deepcopy(host_limits)
+        self.host_limits = None if self.task['fragment'].get('ending_policy') == 'webcollect-continuous-attempt-ending-4' else deepcopy(host_limits)
         self.page_urls = list(self.task['fragment']['page_urls'])
         self.dialogs = []
         self.excluded_links_seen = set()
@@ -614,14 +615,14 @@ class ReactSession:
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
              'language_exclusion_policy': __import__('webcollect.page_language',fromlist=['VERSION']).VERSION,
              **({'host_limits': self.host_limits} if self.host_limits else {}),
-             'system_prompt_sha256': object_sha256(system_for(task) if contracted or (self.plan_controller and self.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS) else PLAN_SYSTEM if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
+             'system_prompt_sha256': object_sha256(system_with_attempt_limit(system_for(task),attempt_limit(task)) if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
              'decision_protocol': self.task['fragment']['decision_protocol'] if self.native else REACT_VERSION,
              **({'attempt_id': self.attempt_id} if contracted else {}),
              **({'first_plan_reasoning_effort': getattr(choose,'first_plan_reasoning_effort',None),
                  'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort',None)} if self.native else {}),
              **({'first_plan_timeout_seconds': choose.first_plan_timeout_seconds}
                 if getattr(choose,'first_plan_timeout_seconds',None) else {}),
-             **({'tool_schema_sha256': object_sha256(protocol_schema(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS),contract_for(self.task)) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
+             **({'tool_schema_sha256': object_sha256(protocol_schema(plan_tools(contracted,pending_checks=self.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS,max_steps=attempt_limit(task)),contract_for(self.task),max_steps=attempt_limit(task)) if self.plan_controller else native_tools(self.task['fragment']['allowed_actions'], self.task['fragment']['decision_protocol'],
                     self.task['fragment'].get('reference_protocol'))),
                  'effective_action_rule': RULE_VERSION,
                  # The recorded effort is the value actually dispatched, not the
@@ -1062,7 +1063,7 @@ class ReactSession:
         unknown=bool(unknown or self.unknown or (tail_dispatches and not safe and not tail_known))
         flagged=kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
         self.collection_ending={'protocol':POLICY,'kind':kind,'flagged':flagged,'reason':reason,
-            **({'attempt_limit':limit,'attempt_band':band} if POLICY=='webcollect-banded-attempt-ending-3' else {}),
+            **({'attempt_limit':limit,'attempt_band':band} if POLICY in ('webcollect-banded-attempt-ending-3','webcollect-continuous-attempt-ending-4') else {}),
             'business_attempts':len(refs),'actual_atomic_dispatches':self.actual_dispatches,
             'verified_effective_steps':len(self.trajectory),'unverified_tail_dispatches':tail_dispatches,
             'zero_dispatch_attempts':sum(a['actual_dispatches_delta']==0 for a in attempts),
@@ -1114,9 +1115,9 @@ class ReactSession:
         from .closing_policy import attempt_limit,limit_kind
         band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
         limit=attempt_limit(self.task,band)
-        if 5<=number<=limit and outcome!='VERIFIED':
+        if limit is not None and 5<=number<=limit and outcome!='VERIFIED':
             self._range_close(outcome,reason,unknown=unknown)
-        elif number==limit and self.plan_controller is None:
+        elif limit is not None and number==limit and self.plan_controller is None:
             self._range_close(limit_kind(limit),f'已达到{limit}次业务动作尝试；未获得目标完成确认，保存真实末态待审')
 
     async def _tool_act(self, arguments):
@@ -1514,7 +1515,7 @@ class ReactSession:
         from .closing_policy import attempt_limit,limit_kind
         band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
         limit=attempt_limit(self.task,band)
-        if number>limit:
+        if limit is not None and number>limit:
             self._range_close(limit_kind(limit),f'已达{limit}次业务动作尝试，不再派发第{limit+1}次')
             return self._ok('act',summary=self.stop_summary,data={'collection_ending':self.collection_ending})
         self._active_business_attempt=number
@@ -2010,8 +2011,8 @@ class ReactSession:
                 result['ending_evidence']={'protocol':POLICY,'business_attempts':len(getattr(self,'business_attempt_refs',[])),
                     'actual_atomic_dispatches':self.actual_dispatches,'verified_effective_steps':len(self.trajectory),
                     'unverified_tail_dispatches':self.actual_dispatches-len(self.trajectory),
-                    'finish_counted_as_action':False,'attempt_interval':[5,limit]}
-                result['reading_progress']['instruction']=f'按当前新正文与位置核对目标；达到目标就finish，不凑步。5–{limit}次业务动作尝试内异常尾步由宿主收口并标记。'
+                    'finish_counted_as_action':False,'attempt_interval':None if limit is None else [5,limit]}
+                result['reading_progress']['instruction']='按当前新正文与位置核对目标；达到目标就finish，不凑步；失败与未知结果照实保留。'
             if self.task['fragment'].get('planning_intent_protocol'):
                 result['planning_basis']={'site_primary_category':self.task.get('site_category','UNKNOWN'),
                     'page_purpose':(self.task.get('candidate_binding') or {}).get('candidate',{}).get('page_purpose','UNKNOWN'),
@@ -2207,8 +2208,6 @@ class ReactSession:
             if usage['unresolved']:
                 raise ReactStop('blocked', '原尝试请求待核实，保留 UNKNOWN 不重发：' + usage['unresolved'],
                                 'interrupted', unknown=True)
-            if self.glm_session_id and usage['used'] >= SessionGLMCallLimit.limit:
-                raise SessionGLMCallLimit(self.glm_session_id, usage['used'])
         else:
             counter = getattr(self.choose, 'requests_used', None)
             if counter is not None:
@@ -2361,9 +2360,6 @@ class ReactSession:
             return self._raw_receipt
         if self.state == 'recording':
             self.state = 'closed_by_host'
-        if (self.state == 'finished' and self.stop_reason == 'budget' and self.glm_http_requests is not None
-                and self.glm_http_requests >= SessionGLMCallLimit.limit):
-            self.stop_details = SessionGLMCallLimit(self.glm_session_id, self.glm_http_requests).details
         from .postprocess import flow_classification
         self.short_flow, self.short_flow_reason = flow_classification(len(self.trajectory))
         if self._v2() and not getattr(self,'collection_ending',None):
@@ -2371,7 +2367,7 @@ class ReactSession:
             from .closing_policy import attempt_limit
             band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
             limit=attempt_limit(self.task,band)
-            budget_prefix=(original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
+            budget_prefix=(limit is not None and original_stop=='budget' and not self.unknown and not getattr(self,'host_failure',False)
                            and 5<=len(getattr(self,'business_attempt_refs',[]))<=limit and bool(self.trajectory))
             # Every dispatch accounted for by a definite attempt outcome keeps
             # the closeout definite: a known zero-effect tail never turns the
@@ -2666,9 +2662,7 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
             first_plan_effort = 'low' if grounded else ledger.config['model'].get('reasoning_effort', 'max')
             branch_effort = first_plan_effort if grounded else 'max'
     current_plan = plan_protocol in banded_protocols
-    request_limit = task['fragment']['budgets']['max_model_calls']
-    if ledger.real_glm and 'glm_http_call_limit' in task['fragment']:
-        request_limit = min(request_limit or SessionGLMCallLimit.limit, SessionGLMCallLimit.limit)
+    request_limit = None
 
     async def choose(prompt):
         nonlocal gateway
@@ -2755,7 +2749,8 @@ def _native_chooser(ledger, task, attempt_id, guard_unresolved, *, parent_job=No
                     from .banded_plan import choice_schema
                     from .direct_article import protocol_schema
                     completion=prompt.get('direct_completion_protocol')=='webcollect-direct-reading-completion-1'
-                    branch_limit=prompt.get('replan_contract',{}).get('attempt_limit',8)
+                    from .closing_policy import attempt_limit
+                    branch_limit=attempt_limit(task)
                     # V9 ordinary branches use the same choice wire protocol as
                     # grounded branches; V8 and older keep their original form.
                     response = await asyncio.to_thread(gateway.call_message, job, prompt['protocol'],

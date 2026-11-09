@@ -5,6 +5,7 @@ Ark reference: https://docs.volcengine.com/docs/ark/chat-api?lang=zh
 Prices/model names are explicit configuration, never inferred from chat access.
 """
 from copy import deepcopy
+from itertools import count
 import base64
 import json
 from pathlib import Path
@@ -21,7 +22,7 @@ from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 
-from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, BudgetStop, _integer, validate_config, file_sha, save_json
+from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, BudgetStop, CONSUMER_KINDS, _integer, validate_config, file_sha, save_json
 from .planning import object_sha256
 
 
@@ -563,6 +564,7 @@ class ModelGateway:
               attempts=2, output_limit=None, tools=None, tool_choice=None, native_context=None):
         model = self.config['model']
         qc_transport = job['kind'] in QC_KINDS
+        consumer = job['kind'] in CONSUMER_KINDS
         if output_limit is not None:
             if type(output_limit) is not int or not 1<=output_limit<=model['max_completion_tokens']:
                 raise ValueError('Stage output limit may only tighten the original reservation')
@@ -642,7 +644,7 @@ class ModelGateway:
                 raise OutcomeUnknown('Original request unresolved; no credential selection or replacement')
         if self.config['mode'] == 'real':
             session_id = (native_context or {}).get('attempt_id') or job['id']
-            if native_context and self.ledger.real_glm:
+            if native_context and self.ledger.real_glm and not consumer:
                 with self.ledger.connect() as con:
                     prior = self.ledger.session_http_usage(con, session_id)
                 if prior['held']:
@@ -651,7 +653,7 @@ class ModelGateway:
                 if prior['used'] >= SessionGLMCallLimit.limit:
                     raise SessionGLMCallLimit(session_id, prior['used'])
             if self._session_id != session_id:
-                self._credential = self.ledger.bind_model_session(session_id)
+                self._credential = self.ledger.bind_model_session(session_id, consumer=consumer)
                 self._session_id = session_id
         correction = None
         qc_binding = {}
@@ -663,7 +665,9 @@ class ModelGateway:
                               if isinstance(material.get(name), str)}
         timeout_retry = {}
         timeout_retries = invalid_attempts = 0
-        for attempt in range(attempts + 3):
+        for attempt in (count() if consumer else range(attempts + 3)):
+            if consumer:
+                self.ledger.heartbeat(job)
             dispatch_policy = (native_context or {}).get('dispatch_policy')
             if model['provider']!='synthetic' and not qc_transport:
                 # DNS resolution is provably before HTTP dispatch. Do not turn
@@ -685,7 +689,7 @@ class ModelGateway:
                         raise ValueError('Local provider DNS preflight failed before reservation/HTTP dispatch') from None
             while True:
                 try:
-                    deadline = (native_context or {}).get('dispatch_deadline')
+                    deadline = None if consumer else (native_context or {}).get('dispatch_deadline')
                     if deadline is not None and time.monotonic() >= deadline:
                         raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
                     if qc_transport:
@@ -727,7 +731,7 @@ class ModelGateway:
             if request['state'] != 'new':
                 if request['state'] == 'invalid_response':
                     invalid_attempts += 1
-                    if invalid_attempts >= attempts:
+                    if not consumer and invalid_attempts >= attempts:
                         break
                 continue  # Previously charged invalid response is retained, never resent under the same identity.
             rid = request['id']
@@ -912,7 +916,7 @@ class ModelGateway:
                 self._settle_failure(job,rid, state='unknown', error=type(error).__name__,
                                            response={'transport_error': detail, **transport_receipt})
                 producer_discovery = job['kind'] in ('ai-search-plan','ai-application-site-classification-1','ai-grounded-entry-ids-1')
-                retry_allowed = (not qc_transport and isinstance(root, TimeoutError) and timeout_retries < 3
+                retry_allowed = (not consumer and not qc_transport and isinstance(root, TimeoutError) and timeout_retries < 3
                                  and not producer_discovery and not dispatch_policy)
                 if retry_allowed and native_context:
                     with self.ledger.connect() as con:
@@ -951,7 +955,7 @@ class ModelGateway:
                     raise OutcomeUnknown('Missing provider usage; reservation retained') from None
                 invalid_attempts += 1
                 timeout_retry = {}
-                if qc_transport or invalid_attempts >= attempts:
+                if qc_transport or (not consumer and invalid_attempts >= attempts):
                     break
                 if native_context:
                     path = list(getattr(error, 'absolute_path', ()))
