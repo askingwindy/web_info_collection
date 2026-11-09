@@ -92,16 +92,16 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False):
 
 
 def natural_instruction(task, record, effective):
-    """Describe executed stages; retain requested/working intent in evidence."""
+    """Describe the working goal once; retain every executed stage in evidence."""
     app = task['app_name']
     if record.get('trusted_prefix'):
         from .trusted_prefix import natural_instruction as prefix_instruction
         return prefix_instruction(record)
     actual = list(dict.fromkeys(row.get('semantic_goal') or row.get('goal') or '' for row in record['trajectory']))
-    focus = '、'.join(g for g in actual if g)
+    focus = (record['terminal'].get('working_goal') or '').strip() or '、'.join(g for g in actual if g)
     if focus:
         from .task_instruction import generated_instruction
-        return generated_instruction(f'在「{app}」上{focus}，查看实际输入与页面结果')
+        return generated_instruction(f'在「{app}」上{focus}')
     return f'在「{app}」上连续完成{effective}步真实网页操作并查看实际状态'
 
 
@@ -424,8 +424,6 @@ def terminal_outcome(task, record, final_state):
         # remains in the raw observation. The delivery narrative describes the
         # independently rechecked, currently visible reading passage only.
         description = '当前正文可见「' + scoped_passage + '」'
-    elif lines:
-        description += '；末帧可见文字「' + '；'.join(lines)[:1200] + '」'
     title = (final_state.get('title') or '').strip().casefold()
     visible = (final_state.get('visible_text') or '').strip().casefold()
     denial = ('您的访问被阻止', '访问被拒绝', '访问受限', 'access denied', 'verify you are human',
@@ -454,6 +452,12 @@ def terminal_outcome(task, record, final_state):
     if terminal.get('stop_reason') not in ('ready', 'budget'):
         return 'failed', description
     return 'success', description
+
+
+def terminal_judgement(completion_status, final_result):
+    """Identify the visible terminal basis without repeating the whole viewport."""
+    prefix = '末帧完成判定依据：' if completion_status == 'success' else '末帧状态判定依据：'
+    return prefix + final_result
 
 
 def _write_delivery_bytes(path, data):
@@ -630,6 +634,7 @@ def derive(task, record, delivery, ids, manifest, *, resume=False):
             file_sha(delivery / steps[position]['image_path']) != file_sha(delivery / steps[position + 1]['image_path'])
     stop_summary = (record['terminal'].get('stop_summary') or '').strip()
     final_result = final_result if native else stop_summary or task['final_result']
+    completion_judgement = terminal_judgement(completion_status, final_result) if native else final_result
     from .trajectory_types import classify
     actual_types=classify(record) if task['fragment'].get('planning_intent_protocol') else {'task_type':task['task_type'],'status':'LEGACY'}
     result['actual_task_types']=actual_types
@@ -647,7 +652,7 @@ def derive(task, record, delivery, ids, manifest, *, resume=False):
         'trajectory_source': {'source_type': 'agent', 'data_type': 'webcollect_agent_v1',
                               'action_space': 'unified_gui_v4'},
         'steps': steps, 'final_state_image': final_image, 'final_result': final_result,
-        'completion_status': completion_status, 'completion_judgement': final_result}
+        'completion_status': completion_status, 'completion_judgement': completion_judgement}
     if short:
         annotation['short_flow'] = True
         annotation['short_flow_reason'] = reason
