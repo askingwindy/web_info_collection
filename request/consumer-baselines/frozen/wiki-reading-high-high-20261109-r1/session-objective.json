@@ -1,0 +1,31 @@
+{
+  "authorization": "隔离研发工程 wwiki-mix-20261109-r01 r2：跨页阅读基线修正后的正规 Runtime 保存闭环：目标文本改为由模型依据页面可见超链接自主选择一个相关链接点击查阅并返回续读（r1 假设正文存在「日食」链接与实际页面不符，绑定有界停止，原样本不回写）；业务 objective/evidence contract (webcollect-goal-evidence-2 reading 月食/月球/地球, direct_entry)/动作级最小证据(webcollect-action-scoped-evidence-1)/最少5步/long 档逐字保留自 request/consumer-baselines/zh-wikipedia-direct-reading-cross-page.json；不经过站内检索；外层身份为 put()(baseline_import) 登记的 target 类新候选（同入口不同明确目标）；high/high 一次有界会话(≤25次真实GLM)；production_counted=false。",
+  "candidate_id": "candidate-1bca4ce2-a6ff-4e4d-9d74-8444744bf47c",
+  "entry_url": "https://zh.wikipedia.org/wiki/%E6%9C%88%E9%A3%9F",
+  "objective": {
+    "description": "从中文维基百科「月食」词条直接开始阅读，不经过站内检索。往下阅读正文，依据当前页面证据自由组合滚动、目录或相关链接点击、返回等合法操作；阅读中依据当前页面可见的超链接，自主选择一个与阅读问题相关的链接点击查阅关联词条，核验后返回原词条续读，用月食词条正文说明发生月食时太阳、地球与月球的相对位置次序，以及月食为什么只发生在满月前后。",
+    "evidence_contract": {
+      "aspects": [
+        "月球",
+        "地球"
+      ],
+      "direct_entry": true,
+      "kind": "reading",
+      "subject": "月食",
+      "version": "webcollect-goal-evidence-2"
+    },
+    "evidence_policy": "webcollect-action-scoped-evidence-1",
+    "kind": "reading",
+    "minimum_effective_steps": 5,
+    "preferred_band": "long"
+  },
+  "requested_goal": {
+    "entity": "月食",
+    "kind": "reading",
+    "parameters": {
+      "variant": "direct-reading-cross-page-20261109-r6"
+    }
+  },
+  "schema_version": "webcollect-session-objective-1",
+  "version": 1
+}

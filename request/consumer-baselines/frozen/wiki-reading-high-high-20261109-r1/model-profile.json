@@ -1,0 +1,44 @@
+{
+  "freeze_id": "wiki-reading-high-high-20261109-r1",
+  "scope": "Consumer model settings and per-session overrides; not a complete BatchLedger config",
+  "model": {
+    "provider": "glm",
+    "model": "glm-5.3-flash",
+    "max_completion_tokens": 16384,
+    "max_images": 24,
+    "image_encoding": "data_url",
+    "supports_vision": true,
+    "timeout_seconds": 180
+  },
+  "consume_kwargs": {
+    "effort_profile": {
+      "first_plan": "high",
+      "branch": "high"
+    },
+    "session_soft_seconds": 720,
+    "session_hard_seconds": 900
+  },
+  "effective_request_timeout_seconds": {
+    "first_plan": 600,
+    "branch": 180
+  },
+  "glm_calls_per_session_limit": 25,
+  "application": "Pass consume_kwargs to the existing candidate_consumer.consume/run entry; changing model.reasoning_effort alone does not override the V11 low/low fallback.",
+  "credential_policy": "Credentials are not included. Preserve existing ledger/session account binding and normal rotation for new sessions.",
+  "evidence": {
+    "run_manifest": {
+      "path": "/Users/hemiao/projects/2610/WebCollect/verify_results/wiki-current-candidate-high-high-live-20261109-r01/run-manifest.json",
+      "sha256": "c10865d2a8a8bcca227f56bd9050d9da6b372f8888e2cd173a21e9963be83c99"
+    },
+    "readback": {
+      "path": "/Users/hemiao/projects/2610/WebCollect/verify_results/wiki-current-candidate-high-high-live-20261109-r01/readback.json",
+      "sha256": "40d9c43ae66ceafb81acbeef05fd92a05baa932d0bac244c7519a4d5adf9e752"
+    }
+  },
+  "recorded_model_confirmation": {
+    "provider": "glm",
+    "requested_model": "glm-5.3-flash",
+    "returned_model": "glm-5.3-flash",
+    "high_requests": 5
+  }
+}
