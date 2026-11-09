@@ -325,6 +325,8 @@ QC 安装包的需求原文、日期优先关系及摘要由 `contract-authority
 
 仅给类目找新站时使用 `produce-entries --category <站点主类> --discovery-mode new-sites`。宿主冻结已有站，由普通 GLM 对话拟词，默认从公开搜索取网址；按第一方证据核类后才计入该类目的新增供给。[检索与恢复说明](docs/工程说明.md#仅给类目发现新站)
 
+2026-11-09 生产者新增可选 `--producer-pipeline overlap-1` 调度模式：应用 pending 余量前置到浏览器/模型之前（宿主 `APP_PENDING_CAP_PREFLIGHT` 收据，发布事务检查保留），同一 prepared unit 内当前批 classify/publish 与下一批 screen 单批预取重叠；缺省 `serial` 保持原行为，模式冻结进 run 配置且不可中途切换。[工程说明](docs/工程说明.md#生产者流水提速余量前置与单批预取2026-11-09) · [设计说明](docs/设计说明.md)
+
 2026-11-03 独立可选的消费者模板对照入口为 `webcollect.consumer_template_experiment`，两个模板通过原同会话四工具驱动浏览器，普通消费者继续原 ReAct。[实现、目标规则与有界八条试验](docs/消费者模板AB8试验-20261103.md)。仅此固定八条采集及同样本独立 AI QC 获授权，不恢复其他生产或发布。
 
 2026-11-03 消费者新增冻结扩展 `webcollect-banded-conditional-plan-1`。普通新候选通过正式 `task_generation` 入口进入首轮单 `submit_plan` 工具规划，宿主按当前观察重绑语义目标并直接执行已证步骤；有分支时用无工具历史的普通 JSON 消息。旧任务仍按原冻结协议运行。预排档、首次派发前锁档、真实待审步数和显式接纳集合分别记账；内部 80% 五步／19% 长档／≤1% 短流程预留不改变外部 QC 门槛。推理图为派生 JPEG，审核仍用原 PNG。实现、只读 27 候选回放和离线检查见[实施交接](verify_results/consumer-banded-plan-implementation-20261103-r01/handoff.md)。生产保持 `STOPPED_BY_USER`，没有新增真实请求、采集或审核。

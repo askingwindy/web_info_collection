@@ -4,10 +4,12 @@ The old producer protocols and their frozen batches remain in candidate_discover
 No browser or consumer implementation is imported by this path.
 """
 from collections import Counter, defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
+import time
 from urllib.parse import urljoin, urlsplit
 
 from webcollect.batch_core import BatchLedger, load_json, save_json
@@ -454,14 +456,16 @@ def index_settled_landings(pool):
 def produce(config, *, pool_path, ledger_path, output, history_set, queries, sources, directions,
             goals_path, target, max_searches, max_batches, batch_size, search_engine, stall_threshold,
             per_direction_cap, batch_key, excluded_applications, discovery_mode, feedback_scope, search_count,
-            entry_selection='rule', model_protocol=PROTOCOL, categories=(), probe_search_hold=None, dispatch_holds=None):
+            entry_selection='rule', model_protocol=PROTOCOL, categories=(), probe_search_hold=None, dispatch_holds=None,
+            producer_pipeline=None):
     target_categories=tuple(categories)
     from .site_pool import category
     for value in categories: category(value)
     if 'UNKNOWN' in categories: raise ValueError('A concrete target category is required')
     PROTOCOL = model_protocol
     VERSION = 'first-party-entries-3' if model_protocol in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else 'first-party-entries-2' if model_protocol in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else 'first-party-entries-1'
-    from .candidate_discovery import _publish_entry, QueryPolicy, fold_query_state, record_query_outcome, normalize_query
+    from .candidate_discovery import (_publish_entry, QueryPolicy, fold_query_state, record_query_outcome,
+                                      normalize_query, application_pending_remaining)
     from webcollect.current_chain import (read_chain_scope,check_project_pool,check_project_guard,
         require_evidence_path,current_evidence_roots,assert_current_evidence)
     from webcollect.site_failure_stop import SiteFailureStore
@@ -476,9 +480,26 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     root=Path(output).absolute() if output else (current_evidence_roots(chain)[0]/'producer-evidence'/object_sha256(run) if chain else None)
     if root is None:raise ValueError('Explicit output or history-set required')
     if chain:root=require_evidence_path(root,current_evidence_roots(chain))
+    if producer_pipeline=='overlap-1' and int((config.get('budget') or {}).get('max_concurrent_jobs',1))<2:
+        # The shared ledger's job slot serializes claims across threads; a
+        # prefetch worker racing the classify job would otherwise settle every
+        # probe as an immutable UNKNOWN (demonstrated in the 2026-11-09 r01
+        # baseline). Fail fast instead of poisoning original requests.
+        raise ValueError('overlap-1 requires budget.max_concurrent_jobs>=2 for browser/model concurrency')
     with pool.pool.connect() as con:
         prior=con.execute('SELECT config FROM runs WHERE id=?',(run,)).fetchone()
     previous=json.loads(prior[0]) if prior else {}
+    if producer_pipeline is not None and producer_pipeline not in ('serial','overlap-1'):
+        raise ValueError('producer_pipeline must be serial or overlap-1')
+    if previous:
+        frozen_pipeline=previous.get('producer_pipeline')
+        if frozen_pipeline is None and producer_pipeline=='overlap-1':
+            raise ValueError('Original run predates producer_pipeline and stays serial; start a new run for overlap-1')
+        if frozen_pipeline is not None and producer_pipeline is not None and frozen_pipeline!=producer_pipeline:
+            raise ValueError('Frozen producer_pipeline='+str(frozen_pipeline)+'; one run cannot switch pipeline mode')
+        producer_pipeline=frozen_pipeline or producer_pipeline or 'serial'
+    else:
+        producer_pipeline=producer_pipeline or 'serial'
     max_batches=previous.get('max_batches') if previous and max_batches is None else max_batches
     max_searches=previous.get('max_searches') if previous and max_searches is None else max_searches
     feedback_ref=reference(feedback_scope) if feedback_scope else None
@@ -505,6 +526,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         'stall_threshold':stall_threshold,'per_direction_cap':per_direction_cap,'entry_selection':entry_selection,
         'discovery_mode':discovery_mode,'feedback_scope':feedback_ref,'feedback':feedback,'search_count':search_count,
         'goals':goals_ref,'excluded_applications':list(excluded_applications),'output':str(root),'ledger':str(Path(ledger_path).resolve()),
+        # Old runs stay byte-identical on resume; new runs always freeze their mode.
+        **({'producer_pipeline':producer_pipeline} if not previous or 'producer_pipeline' in previous else {}),
         **({'current_chain_manifest':chain['manifest']} if chain else {})}
     independent = bool(categories and discovery_mode=='new-sites' and not (queries or directions or sources or goals_path)
                        and (not previous or previous.get('category_query_plan',{}).get('version') in ('producer-category-query-2','producer-category-query-3')))
@@ -696,6 +719,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                                 if PROTOCOL not in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):raise
                                 outcome=pool.record_row_conclusion(header,result='HELD',reason=str(error),original_row=row)
             sites.conclude(scopes[aid],item,outcome)
+            chunk_outcomes.append(outcome.get('result') if isinstance(outcome,dict) else str(outcome))
             # Classification allocation spans the frozen per-site input across
             # chunks; unselected and failed rows never receive NEW allocations.
             sites.conclude(site_allocation_scopes[aid],{'uri':candidate['entry_url'],'goal':candidate['requested_goal']},outcome)
@@ -709,6 +733,103 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         for g in goals:validate_candidate_v2({'schema_version':VERSION2,'candidate_kind':'target','entry_url':g['uri'],'requested_goal':g.get('requested_goal')})
     seed_sources=list(sources) or [{'uri':g['uri'],'title':'调用方目标入口','content':'','reference':goals_ref} for g in goals]
     site_allocation_scopes={}
+    overlap=producer_pipeline=='overlap-1'
+    chunk_outcomes=[]
+    pipeline_metrics={'schema_version':'webcollect-producer-pipeline-metrics-1','mode':producer_pipeline,'chunks':[]}
+    pipeline_wall=time.monotonic() if overlap else None
+    prefetch_executor=None
+    pending_prefetch=None
+
+    def screen_stage(links):
+        """Observation prep only; call-time imports keep the original patch points.
+        Each call owns its asyncio.Runner/browser, so it is safe from the
+        single prefetch worker; no Page/browser/connection is shared."""
+        if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
+            if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
+                from .producer_observation import screen
+            else:
+                from .page_consumption import screen
+            return screen(pool,ledger,links,root)
+        return links,None
+
+    def timed_screen_stage(links):
+        t0=time.monotonic();started=time.time()
+        admitted,records=screen_stage(links)
+        return admitted,records,time.monotonic()-t0,started
+
+    def preflight_partition(links,in_flight):
+        """Bounded same-app scheduling before any browser/model dispatch.
+        Remaining capacity reuses the frozen application_pending_cap; the
+        in-flight counts are process-local scheduling state only."""
+        snapshots={};admitted=[];taken=Counter();skipped={}
+        for h in links:
+            aid=h.get('application_id')
+            if aid not in snapshots:
+                snapshots[aid]=application_pending_remaining(pool,run,aid)
+            snapshot=snapshots[aid]
+            if snapshot is None or in_flight.get(aid,0)+taken[aid]<snapshot['remaining']:
+                admitted.append(h);taken[aid]+=1
+            else:
+                skipped.setdefault(aid,{'application_id':aid,'reason':'APP_PENDING_CAP_PREFLIGHT',
+                    'pending':snapshot['pending'],'cap':snapshot['cap'],'remaining':snapshot['remaining'],
+                    'preflight_in_flight':in_flight.get(aid,0)+taken[aid],'skipped_links':[]})['skipped_links'].append(
+                    {'link_id':h['link_id'],'uri':h['uri']})
+        return admitted,list(skipped.values()),snapshots
+
+    def save_preflight_skips(chunk_key,records,unit_key):
+        """Host-side APP_PENDING_CAP_PREFLIGHT receipts; never model response
+        rows and never a fabricated OVER_LIMIT."""
+        if not records:return None
+        identity=object_sha256([run,chunk_key,[[r['application_id'],r['pending'],r['cap'],r['remaining'],
+            r['preflight_in_flight'],[l['link_id'] for l in r['skipped_links']]] for r in records]])
+        path=root/('pipeline-preflight-'+identity+'.json')
+        if path.exists():
+            if load_json(path)['records']!=records:raise ValueError('Original preflight skip receipt differs')
+        else:
+            save_json(path,{'schema_version':'webcollect-producer-pipeline-metrics-1','reason':'APP_PENDING_CAP_PREFLIGHT',
+                'pipeline':producer_pipeline,'run_id':run,'unit':unit_key,'chunk_key':chunk_key,
+                'timestamp':time.time(),'records':records})
+        return reference(path)
+
+    def dispatch_prefetch(chunk,start,unit_key):
+        """One-batch lookahead inside the same prepared unit: screen(N+1) runs
+        behind classify/publish(N). Dispatch-time preflight skips are binding
+        for that chunk; later chunks re-read the real database headroom."""
+        nonlocal prefetch_executor,pending_prefetch
+        if not overlap:return
+        if PROTOCOL not in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):return
+        next_start=start+batch_size
+        if next_start>=len(prepared['links']):return
+        if max_batches is not None and batches+1>=max_batches:return
+        # The next chunk only runs selection when publishing this one cannot
+        # reach target: NEW from this chunk is bounded by its link count.
+        lookahead=max(0,min(batch_size,target-new_count()-len(chunk)))
+        if lookahead<=0:return
+        next_chunk=[h for h in prepared['links'][next_start:next_start+lookahead]
+                    if not pool.consumption(h['uri'],kind='target' if goals else 'entry')]
+        if not next_chunk:return
+        next_chunk_key=unit_key+'/'+str(next_start)
+        if pool.pool.checkpoint(run,next_chunk_key+'/selection') is not None:return
+        in_flight=Counter(h['application_id'] for h in chunk)
+        admitted,skips,_=preflight_partition(next_chunk,in_flight)
+        skip_reference=save_preflight_skips(next_chunk_key,skips,unit_key)
+        future=None
+        if admitted:
+            if prefetch_executor is None:
+                prefetch_executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='producer-prefetch')
+            future=prefetch_executor.submit(timed_screen_stage,admitted)
+        pending_prefetch={'chunk_key':next_chunk_key,'skip_records':skips,'skip_reference':skip_reference,
+                          'future':future,'dispatched_at':time.time()}
+
+    def drain_prefetch():
+        """No surviving background work; the worker's browser/event loop close
+        inside its own screen() call."""
+        nonlocal pending_prefetch
+        if pending_prefetch and pending_prefetch['future'] is not None:
+            try:pending_prefetch['future'].result()
+            except Exception:pass  # diagnosed at its own chunk; never mask the primary failure
+        pending_prefetch=None
+
     try:
         unit=0
         while new_count()<target and (max_batches is None or batches<max_batches):
@@ -938,9 +1059,18 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     chunk=[{**h,'site_category':sites.get(h['application_id'])['category'],
                             'site_decision_id':sites.get(h['application_id'])['decision_id']} for h in chunk]
                 saved_selection=pool.pool.checkpoint(run,chunk_key+'/selection')
+                fresh_metrics=None
                 if saved_selection is None:
                     if max_batches is not None and batches>=max_batches:break
                     if new_count()>=target:break
+                    # Consume this chunk's own lookahead first; a mismatched or
+                    # stale prefetch is discarded, never reused across chunks.
+                    prefetched=pending_prefetch if (pending_prefetch is not None and pending_prefetch['chunk_key']==chunk_key) else None
+                    pending_prefetch=None
+                    if overlap:
+                        fresh_metrics={'schema_version':'webcollect-producer-pipeline-metrics-1','pipeline':producer_pipeline,
+                                       'unit':unit,'chunk_key':chunk_key,'input_links':len(chunk)}
+                    preflight_skips=[];preflight_reference=None
                     if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
                         if PROTOCOL=='entry-tools-13':from .producer_business_content import classify
                         elif PROTOCOL=='entry-tools-12':from .producer_business_value import classify
@@ -949,16 +1079,49 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         elif PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):from .page_purpose_v5 import classify
                         elif PROTOCOL=='entry-tools-7':from .page_purpose_v4 import classify
                         else:from .page_purpose import classify
-                        unscreened_chunk=chunk
-                        screen_records=[]
+                        classify_links=chunk;screen_records=None
                         if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
-                            if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):from .producer_observation import screen
-                            else:from .page_consumption import screen
-                            chunk,screen_records=screen(pool,ledger,chunk,root)
-                        rows,selection_body=classify(ledger,chunk,run+'/'+chunk_key,root,**({'pool':pool} if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else {})) if chunk else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                            screen_input=chunk
+                            if prefetched is not None:
+                                # Consume the dispatch-time preflight decisions and
+                                # the settled probes; the follow-up screen reuses
+                                # settled requests without re-dispatching them.
+                                preflight_skips=prefetched['skip_records']
+                                preflight_reference=prefetched['skip_reference']
+                                skipped_ids={l['link_id'] for r in preflight_skips for l in r['skipped_links']}
+                                if prefetched['future'] is not None:
+                                    t0=time.monotonic()
+                                    try:
+                                        _,_,worker_seconds,worker_started=prefetched['future'].result()
+                                    finally:
+                                        if fresh_metrics is not None:fresh_metrics['wait_prefetch_seconds']=round(time.monotonic()-t0,3)
+                                    if fresh_metrics is not None:
+                                        fresh_metrics['screen_started_at']=worker_started
+                                        fresh_metrics['screen_seconds']=round(worker_seconds,3)
+                                screen_input=[h for h in chunk if h['link_id'] not in skipped_ids]
+                            elif overlap:
+                                admitted,skips,snapshots=preflight_partition(chunk,{})
+                                preflight_skips=skips;preflight_reference=save_preflight_skips(chunk_key,skips,key)
+                                screen_input=admitted
+                                if fresh_metrics is not None:fresh_metrics['pending_snapshot']=snapshots
+                            if fresh_metrics is not None:fresh_metrics.setdefault('screen_started_at',time.time())
+                            t0=time.monotonic()
+                            if screen_input:
+                                classify_links,screen_records=screen_stage(screen_input)
+                            else:
+                                classify_links,screen_records=[],[]
+                            if fresh_metrics is not None:
+                                fresh_metrics['screen_seconds']=round(fresh_metrics.get('screen_seconds',0.0)+time.monotonic()-t0,3)
+                                fresh_metrics['preflight_skipped']=sum(len(r['skipped_links']) for r in preflight_skips)
+                        # One-batch lookahead: the next chunk screen starts now,
+                        # behind this chunk's classify/publish, in the same unit.
+                        dispatch_prefetch(chunk,start,key)
+                        classify_t0=time.monotonic() if overlap else None
+                        rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'pool':pool} if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') else {})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                        if fresh_metrics is not None and classify_t0 is not None:
+                            fresh_metrics['classify_seconds']=round(time.monotonic()-classify_t0,3)
                         if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
                             selection_body['page_consumption']=screen_records
-                            chunk=unscreened_chunk
                         job_id=selection_body['calls'][0]['job_id'] if selection_body['calls'] else 'purpose-entries/'+object_sha256([run,chunk_key])
                     elif entry_selection=='model' and PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
                         original_jobs={h.get('settled_selection_job_id') for h in seeds if h.get('settled_selection_job_id')}
@@ -997,18 +1160,49 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     count=min(len(items),max(0,target-new_count()))
                     if count:ledger.consume('discovery_candidates',run+'/'+chunk_key,count)
                     path=root/('entry-links-'+object_sha256([run,chunk_key])+'.json');save_json(path,selection_body)
-                    saved_selection={'items':items,'reference':reference(path),'job_id':job_id}
+                    saved_selection={'items':items,'reference':reference(path),'job_id':job_id,
+                        **({'preflight_skips':preflight_skips,'preflight_reference':preflight_reference} if overlap else {})}
                     pool.pool.checkpoint(run,chunk_key+'/selection',saved_selection)
                 items=saved_selection['items']
                 selected={i['hit']['link_id'] for i in items}
+                # Preflight-skipped links never reached the model; they conclude
+                # against the host skip receipt, never a fabricated OVER_LIMIT.
+                preflight_skipped_ids={}
+                for record in saved_selection.get('preflight_skips',()):
+                    evidence=saved_selection.get('preflight_reference') or saved_selection['reference']
+                    for link in record['skipped_links']:preflight_skipped_ids[link['link_id']]=evidence
                 for h in chunk:
-                    if h['link_id'] not in selected:
+                    if h['link_id'] in preflight_skipped_ids:
+                        for goal in ([g['requested_goal'] for g in goals if g['uri']==h['uri']] if goals else [None]):
+                            sites.conclude(site_allocation_scopes[h['application_id']],{'uri':h['uri'],'goal':goal},
+                                {'result':'NOT_SELECTED','stage':'app_pending_cap_preflight','evidence':preflight_skipped_ids[h['link_id']]})
+                    elif h['link_id'] not in selected:
                         for goal in ([g['requested_goal'] for g in goals if g['uri']==h['uri']] if goals else [None]):
                             sites.conclude(site_allocation_scopes[h['application_id']],{'uri':h['uri'],'goal':goal},
                                 {'result':'NOT_SELECTED','stage':'producer_entry_selection','evidence':saved_selection['reference']})
                 for aid in {i['application_id'] for i in items}:
                     scopes[aid]=sites.freeze_scope(aid,run+'/'+chunk_key,[i for i in items if i['application_id']==aid],[saved_selection['reference']])
+                if overlap:chunk_outcomes.clear()
                 publish_items(items,saved_selection['reference'],saved_selection['job_id'],chunk_key);batches+=1
+                if fresh_metrics is not None:
+                    # Written once when the selection was freshly built; replays
+                    # of a saved selection never rewrite the original receipt.
+                    fresh_metrics['selected']=len(items)
+                    fresh_metrics['results']=dict(Counter(chunk_outcomes))
+                    fresh_metrics['classify_seconds']=fresh_metrics.get('classify_seconds',0.0)
+                    fresh_metrics['publish_ended_at']=time.time()
+                    if screen_records:
+                        held=Counter(r['decision'].get('reason') for r in screen_records if r['decision'].get('status')=='HELD')
+                        fresh_metrics['screen_held']=dict(held)
+                    try:
+                        with ledger.connect() as con:
+                            fresh_metrics['model_request_states']=dict(con.execute(
+                                'SELECT state,COUNT(*) FROM model_requests WHERE job_id IN (%s) GROUP BY state'%','.join('?'*len({saved_selection['job_id'],*[c['job_id'] for c in selection_body.get('calls',())]})),
+                                tuple({saved_selection['job_id'],*[c['job_id'] for c in selection_body.get('calls',())]})).fetchall())
+                    except Exception:
+                        fresh_metrics['model_request_states']='UNKNOWN'
+                    pool.pool.checkpoint(run,chunk_key+'/pipeline-metrics',fresh_metrics)
+                    pipeline_metrics['chunks'].append(fresh_metrics)
             if query:
                 stats_key='entry-query/stats/grounded/'+object_sha256([run,unit])
                 if pool.pool.checkpoint(session,stats_key) is None:
@@ -1019,6 +1213,12 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             if max_batches is not None and batches>=max_batches:break
     except Exception as error:
         stopped={'stage':'grounded_producer','type':type(error).__name__,'reason':str(error)}
+    finally:
+        # Current-batch model/publication settles first (above); only then is
+        # an unexpected prefetch failure diagnosed. No background work survives.
+        if prefetch_executor is not None or pending_prefetch is not None:
+            drain_prefetch()
+            if prefetch_executor is not None:prefetch_executor.shutdown(wait=True)
     with pool.pool.connect() as con:
         actual=[dict(r) for r in con.execute('SELECT candidate_id,result FROM candidate_batch_rows WHERE run_id=?',(run,))]
         provenance=[json.loads(r[0]).get('source',{}) for r in con.execute("SELECT e.record FROM candidate_events e JOIN candidate_batch_rows b USING(candidate_id) WHERE e.kind='discovered' AND b.run_id=? AND b.result='NEW'",(run,))]
@@ -1030,6 +1230,25 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     effective_sites={}
     for source in provenance:
         effective_sites.setdefault(source['application_classification']['application'],source['site_origin'])
+    pipeline_report=None
+    if overlap:
+        wall=time.monotonic()-pipeline_wall
+        invocation_new=len(set(ids)-initial)
+        pipeline_report={'mode':producer_pipeline,'metrics_version':'webcollect-producer-pipeline-metrics-1',
+            'this_invocation':True,'chunks_recorded':len(pipeline_metrics['chunks']),
+            'wall_seconds':round(wall,3),
+            'screen_seconds':round(sum(c.get('screen_seconds',0.0) for c in pipeline_metrics['chunks']),3),
+            'classify_seconds':round(sum(c.get('classify_seconds',0.0) for c in pipeline_metrics['chunks']),3),
+            'serial_workload_reference_seconds':round(sum(c.get('screen_seconds',0.0)+c.get('classify_seconds',0.0)
+                                                         for c in pipeline_metrics['chunks']),3),
+            'wait_prefetch_seconds':round(sum(c.get('wait_prefetch_seconds',0.0) for c in pipeline_metrics['chunks']),3),
+            'preflight_skipped_links':sum(c.get('preflight_skipped',0) for c in pipeline_metrics['chunks']),
+            'new_candidates_this_invocation':invocation_new,
+            'new_per_hour_invocation':round(invocation_new*3600/wall,2) if wall>0 else None,
+            'over_limit_published':dict(Counter(r['result'] for r in actual)).get('OVER_LIMIT',0)}
+        pipeline_metrics['summary']=pipeline_report
+        path=root/('pipeline-metrics-'+object_sha256(pipeline_metrics)+'.json');save_json(path,pipeline_metrics)
+        pipeline_report={**pipeline_report,'reference':reference(path)}
     report={'schema_version':'candidate-producer-report-2','protocol':'candidate-producer-3','model_protocol':PROTOCOL,'source_pipeline':VERSION,'batch_scope':run,
         'target':target,'listed_unique_candidates':len(ids),'deficit':max(0,target-len(ids)),
         'status':'TARGET_REACHED' if len(ids)>=target else 'PARTIAL','candidate_ids':ids,
@@ -1045,7 +1264,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         'inventory':pool.stats(),'search_usage':search_states,'query_decisions':decisions,
         'discovery_mode':discovery_mode or 'mixed',
         'evidence_output':str(root),**({'current_chain_manifest':chain['manifest']} if chain else {}),
-        'production_attempts':0,'collected':0,'pending_review':0,'QC_accepted':0,'published':0,'real_throughput':'NOT_TESTED'}
+        'production_attempts':0,'collected':0,'pending_review':0,'QC_accepted':0,'published':0,'real_throughput':'NOT_TESTED',
+        **({'producer_pipeline':pipeline_report} if pipeline_report is not None else {})}
     path=root/('grounded-report-'+object_sha256(report)+'.json');save_json(path,report)
     if len(ids)>=target or (exhausted and not stopped and not unfinished):pool.pool.checkpoint(run,'grounded-final',reference(path))
     return report

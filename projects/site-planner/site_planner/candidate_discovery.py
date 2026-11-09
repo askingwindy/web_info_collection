@@ -694,6 +694,21 @@ def _app_pending_over_limit(pool, batch, application_id, header, row):
         reason=f'APP_PENDING_CAP: application pending inventory {pending} >= {cap}', original_row=row)
 
 
+def application_pending_remaining(pool, batch, application_id):
+    """Read-only scheduling headroom for the producer pipeline preflight.
+
+    Reuses the same frozen application_pending_cap source as the final
+    publication check; it never writes a quota ledger of its own. The
+    publication-time _app_pending_over_limit() check stays authoritative."""
+    if not application_id:
+        return None
+    cap = _application_pending_cap(pool, batch)
+    with pool.pool.connect() as con:
+        pending = con.execute("SELECT COUNT(*) FROM data_candidates WHERE application_id=? AND state='pending'",
+                              (application_id,)).fetchone()[0]
+    return {'pending': pending, 'cap': cap, 'remaining': max(0, cap - pending)}
+
+
 def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *, application_id=None):
     if pool.consumption(candidate['entry_url'],kind=candidate.get('candidate_kind')):
         return pool.record_row_conclusion(header,result='REJECTED',reason='NO_CONSUME: producer image-only page exclusion',original_row=row)
@@ -764,7 +779,8 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
                     goals_path=None, target=1000, max_searches=None, max_batches=None, batch_size=50,
                     search_engine=None, stall_threshold=2, per_direction_cap=None, batch_key=None,
                     excluded_applications=(), model_protocol=None, discovery_mode=None, feedback_scope=None,
-                    search_count=10, entry_selection='rule', categories=(), probe_search_hold=None, dispatch_holds=None):
+                    search_count=10, entry_selection='rule', categories=(), probe_search_hold=None, dispatch_holds=None,
+                    producer_pipeline=None):
     """Entry/target candidate producer on webcollect-data-candidate-2.
 
     Per-response-row publication with stable identities; interruption resumes
@@ -772,6 +788,8 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
     """
     if model_protocol is not None and model_protocol not in ('entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
         raise ValueError('Unsupported entry model protocol')
+    if producer_pipeline not in (None, 'serial', 'overlap-1'):
+        raise ValueError('producer_pipeline must be serial or overlap-1')
     if (any(type(n) is not int or n < 1 for n in (target, batch_size))
             or any(type(n) is not int or n < 1 for n in (max_searches, max_batches) if n is not None)
             or batch_size > 100):
@@ -833,8 +851,10 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             stall_threshold=stall_threshold,per_direction_cap=per_direction_cap,batch_key=batch_key,
             excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
             search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories,
-            probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds)
+            probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds,producer_pipeline=producer_pipeline)
     if categories: raise ValueError('Category planning requires entry-tools-3 or entry-tools-4')
+    if producer_pipeline == 'overlap-1':
+        raise ValueError('producer_pipeline=overlap-1 requires an entry-tools grounded protocol')
     optimized = bool(previous_batch.get('selection_version')) if previous_batch else (
         discovery_mode is not None or model_protocol == selection.TOOL_PROTOCOL)
     if discovery_mode is not None and discovery_mode not in ('new-sites','expand','mixed'):
@@ -1440,6 +1460,10 @@ def main(argv=None):
     entry.add_argument('--discovery-mode', choices=['new-sites','expand','mixed'])
     entry.add_argument('--entry-selection', choices=['rule','model'], default='rule',
                        help='entry-tools-3: conservative HTML rules or evidence-bound model link selection')
+    entry.add_argument('--producer-pipeline', choices=['serial','overlap-1'],
+                       help='Scheduling mode only; default serial keeps the original observe->judge->publish order. '
+                            'overlap-1 additionally moves the app pending-cap preflight ahead of browser/model and '
+                            'prefetches the next chunk screen behind the current classify/publish (same prepared unit).')
     entry.add_argument('--feedback-scope',type=Path,help='Explicit original consumer scope; read-only feedback frozen for this batch')
     entry.add_argument('--batch-key')
     entry.add_argument('--search-count',type=int,default=10,help='Requested results per distinct search, 1–50')
@@ -1461,7 +1485,8 @@ def main(argv=None):
             goals_path=Path(a.goals).absolute() if a.goals else None,target=a.target,max_searches=a.max_searches,
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,model_protocol=a.model_protocol,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
-            search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else ()),
+            search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else (),
+            producer_pipeline=a.producer_pipeline),
             ensure_ascii=False));return
     print(json.dumps(produce(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,
         queries=a.query,sources=load_json(a.sources) if a.sources else (),target=a.target,max_searches=a.max_searches,
