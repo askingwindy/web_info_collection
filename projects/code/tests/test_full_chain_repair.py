@@ -372,3 +372,88 @@ class ResearchV2(unittest.TestCase):
             store.finish_attempt(row['attempt_id'],'runtime-worker',row['lease_token'],
                 'collected_pending_review',evidence=[evidence],exact_images=images,now=NOW+2)
         self.assertEqual(store.snapshot()['attempts'][0]['status'],'running')
+
+
+class ResearchV3(unittest.TestCase):
+    """Reuse V2's claim/result paths; only saved research is newly eligible."""
+    def setUp(self):
+        f=ResearchV2('test_failed_source_and_comparison_save_keep_effective_zero_and_original_rows')
+        f.setUp();self.addCleanup(f.doCleanups);self.f=f
+        source=f.claim()
+        output=f.root/'settled-research';output.mkdir()
+        (output/'session-objective.json').write_bytes(Path(f.obj['path']).read_bytes())
+        f.pool.stage(source,'execution',{'output':str(output)})
+        self.receipt=exclusive(output/'saved_sample.json',{'sample_id':'research-source'})
+        saved={**f.result,'sample_id':'research-source','scope_id':'research-source','task_key':'research-source',
+               'save_receipt':self.receipt,'result_location':str(output/'samples/research-source')}
+        with patch('webcollect.candidate_consumer.verified_saved',return_value=saved), \
+             patch('webcollect.site_pool_sync.sync_candidate_qc'):
+            finish_or_reconcile(f.pool,source)
+        self.source=f.pool.get_claim(source['claim_id'])
+        self.comparisons=[*f.comparisons,{'role':'comparison','claim_id':source['claim_id'],
+            'sample_id':'research-source','save_receipt':self.receipt}]
+        self.auth=exclusive(f.root/'v3-authorization.json',{'scope':'fixed-baseline-research-only',
+            'candidate_id':f.cid,'version':f.old['version'],'original_claim_id':source['claim_id'],
+            'objective':f.obj,'pool':str(f.pool.path),'registry':str(f.registry),
+            'comparisons':self.comparisons,'production_counted':False})
+
+    def claim(self, version='candidate-research-replay-3'):
+        f=self.f
+        return f.pool.claim_research('w','next-research',candidate_id=f.cid,version=f.old['version'],
+            original_claim_id=self.source['claim_id'],objective=f.obj,authorization=self.auth,
+            comparisons=self.comparisons,replay_version=version)
+
+    def test_saved_research_replay_keeps_named_overlaps_and_nonproduction_projection(self):
+        from webcollect.candidate_contract import research_duplicate_basis, research_overlap_sample_ids
+        from webcollect.site_pool_sync import sync_candidate_qc
+        f=self.f;before=f.original_rows();source_before=f.pool.get_claim(self.source['claim_id'])
+        with f.pool.pool.connect() as con:
+            result_before=tuple(con.execute('SELECT * FROM candidate_results WHERE claim_id=?',
+                                            (self.source['claim_id'],)).fetchone())
+        with self.assertRaisesRegex(ValueError,'settled failed'):
+            self.claim('candidate-research-replay-2')
+        # V2 also retains its effective=1-only comparison rule.
+        v2_auth=f.authorization(f.obj,comparisons=self.comparisons,name='v2-research-comparison-auth.json')
+        with self.assertRaisesRegex(ValueError,'historical save'):
+            f.pool.claim_research('w','v2-with-research-comparison',candidate_id=f.cid,version=f.old['version'],
+                original_claim_id=f.old['claim_id'],objective=f.obj,authorization=v2_auth,
+                comparisons=self.comparisons,replay_version='candidate-research-replay-2')
+        claim=self.claim();self.assertEqual(claim,self.claim())
+        basis=research_duplicate_basis(f.task(claim),f.registry)
+        self.assertEqual(basis['schema_version'],'candidate-research-duplicate-2')
+        self.assertEqual(research_overlap_sample_ids(basis),{'old','research-source'})
+        self.assertNotIn('third',research_overlap_sample_ids(basis))
+        new={**f.result,'sample_id':'research-next','scope_id':'research-next','task_key':'research-next'}
+        with patch('webcollect.candidate_consumer.verified_saved',return_value=new), \
+             patch('webcollect.site_pool_sync.sync_candidate_qc'):
+            saved=finish_or_reconcile(f.pool,claim)
+        self.assertFalse(saved['result']['production_counted'])
+        self.assertEqual(saved['result']['research_replay']['schema_version'],'candidate-research-replay-3')
+        def snapshot(registry,scope):
+            return {'tasks':[{'task_key':scope,'production_status':'collected_pending_review','qc':None}]}
+        with patch('webcollect.site_pool_sync._snapshot',side_effect=snapshot) as read:
+            sync_candidate_qc(f.pool.path,f.registry)
+            read.assert_any_call(str(f.registry),'research-next')
+        with f.pool.pool.connect() as con:
+            self.assertEqual(tuple(con.execute('SELECT effective,qc_state FROM candidate_results WHERE claim_id=?',
+                (claim['claim_id'],)).fetchone()),(0,'pending_review'))
+            self.assertEqual(tuple(con.execute('SELECT * FROM candidate_results WHERE claim_id=?',
+                (self.source['claim_id'],)).fetchone()),result_before)
+        self.assertEqual(f.original_rows(),before)
+        self.assertEqual(f.pool.get_claim(self.source['claim_id']),source_before)
+
+    def test_unknown_and_reconcile_source_do_not_create_research_claim(self):
+        from webcollect.batch_core import OutcomeUnknown
+        f=self.f
+        with f.ledger.connect() as con:
+            con.execute("INSERT INTO model_requests(id,job_id,purpose,attempt,state,reserved_tokens,reserved_cost,started,request_json) "
+                        "VALUES('unresolved','source-job','fixture',1,'unknown',0,0,0,'{}')")
+            con.commit()
+        with self.assertRaises(OutcomeUnknown):self.claim()
+        with f.pool.transaction() as con:
+            con.execute("UPDATE candidate_claims SET state='reconcile' WHERE claim_id=?",(self.source['claim_id'],))
+        with self.assertRaisesRegex(ValueError,'settled'):self.claim()
+        with f.pool.pool.connect() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM candidate_claims WHERE request_id='next-research'").fetchone()[0],0)
+        with f.ledger.connect() as con:
+            self.assertEqual(con.execute("SELECT state FROM model_requests WHERE id='unresolved'").fetchone()[0],'unknown')

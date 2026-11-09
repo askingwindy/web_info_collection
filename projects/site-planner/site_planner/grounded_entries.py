@@ -457,7 +457,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             goals_path, target, max_searches, max_batches, batch_size, search_engine, stall_threshold,
             per_direction_cap, batch_key, excluded_applications, discovery_mode, feedback_scope, search_count,
             entry_selection='rule', model_protocol=PROTOCOL, categories=(), probe_search_hold=None, dispatch_holds=None,
-            producer_pipeline=None, producer_optimization=None):
+            producer_pipeline=None, producer_optimization=None, application_pending_cap=None, allowed_hosts=()):
+    if application_pending_cap is not None and application_pending_cap < 1:
+        raise ValueError('application_pending_cap must be positive')
+    allowed_hosts=sorted(set(h.lower() for h in allowed_hosts))
     target_categories=tuple(categories)
     from .site_pool import category
     for value in categories: category(value)
@@ -483,6 +486,11 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     with pool.pool.connect() as con:
         prior=con.execute('SELECT config FROM runs WHERE id=?',(run,)).fetchone()
     previous=json.loads(prior[0]) if prior else {}
+    if previous:
+        if application_pending_cap is None:
+            application_pending_cap=previous.get('application_pending_cap')
+        if not allowed_hosts:
+            allowed_hosts=previous.get('allowed_hosts', [])
     from .producer_read_policy import OPTIMIZATION, VERSION as READ_POLICY
     if producer_optimization not in (None,OPTIMIZATION):raise ValueError('Unsupported producer_optimization')
     if previous:
@@ -536,6 +544,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         **({'producer_pipeline':producer_pipeline} if not previous or 'producer_pipeline' in previous else {}),
         **({'producer_optimization':producer_optimization} if producer_optimization else {}),
         **({'current_chain_manifest':chain['manifest']} if chain else {})}
+    if application_pending_cap is not None:
+        frozen['application_pending_cap']=application_pending_cap
+    if allowed_hosts:
+        frozen['allowed_hosts']=allowed_hosts
     independent = bool(categories and discovery_mode=='new-sites' and not (queries or directions or sources or goals_path)
                        and (not previous or previous.get('category_query_plan',{}).get('version') in ('producer-category-query-2','producer-category-query-3','producer-category-query-4')))
     public_business = independent and (not previous or previous['category_query_plan']['version'] in ('producer-category-query-3','producer-category-query-4'))
@@ -873,6 +885,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     else:decision=policy.next_query(state)
                     if decision is None:exhausted=True;break
                     engine=search_engine;probe=None
+                    if not independent and engine=='public':
+                        engine='360-public'
                     if independent and search_engine=='public':
                         engine=public_index
                     elif independent and not hold and unit and failures:
@@ -917,6 +931,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 def eligible_seeds(hits):
                     eligible=[]
                     for h in hits:
+                        if allowed_hosts and urlsplit(h['uri']).hostname not in allowed_hosts:
+                            failures.append({'uri':h['uri'],'reason':'outside_allowed_hosts'});continue
                         if not h.get('context_only') and pool.consumption(h['uri'],kind='target' if goals else 'entry'):
                             failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
                         verify_evidence([h['reference']])
@@ -997,6 +1013,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 for document_key,document in documents.items():
                     aid=document.get('application_id',document_key)
                     for h in extract_links(document,aliases,strict=PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13')):
+                        if allowed_hosts and urlsplit(h['uri']).hostname not in allowed_hosts:
+                            failures.append({'uri':h['uri'],'reason':'outside_allowed_hosts'});continue
                         if pool.consumption(h['uri'],kind='target' if goals else 'entry'):
                             failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
                         if entry_identity(h['uri']) in historical:continue

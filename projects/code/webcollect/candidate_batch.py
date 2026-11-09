@@ -130,9 +130,12 @@ def english_quiz_reason(state):
 
 def first_frame_disposition(state):
     """Route direct first-frame facts; this does not certify later frames."""
-    from .consumer_page_policy import full_image, boundary
+    from .consumer_page_policy import full_image, boundary, login_entry_exclusion
     if (boundary(state) or {}).get('kind')=='http_403':
         return 'abandon','entry_http_403'
+    login = login_entry_exclusion(state)
+    if login:
+        return 'abandon', login['reason']
     if full_image(state):
         return 'abandon', 'first_frame_image_fills_viewport'
     title = (state.get('title') or '').strip().casefold()
@@ -140,10 +143,6 @@ def first_frame_disposition(state):
     if title in ('404', '404 not found', '页面不存在', '网页不存在') and any(
             phrase in text.casefold() for phrase in ('404', 'not found', '页面不存在', '网页不存在')):
         return 'abandon', 'page_absent'
-    # A login button on an otherwise public page is not an access barrier.
-    links = [e for e in state.get('elements', []) if e.get('element_type') == 'link' and e.get('text', '').strip()]
-    if title in ('登录', '用户登录', 'login', 'sign in') and '请登录后使用' in text and not links:
-        return 'abandon', 'login_required_no_public_path'
     if title in ('access denied', '访问受限', '安全验证', '人机验证', '网站暂时无法访问'):
         return 'optimize', 'access_blocked'
     quiz_reason=english_quiz_reason(state)

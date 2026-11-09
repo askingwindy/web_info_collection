@@ -323,7 +323,7 @@ def build_candidate_task(capability, task_version, budgets=None):
         raise ValueError('Candidate capability supports none of the react actions')
     from .closing_policy import VERSION as CLOSE_POLICY
     from .banded_plan import VERSION as PLAN_PROTOCOL
-    from .action_stability import POST_VERSION as FOCUS_PROTOCOL
+    from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
     from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
     task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
         plan_protocol=PLAN_PROTOCOL, action_stability_protocol=FOCUS_PROTOCOL,
@@ -1296,24 +1296,43 @@ class ReactSession:
                 # (scroll/back/open_url) scope; unrelated overlay/announcement
                 # repaints never block dispatch. Older protocols keep their
                 # search-flow scopes below untouched.
-                try:
-                    scoped_state = load_json(self.current['evidence']['state']['path'])
-                    if row['action'] in ('click', 'type') and cid:
-                        action_scope = action_scoped_scope(scoped_state, cid, row['action'])
-                    elif row['action'] == 'hotkey':
-                        focused = [key for key, c in self.current['controls'].items()
-                                   if (c.get('value') or {}).get('focused') is True]
-                        if len(focused) == 1:
-                            action_scope = action_scoped_scope(scoped_state, focused[0], 'hotkey')
+                for scope_refresh in range(2):
+                    try:
+                        scoped_state = load_json(self.current['evidence']['state']['path'])
+                        if row['action'] in ('click', 'type') and cid:
+                            action_scope = action_scoped_scope(scoped_state, cid, row['action'])
+                        elif row['action'] == 'hotkey':
+                            focused = [key for key, c in self.current['controls'].items()
+                                       if (c.get('value') or {}).get('focused') is True]
+                            if len(focused) == 1:
+                                action_scope = action_scoped_scope(scoped_state, focused[0], 'hotkey')
+                            else:
+                                action_scope = document_scope(scoped_state, 'hotkey')
+                        elif row['action'] in ('scroll', 'back', 'open_url'):
+                            action_scope = document_scope(scoped_state, row['action'])
                         else:
-                            action_scope = document_scope(scoped_state, 'hotkey')
-                    elif row['action'] in ('scroll', 'back', 'open_url'):
-                        action_scope = document_scope(scoped_state, row['action'])
-                    else:
-                        action_scope = None
-                except ValueError as error:
-                    return self._need_observation('act', '动作级局部证据不足：' + str(error),
-                                                  data=self._deltas(executed))
+                            action_scope = None
+                        break
+                    except ValueError as error:
+                        if scope_refresh:
+                            return self._need_observation('act', '动作级局部证据不足：' + str(error),
+                                                          data=self._deltas(executed))
+                        refresh_key = (self._probe_key(self.current), row['action'], cid)
+                        refreshed = getattr(self, '_scope_refresh_history', set())
+                        if refresh_key in refreshed:
+                            return self._need_observation('act', '同一观察下动作证据仍不足：' + str(error),
+                                                          data=self._deltas(executed))
+                        refreshed.add(refresh_key)
+                        self._scope_refresh_history = refreshed
+                        old_binding = dict(control['binding']) if cid else None
+                        await self._observe(cid)
+                        refreshed.add((self._probe_key(self.current), row['action'], cid))
+                        if cid:
+                            control = self.current['controls'].get(cid)
+                            if control is None or control['binding'] != old_binding:
+                                return self._need_observation('act', '刷新后目标绑定变化，请按新观察选择目标',
+                                                              data=self._deltas(executed))
+                            selector, index = control['binding'].get('selector'), control['binding'].get('index', 0)
                 self.event('action-scoped-evidence', action=row['action'], target=cid,
                            scope_purpose=(action_scope or {}).get('purpose'), action_dispatched=False)
             focus = getattr(self, 'preflight_search_focus', None)
@@ -1542,7 +1561,18 @@ class ReactSession:
             dispatch_started = True
             self.actual_dispatches += 1
             try:
-                await execute(self.page, operation['action_type'], arguments, {})
+                popup_source = getattr(self, '_popup_sources', {}).get(self.page)
+                if (operation['action_type'] == 'back' and popup_source is not None
+                        and self.task['fragment'].get('plan_protocol') == 'webcollect-banded-conditional-plan-11'):
+                    raw['return_navigation'] = {'method': 'switch_to_opener',
+                        'from_url': self.page.url, 'source_url': popup_source.url,
+                        'popup_provenance': deepcopy(self._popup_provenances[self.page])}
+                    await popup_source.bring_to_front()
+                    self.page = popup_source
+                else:
+                    if operation['action_type'] == 'back':
+                        raw['return_navigation'] = {'method': 'go_back', 'from_url': self.page.url}
+                    await execute(self.page, operation['action_type'], arguments, {})
             except Exception as error:
                 from playwright.async_api import TimeoutError as PlaywrightTimeout
                 if operation['action_type'] != 'back' or not isinstance(error, PlaywrightTimeout):
@@ -1563,9 +1593,16 @@ class ReactSession:
             new_pages = set(self.page.context.pages) - pages_before
             if len(new_pages) > 1:
                 raise ValueError('一次动作打开多个页面，需单独适配并记录')
-            if new_pages and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9'):
+            if new_pages and self.task['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-11'):
                 from .plan_evidence import verify_popup
                 raw['popup_provenance'] = await verify_popup(self.page,next(iter(new_pages)),operation,state)
+                if self.task['fragment'].get('plan_protocol') == 'webcollect-banded-conditional-plan-11':
+                    if not hasattr(self, '_popup_sources'):
+                        self._popup_sources = {}
+                    self._popup_sources[next(iter(new_pages))] = self.page
+                    if not hasattr(self, '_popup_provenances'):
+                        self._popup_provenances = {}
+                    self._popup_provenances[next(iter(new_pages))] = deepcopy(raw['popup_provenance'])
             elif new_pages and self.task['fragment'].get('decision_protocol') == NATIVE_VERSION:
                 raw['opened_pages'] = [p.url for p in new_pages]
                 raw.update(dispatched=True, action_executed=True, phase='post_dispatch',
@@ -1757,6 +1794,8 @@ class ReactSession:
             'observed': observed,
             'semantic_goal': step['goal'], 'semantic_expected': step['expected'],
             'primitive': row['action']}
+        if raw.get('return_navigation'):
+            row_record['return_navigation'] = deepcopy(raw['return_navigation'])
         if self.task['fragment'].get('reading_progress_protocol') and len(self.trajectory) >= 2:
             from .reading_progress import same_view, control_return
             first,last=self.trajectory[-2:]
@@ -2182,11 +2221,13 @@ class ReactSession:
             # Same Page: validate the supplied synchronization receipt before
             # accepting it. A changed/invalid entry is refreshed, never navigated.
             from .browser import validate_capture_receipt, verify_execution_state
+            from .action_stability import ACTION_SCOPED_VERSION
             try:
                 validate_capture_receipt(captured['state'], captured['capture'], captured['png'])
                 if captured['state']['url'] != self.page.url:
                     raise ValueError('Entry observation URL changed')
-                await verify_execution_state(self.page, captured['state'], timeout=REACT_OBSERVE_TIMEOUT_SECONDS, **options)
+                if self.task['fragment'].get('action_stability_protocol') != ACTION_SCOPED_VERSION:
+                    await verify_execution_state(self.page, captured['state'], timeout=REACT_OBSERVE_TIMEOUT_SECONDS)
             except Exception:
                 await self._observe()
             else:
@@ -2211,6 +2252,10 @@ class ReactSession:
         await self._run_preflight()
 
     async def _run_preflight(self):
+        from .action_stability import ACTION_SCOPED_VERSION
+        if self.task['fragment'].get('action_stability_protocol') == ACTION_SCOPED_VERSION:
+            self.event('preflight-reused-action-evidence', independent_probe_dispatched=False)
+            return
         if self.preflight is not None:
             record = await self.preflight(self.page, self.root / 'preflight')
             from .action_stability import VERSIONS as focus_versions

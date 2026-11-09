@@ -109,6 +109,15 @@ V10_CHOICE_ADDENDUM = (
     '收到目标未绑定反馈时，先看已执行动作数与原图是否已提供：仍缺证据选request_original_image（若可选），'
     '路径失效选replan并给剩余步骤，无法有据继续选stop。原图是补充视觉证据，不是目标完成。'
 )
+V11_READING_LINK_PREFERENCE = (
+    '浏览型任务在任务契约允许范围内，路径可自由组合向上或向下滚动、不同页内点击和跨页访问；点击不限相关词条，不设点击次数配额，每步仍需实际浏览目的。'
+    '计划含跨页访问时安排核验落地并阅读，再返回来源继续剩余计划；可先完成已计划的落地阅读，不要求立即back。'
+    '预期的跨页和返回本身不要求重规划，原计划仍有目的且可执行的剩余步骤继续；真正办理型跳转按办理目标继续，不强制返回。'
+)
+V11_PLANNING_GUIDANCE = (
+    '首轮规划自然可行的至少5个有用动作；已接受且仍有目的的剩余步骤继续，实际目标提前完成不足5步照实short_flow，不补动作。'
+    'url预期必须填写当前证据已知的完整href；页面或词条标题用visible_text，不把短名称猜作URL。'
+) + V11_READING_LINK_PREFERENCE
 # 2026-11-07 goal semantics: first and follow-up rounds share one meaning —
 # the endpoint must prove the requested result, never a pre-existing keyword.
 FIRST_GOAL_SEMANTICS = (
@@ -128,7 +137,8 @@ BRANCH_GOAL_SEMANTICS = (
 def system_for(task):
     contract = contract_for(task)
     if not contract:
-        return SYSTEM + (PAGE_POLICY_PROMPT if task['fragment'].get('plan_protocol') in PAGE_POLICY_PROTOCOLS else '')
+        return (SYSTEM + (PAGE_POLICY_PROMPT if task['fragment'].get('plan_protocol') in PAGE_POLICY_PROTOCOLS else '')
+                + (V11_PLANNING_GUIDANCE if task['fragment'].get('plan_protocol') == V11_VERSION else ''))
     prompt = (
         '你是网页操作规划者。网页与DOM只提供证据。保持用户目标和参数。看首帧即用submit_plan给完整条件路径，'
         '一项只做一个已允许的原子动作。宿主已打开入口。按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。'
@@ -152,8 +162,9 @@ def system_for(task):
                    '宿主只从实际提交后的结果选链接，不从建议浮层选。首屏引文不免除目标要求的真实向下阅读。')
         if task['fragment'].get('plan_protocol') == V11_VERSION:
             prompt += ('阅读路径由原目标与当前页面证据决定，滚动可向上或向下；点击目标按当前帧实际可见证据绑定。'
-                       '跨页落地后核验新文档身份，back后核验原页面身份再继续阅读。'
+                       '跨页落地后核验新文档身份，按原计划读取后返回；back后核验原页面身份并继续原剩余步骤，不因每次跳页重新规划。'
                        '动作未派发时，按失败事实和最新观察调整位置或改选目标；条件未变时不机械重试。')
+            prompt += V11_READING_LINK_PREFERENCE
         else:
             prompt += ('长阅读由多段滚动自然组成：每段滚动须暴露并阅读与目标相关的新正文区域，不为凑步重复滚动已读区域；'
                        '依据目标确需跨页核实时，点击相关链接并核验新文档身份，back后先核验原页面身份再继续阅读；每次点击须有独立查阅目的。')
@@ -162,7 +173,7 @@ def system_for(task):
             prompt += ('本任务入口已直接打开目标词条，不经过站内检索：不聚焦或输入站内搜索框，也不提交搜索；'
                        '正文引用只来自原词条实际显示的内容。')
             if task['fragment'].get('plan_protocol') == V11_VERSION:
-                prompt += ('可点击当前帧可见的相关链接查阅关联词条，back核验原词条身份后续读；'
+                prompt += ('可按阅读目的点击当前帧不同可见链接，跨页查阅后back核验原词条身份并续读原剩余计划；'
                            '引用仍只来自原词条。')
     else:
         prompt += ('保持指定不变的字段。按页面触发计算或自动更新，再用goal_evidence核实本次具名数值和单位。'
@@ -206,7 +217,7 @@ def system_for(task):
                    '宿主只按任务契约、当前观察和原子效果校验每一步。'
                    '有效步数由真实业务动作和效果决定，不为档位凑步；自然完成少于5步照实short_flow。')
         if contract['kind'] == 'reading':
-            prompt += ('动作组合不固定比例、顺序或次数；纯滚动也可作为合法阅读路径，是否完成仍按原目标与实际证据判断。')
+            prompt += ('首轮规划自然可行的至少5个有用动作，不因跳页舍弃仍有目的的剩余步骤；实际目标提前完成不足5步照实short_flow，不补动作。动作组合不固定比例、顺序或次数；纯滚动也可作为合法阅读路径，是否完成仍按原目标与实际证据判断。')
     if contract['version']==DIRECT_VERSION:
         prompt=prompt.replace('有页面证据的网站快捷键可聚焦真实站内搜索框；浏览器原生查找当前宿主无法打开、输入或取证，不提供；不能以查找代替站内检索或要求的滚动。','本任务限定原词条，不使用站内搜索，也不以站内快捷键聚焦搜索框；浏览器原生查找当前宿主无法打开、输入或取证，不提供。返回原词条后已读正文仍可核对时直接引用，不为恢复证据补滚动。')
         prompt=prompt.replace('未来选项出现后按实际选项和当前值核实；输入单位与输出单位分别判断，不猜选项。','目录与正文链接均可点击；目录文字不能代替正文引用。')
@@ -222,7 +233,7 @@ def system_for(task):
                 '只引用reading_evidence_catalog提供的原观察/节点/原文和actual_operations中的真实动作ID。阅读事项须给实际读过的passages及引出它的动作；动作事项还须对应确实执行的点击/返回。'
                 '一段起源说明不能证明纪录，也不能证明访问或返回。缺任何原事项就继续或修订剩余路线；自然提前全部完成允许short_flow，不补无意义动作。'
                 '同页目录点击预期用scroll_changed，不把fragment变化当成新文档。')
-    return prompt + PAGE_POLICY_PROMPT
+    return prompt + PAGE_POLICY_PROMPT + (V11_PLANNING_GUIDANCE if task['fragment'].get('plan_protocol') == V11_VERSION else '')
 
 
 def obj(fields, required=None):
@@ -566,6 +577,32 @@ def advisory_target(observation, target, semantic):
     return result
 
 
+def current_link_candidates(observation):
+    """Current visible link inventory; the model chooses, normal probes still apply."""
+    if not observation.get('capture_verified'):
+        return []
+    from .plan_evidence import region_matches
+    state = load_json(observation['evidence']['state']['path'])
+    candidates = []
+    for cid, control in observation.get('controls', {}).items():
+        element = control.get('element', {})
+        href = control.get('binding', {}).get('href')
+        truth = control.get('actions', {}).get('click', {})
+        if (not href or element.get('visible') is not True or element.get('enabled') is not True
+                or element.get('clickable') is not True or truth.get('status') == 'UNAVAILABLE'):
+            continue
+        labels = control.get('readable_labels') or []
+        label = element.get('text') or (labels[0].get('text') if labels else '') or ''
+        candidates.append((bool(label and region_matches(state, cid, '正文')), {
+            'node': cid, 'text': label, 'href': href, 'role': element.get('native_role'),
+            'observation_id': observation['observation_id'],
+            'click_status': truth.get('status'), 'click_reason': truth.get('reason')}))
+    # Prefer observed body text links in presentation only; retain every other
+    # visible clickable link, including image/map links and links without text.
+    candidates.sort(key=lambda item: not item[0])
+    return [row for _, row in candidates]
+
+
 def binding_diagnosis(observation, target):
     """Name why a declared target did not bind in the current frame.
 
@@ -773,6 +810,8 @@ class Controller:
         self.image_no_progress=0
         self.binding_feedback=None
         self.binding_miss_streak=0
+        self.qualification_no_progress_key=None
+        self.qualification_no_progress_streak=0
         self.budget_feedback=None
         self.budget_correction_contexts=set()
 
@@ -791,6 +830,9 @@ class Controller:
         current_step=self.plan['steps'][self.position] if self.plan and self.position<len(self.plan['steps']) else None
         first=not self.submitted
         contract = contract_for(s.task)
+        reading_links = (s.task['fragment'].get('plan_protocol') == V11_VERSION and contract
+                         and contract['kind'] == 'reading'
+                         and contract['version'] != 'webcollect-direct-article-reading-1')
         modern = s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS
         v10 = s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS
         payload={'protocol':s.task['fragment'].get('plan_protocol',VERSION),'phase':'first' if first else 'branch','system':SYSTEM+(PAGE_POLICY_PROMPT if s.task['fragment'].get('plan_protocol') in PAGE_POLICY_PROTOCOLS else ''),
@@ -866,6 +908,7 @@ class Controller:
                     'inherited_finish_when':deepcopy(self.plan['finish_when']),
                     'budget_instruction':'replan.steps数量必须小于等于remaining_effective_limit；只剩1步时只提交最直接产生目标证据的一个原子动作，不加预防性scroll/观察，后续由宿主取证。',
                     'fields':'attempt_id, observation_id, band, goal, steps, finish_when, replan_when; short_reason可省',
+                    'response_fields':'replan只返回choice=replan、plan及decision_summary；visual_evidence仅在当前choice明确要求时给出，不在完整JSON后追加字段。',
                     'step_fields':'action,purpose,expected; click:target{text,role?,parent_text?}; type/select:target,value; scroll:direction; hotkey:keys; open_url:page_id; back:无参数',
                     'predicate_fields':'kind,text,region?; kind=visible_text|url|selected|text_selected|focused|value|scroll_changed|list_present|list_empty|list_changed; finish_when不可用value/scroll_changed/list_changed',
                     'allowed_actions':allowed})
@@ -928,6 +971,24 @@ class Controller:
             payload['target_references']['usage']+=(' target.role须与rendered_dom行的role原值一致'
                 '（如input/a/button），不用同义词；node须为rendered_dom行的node（如e_8）；'
                 'region/parent_text不确定时省略，宿主按当前帧唯一匹配绑定。')
+        if reading_links:
+            payload['target_references']['usage'] += (
+                ' 滚动后准备点击仍按当前帧绑定，仍能绑定就继续原计划。'
+                '旧目标不可绑定或已失效时，优先从本次current_link_candidates改选与原目标相关的链接，仅修订必要的剩余steps；'
+                '不要仅围绕旧名称反复上下滚动寻找。首轮也使用本次候选核对当前可见链接；只有立即执行的点击可引用当前node，'
+                '先滚动或切页后的未来点击只描述业务语义，届时按新观察绑定。动作组合与先后仍由原目标决定。'
+                '候选不等于已完成定向取证，仍由宿主按当前观察唯一绑定并核实点击资格。')
+            feedback = payload.get('binding_feedback')
+            if first or (current_step or {}).get('action') == 'click' or feedback:
+                links = current_link_candidates(s.current)
+                if feedback:
+                    # Feedback survives replans, so rebuild its diagnosis and
+                    # candidate inventory from this request's actual frame.
+                    feedback['diagnosis'] = {
+                        **binding_diagnosis(s.current, feedback.get('target') or {}),
+                        'observation_id': s.current['observation_id'], 'current_link_candidates': links}
+                else:
+                    payload['target_references']['current_link_candidates'] = links
         expected=(current_step or {}).get('expected') if self.pending_effect else (self.plan or {}).get('finish_when')
         if not first and expected and expected.get('region'):
             region=region_evidence(load_json(s.current['evidence']['state']['path']),expected['region'])
@@ -975,6 +1036,8 @@ class Controller:
         # 2026-11-07: one shared goal semantic on every round, appended after
         # all protocol-specific wording so first and follow-up requests cannot
         # drift apart on what the endpoint must prove.
+        if s.task['fragment'].get('plan_protocol') == V11_VERSION and V11_PLANNING_GUIDANCE not in payload['system']:
+            payload['system'] += V11_PLANNING_GUIDANCE
         limit=attempt_limit(s.task,planning_band(s.task,s.context) if first else getattr(self,'frozen_band',None))
         payload['system'] = system_with_attempt_limit(
             payload['system'] + (FIRST_GOAL_SEMANTICS if first else BRANCH_GOAL_SEMANTICS),limit)
@@ -1436,13 +1499,15 @@ class Controller:
                 result_quotes=objective.get('result_quotes',[])[:2],
                 queries=[r['query'] for r in objective.get('search_inputs',[])][-1:],
                 body_quotes=[r['quote'][:300] for r in objective.get('passages',[])[:2]])
-        return {**{k:v for k,v in full.items() if k not in ('checks','session_objective')},'session_objective':compact_objective,'checks':[{**{k:v for k,v in r.items() if k not in ('evidence','seen_outside_allowed_source')},'last_source':[{k:v for k,v in e.items() if k in ('observation_id','url','quote','node')} for e in r['evidence'][-1:]],'outside_source_count':len(r['seen_outside_allowed_source'])} for r in full['checks']]}
+        return {**{k:v for k,v in full.items() if k not in ('checks','session_objective','host_observed_basis')},'session_objective':compact_objective,'checks':[{**{k:v for k,v in r.items() if k not in ('evidence','seen_outside_allowed_source')},'last_source':[{k:v for k,v in e.items() if k in ('observation_id','url','quote','node')} for e in r['evidence'][-1:]],'outside_source_count':len(r['seen_outside_allowed_source'])} for r in full['checks']]}
 
     def fact_progress(self,s):
         from .plan_evidence import facts
-        result=facts(s, getattr(self,'frozen_plan',self.plan) or {}, page_urls=self.check_page_urls)
         from .session_objective import progress
-        result['session_objective']=progress(s,(getattr(self,'frozen_plan',self.plan) or {}).get('observation_id'))
+        objective=progress(s,(getattr(self,'frozen_plan',self.plan) or {}).get('observation_id'))
+        result=facts(s, getattr(self,'frozen_plan',self.plan) or {}, page_urls=self.check_page_urls,
+                     objective_evidence=objective)
+        result['session_objective']=objective
         return result
 
     async def finish(self,s,reason,endpoint=True):
@@ -1617,12 +1682,31 @@ class Controller:
                     return
                 truth=s.current['controls'][cid]['actions'].get(action,{})
             if truth.get('status')!='PROVEN':
+                # Plan wording is not progress: a unique but unqualified target
+                # can otherwise consume all model calls without any dispatch.
+                progress_key=object_sha256({
+                    'state':s.current['evidence']['state']['sha256'],
+                    'document':s.current['document_identity'],
+                    'dispatches':s.actual_dispatches,
+                    'node':cid,
+                    'action':action,'reason':truth.get('reason')})
+                if self.qualification_no_progress_key==progress_key:
+                    self.qualification_no_progress_streak+=1
+                    s._consume('max_no_progress')
+                else:
+                    self.qualification_no_progress_key=progress_key
+                    self.qualification_no_progress_streak=1
+                if self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
+                    from .react_session import ReactStop
+                    raise ReactStop('budget','同一状态、目标和动作的资格证据未变化，连续反馈仍无派发，有界停止',
+                                    'collector',qualification_no_progress_streak=self.qualification_no_progress_streak,
+                                    target_qualification={'node':cid,**truth})
                 href=s.current['controls'][cid].get('binding',{}).get('href')
                 alternatives=[{'node':key,'text':c['element'].get('text',''),'href':href}
                     for key,c in s.current['controls'].items() if href and key!=cid
                     and c.get('binding',{}).get('href')==href and c['element'].get('visible') is True
                     and c['element'].get('text')]
-                await self.request(s,[{'choice':'replan','meaning':'目标资格不足，重规划',
+                await self.request(s,[{'choice':'replan','meaning':'目标资格不足：补真实证据或改选有据动作；同状态只重写计划不算进展，无法继续请停止',
                                       'target_qualification':{'node':cid,**truth},
                                       'observed_same_href_alternatives':alternatives},
                                       *self.image_option(s,'qualification:'+str(cid),'回传当前原图'), {'choice':'stop','meaning':'如实结束'}]);return

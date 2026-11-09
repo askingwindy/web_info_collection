@@ -30,11 +30,13 @@ class CurrentChainTests(unittest.TestCase):
         descriptor = {'schema_version':'candidate-research-replay-2','original_claim_id':'failed',
             'objective':reference(objective),'authorization':reference(authorization),
             'comparisons':comparisons,'production_counted':False}
-        assert_current_evidence(self.scope,descriptor)
-        with self.assertRaisesRegex(ValueError,'out-of-chain'):
-            assert_current_evidence(self.scope,{'research_replay':descriptor,'observation':reference(receipt)})
-        with self.assertRaisesRegex(ValueError,'metadata'):
-            assert_current_evidence(self.scope,{**descriptor,'observation':reference(receipt)})
+        for version in ('candidate-research-replay-2','candidate-research-replay-3'):
+            descriptor['schema_version'] = version
+            assert_current_evidence(self.scope,descriptor)
+            with self.assertRaisesRegex(ValueError,'out-of-chain'):
+                assert_current_evidence(self.scope,{'research_replay':descriptor,'observation':reference(receipt)})
+            with self.assertRaisesRegex(ValueError,'metadata'):
+                assert_current_evidence(self.scope,{**descriptor,'observation':reference(receipt)})
 
     def test_research_inputs_do_not_adopt_historical_observations(self):
         objective=self.root/'old-objective.json';authorization=self.root/'authorization.json'

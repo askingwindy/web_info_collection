@@ -312,7 +312,7 @@ def sync_candidate_qc(pool_path, registry):
     pool=CandidatePool(pool_path)
     registry=str(Path(registry).resolve())
     with pool.pool.connect() as con:
-        rows=[dict(r) for r in con.execute("SELECT r.*,json_extract(c.binding,'$.research_replay.schema_version') AS research_version FROM candidate_results r JOIN candidate_claims c USING(candidate_id,claim_id) WHERE r.effective=1 OR json_extract(c.binding,'$.research_replay.schema_version') IN ('candidate-research-replay-1','candidate-research-replay-2')")]
+        rows=[dict(r) for r in con.execute("SELECT r.*,json_extract(c.binding,'$.research_replay.schema_version') AS research_version FROM candidate_results r JOIN candidate_claims c USING(candidate_id,claim_id) WHERE r.effective=1 OR json_extract(c.binding,'$.research_replay.schema_version') IN ('candidate-research-replay-1','candidate-research-replay-2','candidate-research-replay-3')")]
     for row in rows:
         result=json.loads(row['record'])
         if result['registry']!=registry: continue

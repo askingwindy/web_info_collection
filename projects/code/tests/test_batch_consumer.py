@@ -346,7 +346,7 @@ class BatchAcceptance(PipelineAcceptance):
         self.assertIsNone(first_frame_disposition({'title':'工具页','visible_text':'登录 更多工具'}))
         self.assertIsNone(first_frame_disposition({'title':'复杂页面','elements':[{}]*500}))
         self.assertEqual(first_frame_disposition({'title':'安全验证'}),('optimize','access_blocked'))
-        self.assertIsNone(first_frame_disposition({'title':'登录','visible_text':'请登录后使用','elements':[{'element_type':'link','text':'公开工具'}]}))
+        self.assertEqual(first_frame_disposition({'title':'登录','visible_text':'请登录后使用','elements':[{'element_type':'link','text':'公开工具'}]}),('abandon','login_page'))
 
 
 def load_tests(loader, tests, pattern):

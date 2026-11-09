@@ -661,10 +661,11 @@ async def _capture(page, selector=None, index=0, retries=8, assertions=None, pro
         rejected_reason=None
         if not accepted:
             if v2:
-                rejected_reason=('dom_unstable' if not same else
+                rejected_reason=(stability.get('scope_error') or final_stability.get('scope_error') or
+                                 ('dom_unstable' if not same else
                                  'related_dom_changed' if not stability['related_dom_stable'] else
                                  'loading_incomplete' if not stability['loading_complete'] else
-                                 'pixel_change_outside_allowed')
+                                 'pixel_change_outside_allowed'))
             else:
                 rejected_reason='dom_unstable'
         attempts.append({'attempt':attempt_index+1,'started_ns':started,'ended_ns':ended,'dom_stable':same,

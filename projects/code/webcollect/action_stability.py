@@ -449,12 +449,12 @@ def document_scope(state, action):
     observed_back = action == 'back'
     if observed_back and (not state.get('url') or not state.get('document_identity')):
         raise ValueError('Back requires the observed document URL and identity')
-    if readiness.get('document_ready') not in (('interactive', 'complete') if observed_back else ('complete',)):
+    if readiness.get('document_ready') not in ('interactive', 'complete'):
         raise ValueError('Document scope requires a loaded document')
     keys = ('url', 'document_identity', 'scroll') if action == 'scroll' else ('url', 'document_identity')
     return {'schema_version': ACTION_SCOPED_VERSION, 'action': action,
             'purpose': 'document_scoped_dispatch', 'node': None,
-            **({'readiness_policy': BACK_OBSERVED_VERSION} if observed_back else {}),
+            'readiness_policy': 'webcollect-document-observed-1',
             'basis': {k: deepcopy(state.get(k)) for k in keys}}
 
 
@@ -490,7 +490,7 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
     from .browser import fingerprint
     action = scope.get('action')
     purpose = scope.get('purpose')
-    observation_only = purpose == 'post_action_document'
+    observation_only = purpose in ('post_action_document', 'entry_observation')
     with Image.open(BytesIO(png_before)) as a, Image.open(BytesIO(png_after)) as b:
         if a.format != 'PNG' or b.format != 'PNG' or a.size != b.size or list(a.size) != before['screen_resolution']:
             raise ValueError('Action-scoped proof needs complete original viewport PNGs')
@@ -520,7 +520,7 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
                 valid = False
         elif purpose == 'document_scoped_dispatch' and action in ('scroll', 'back', 'open_url', 'hotkey'):
             observed_back = action == 'back' and scope.get('readiness_policy') == BACK_OBSERVED_VERSION
-            ready_states = ('interactive', 'complete') if observed_back else ('complete',)
+            ready_states = ('interactive', 'complete') if (observed_back or scope.get('readiness_policy') == 'webcollect-document-observed-1') else ('complete',)
             ready = all((s.get('capture_readiness') or {}).get('document_ready') in ready_states
                         for s in (before, after))
             valid = ready and all(before.get(k) == after.get(k) == scope['basis'][k]

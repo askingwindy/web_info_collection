@@ -13,6 +13,41 @@ VERSION = 'producer-first-frame-image-2'
 OBSERVATION_VERSION = 'producer-image-viewport-observation-2'
 RUN = 'producer-page-consumption-1'
 SCREEN_RUN = 'producer-image-screen-1'
+VISIBLE_FRAME_VERSION = 'producer-visible-first-frame-1'
+LOGIN_REQUIRED_VERSION = 'producer-login-page-exclusion-2'
+
+
+def required_login_exclusion(result):
+    """Reject an observed login entry before purpose selection or publication."""
+    refs = [result['observation'], result['image']]
+    verify_evidence(refs)
+    observation = load_json(result['observation']['path'])
+    from webcollect.consumer_page_policy import login_entry_exclusion
+    decision = login_entry_exclusion(observation)
+    if decision is None:
+        return None
+    return {'policy': LOGIN_REQUIRED_VERSION, 'status': 'REJECTED',
+            'reason': decision['reason'], 'references': refs,
+            'login_exclusion': decision, 'QC': 'NOT_RUN'}
+
+
+def blank_frame_exclusion(result):
+    """Reject a proven blank original frame, without guessing from empty text alone."""
+    refs = [result['observation'], result['image']]
+    verify_evidence(refs)
+    observation = load_json(result['observation']['path'])
+    if ((observation.get('visible_text', observation.get('text', '')) or '').strip()
+            or observation.get('controls') or observation.get('links')):
+        return None
+    with Image.open(result['image']['path']) as image:
+        extrema = image.convert('RGB').getextrema()
+    if any(low != high for low, high in extrema):
+        return None
+    return {'policy': VISIBLE_FRAME_VERSION, 'status': 'REJECTED',
+            'reason': 'blank_first_frame', 'references': refs,
+            'evidence': {'readable_text': False, 'visible_controls': False,
+                         'visible_links': False, 'uniform_rgb': [low for low, _ in extrema]},
+            'language_QC': 'NOT_RUN'}
 
 
 class ObservationUnavailable(ValueError):
@@ -146,9 +181,12 @@ def screen(pool,ledger,links,root,*,probe=None):
                 'http_status':result.get('http_status'),'tool_request_id':identity},'reused':bool(prior),'probe':probe_refs})
             continue
         if verdict['status'] != 'NO_CONSUME':
+            blank = blank_frame_exclusion(result) or required_login_exclusion(result)
             from webcollect.page_language import assess as assess_language
             language = assess_language(load_json(result['observation']['path']))
-            if language['excluded']:
+            if blank:
+                verdict = blank
+            elif language['excluded']:
                 verdict = {**language, 'status':'REJECTED', 'references':[result['observation'],result['image']]}
         records.append({'uri':uri,'decision':verdict,'reused':bool(prior),'probe':probe_refs})
         if verdict['status'] not in ('NO_CONSUME','REJECTED'):admitted.append(link)

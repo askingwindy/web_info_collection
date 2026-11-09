@@ -287,8 +287,9 @@ def reading_evidence(s, start, contract):
             article_sources.append(start)
             opened.append({'text': headings[0]['text'], 'href': start['url'], 'landing': start['url'],
                            'operation_id': None, 'source': 'direct_entry_article'})
-            for e in initial.get('elements', []):
-                quote = e.get('text') or ''
+            for passage in body(initial):
+                e = next(e for e in initial['elements'] if e['element_id'] == passage['node'])
+                quote = passage['quote']
                 if (e.get('visible') and len(quote.strip()) >= 12 and all(norm(a) in norm(quote) for a in aspects)
                         and e.get('native_role') not in ('a', 'input', 'button', 'h1', 'h2', 'h3')
                         and region_matches(initial, e['element_id'], '正文')):
@@ -367,15 +368,15 @@ def reading_evidence(s, start, contract):
             old, new = state(before), state(after)
             if not old.get('scroll') or old.get('scroll') == new.get('scroll'):
                 continue
-            seen = {e.get('text') for e in old.get('elements', []) if e.get('visible')}
-            fresh_body=[e for e in new.get('elements',[]) if e.get('visible') and e.get('text') not in seen
-                        and len((e.get('text') or '').strip())>=12 and e.get('native_role') not in ('a','input','button','h1','h2','h3')
-                        and region_matches(new,e['element_id'],'正文')]
+            # Rendered paragraph blocks retain visible inline link/emphasis text.
+            seen = {p['quote'] for p in body(old)}
+            fresh_body = [p for p in body(new) if p['quote'] not in seen]
             if new.get('scroll',[0,0])[1]>old.get('scroll',[0,0])[1] and fresh_body:
                 downward_reading.append({'operation_id':step['operation_id'],'observation_id':after['observation_id'],
-                                         'visible_new_body':[{'node':e['element_id'],'quote':e['text']} for e in fresh_body]})
-            for e in new.get('elements', []):
-                quote = e.get('text') or ''
+                                         'visible_new_body':fresh_body})
+            for passage in body(new):
+                e = next(e for e in new['elements'] if e['element_id'] == passage['node'])
+                quote = passage['quote']
                 if (e.get('visible') and quote not in seen and len(quote.strip()) >= 12
                         and all(norm(a) in norm(quote) for a in aspects)
                         and e.get('native_role') not in ('a','input','button','h1','h2','h3')
@@ -386,14 +387,15 @@ def reading_evidence(s, start, contract):
             if not is_article(after):
                 article_sources.append(after)
             page=state(after)
-            for e in page.get('elements',[]):
-                quote=e.get('text') or ''
+            for passage in body(page):
+                e = next(e for e in page['elements'] if e['element_id'] == passage['node'])
+                quote = passage['quote']
                 if (e.get('visible') and len(quote.strip())>=12 and all(norm(a) in norm(quote) for a in aspects)
                         and e.get('native_role') not in ('a','input','button','h1','h2','h3') and region_matches(page,e['element_id'],'正文')):
                     passages.append({'node':e['element_id'],'quote':quote,'url':after['url'],
                                      'observation_id':after['observation_id'],'operation_id':step['operation_id']})
     now = state(s.current)
-    visible = {(e['element_id'], e.get('text')) for e in now.get('elements', []) if e.get('visible')}
+    visible = {(p['node'], p['quote']) for p in body(now)}
     on_article = is_article(s.current) and return_source is None
     candidates = [p for p in passages if (p['node'], p['quote']) in visible and same_url(p['url'], s.current['url'])
                   and on_article]

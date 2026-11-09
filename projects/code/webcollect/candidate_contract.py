@@ -8,13 +8,14 @@ from .planning import object_sha256, verify_evidence, validate_capability
 
 VERSION = 'webcollect-candidate-consumption-1'
 RESEARCH_V2 = 'candidate-research-replay-2'
+RESEARCH_V3 = 'candidate-research-replay-3'
 
 
 def research_v2_inputs(descriptor):
     """Frozen development inputs, never historical page/action evidence."""
     required = {'schema_version', 'original_claim_id', 'objective', 'authorization',
                 'comparisons', 'production_counted'}
-    if (set(descriptor) != required or descriptor['schema_version'] != RESEARCH_V2
+    if (set(descriptor) != required or descriptor['schema_version'] not in (RESEARCH_V2, RESEARCH_V3)
             or not descriptor['original_claim_id'] or descriptor['production_counted'] is not False):
         raise ValueError('Invalid research v2 input metadata')
     verify_evidence([descriptor['objective'], descriptor['authorization']])
@@ -46,15 +47,18 @@ def research_v2_inputs(descriptor):
 
 
 def validate_research_v2(descriptor, pool, original, registry=None):
-    """Recheck failed source and individually authorized saved comparisons."""
+    """V2 keeps failed sources; V3 also accepts settled nonproduction saves."""
     authorization = research_v2_inputs(descriptor)
+    saved_replay = descriptor['schema_version'] == RESEARCH_V3
     old = original.get('binding') or {}
     objective = load_json(descriptor['objective']['path'])
-    if (original['claim_id'] != descriptor['original_claim_id'] or original['state'] != 'failed'
+    if (original['claim_id'] != descriptor['original_claim_id']
+            or original['state'] not in (('failed', 'succeeded') if saved_replay else ('failed',))
             or (original['candidate_id'], original['version']) !=
                (objective.get('candidate_id'), objective.get('version'))
             or any(not old.get(k) for k in ('output', 'registry', 'ledger', 'history_set'))):
-        raise ValueError('Research v2 requires the settled failed original execution')
+        raise ValueError('Research v3 requires a settled failed or saved research execution' if saved_replay
+                         else 'Research v2 requires the settled failed original execution')
     from .batch_core import file_sha
     original_objective = Path(old['output']) / 'session-objective.json'
     if file_sha(original_objective) != descriptor['objective']['sha256']:
@@ -63,15 +67,35 @@ def validate_research_v2(descriptor, pool, original, registry=None):
             or Path(authorization['registry']).resolve() != Path(old['registry']).resolve()
             or registry is not None and Path(registry).resolve() != Path(old['registry']).resolve()):
         raise ValueError('Research v2 changes the original pool or registry')
+    def nonproduction_save(row, saved, binding):
+        replay = binding.get('research_replay') or {}
+        return (row['effective'] == 0
+                and replay.get('schema_version') in ('candidate-research-replay-1', RESEARCH_V2, RESEARCH_V3)
+                and replay.get('production_counted') is False
+                and saved.get('production_counted', False) is False
+                and saved.get('research_replay', replay) == replay)
     with pool.pool.connect() as con:
+        if original['state'] == 'succeeded':
+            row = con.execute('SELECT * FROM candidate_results WHERE candidate_id=? AND claim_id=?',
+                              (original['candidate_id'], original['claim_id'])).fetchone()
+            saved = json.loads(row['record']) if row else {}
+            if (not row or not nonproduction_save(row, saved, old)
+                    or saved.get('sample_id') != row['sample_id']
+                    or Path(saved.get('registry', '')).resolve() != Path(old['registry']).resolve()
+                    or not saved.get('save_receipt')):
+                raise ValueError('Research v3 requires the original saved nonproduction result')
+            verify_evidence([saved['save_receipt']])
+            if load_json(saved['save_receipt']['path']).get('sample_id') != row['sample_id']:
+                raise ValueError('Research source save receipt differs')
         for comparison in descriptor['comparisons']:
-            row = con.execute('''SELECT r.record,c.binding,c.state FROM candidate_results r
+            row = con.execute('''SELECT r.record,r.effective,c.binding,c.state FROM candidate_results r
                 JOIN candidate_claims c USING(candidate_id,claim_id)
-                WHERE r.claim_id=? AND r.sample_id=? AND r.effective=1''',
+                WHERE r.claim_id=? AND r.sample_id=?''',
                 (comparison['claim_id'], comparison['sample_id'])).fetchone()
             saved = json.loads(row['record']) if row else {}
             binding = json.loads(row['binding'] or '{}') if row else {}
             if (not row or row['state'] != 'succeeded'
+                    or not (row['effective'] == 1 or saved_replay and nonproduction_save(row, saved, binding))
                     or saved.get('sample_id') != comparison['sample_id']
                     or saved.get('save_receipt') != comparison['save_receipt']
                     or Path(saved.get('registry', '')).resolve() != Path(old['registry']).resolve()
@@ -117,7 +141,7 @@ def research_duplicate_basis(task, registry):
         result = con.execute('SELECT * FROM candidate_results WHERE claim_id=? AND effective=1',
             (descriptor['original_claim_id'],)).fetchone()
         events = [json.loads(r[0]) for r in con.execute("SELECT record FROM candidate_events WHERE claim_id=? AND kind='research_claimed'", (binding['claim_id'],))]
-    if descriptor.get('schema_version') == RESEARCH_V2:
+    if descriptor.get('schema_version') in (RESEARCH_V2, RESEARCH_V3):
         if (not original or not any(all(event.get(k) == v for k, v in descriptor.items()) for event in events)
                 or Path(live['binding']['registry']).resolve() != Path(registry).resolve()):
             raise ValueError('Research v2 lacks frozen/live original authorization')

@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlsplit
 
 VERSION = 'webcollect-consumer-page-policy-1'
+LOGIN_ENTRY_VERSION = 'webcollect-login-entry-exclusion-1'
 PLAN_PROTOCOL = 'webcollect-banded-conditional-plan-7'
 EXIT_LABELS = {'取消', '返回', '关闭', '取消下载', '暂不登录', '稍后再说',
                'cancel', 'back', 'close', 'not now', 'cancel download'}
@@ -83,6 +84,28 @@ def exit_ids(state):
     return [e['element_id'] for e in state.get('elements', [])
             if e.get('visible') is True and e.get('clickable') is True
             and (e.get('text') or '').strip().casefold() in EXIT_LABELS]
+
+
+def login_entry_exclusion(state):
+    """Shared first-frame rule for native consumer state and producer observations."""
+    view = {**state, 'url': state.get('url') or state.get('landed_uri') or state.get('requested_uri', ''),
+            'visible_text': state.get('visible_text', state.get('text', '')) or ''}
+    found = boundary(view)
+    if found and found['kind'] == 'login':
+        return {'policy': LOGIN_ENTRY_VERSION, 'reason': 'login_page', 'basis': found['basis']}
+    lines = {line.strip() for line in view['visible_text'].splitlines()}
+    controls = state.get('controls')
+    if controls is None:
+        controls = [{'label': e.get('text'), 'disabled': e.get('disabled', False)}
+                    for e in state.get('elements', [])
+                    if e.get('visible') is True and e.get('clickable') is True]
+    if ('登录即可免费使用' in lines
+            and '受服务器资源影响，请先登录后再使用' in lines
+            and any((c.get('label') or '').strip() == '立即登录' and not c.get('disabled') for c in controls)):
+        return {'policy': LOGIN_ENTRY_VERSION, 'reason': 'explicit_login_required_to_use',
+                'basis': 'visible_mandatory_use_notice_and_login_control',
+                'visible_notice': '受服务器资源影响，请先登录后再使用', 'visible_login_control': '立即登录'}
+    return None
 
 
 def allowed_exit(state, action, control_id=None):

@@ -571,166 +571,172 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     from .evidence import audit_capture
     from .telemetry import NetworkMeter, phase, worker_measurement
 
-    plan = read_json(plan_path)
-    history = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope') or {}
-    if history.get('candidate_project'):
-        from .current_chain import assert_current_result_path
-        assert_current_result_path(history, Path(output).resolve())
-    validate_plan(plan)
-    if entry_session is not None:
-        from .candidate_contract import guard_claim
-        from .react_session import is_react_task
-        if len(plan['tasks']) != 1 or not is_react_task(plan['tasks'][0]):
-            raise ValueError('Candidate entry session requires exactly one ReAct task')
-        guard_claim(plan['tasks'][0])
-        if plan['tasks'][0]['candidate_binding']['claim_id'] != entry_session['claim_id']:
-            raise ValueError('Entry page belongs to another candidate claim')
-    from .agent_controller import verify_ledger_binding
-    verify_ledger_binding(plan, controller_ledger)
-    from .batch_protocol import verify_plan_shard, verify_shard_policy
-    verify_plan_shard(plan, registry)  # Read-only ownership check before any dispatch side effect.
-    if publication_path is None:
-        raise ValueError('M4采集必须提供 --publication；先发布已预检的计划')
-    publication = read_json(publication_path)
-    verify_publication(plan, publication)
-    if not resume and policy_path is None:
-        raise ValueError('首次M4采集必须提供 --policy，明确累计基线类目计数与本波预算；不能默认忽略旧样本')
-    output, registry = Path(output).resolve(), Path(registry).resolve()
-    # New ordinary plans collect once without any prior workflow execution.
-    # Explicit legacy evidence bindings still need their original validator;
-    # an observation trace alone never becomes a saved production sample.
-    if any('task_admission' in task for task in plan['tasks']):
-        from .task_admission import verify_collection_entry
-        verify_collection_entry(plan, registry, output)
-    if any('observed_workflow' in task or 'workflow_admission' in task
-           or task.get('task_family') == 'observed-workflow' for task in plan['tasks']):
-        from .observed_workflow import verify_entry as verify_workflow_entry
-        verify_workflow_entry(plan, registry, output)
-    scope = runtime_scope(output)
-    store = RuntimeStore(registry, scope)
-    if resume:
-        import sqlite3
-        try:
-            prior_scope = store.snapshot()['scope']['state']
-        except (ValueError, sqlite3.OperationalError) as error:
-            if str(error) != '运行范围尚未初始化' and 'no such table: m4_scopes' not in str(error):
-                raise
-            prior_scope = None
-        if prior_scope == 'closed_replanned':
-            raise ValueError('scope已永久closed_replanned；新任务版本必须使用新输出范围')
-    sources = source_identity()
-    bootstrap_path = output / 'bootstrap.json'
-    if resume and bootstrap_path.exists():
-        bootstrap = read_json(bootstrap_path)
-        if (bootstrap.get('plan') != plan or bootstrap.get('publication') != publication
-                or bootstrap.get('source_files_sha256') != sources
-                or bootstrap.get('registry_path') != str(registry)
-                or bootstrap.get('output_path') != str(output)
-                or bootstrap.get('manifest', {}).get('contract_profile') != contract_identity(Path(__file__).resolve().parents[3])):
-            raise ValueError('续跑bootstrap绑定发生变化，拒绝更换输入或程序')
-        from .runtime import validate_policy
-        from sqlite3 import OperationalError
-        try:
-            snapshot = store.snapshot()
-        except (ValueError, OperationalError) as error:
-            if str(error) != '运行范围尚未初始化' and 'no such table: m4_scopes' not in str(error):
-                raise
+    from .telemetry import preparation_phase
+    timing = Path(output).parent / "preparation-timings.jsonl"
+    with preparation_phase(timing, "runtime_validate"):
+        plan = read_json(plan_path)
+        history = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope') or {}
+        if history.get('candidate_project'):
+            from .current_chain import assert_current_result_path
+            assert_current_result_path(history, Path(output).resolve())
+        validate_plan(plan)
+        if entry_session is not None:
+            from .candidate_contract import guard_claim
+            from .react_session import is_react_task
+            if len(plan['tasks']) != 1 or not is_react_task(plan['tasks'][0]):
+                raise ValueError('Candidate entry session requires exactly one ReAct task')
+            guard_claim(plan['tasks'][0])
+            if plan['tasks'][0]['candidate_binding']['claim_id'] != entry_session['claim_id']:
+                raise ValueError('Entry page belongs to another candidate claim')
+        from .agent_controller import verify_ledger_binding
+        verify_ledger_binding(plan, controller_ledger)
+        from .batch_protocol import verify_plan_shard, verify_shard_policy
+        verify_plan_shard(plan, registry)  # Read-only ownership check before any dispatch side effect.
+        if publication_path is None:
+            raise ValueError('M4采集必须提供 --publication；先发布已预检的计划')
+        publication = read_json(publication_path)
+        verify_publication(plan, publication)
+        if not resume and policy_path is None:
+            raise ValueError('首次M4采集必须提供 --policy，明确累计基线类目计数与本波预算；不能默认忽略旧样本')
+        output, registry = Path(output).resolve(), Path(registry).resolve()
+        # New ordinary plans collect once without any prior workflow execution.
+        # Explicit legacy evidence bindings still need their original validator;
+        # an observation trace alone never becomes a saved production sample.
+        if any('task_admission' in task for task in plan['tasks']):
+            from .task_admission import verify_collection_entry
+            verify_collection_entry(plan, registry, output)
+        if any('observed_workflow' in task or 'workflow_admission' in task
+               or task.get('task_family') == 'observed-workflow' for task in plan['tasks']):
+            from .observed_workflow import verify_entry as verify_workflow_entry
+            verify_workflow_entry(plan, registry, output)
+        scope = runtime_scope(output)
+        store = RuntimeStore(registry, scope)
+        if resume:
+            import sqlite3
+            try:
+                prior_scope = store.snapshot()['scope']['state']
+            except (ValueError, sqlite3.OperationalError) as error:
+                if str(error) != '运行范围尚未初始化' and 'no such table: m4_scopes' not in str(error):
+                    raise
+                prior_scope = None
+            if prior_scope == 'closed_replanned':
+                raise ValueError('scope已永久closed_replanned；新任务版本必须使用新输出范围')
+    with preparation_phase(timing, "runtime_bootstrap"):
+        sources = source_identity()
+        bootstrap_path = output / 'bootstrap.json'
+        if resume and bootstrap_path.exists():
+            bootstrap = read_json(bootstrap_path)
+            if (bootstrap.get('plan') != plan or bootstrap.get('publication') != publication
+                    or bootstrap.get('source_files_sha256') != sources
+                    or bootstrap.get('registry_path') != str(registry)
+                    or bootstrap.get('output_path') != str(output)
+                    or bootstrap.get('manifest', {}).get('contract_profile') != contract_identity(Path(__file__).resolve().parents[3])):
+                raise ValueError('续跑bootstrap绑定发生变化，拒绝更换输入或程序')
+            from .runtime import validate_policy
+            from sqlite3 import OperationalError
+            try:
+                snapshot = store.snapshot()
+            except (ValueError, OperationalError) as error:
+                if str(error) != '运行范围尚未初始化' and 'no such table: m4_scopes' not in str(error):
+                    raise
+                verify_existing_registry(registry, output.parent)
+                verify_shard_policy(registry, validate_policy(bootstrap['policy']))
+                store.initialize(bootstrap['policy'])
+                snapshot = store.snapshot()
+            verify_shard_policy(registry, snapshot['policy'])
+            if policy_path and validate_policy(read_json(policy_path)) != snapshot['policy']:
+                raise ValueError('续跑不能静默替换预算，请显式记录预算调整原因')
+            original_pool = bootstrap.get('site_pool')
+            if site_pool is not None and str(Path(site_pool).resolve()) != original_pool:
+                raise ValueError('Resume cannot replace the frozen shared pool')
+            if original_pool:
+                store.bind_site_pool(original_pool)
+            store.enqueue_plan(plan, publication)
+            binding = store.plan_binding()
+            if binding['plan'] != plan or binding['publication'] != publication:
+                raise ValueError('数据库冻结计划与bootstrap不一致')
+            missing = [name for name in ('plan.json', 'publication.json', 'manifest.json') if not (output / name).is_file()]
+            if missing and snapshot['attempts']:
+                raise ValueError('已有attempt但初始化文件缺失，必须保留现场核账，不能重建程序身份')
+            if missing and any((output / name).exists() for name in ('samples', 'evidence', 'rejected')):
+                raise ValueError('初始化不完整且存在未知样本文件，停止自动恢复')
+            for name, value in (('plan.json', plan), ('publication.json', publication)):
+                path = output / name
+                if path.exists():
+                    if read_json(path) != value:
+                        raise ValueError('续跑冻结文件发生变化：' + name)
+                else:
+                    write_json(path, value)
+            manifest = read_json(output / 'manifest.json') if 'manifest.json' not in missing else bootstrap['manifest']
+            if (manifest.get('runtime_scope_id') != scope or manifest.get('registry_path') != str(registry)
+                    or manifest.get('generator_files_sha256') != sources
+                    or manifest.get('contract_profile') != contract_identity(Path(__file__).resolve().parents[3])
+                    or manifest.get('configuration', {}).get('channel') != channel
+                    or manifest.get('configuration', {}).get('headless') != headless):
+                raise ValueError('续跑输出、账本或代码版本不匹配；不能拼接新版本')
+            if missing:
+                checkpoint_manifest(output, manifest)
+                recovery = output / 'bootstrap-recovery' / (str(uuid.uuid4()) + '.json')
+                recovery.parent.mkdir(exist_ok=True)
+                write_json(recovery, {'restored_files': missing, 'attempts_before_recovery': 0,
+                    'files_sha256': {name: sha(output / name) for name in ('plan.json', 'publication.json', 'manifest.json')}})
+                store.record_bootstrap_recovery(plan, publication,
+                    _evidence(bootstrap_path) + _evidence(recovery),
+                    'Restore frozen initialization files with no attempt: ' + ', '.join(missing))
+        else:
+            # An empty directory is the only state allowed before the durable bootstrap.
+            if output.exists() and not (resume and output.is_dir() and not any(output.iterdir())):
+                raise FileExistsError('输出已存在且缺少可验证bootstrap；保留现场，不能覆盖')
+            if policy_path is None:
+                raise ValueError('未完成初始化的空目录恢复需要原 --policy，不能猜测预算')
             verify_existing_registry(registry, output.parent)
-            verify_shard_policy(registry, validate_policy(bootstrap['policy']))
-            store.initialize(bootstrap['policy'])
-            snapshot = store.snapshot()
-        verify_shard_policy(registry, snapshot['policy'])
-        if policy_path and validate_policy(read_json(policy_path)) != snapshot['policy']:
-            raise ValueError('续跑不能静默替换预算，请显式记录预算调整原因')
-        original_pool = bootstrap.get('site_pool')
-        if site_pool is not None and str(Path(site_pool).resolve()) != original_pool:
-            raise ValueError('Resume cannot replace the frozen shared pool')
-        if original_pool:
-            store.bind_site_pool(original_pool)
-        store.enqueue_plan(plan, publication)
-        binding = store.plan_binding()
-        if binding['plan'] != plan or binding['publication'] != publication:
-            raise ValueError('数据库冻结计划与bootstrap不一致')
-        missing = [name for name in ('plan.json', 'publication.json', 'manifest.json') if not (output / name).is_file()]
-        if missing and snapshot['attempts']:
-            raise ValueError('已有attempt但初始化文件缺失，必须保留现场核账，不能重建程序身份')
-        if missing and any((output / name).exists() for name in ('samples', 'evidence', 'rejected')):
-            raise ValueError('初始化不完整且存在未知样本文件，停止自动恢复')
-        for name, value in (('plan.json', plan), ('publication.json', publication)):
-            path = output / name
-            if path.exists():
-                if read_json(path) != value:
-                    raise ValueError('续跑冻结文件发生变化：' + name)
-            else:
-                write_json(path, value)
-        manifest = read_json(output / 'manifest.json') if 'manifest.json' not in missing else bootstrap['manifest']
-        if (manifest.get('runtime_scope_id') != scope or manifest.get('registry_path') != str(registry)
-                or manifest.get('generator_files_sha256') != sources
-                or manifest.get('contract_profile') != contract_identity(Path(__file__).resolve().parents[3])
-                or manifest.get('configuration', {}).get('channel') != channel
-                or manifest.get('configuration', {}).get('headless') != headless):
-            raise ValueError('续跑输出、账本或代码版本不匹配；不能拼接新版本')
-        if missing:
+            from .runtime import validate_policy
+            supplied_policy = read_json(policy_path)
+            if 'baseline_category_counts' not in supplied_policy:
+                raise ValueError('M4预算必须显式声明baseline_category_counts；旧基线尚未确认时不能开始采集')
+            policy = validate_policy(supplied_policy)
+            verify_shard_policy(registry, policy)
+            manifest = {'schema_version': 'webcollect-runtime-manifest-m4-1',
+                'runtime_scope_id': scope, 'registry_path': str(registry),
+                'contract_profile': contract_identity(Path(__file__).resolve().parents[3]),
+                'plan_sha256': sha(plan_path), 'plan_object_sha256': object_sha256(plan),
+                'preparation_policy': 'content-preparation-v1', 'generator_files_sha256': sources,
+                'batch_id': None, 'sample_kind': 'real', 'program_version': program_version(),
+                'rule_version': 'm4-1', 'configuration': {'viewport': [1280, 720],
+                    'device_scale_factor': 1, 'locale': 'zh-CN', 'timezone': 'Asia/Shanghai',
+                    'channel': channel, 'headless': headless, 'default_settle_ms': 500,
+                    'task_interval_seconds': policy['task_interval_seconds']},
+                'sites': [], 'samples': [], 'collection_status': 'in_progress',
+                'producer_index_status': 'PENDING',
+                'human_review': 'pending', 'created_at': now()}
+            if not output.exists():
+                output.mkdir(parents=True)
+            checkpoint_json(bootstrap_path, {'schema_version': 'webcollect-bootstrap-m4-1',
+                'plan': plan, 'publication': publication, 'policy': policy, 'manifest': manifest,
+                'source_files_sha256': sources, 'registry_path': str(registry), 'output_path': str(output),
+                **({'site_pool': str(Path(site_pool).resolve())} if site_pool is not None else {})})
+            # Save a recoverable initialization record before touching persistent queue state.
+            write_json(output / 'plan.json', plan)
+            write_json(output / 'publication.json', publication)
             checkpoint_manifest(output, manifest)
-            recovery = output / 'bootstrap-recovery' / (str(uuid.uuid4()) + '.json')
-            recovery.parent.mkdir(exist_ok=True)
-            write_json(recovery, {'restored_files': missing, 'attempts_before_recovery': 0,
-                'files_sha256': {name: sha(output / name) for name in ('plan.json', 'publication.json', 'manifest.json')}})
-            store.record_bootstrap_recovery(plan, publication,
-                _evidence(bootstrap_path) + _evidence(recovery),
-                'Restore frozen initialization files with no attempt: ' + ', '.join(missing))
-    else:
-        # An empty directory is the only state allowed before the durable bootstrap.
-        if output.exists() and not (resume and output.is_dir() and not any(output.iterdir())):
-            raise FileExistsError('输出已存在且缺少可验证bootstrap；保留现场，不能覆盖')
-        if policy_path is None:
-            raise ValueError('未完成初始化的空目录恢复需要原 --policy，不能猜测预算')
-        verify_existing_registry(registry, output.parent)
-        from .runtime import validate_policy
-        supplied_policy = read_json(policy_path)
-        if 'baseline_category_counts' not in supplied_policy:
-            raise ValueError('M4预算必须显式声明baseline_category_counts；旧基线尚未确认时不能开始采集')
-        policy = validate_policy(supplied_policy)
-        verify_shard_policy(registry, policy)
-        manifest = {'schema_version': 'webcollect-runtime-manifest-m4-1',
-            'runtime_scope_id': scope, 'registry_path': str(registry),
-            'contract_profile': contract_identity(Path(__file__).resolve().parents[3]),
-            'plan_sha256': sha(plan_path), 'plan_object_sha256': object_sha256(plan),
-            'preparation_policy': 'content-preparation-v1', 'generator_files_sha256': sources,
-            'batch_id': None, 'sample_kind': 'real', 'program_version': program_version(),
-            'rule_version': 'm4-1', 'configuration': {'viewport': [1280, 720],
-                'device_scale_factor': 1, 'locale': 'zh-CN', 'timezone': 'Asia/Shanghai',
-                'channel': channel, 'headless': headless, 'default_settle_ms': 500,
-                'task_interval_seconds': policy['task_interval_seconds']},
-            'sites': [], 'samples': [], 'collection_status': 'in_progress',
-            'producer_index_status': 'PENDING',
-            'human_review': 'pending', 'created_at': now()}
-        if not output.exists():
-            output.mkdir(parents=True)
-        checkpoint_json(bootstrap_path, {'schema_version': 'webcollect-bootstrap-m4-1',
-            'plan': plan, 'publication': publication, 'policy': policy, 'manifest': manifest,
-            'source_files_sha256': sources, 'registry_path': str(registry), 'output_path': str(output),
-            **({'site_pool': str(Path(site_pool).resolve())} if site_pool is not None else {})})
-        # Save a recoverable initialization record before touching persistent queue state.
-        write_json(output / 'plan.json', plan)
-        write_json(output / 'publication.json', publication)
-        checkpoint_manifest(output, manifest)
-        store.initialize(policy)
-        if site_pool is not None:
-            store.bind_site_pool(site_pool)
-        store.enqueue_plan(plan, publication)
-    # Reap this scope's expired leases plus any other dead-scope attempt of
-    # the same campaign: an expired lease can never be resumed by its owner
-    # (lease fencing), and without a campaign-wide reap a crashed close-out in
-    # an abandoned scope would block its whole site as an unresolved attempt
-    # with no remaining reaper (real-run v13/v14 fact).
-    store.recover_expired(campaign_wide=True)
-    attempts = store.attempt_ledger()['attempts']
-    verify_committed_samples(output, attempts)
-    quarantine_interrupted(output, attempts)
-    snapshot = sync_manifest(store, output, manifest)
-    roots = [output.parent, *[Path(path) for path in plan.get('dedup_roots', [])]]
-    index = ConcurrentExactImageIndex(roots, store)
+            store.initialize(policy)
+            if site_pool is not None:
+                store.bind_site_pool(site_pool)
+            store.enqueue_plan(plan, publication)
+    with preparation_phase(timing, "runtime_recovery_snapshot"):
+        # Reap this scope's expired leases plus any other dead-scope attempt of
+        # the same campaign: an expired lease can never be resumed by its owner
+        # (lease fencing), and without a campaign-wide reap a crashed close-out in
+        # an abandoned scope would block its whole site as an unresolved attempt
+        # with no remaining reaper (real-run v13/v14 fact).
+        store.recover_expired(campaign_wide=True)
+        attempts = store.attempt_ledger()['attempts']
+        verify_committed_samples(output, attempts)
+        quarantine_interrupted(output, attempts)
+        snapshot = sync_manifest(store, output, manifest)
+    with preparation_phase(timing, "exact_index_initialize"):
+        roots = [output.parent, *[Path(path) for path in plan.get('dedup_roots', [])]]
+        index = ConcurrentExactImageIndex(roots, store)
     worker_id = 'serial-' + str(uuid.uuid4())
     phase_ledger = output / 'metering' / 'phases.jsonl'
     stopping_checkpoint = None

@@ -46,6 +46,20 @@ class PipelineOverlap(unittest.TestCase):
         args.update(kwargs)
         return self.f.f.f.run_new(home, **args)
 
+    def test_explicit_site_capacity_and_host_scope_are_frozen(self):
+        home=self.home()
+        with patch('site_planner.page_consumption.screen', return_value=([], [])):
+            self.run_overlap(home, key='scoped', application_pending_cap=507,
+                             allowed_hosts=['pipeline.example.org'])
+        frozen=self.frozen_config(self.run_id('scoped'))
+        self.assertEqual(frozen['application_pending_cap'],507)
+        self.assertEqual(frozen['allowed_hosts'],['pipeline.example.org'])
+        from site_planner.candidate_discovery import _application_pending_cap
+        self.assertEqual(_application_pending_cap(self.pool,self.run_id('scoped')),507)
+        with self.assertRaises(ValueError):
+            self.run_overlap(home,key='scoped',application_pending_cap=508,
+                             allowed_hosts=['pipeline.example.org'])
+
     def run_id(self, key):
         return self.f.f.f.f.cfg['run_id'] + '/entry-batch/' + key
 

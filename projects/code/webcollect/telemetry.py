@@ -187,3 +187,25 @@ def main(argv=None):
 
 if __name__ == '__main__':
     main()
+
+
+@contextmanager
+def preparation_phase(path, name):
+    """Best-effort monotonic timing; never change collection decisions or fail it."""
+    started = time.monotonic()
+    outcome = 'completed'
+    try:
+        yield
+    except BaseException as error:
+        outcome = type(error).__name__
+        raise
+    finally:
+        # Outside capture/: its initial emptiness is part of bootstrap validation.
+        try:
+            line = json.dumps({'recorded_at': utc_now(), 'event': 'preparation_finished',
+                'phase': name, 'elapsed_seconds': time.monotonic() - started,
+                'outcome': outcome, 'usage': 'UNKNOWN', 'cost': 'UNKNOWN'}) + '\n'
+            with Path(path).open('a', encoding='utf-8') as stream:
+                stream.write(line)
+        except OSError:
+            pass

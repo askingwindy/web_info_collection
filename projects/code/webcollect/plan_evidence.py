@@ -57,11 +57,52 @@ def region_matches(state, cid, region):
     return False
 
 
-def facts(s,plan, *, page_urls=None):
+def observed_basis(s, objective_evidence):
+    """Archive-derived witnesses, without interpreting a free-text check field."""
+    selected = (objective_evidence or {}).get('selected_passage')
+    # The full citation remains owned by session_objective, with its original
+    # observation. Do not copy every observed paragraph into every fact check.
+    passages = ([{'reference':'session_objective.selected_passage',
+                  **{k:selected[k] for k in ('observation_id','node') if k in selected}}]
+                if selected else [])
+    observations = {}
+    for row in s.trajectory:
+        if row.get('action') not in ('click', 'back'):continue
+        for key in ('before_observation_id', 'after_observation_id'):
+            oid = row[key]
+            obs = s.observation_records.get(oid)
+            if oid not in observations and obs and obs.get('capture_verified'):
+                observations[oid] = (obs, load_json(obs['evidence']['state']['path']))
+    navigation = []
+    for row in s.trajectory:
+        if row.get('action') not in ('click', 'back'):continue
+        before = observations.get(row['before_observation_id'])
+        after = observations.get(row['after_observation_id'])
+        if not before or not after:continue
+        _, origin = before; _, landing = after
+        cid = (row.get('target') or {}).get('control_id')
+        element = next((e for e in origin.get('elements',[]) if e['element_id']==cid), {})
+        binding = next((b for b in origin.get('capture_controls',[]) if b['element_id']==cid), {})
+        navigation.append({'operation_id':row['operation_id'], 'action':row['action'],
+            'before_observation_id':row['before_observation_id'],
+            'after_observation_id':row['after_observation_id'], 'node':cid,
+            'actual_visible_target':element.get('text'), 'clicked_href':binding.get('href'),
+            'origin_url':origin['url'], 'landed_url':landing['url'],
+            'origin_document_identity':origin.get('document_identity'),
+            'landed_document_identity':landing.get('document_identity'),
+            'landed_title':landing.get('title')})
+    return {'passages':passages, 'navigation':navigation,
+        'interpretation':'Observed witnesses only; no semantic mapping from free-text checks or independent QC judgment'}
+
+
+def facts(s,plan, *, page_urls=None, objective_evidence=None):
     checks=plan.get('checks',[]); rows=[]
     for check in checks:
         if not all(check.get(key) for key in ('page','region','visible_text')):
-            rows.append({**check,'status':'PENDING','evidence':[], 'seen_outside_allowed_source':[]})
+            rows.append({**check,'status':'PENDING','evidence':[], 'seen_outside_allowed_source':[],
+                         'missing_binding_fields':[key for key in ('page','region','visible_text') if not check.get(key)],
+                         'available_basis':'host_observed_basis',
+                         'binding_status':'PENDING_SEMANTIC_MAPPING'})
             continue
         proofs=[];other=[];seen=set()
         # A page ID denotes the URL shown in this plan's first request, even after navigation.
@@ -97,6 +138,7 @@ def facts(s,plan, *, page_urls=None):
     done=sum(r['status']=='VERIFIED' for r in rows)
     return {'protocol':VERSION,'requested_goal':s.requested_goal,'working_goal':s.working_goal,
             'checks':rows,'verified':done,'total':len(rows),
+            **({'host_observed_basis':observed_basis(s, objective_evidence)} if any(r['status']=='PENDING' for r in rows) else {}),
             'business_goal_status':('VERIFIED' if done==len(rows) else 'PARTIAL' if done else 'UNVERIFIED') if rows else 'NOT_SPECIFIED',
             'fragment_effective_steps':len(s.trajectory),'is_ai_review':False}
 

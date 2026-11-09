@@ -845,7 +845,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     else:
         from .closing_policy import VERSION as CLOSE_POLICY
         from .banded_plan import VERSION as PLAN_PROTOCOL
-        from .action_stability import POST_VERSION as FOCUS_PROTOCOL
+        from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
         from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
                               **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL,
@@ -1471,25 +1471,29 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             await asyncio.sleep(2)
             ledger.heartbeat(job)
     async def work():
-        if has_legacy_admissions:
-            verify_task_admissions(plan, catalog, registry, output)
-        from .react_session import is_react_task
-        react_only = bool(plan['tasks']) and all(is_react_task(task) for task in plan['tasks'])
-        pf=output/'preflight'; publication=output/'publication.json'
-        if react_only:
-            # React sessions preflight the already-open entry page themselves;
-            # re-running an outer preflight would open a second site context.
-            if not publication.exists():
-                save_json(publication,publish_plan(plan,catalog,require_preflight=False))
-        elif not publication.exists():
-            if not (pf/'report.json').exists():
-                ledger.consume('probe_pages',jid+':preflight',len(plan['tasks']))
-                await preflight_plan(plan_path,pf,samples=2,interval_ms=100,preserve_order=True,navigation=navigation)
-            scheduled=load_json(pf/'scheduled-plan.json')
-            save_json(publication,publish_plan(scheduled,catalog))
-        check_live_m4_history(plan, registry, output)
-        if has_legacy_admissions:
-            verify_task_admissions(plan, catalog, registry, output)
+        from .telemetry import preparation_phase
+        timing = output / "preparation-timings.jsonl"
+        with preparation_phase(timing, "publication_prepare"):
+            if has_legacy_admissions:
+                verify_task_admissions(plan, catalog, registry, output)
+            from .react_session import is_react_task
+            react_only = bool(plan['tasks']) and all(is_react_task(task) for task in plan['tasks'])
+            pf=output/'preflight'; publication=output/'publication.json'
+            if react_only:
+                # React sessions preflight the already-open entry page themselves;
+                # re-running an outer preflight would open a second site context.
+                if not publication.exists():
+                    save_json(publication,publish_plan(plan,catalog,require_preflight=False))
+            elif not publication.exists():
+                if not (pf/'report.json').exists():
+                    ledger.consume('probe_pages',jid+':preflight',len(plan['tasks']))
+                    await preflight_plan(plan_path,pf,samples=2,interval_ms=100,preserve_order=True,navigation=navigation)
+                scheduled=load_json(pf/'scheduled-plan.json')
+                save_json(publication,publish_plan(scheduled,catalog))
+        with preparation_phase(timing, "live_history_recheck"):
+            check_live_m4_history(plan, registry, output)
+            if has_legacy_admissions:
+                verify_task_admissions(plan, catalog, registry, output)
         result=await collect_m4(plan_path if react_only else pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
             navigation=navigation, controller_ledger=ledger, controller_parent_job=job,

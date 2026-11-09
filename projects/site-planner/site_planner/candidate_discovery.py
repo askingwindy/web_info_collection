@@ -719,6 +719,11 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
     from .producer_observation import from_pool
     shared_language = from_pool(pool, ledger, candidate['entry_url'])
     if shared_language is not None:
+        from .page_consumption import blank_frame_exclusion, required_login_exclusion
+        blank = blank_frame_exclusion(shared_language[1]) or required_login_exclusion(shared_language[1])
+        if blank:
+            return pool.record_row_conclusion(header, result='REJECTED',
+                reason=blank['reason'], original_row={**row, 'visible_frame_exclusion': blank})
         from webcollect.page_language import assess as assess_language
         from webcollect.batch_core import load_json
         language = assess_language(load_json(shared_language[1]['observation']['path']))
@@ -796,7 +801,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
                     search_engine=None, stall_threshold=2, per_direction_cap=None, batch_key=None,
                     excluded_applications=(), model_protocol=None, discovery_mode=None, feedback_scope=None,
                     search_count=10, entry_selection='rule', categories=(), probe_search_hold=None, dispatch_holds=None,
-                    producer_pipeline=None, producer_optimization=None):
+                    producer_pipeline=None, producer_optimization=None, application_pending_cap=None, allowed_hosts=()):
     """Entry/target candidate producer on webcollect-data-candidate-2.
 
     Per-response-row publication with stable identities; interruption resumes
@@ -833,7 +838,8 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
     category_only=bool(categories and discovery_mode=='new-sites' and not (queries or sources or directions or goals_path))
     if search_engine is None:
         search_engine=previous_batch.get('search_engine') or ('public' if category_only else 'search_std')
-    if search_engine=='public' and (not category_only or probe_search_hold):
+    scoped_expand=bool(discovery_mode=='expand' and allowed_hosts and model_protocol=='entry-tools-13')
+    if search_engine=='public' and (not (category_only or scoped_expand) or probe_search_hold):
         raise ValueError('Public search requires category-only new-sites. A paid probe requires an explicit BigModel search engine.')
     table_policy = previous_batch.get('table_policy') if previous_batch else site_tables.POLICY
     if table_policy:
@@ -868,7 +874,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
             search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories,
             probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds,producer_pipeline=producer_pipeline,
-            producer_optimization=producer_optimization)
+            producer_optimization=producer_optimization, application_pending_cap=application_pending_cap, allowed_hosts=allowed_hosts)
     if categories: raise ValueError('Category planning requires entry-tools-3 or entry-tools-4')
     if producer_pipeline == 'overlap-1':
         raise ValueError('producer_pipeline=overlap-1 requires an entry-tools grounded protocol')
@@ -1485,6 +1491,8 @@ def main(argv=None):
     entry.add_argument('--producer-optimization', choices=['observation-feedback-1'],
                        help='Opt-in for a new entry-tools-13 batch: bounded readiness, confirmed HTTP failure receipts and query feedback.')
     entry.add_argument('--feedback-scope',type=Path,help='Explicit original consumer scope; read-only feedback frozen for this batch')
+    entry.add_argument('--application-pending-cap', type=int, help='Explicit pending ceiling frozen for this new batch')
+    entry.add_argument('--allowed-host', action='append', default=[], help='Exact hostname allowed in this batch')
     entry.add_argument('--batch-key')
     entry.add_argument('--search-count',type=int,default=10,help='Requested results per distinct search, 1–50')
     entry.add_argument('--excluded-applications',help='JSON list of URIs whose original model application is unresolved')
@@ -1506,7 +1514,7 @@ def main(argv=None):
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,model_protocol=a.model_protocol,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
             search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else (),
-            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization),
+            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization,application_pending_cap=a.application_pending_cap,allowed_hosts=a.allowed_host),
             ensure_ascii=False));return
     print(json.dumps(produce(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,
         queries=a.query,sources=load_json(a.sources) if a.sources else (),target=a.target,max_searches=a.max_searches,

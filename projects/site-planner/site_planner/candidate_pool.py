@@ -566,10 +566,11 @@ class CandidatePool:
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, request and bounded lease required')
         verify_evidence([objective, authorization])
-        if replay_version == 'candidate-research-replay-2':
+        if replay_version in ('candidate-research-replay-2', 'candidate-research-replay-3'):
             return self._claim_research_v2(worker_id, request_id, candidate_id=candidate_id, version=version,
                 original_claim_id=original_claim_id, objective=objective, authorization=authorization,
-                comparisons=[] if comparisons is None else comparisons, lease_seconds=lease_seconds)
+                comparisons=[] if comparisons is None else comparisons, lease_seconds=lease_seconds,
+                replay_version=replay_version)
         if replay_version != 'candidate-research-replay-1' or comparisons is not None:
             raise ValueError('Unknown research replay version or comparisons on v1')
         from webcollect.session_objective import bind
@@ -635,11 +636,12 @@ class CandidatePool:
             return self._claim(con.execute('SELECT * FROM candidate_claims WHERE claim_id=?',(cid,)).fetchone())
 
     def _claim_research_v2(self, worker_id, request_id, *, candidate_id, version, original_claim_id,
-                           objective, authorization, comparisons, lease_seconds):
-        from webcollect.candidate_contract import RESEARCH_V2, validate_research_v2
+                           objective, authorization, comparisons, lease_seconds,
+                           replay_version='candidate-research-replay-2'):
+        from webcollect.candidate_contract import validate_research_v2
         from webcollect.candidate_consumer import guard_original_dispatch
         from webcollect.session_objective import bind
-        descriptor = {'schema_version': RESEARCH_V2, 'original_claim_id': original_claim_id,
+        descriptor = {'schema_version': replay_version, 'original_claim_id': original_claim_id,
                       'objective': objective, 'authorization': authorization,
                       'comparisons': comparisons, 'production_counted': False}
         with self.transaction() as con:
@@ -660,7 +662,7 @@ class CandidatePool:
                                  'ORDER BY created DESC,rowid DESC LIMIT 1', (candidate_id,)).fetchone()
             if (latest[0] != original_claim_id or con.execute("SELECT 1 FROM candidate_claims WHERE candidate_id=? "
                     "AND state IN ('consuming','reconcile')", (candidate_id,)).fetchone()):
-                raise ValueError('Research v2 requires latest settled failed claim; original collection unresolved')
+                raise ValueError('Research requires latest settled claim; original collection unresolved')
             guard_original_dispatch(original)
             body = json.loads(row['body'])
             bind(objective, {'candidate_id': candidate_id, 'version': version, 'snapshot': body})

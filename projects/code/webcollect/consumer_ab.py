@@ -356,7 +356,8 @@ def adjust_concurrency(ledger_path, config_path, *, target, authorization):
     # Workers must resume the ledger with THIS file: the frozen row now holds
     # the new ceiling, and constructing BatchLedger with the original config
     # fails the frozen-config check by design.
-    adjusted_path = _save(Path(ledger_path).with_name('consumer-config.ab-adjusted.json'), updated)
+    from uuid import uuid4
+    adjusted_path = _save(Path(ledger_path).with_name(f'consumer-config.ab-adjusted-{uuid4().hex}.json'), updated)
     return {'ledger': str(ledger_path), 'before': before, 'after': target, 'changed': True,
             'adjusted_config': str(adjusted_path),
             'worker_config_required': str(adjusted_path)}

@@ -321,7 +321,7 @@ def finish_or_reconcile(pool, claim, *, reconciliation=False):
                 pool.event(con,claim['candidate_id'],claim['claim_id'],'lease_expired',{})
             original=pool.get_claim(claim['claim_id'])
         return {'state':original['state'],'saved':False,'reason':'No committed complete save; inspect original model/visit/runtime ledgers; no resend'}
-    if research and descriptor.get('schema_version') == 'candidate-research-replay-2':
+    if research and descriptor.get('schema_version') in ('candidate-research-replay-2', 'candidate-research-replay-3'):
         result = {**result, 'research_replay': descriptor, 'production_counted': False}
     with pool.transaction() as con:
         latest=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1',(claim['candidate_id'],)).fetchone()
@@ -435,12 +435,12 @@ def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=No
 @asynccontextmanager
 async def entry_session(ledger, pool, claim, root):
     """One owned page from the first accounted visit through formal close-out."""
-    from playwright.async_api import async_playwright
-    from .browser import capture, verify_execution_state, EvidenceStale
-    from .navigation import BatchNavigation
+    from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+    from .browser import capture
+    from .navigation import BatchNavigation, NavigationTimeoutError
     from .production_quality import require_public_task_state
     from .candidate_contract import application_matches
-    from .preflight import _wait_visible_readiness
+    from .telemetry import phase
     from .site_failure_stop import SiteFailureStore, execution_id
     uri = claim['snapshot']['entry_url']
     guard = ledger.config.get('site_failure_guard')
@@ -468,10 +468,17 @@ async def entry_session(ledger, pool, claim, root):
                 page = await context.new_page()
                 with pool.transaction() as con:
                     pool._fence(con, claim)
-                await BatchNavigation(ledger, job).goto(page, uri, purpose='candidate-entry:'+claim['claim_id'])
-                exclusive(root/'first-readiness.json', await _wait_visible_readiness(page))
-                for refresh in range(3):
-                    captured = await capture(page)
+                with phase(root/'phases.jsonl', 'entry_navigation', scope={'claim_id':claim['claim_id']}):
+                    try:
+                        await BatchNavigation(ledger, job).goto(page, uri, purpose='candidate-entry:'+claim['claim_id'], timeout_ms=10000)
+                    except PlaywrightTimeoutError as error:
+                        # BatchNavigation has already settled this explicit visit as failed.
+                        raise NavigationTimeoutError(uri, 'candidate-entry:'+claim['claim_id'], 10) from error
+                with phase(root/'phases.jsonl', 'entry_capture_identity_save', scope={'claim_id':claim['claim_id']}):
+                    from .action_stability import post_action_document_scope
+                    entry_scope = post_action_document_scope({'url': uri})
+                    entry_scope['purpose'] = 'entry_observation'
+                    captured = await capture(page, action_scope=entry_scope)
                     try:
                         require_public_task_state(captured['state'])
                     except ValueError as rejected:
@@ -480,7 +487,7 @@ async def entry_session(ledger, pool, claim, root):
                     if not application_matches(uri, captured['state']['url'], claim.get('application_registry')):
                         raise ValueError('Candidate entry landed outside the evidence-backed application')
                     html = await page.content()
-                    prefix = 'first' if refresh == 0 else 'first-refresh-'+str(refresh)
+                    prefix = 'first'
                     with (root/(prefix+'.png')).open('xb') as image:
                         image.write(captured['png'])
                     anchor = {'image': {'path': str(root/(prefix+'.png')), 'sha256': file_sha(root/(prefix+'.png'))},
@@ -492,28 +499,7 @@ async def entry_session(ledger, pool, claim, root):
                         # No action/plan will use this frame. Retain the trusted
                         # capture and reject immediately, without live re-probes.
                         exclusive(root/'first-frame-image-policy.json',image_failure)
-                        break
-                    try:
-                        await verify_execution_state(page, captured['state'])
-                    except EvidenceStale as error:
-                        exclusive(root/(prefix+'-stale.json'), {'reason':str(error), 'capture':getattr(error,'capture',None)})
-                        if refresh == 2:
-                            raise
-                        continue
-                    # Client hydration may still insert header/navigation after
-                    # capture readiness. Freeze the anchor only once the live
-                    # DOM reproduces it; a bounded timeout keeps the snapshot.
-                    from .preflight import wait_hydration_stable
-                    hydration = await wait_hydration_stable(page, reference=captured['state'])
-                    exclusive(root/(prefix+'-hydration.json'), hydration)
-                    if hydration['status'] == 'stable':
-                        break
-                    if refresh < 2:
-                        continue
-                    exclusive(root/'first-hydration-timeout.json', {
-                        'status': hydration['status'], 'wait_receipt': hydration,
-                        'anchor_retained': True, 'retries_exhausted': True})
-                    break
+    
                 visits = [v['id'] for v in ledger.visits() if v['job_id']==jid]
                 ledger.finish(job, result=anchor)
                 observed = True
@@ -689,8 +675,10 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
             route = first_frame_disposition(load_json(session['anchor']['state']['path']))
             if route:
                 disposition, reason = route
+                from .consumer_page_policy import LOGIN_ENTRY_VERSION
+                route_policy = LOGIN_ENTRY_VERSION if reason in ('login_page', 'explicit_login_required_to_use') else ROUTING_VERSION
                 pool.record_disposition(claim, disposition=disposition, reason=reason, stage='first_frame',
-                    evidence=list(session['anchor'].values()), policy_version=ROUTING_VERSION)
+                    evidence=list(session['anchor'].values()), policy_version=route_policy)
                 return {'state':'failed', 'disposition':disposition, 'reason':reason, 'formal_attempts':0}
             hints = _entry_hints(claim)
             record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
@@ -773,7 +761,9 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
             if reconciled.get('saved'):
                 if isinstance(error, asyncio.CancelledError): raise
                 return reconciled
-            state='reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError,TimeoutError)) else 'failed'
+            from .navigation import NavigationTimeoutError
+            entry_timeout = stage=='observation' and isinstance(error, NavigationTimeoutError)
+            state='failed' if entry_timeout else ('reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError,TimeoutError)) else 'failed')
             pool.finish(claim,state=state,stage=stage,reason=type(error).__name__+': '+str(error))
             from .navigation import NavigationHTTPError
             if stage=='observation' and isinstance(error,NavigationHTTPError) and error.status==403:
@@ -816,7 +806,10 @@ def _cohort_rows(path, pool, registry, batch):
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              protocols=None, poll_seconds=None, producer_batch=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, **kwargs):
+              protocols=None, poll_seconds=None, producer_batch=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, **kwargs):
+    if effort_profile is not None:
+        from .react_session import validate_effort_profile
+        effort_profile = validate_effort_profile(effort_profile)
     rows = None
     if cohort is not None:
         if any((categories, application_id, recovery_version, target is not None, poll_seconds is not None)) or protocols not in (None, ('webcollect-data-candidate-2',)):
@@ -889,7 +882,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             await asyncio.sleep(poll_seconds)
             continue
         try:
-            result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+            result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,**({'effort_profile':effort_profile} if effort_profile else {}),**({'skip_wechat_articles':True} if skip_wechat_articles else {}))
         except BudgetStop as error:
             if target is None and rows is None: raise
             current = pool.get_claim(claim['claim_id'])
@@ -1046,6 +1039,8 @@ def main(argv=None):
     runp.add_argument('--skip-wechat-articles', action='store_true', help='Record observed WeChat article links and skip them for this entry run')
     runp.add_argument('--target',type=int,help='Receipt-counted result target, separate from --limit')
     runp.add_argument('--target-basis',choices=('saved','qualified'),default='saved')
+    runp.add_argument('--first-plan-effort',choices=('low','high','max'))
+    runp.add_argument('--branch-effort',choices=('low','high','max'))
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
     runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default exits on EMPTY')
     runp.add_argument('--producer-batch',help='Consume only newly published V2 rows from this producer batch; stop when its report is committed and its queue is empty')
@@ -1059,7 +1054,10 @@ def main(argv=None):
         if value.startswith('--pool='):
             argv = [value] + argv[:i] + argv[i+1:]
             break
-    a=p.parse_args(argv); pool=CandidatePool(a.pool)
+    a=p.parse_args(argv)
+    if a.command == 'run' and bool(a.first_plan_effort) != bool(a.branch_effort):
+        p.error('--first-plan-effort and --branch-effort must be specified together')
+    pool=CandidatePool(a.pool)
     if a.command=='list':
         records=pool.rows(protocols=('webcollect-data-candidate-2',) if a.protocol=='entry' else None)
         if a.protocol=='entry':
@@ -1090,6 +1088,7 @@ def main(argv=None):
             check_project_guard(scope, guard, a.ledger, role='consumer')
         ledger=BatchLedger(a.ledger,config,initialize=new_project)
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+            effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
             protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None))
     print(json.dumps(result,ensure_ascii=False))
