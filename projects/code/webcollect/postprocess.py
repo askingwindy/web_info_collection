@@ -594,6 +594,44 @@ def planned_terminal_narrative(record, final_state, final_id):
     numeric = completion_result_summary(evidence, final_observation_id=final_id)
     if numeric:
         return numeric
+    checks = evidence.get('checks') or []
+    if evidence.get('business_goal_status') == 'VERIFIED' and checks:
+        basis = []
+        final_quotes = []
+        operations = {row['operation_id']: row for row in record['trajectory']}
+        for check in checks:
+            if check.get('status') != 'VERIFIED':
+                return None
+            quotes = []
+            action_ids = []
+            for item in check.get('evidence') or []:
+                observation_id = item.get('observation_id')
+                quote = item.get('quote')
+                if observation_id not in record['observations'] or not quote:
+                    continue
+                state = _observation_state(record, observation_id)
+                if quote not in state.get('visible_text', ''):
+                    continue
+                quotes.append(quote)
+                if observation_id == final_id:
+                    final_quotes.append(quote)
+                action_ids.extend(ref['operation_id'] for ref in item.get('action_refs') or []
+                                  if ref.get('operation_id') in operations)
+            if not quotes:
+                return None
+            field = str(check.get('field') or '原目标条件')
+            labels = list(dict.fromkeys((operations[action_id].get('target') or {}).get('label')
+                                        or operations[action_id]['goal'] for action_id in action_ids))
+            operation_basis = ('，已实际操作' + '、'.join('「' + label + '」' for label in labels)) if labels else ''
+            basis.append(field + operation_basis + '，绑定页面证据' +
+                         '、'.join('「' + quote + '」' for quote in dict.fromkeys(quotes)))
+        title = str(final_state.get('title') or '任务页面')
+        final_result = '最终页面「' + title + '」' + (
+            '可见' + '、'.join('「' + quote + '」' for quote in dict.fromkeys(final_quotes)) + '。'
+            if final_quotes else '；各项原目标依据保留在已观察页面中。')
+        return {'final_result': final_result,
+                'completion_judgement': '原目标各项核验依据：' + '；'.join(basis) + '。',
+                'basis': checks, 'is_ai_review': False}
     objective = evidence.get('session_objective') or {}
     completion = objective.get('completion') or {}
     checks = completion.get('original_checks') or []
@@ -746,6 +784,8 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                       if element and op['evidence'].get('target_label') else ''),
                   'expected_result': delivery_expectation(row['expected'], row['action'], element,
                                                           op['evidence']['target_label'])}
+        if row['action'] == 'drag':
+            action['end_coordinate'] = [arguments['end_x'], arguments['end_y']]
         if element:
             action.update(target_bbox=element['bbox'], target_control_type=element['element_type'])
         step = {'step_id': index, 'image_path': image_path,

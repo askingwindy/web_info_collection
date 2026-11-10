@@ -124,6 +124,56 @@ def validate_plan_page_bindings(record):
             known[key]=url
 
 
+def verified_wait_plan_effect(record, effect_name, event, step, position, *, plan_name):
+    """Replay a V13 zero-business wait only from its sealed dispatch/result."""
+    if record['task'].get('fragment',{}).get('plan_protocol')!='webcollect-banded-conditional-plan-13':return None
+    actual=event.get('actual') or {};tool=actual.get('tool_result') or {};data=tool.get('data') or {}
+    if (step.get('action')!='wait' or actual.get('actual_effective_delta')!=0
+            or event.get('established') is not True or event.get('literal_expected_established') is not True
+            or event.get('expected')!=step.get('expected') or tool.get('status')!='ok'
+            or data.get('wait_executed') is not True or data.get('effective_steps_delta')!=0
+            or data.get('actual_actions_delta')!=0):return None
+    from pathlib import Path
+    from .agent_observation import project
+    from .banded_plan import proves
+    root=Path(record['receipt']['boundary']['path']).parent;sealed=record['receipt']['files_sha256']
+    def original(name):
+        verify_evidence([{'path':str(root/name),'sha256':sealed[name]}])
+        return load_json(root/name)
+    original(effect_name)
+    hosts=[name for name in sorted(sealed) if plan_name<name<effect_name and name.endswith('-host-plan-step.json')]
+    if not hosts:return None
+    host_name=hosts[-1];host=original(host_name)
+    if host.get('position')!=position or host.get('step')!=step:return None
+    results=[name for name in sorted(sealed) if host_name<name<effect_name and name.endswith('-wait-result.json')]
+    if len(results)!=1:return None
+    result_name=results[0];result=original(result_name);ref=result.get('dispatch') or {};dispatch_path=Path(ref.get('path',''))
+    if (dispatch_path.parent!=root or sealed.get(dispatch_path.name)!=ref.get('sha256')
+            or not host_name<dispatch_path.name<result_name):return None
+    dispatch=original(dispatch_path.name)
+    expected=step['expected'].get('text') or ('核验预期条件：'+step['expected']['kind'])
+    before_id=result.get('before_observation_id');after_id=result.get('after_observation_id')
+    boundary=record['receipt']['boundary']
+    if (dispatch.get('kind')!='wait-dispatch' or dispatch.get('action')!='wait'
+            or dispatch.get('arguments')!={'duration_ms':step.get('duration_ms')}
+            or dispatch.get('purpose')!=step.get('purpose') or dispatch.get('expected')!=expected
+            or dispatch.get('effective_step_delta')!=0 or result.get('effective_step_delta')!=0
+            or before_id!=host.get('bound_observation_id') or before_id!=dispatch.get('before_observation_id')
+            or after_id!=actual.get('observation_id') or after_id!=tool.get('observation_id')
+            or any(row.get('boundary')!=boundary for row in (host,dispatch,result,event))
+            or before_id not in record['observations'] or after_id not in record['observations']):return None
+    for key,oid in (('before_evidence',before_id),('after_evidence',after_id)):
+        evidence={k:v for k,v in record['observations'][oid]['evidence'].items() if k!='html'}
+        if result.get(key)!=evidence:return None
+        verify_evidence(list(evidence.values()))
+    ob=project(state(record,after_id),result['after_evidence'],extended_actions=True)
+    if not proves(step['expected'],ob,state(record,before_id),numeric=True):return None
+    return {'policy':'webcollect-plan-wait-execution-1','plan_step':position,
+            'dispatch':ref,'result':{'path':str(root/result_name),'sha256':sealed[result_name]},
+            'before_observation_id':before_id,'after_observation_id':after_id,
+            'effective_step_delta':0,'actual_actions_delta':0}
+
+
 def validate_reading_completion(record, basis):
     """Recompute the flag's early-end coverage from its sealed plan and facts."""
     from .wiki_reading import enabled as wiki
@@ -165,8 +215,12 @@ def validate_reading_completion(record, basis):
     for name in sorted(sealed):
         if name<=plans[-1] or not name.endswith('-plan-effect.json'):continue
         event=load_json(root/name);actual=event.get('actual') or {}
-        if actual.get('actual_effective_delta')!=1:continue
         index=actual.get('position')
+        if actual.get('actual_effective_delta')!=1:
+            if (type(index) is int and 0<=index<len(plan['steps'])
+                    and verified_wait_plan_effect(record,name,event,plan['steps'][index],index,plan_name=plans[-1])):
+                effects.append(index)
+            continue
         if (type(index) is not int or not 0<=index<len(plan['steps'])
                 or event.get('expected')!=plan['steps'][index]['expected']
                 or actual.get('observation_id') not in after_ids):

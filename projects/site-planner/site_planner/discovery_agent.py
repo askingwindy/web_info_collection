@@ -86,7 +86,7 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
     elif purpose == 'ai-application-site-classification-1' and payload.get('homepage_uri'):
         from .producer_authority import disjoint_requests
         isolated_requests = disjoint_requests(ledger,urls=[payload['homepage_uri']],
-                                             independent=payload.get('protocol') in ('producer-site-classification-3','producer-site-classification-4','producer-site-classification-5'))
+                                             independent=payload.get('protocol') in ('producer-site-classification-3','producer-site-classification-4','producer-site-classification-5','producer-site-classification-6'))
     elif purpose in ('ai-grounded-entry-ids-1','ai-target-page-purpose-1') and source_uris:
         from .producer_authority import disjoint_requests
         isolated_requests = disjoint_requests(ledger,scope=payload['scope'],urls=source_uris,
