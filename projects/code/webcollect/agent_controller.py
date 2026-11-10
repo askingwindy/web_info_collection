@@ -629,7 +629,7 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
             raise ValueError('back binds session history; page_id is not accepted')
         if navigation_count < 1:
             raise ValueError('INSUFFICIENT: no session navigation to go back from')
-    if action in ('click','double_click','right_click','type','set_value','select'):
+    if action in ('click','double_click','right_click','drag','type','set_value','select'):
         if c is None:
             raise ValueError('INSUFFICIENT: unobserved target')
         truth = c['actions'][action]
@@ -638,7 +638,14 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
             if current_plan(task) and action=='type' and truth.get('reason')=='TYPE_REQUIRES_CURRENT_FOCUS':
                 raise PlanPreconditionError('TYPE_REQUIRES_CURRENT_FOCUS','Input must be focused by a real click before type')
             raise ValueError(truth['status'] + ': ' + truth['reason'])
+    if action=='drag':
+        endpoint=observation['controls'].get(step.get('end_control_id'))
+        if not endpoint or endpoint['element'].get('visible') is not True or not endpoint['binding'].get('selector'):
+            raise ValueError('INSUFFICIENT: unobserved drag destination')
+        if step['end_control_id']==cid:raise ValueError('Drag requires distinct observed endpoints')
     primitive = {'action': action, 'control_id': cid, 'goal': step['goal'], 'expected': step['expected']}
+    for name in ('rationale','expected_result'):
+        if name in step:primitive[name]=step[name]
     if action == 'set_value':
         if 'value' not in step or step['value'] == c['value']['value']:
             raise ValueError('Unchanged/missing value has no effective action')
@@ -683,7 +690,7 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
                 raise PlanPreconditionError('UNCHANGED_SELECTION','Unchanged selection is not effective')
             raise ValueError('Unchanged selection is not effective')
         primitive['option'] = match[0]['label']
-    return [{**primitive, **{k: step[k] for k in ('value','keys','direction','page_id') if k in step}}]
+    return [{**primitive, **{k: step[k] for k in ('value','keys','direction','page_id','end_control_id','duration_ms') if k in step}}]
 
 def _job_request_count(ledger, job_id):
     with ledger.connect() as con:

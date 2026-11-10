@@ -39,13 +39,14 @@ FORMAL_LATEST_PATH = Path(__file__).resolve().parents[3] / 'results/delivery/LAT
 def generation_source_identity():
     base = Path(__file__).parent
     names = (
+        'annotation_corrections.py', 'action_normalization.py',
         'task_generation.py', 'history_business.py', 'date_strategy.py', 'closing_policy.py',
         'bmi_strategy.py', 'planning.py', 'task_contract.py', 'task_replanning.py',
         'snapshot.js', 'browser.py', 'ascii_art_strategy.py', 'loan_strategy.py',
         'html_table_strategy.py', 'collect.py', 'qr_strategy.py', 'qr_pixel.py',
         'placeholder_strategy.py', 'placeholder_pixel.py', 'task_admission.py',
         'preflight.py', 'collect_runtime.py', 'observed_workflow.py', 'workflow_proposal.py', 'request_quarantine.py',
-        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py','banded_plan.py','band_budget.py','inference_image.py','session_objective.py','goal_evidence.py','plan_evidence.py','consumer_page_policy.py','trusted_prefix.py','action_stability.py','direct_article.py','direct_completion.py','dynamic_regions.py')
+        'workflow_planning.py','semantic_workflow.py','workflow_normalization.py','fragment_workflow.py','site_rolling.py','agent_controller.py','agent_observation.py','agent_audit.py','agent_feedback.py','observed_actions.py','plan_queue.py','production_identity.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'batch_core.py', 'site_pool_sync.py','candidate_contract.py','candidate_consumer.py','candidate_navigation.py','react_session.py','postprocess.py','banded_plan.py','band_budget.py','inference_image.py','session_objective.py','goal_evidence.py','plan_evidence.py','consumer_page_policy.py','trusted_prefix.py','action_stability.py','direct_article.py','direct_completion.py','dynamic_regions.py','wiki_reading.py','reading_sections.py','numeric_result_evidence.py','result_execution.py','plan_execution.py','key_health.py')
     # A newly implemented adapter changes the frozen implementation identity.
     if (base / 'hmac_strategy.py').is_file():
         names += ('hmac_strategy.py',)
@@ -549,12 +550,14 @@ def read_customer_history(manifest_path):
 
 def bind_formal_history(scope):
     """Require this repository's explicit current formal delivery, not an arbitrary set."""
-    from .current_chain import SCOPE_SCHEMA, read_chain_history
+    from .current_chain import SCOPE_SCHEMA, read_chain_history, history_scope_extends
     if scope.get('schema_version') == SCOPE_SCHEMA:
         actual = read_chain_history(scope['manifest']['path'])[1]
-        if actual != scope:
+        if not history_scope_extends(scope, actual):
             raise ValueError('Current-chain result population changed')
-        return actual
+        # Preserve the scope belonging to the records read by our caller. Peer
+        # additions are checked again by the existing atomic save dedup guard.
+        return scope
     latest = FORMAL_LATEST_PATH.resolve()
     before = file_sha(latest)
     targets = set()
@@ -888,6 +891,12 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         task['workflow_proposal']['spec']['consumer_projection'] = (
             'table2-entry-2' if bound_claim['snapshot'].get('schema_version') == 'webcollect-data-candidate-2'
             else 'candidate-entry-1')
+        from .react_session import configure_candidate_protocols
+        from .banded_plan import V12_VERSION, V13_VERSION
+        for part in (task['fragment'],task['workflow_proposal']['spec']):
+            part['plan_protocol']=V13_VERSION
+            part['result_execution_policy']='webcollect-result-execution-1'
+        configure_candidate_protocols(task)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
         from .react_session import validate_task as validate_react
@@ -1331,14 +1340,15 @@ def _qc_policy(value):
     return dict(policy)
 
 
-def _prepare_qc_handoff(candidate, history_set, output, sampling, checks):
+def _prepare_qc_handoff(candidate, history_set, output, sampling, checks, *, delivery_policy=None):
     if candidate is None:
         return {'qc_status': 'no_pending_candidate', 'qc_inputs': None}
     if sampling is None:
         return {'qc_status': 'qc_configuration_required', 'qc_inputs': None}
     from .qc_handoff import prepare_qc_inputs
     receipt = prepare_qc_inputs(candidate, history_set, output, **sampling,
-                                collection_checks=checks)
+                                collection_checks=checks,
+                                **({'delivery_policy':delivery_policy} if delivery_policy is not None else {}))
     return {'qc_status': 'QC_NOT_RUN', 'qc_inputs': receipt}
 
 
@@ -1360,6 +1370,10 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     sampling = _qc_policy(qc_policy)
     plan = load_json(plan_path); catalog = load_json(catalog_path)
     validate_plan(plan)
+    from .banded_plan import V12_VERSION, V13_VERSION
+    from .closing_policy import COMPLETED_GOAL_DELIVERY
+    delivery_policy=(COMPLETED_GOAL_DELIVERY if any(
+        task.get('fragment',{}).get('plan_protocol') in (V12_VERSION,V13_VERSION) for task in plan['tasks']) else None)
     from .site_pool_sync import pool_for_catalog, guard_plan
     bound_pool = pool_for_catalog(catalog_path)
     if site_pool is not None and bound_pool is not None and str(Path(site_pool).resolve()) != bound_pool:
@@ -1464,7 +1478,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             # Supplying QC configuration after collection only freezes inputs;
             # it never replays a task or asks for a second semantic review.
             return {**result, **_prepare_qc_handoff(candidate, history_manifest['path'],
-                output / 'qc-inputs', sampling, quality_review_ref),
+                output / 'qc-inputs', sampling, quality_review_ref,delivery_policy=delivery_policy),
                 'pending_quality_checks': quality_review_ref}
         return previous
     navigation = BatchNavigation(ledger, job)
@@ -1511,7 +1525,8 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             save_json(facts_path,derive(output/'capture'))
             if not client.exists():
                 try:
-                    build_client_package(Path(__file__).resolve().parents[3],output/'capture',client,facts=facts_path)
+                    build_client_package(Path(__file__).resolve().parents[3],output/'capture',client,facts=facts_path,
+                        **({'delivery_policy':delivery_policy} if delivery_policy is not None else {}))
                 except ValueError as error:
                     stages.update(customer_export='BLOCKED',error={'stage':'customer_export','type':type(error).__name__,'reason':str(error)})
                     stage_path=output/('delivery-stages-'+object_sha256(stages)[:20]+'.json');save_json(stage_path,stages)
@@ -1527,7 +1542,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         candidate = str(client) if client.exists() else None
         try:
             handoff = _prepare_qc_handoff(candidate, history_manifest['path'], output / 'qc-inputs',
-                                          sampling, quality_review_ref)
+                                          sampling, quality_review_ref,delivery_policy=delivery_policy)
             stages['qc_handoff']='PREPARED' if handoff.get('qc_inputs') else handoff['qc_status']
         except ValueError as error:
             stages.update(qc_handoff='BLOCKED',error={'stage':'qc_handoff','type':type(error).__name__,'reason':str(error)})

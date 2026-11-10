@@ -163,6 +163,10 @@ def _bound_quality_report(evidence):
                     'dataset': str(source), 'inspection_stage': report.get('inspection_stage')}
 
 
+class OwnedAttemptClosed(ValueError):
+    """This exact owner committed a normal outcome before its lease expired."""
+
+
 class ImageCommitConflict(ValueError):
     failure_class = 'duplicate'
 
@@ -552,6 +556,10 @@ class RuntimeStore:
         if row['status'] not in ACTIVE:
             if terminal_ok:
                 return row
+            if (row['status'] in ('collected_pending_review', 'rejected')
+                    and row['finished_at'] is not None
+                    and row['finished_at'] <= row['lease_expires_at']):
+                raise OwnedAttemptClosed('attempt已结束，禁止继续或拼接')
             raise ValueError('attempt已结束，禁止继续或拼接')
         if row['lease_expires_at'] <= current:
             raise ValueError('租约已过期；先恢复并用新编号重试')
@@ -561,8 +569,10 @@ class RuntimeStore:
         self.sync_site_pool()
         self._sync_site_failures()
         history_proof = self._customer_history_proof()
-        current = timestamp(now)
         with self._transaction() as con:
+            # Lock acquisition may wait behind another consumer. Fence against
+            # the time ownership is actually checked, not before that wait.
+            current = timestamp(now)
             row = self._owned(con, attempt_id, worker_id, lease_token, current)
             self._guard_site(self._policy(con), json.loads(row['task_json']))
             from .production_identity import guard as page_guard
@@ -581,8 +591,8 @@ class RuntimeStore:
             return self._view(self._attempt(con, attempt_id))
 
     def heartbeat(self, attempt_id, worker_id, lease_token, *, now=None):
-        current = timestamp(now)
         with self._transaction() as con:
+            current = timestamp(now)
             self._owned(con, attempt_id, worker_id, lease_token, current)
             from .admission_cohort import guard_scope
             guard_scope(con, self.registry, self.scope_id)
@@ -791,8 +801,8 @@ class RuntimeStore:
         if outcome == 'collected_pending_review' and (failure_class or root_cause or not evidence):
             raise ValueError('保存成功需要证据且不能带失败原因')
         history_proof = self._customer_history_proof() if outcome == 'collected_pending_review' else None
-        current = timestamp(now)
         with self._transaction() as con:
+            current = timestamp(now)
             row = self._owned(con, attempt_id, worker_id, lease_token, current, terminal_ok=True)
             recovery_proof = None
             if derivation_recovery is not None:

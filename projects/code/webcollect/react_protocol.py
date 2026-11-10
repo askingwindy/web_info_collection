@@ -250,6 +250,15 @@ def atomic_effect(before, after, action, arguments, control_id=None, *, rule_ver
     elif action in ('type', 'select'):
         if cid is not None and old.get('value') != new.get('value'):
             fields.append('target.value')
+    elif action=='drag':
+        before_node=next((e for e in before.get('elements',[]) if e['element_id']==cid),None)
+        after_node=next((e for e in after.get('elements',[]) if e['element_id']==cid),None)
+        if old.get('value')!=new.get('value'):fields.append('target.value')
+        if before_node and after_node and before.get('document_identity')==after.get('document_identity'):
+            if before_node.get('bbox')!=after_node.get('bbox'):fields.append('target.position')
+            if before_node.get('parent_id')!=after_node.get('parent_id'):fields.append('target.parent')
+            if before_node.get('state')!=after_node.get('state'):fields.append('target.state')
+        if content_effect(before,after,cid):fields.append('target.content')
     elif action in ('click', 'double_click', 'right_click', 'hotkey', 'back', 'open_url'):
         if before.get('url') != after.get('url'):
             fields.append('url')

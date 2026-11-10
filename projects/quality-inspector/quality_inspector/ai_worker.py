@@ -25,14 +25,14 @@ from .profiles import package_files
 from .semantic import rule_ids
 from . import semantic_runtime
 
-PROMPT_VERSION = 'independent-all-frame-review-5-dynamic-regions'
+PROMPT_VERSION = 'independent-all-frame-review-6-original-goal-completion'
 POLICY_VERSION = 'batch-review-worker-2'
 DIFFERENCE_PROTOCOL = 'image-difference-bound-pairs-1'
 DOCUMENT_PROMPT_VERSION = 'independent-documentary-full-payload-3-verified-coverage'
 MAX_DOCUMENT_INPUT_BYTES = 4 * 1024 * 1024
 DYNAMIC_REGION_REVIEW = ' Announcements, advertising and changing image frames are permitted to vary inside their evidenced regions, including main content. Original images/trees are retained. These areas remain clickable/readable; verify the selected target location, occlusion, label/href, real input values and claimed business results. Motion or rotating text alone proves neither action effectiveness, new reading nor substantive sample difference. Do not reject continuity solely for allowed background variation; do not excuse changed business evidence as background.'
 TRUSTED_PREFIX_RULE = 'When a bound trusted_prefix protocol webcollect-trusted-prefix-1 or webcollect-trusted-prefix-2 is present, review only its saved consecutive verified source operations and historical boundary image/tree. The prefix does not prove the original goal completed and is delivered as controlled_exception, never as ordinary success. The excluded tail remains in the original attempt, including any unknown effect and cost. Never count an excluded copy/submit or infer its result; visible parameters prove filling only, a visible calculation proves its result. Missing credible historical boundary remains REVIEW_REQUIRED.'
-EXCEPTIONAL_CLOSURE_RULE = 'Internal collection_ending evidence has protocol webcollect-five-eight-attempt-ending-2, webcollect-banded-attempt-ending-3, webcollect-continuous-attempt-ending-4 or webcollect-five-ten-effective-ending-5 and remains outside the customer annotation return_value; review it only when supplied by a bound external collection context. Distinguish actual atomic dispatches, business attempts, verified effective steps and separately preserved unverified/zero-dispatch tail. V5 first plans the shortest complete natural path, normally 5–10 effective actions, with a cumulative maximum of ten. If that path has fewer than five actions, only useful nonduplicate actions inside the original goal may be added; otherwise keep short_flow. It does not cap attempts or count wait/finish/no-effect dispatches as effective steps. A ready declaration with missing result evidence does not establish goal completion. V4 has no attempt ceiling. Historical V3 attempt_limit is 8 for five/short and at most 12 for long. controlled_exception is explicitly unfinished goal closure, never ordinary goal success. complete only confirms the saved final state. Check short_flow against verified effective steps; missing original tail/terminal evidence stays REVIEW_REQUIRED, never infer success.'
+EXCEPTIONAL_CLOSURE_RULE = 'Internal collection_ending evidence has protocol webcollect-five-eight-attempt-ending-2, webcollect-banded-attempt-ending-3, webcollect-continuous-attempt-ending-4 or webcollect-five-ten-effective-ending-5 and remains outside the customer annotation return_value; review it only when supplied by a bound external collection context. Distinguish actual atomic dispatches, business attempts, verified effective steps and separately preserved unverified/zero-dispatch tail. V5 first plans the shortest complete natural path, normally 5–10 effective actions, with a cumulative maximum of ten. If that path has fewer than five actions, only useful nonduplicate actions inside the original goal may be added; otherwise keep short_flow. It does not cap attempts or count wait/finish/no-effect dispatches as effective steps. A ready declaration with missing result evidence does not establish goal completion. V4 has no attempt ceiling. Historical V3 attempt_limit is 8 for five/short and at most 12 for long. controlled_exception is explicitly unfinished goal closure, never ordinary goal success and is excluded from new customer delivery. Bound completion evidence must support the original goal and answers; legal provenance alone does not prove semantic correctness. complete only confirms the saved final state. Check short_flow against verified effective steps; missing original tail/terminal evidence stays REVIEW_REQUIRED, never infer success.'
 
 
 def obj(properties):
@@ -191,7 +191,10 @@ def collection_context(reference, sample_ids, *, candidate_files=None):
     value=load_json(path)
     if value.get('schema_version')!='webcollect-qc-collection-checks-1':raise ValueError('Invalid collection-check handoff schema')
     source=value.get('source')
-    if value.get('prefix_only') is True:
+    if value.get('completion_only') is True:
+        if source is not None or value.get('checks') != [] or not all(row.get('collection_completion') for row in value.get('sample_bindings', [])):
+            raise ValueError('Completion-only handoff requires original saved completion bindings')
+    elif value.get('prefix_only') is True:
         if source is not None or value.get('checks')!=[] or not any(row.get('trusted_prefix') for row in value.get('sample_bindings',[])):
             raise ValueError('Prefix-only handoff requires original saved prefix bindings and no invented checks')
     else:
@@ -211,6 +214,33 @@ def collection_context(reference, sample_ids, *, candidate_files=None):
         key=(row['task_id'],row.get('task_version'))
         if key in bytask:raise ValueError('Ambiguous task-to-sample collection checks')
         bytask[key]=row['sample_id'];bysample[row['sample_id']]=[]
+        if row.get('collection_completion'):
+            from webcollect.planning import verify_evidence
+            context = row['collection_completion']
+            verify_evidence([context['saved_sample'], context['completion_evidence']])
+            saved = load_json(context['saved_sample']['path'])
+            completion = load_json(context['completion_evidence']['path'])
+            candidate = context.get('candidate_sample', {})
+            if (saved.get('sample_id') != row['sample_id']
+                    or saved.get('raw_execution', {}) != context['raw_execution']
+                    or candidate.get('sample_id') != row['sample_id']
+                    or not candidate.get('files_sha256')
+                    or candidate_files is not None and candidate_files.get(row['sample_id']) != candidate['files_sha256']):
+                raise ValueError('Completion context differs from saved receipt or candidate bytes')
+            capture_hashes = saved.get('capture_files_sha256', {})
+            if capture_hashes.get('completion-evidence.json') != context['completion_evidence']['sha256']:
+                raise ValueError('Completion evidence is outside original capture seal')
+            raw_execution = context['raw_execution']
+            raw_receipt = raw_execution.get('receipt')
+            if raw_receipt and not raw_execution.get('trusted_prefix'):
+                from webcollect.postprocess import session_record
+                from webcollect.closing_policy import enabled as closing_enabled, validate_record
+                original_record = session_record(Path(raw_receipt['path']).parent)
+                if closing_enabled(original_record['task']):validate_record(original_record)
+            bysample[row['sample_id']].append({'kind':'original_goal_completion',
+                'raw_execution':context['raw_execution'], 'completion_evidence':completion,
+                'saved_sample':context['saved_sample'],
+                'instruction':'Check the original goal and required answers against actual saved evidence. Legal citations alone do not prove answer correctness. Internal controlled_exception authenticity PASS never grants customer delivery eligibility.'})
         if row.get('trusted_prefix'):
             from webcollect.planning import verify_evidence
             from webcollect.trusted_prefix import model_context, project_prefix

@@ -230,6 +230,41 @@ class SiteFailureStore:
             return row['target_uri']
         return None
 
+    @staticmethod
+    def _closed_producer_document_uri(ledger, database, fact):
+        """Narrow a retained stale-dispatch fact using its sealed zero-model GET."""
+        from .planning import verify_evidence
+        identity, _, stage, _, evidence, usage = fact
+        refs = json.loads(usage)
+        if (stage != 'probe' or len(refs) != 1 or refs[0].get('ledger') != database
+                or identity != execution_id('probe', database, refs[0].get('visit_id'))):
+            return None
+        row = ledger.execute(
+            "SELECT v.*,j.kind,j.state AS job_state,j.payload,j.result FROM top_level_visits v "
+            "JOIN jobs j ON j.id=v.job_id WHERE v.id=?", (refs[0]['visit_id'],)).fetchone()
+        if (not row or row['purpose'] != 'application-evidence-get' or row['kind'] != row['purpose']
+                or row['state'] != 'succeeded' or row['finished_at'] is None
+                or row['job_state'] != 'done' or not row['result']
+                or not isinstance(row['response_status'], int) or not 200 <= row['response_status'] < 300
+                or ledger.execute('SELECT 1 FROM model_requests WHERE job_id=? LIMIT 1', (row['job_id'],)).fetchone()):
+            return None
+        original = {k: row[k] for k in ('id', 'job_id', 'target_uri', 'dispatched_at')}
+        if json.loads(evidence) != [{'visit_fact': original}]:
+            return None
+        payload, ref = json.loads(row['payload']), json.loads(row['result'])
+        verify_evidence([ref])
+        document = load_json(ref['path'])
+        if (payload.get('policy') != 'producer-site-tables-1'
+                or payload.get('uri') != row['target_uri']
+                or document.get('job_id') != row['job_id']
+                or document.get('uri') != row['landed_uri']
+                or document.get('request_uri') != row['target_uri']
+                or document.get('http_status') != row['response_status']
+                or not document.get('raw_html')):
+            return None
+        verify_evidence([document['raw_html']])
+        return row['target_uri']
+
     def _fact_scope(self, fact, books, producer):
         from .request_quarantine import attempt_owner, visit_uri
         identity, _, stage, _, _, raw_refs = fact
@@ -248,7 +283,8 @@ class SiteFailureStore:
             database = ref.get('ledger')
             ledger = books.get(database)
             if ledger is not None:
-                sealed = self._closed_producer_get_uri(ledger, database, fact) if database==producer else None
+                sealed = (self._closed_producer_get_uri(ledger, database, fact)
+                          or self._closed_producer_document_uri(ledger, database, fact)) if database==producer else None
                 uri = sealed or visit_uri(ledger, fact)
                 if uri:
                     return {'uri':uri, 'closed_entry':bool(sealed)}
@@ -298,13 +334,20 @@ class SiteFailureStore:
                         bound = ledger.execute("SELECT json_extract(config,'$.site_failure_guard') FROM batch_meta WHERE id=1").fetchone()
                         if bound and json.loads(bound[0] or 'null') == self.binding:
                             books[str(path)] = ledger
+            # Count scope and totals from this same immutable fact snapshot.
+            # Earlier returns omit these keys so the caller retains whole-site
+            # protection when no endpoint scope can be established.
+            holds.update(unknown_total=0, unknown_effective=0, whole_unknowns=0)
             for fact in facts:
+                own_key = fact[1] == key
+                holds['unknown_total'] += int(own_key)
                 if fact[0] in applied:
                     continue
+                holds['unknown_effective'] += int(own_key)
                 owner = self._fact_scope(fact, books, str(producer))
                 if not owner or endpoint(owner.get('site_uri') or owner['uri'], aliases)[0] != urlsplit(fact[1]).netloc.removeprefix('www.'):
+                    holds['whole_unknowns'] += int(own_key)
                     continue
-                own_key = fact[1] == key
                 same_page = endpoint(owner['uri'], aliases) == target
                 if owner.get('candidate_id'):
                     holds['tasks'] += int(own_key)
@@ -693,7 +736,10 @@ class SiteFailureStore:
         scopes = self._project_holds(application,key,applied,candidate_id) if self.failure_limit is None else {}
         uri_holds = scopes.get('matching_pages',[])
         task_holds = scopes.get('matching_tasks',[])
-        whole_unknown = effective_unknown - scopes.get('pages',0) - scopes.get('tasks',0)
+        if 'unknown_total' in scopes:
+            unknown = scopes['unknown_total']
+            effective_unknown = scopes['unknown_effective']
+        whole_unknown = scopes.get('whole_unknowns', effective_unknown - scopes.get('pages',0) - scopes.get('tasks',0))
         stopped=self.failure_limit is not None and effective>=self.failure_limit
         unavailable=stopped and not verified
         state='unknown_hold' if whole_unknown else 'task_hold' if task_holds else 'entry_uri_hold' if uri_holds else 'unavailable' if unavailable else 'succeeded' if verified else 'available'

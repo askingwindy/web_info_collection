@@ -13,7 +13,7 @@ from .checksums import verify_manifest
 from .layout import discover, package_document_paths
 from jsonschema import Draft202012Validator,validators
 
-VERSION='customer-proxy-0.2'
+VERSION='customer-proxy-0.3-actual-keys'
 REQ='request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md'
 A='request/web操作采集需求/附件A-字段说明.md'
 B='request/web操作采集需求/附件B-动作空间与坐标系.md'
@@ -33,7 +33,7 @@ CATALOG=[
  ('C06','confirmed','PNG files, identical resolution, image/tree linkage',REQ+'#7.3–4',A+'#界面树文件 / 通用约定'),
  ('C07','confirmed','unique element IDs and resolvable action/parent references; exact target text',A+'#界面树文件',REQ+'#7.8'),
  ('C08','confirmed','integer pixel coordinates, valid boxes, point/arguments consistency',B+'#1–2',REQ+'#4 / #7.7'),
- ('C09','confirmed','Web action/tool equality, documented arguments and canonical Windows shortcut delivery representation',B+'#1',CL+'#快捷键的 Windows 交付表达',REQ+'#7.9'),
+ ('C09','confirmed','Web action/tool equality, documented arguments and actual executed shortcut representation',B+'#1',CL+'#快捷键的实际执行表达',REQ+'#7.9'),
  ('C10','confirmed','success states and explicit final complete',REQ+'#6 / #7.10–11',A+'#final_state_image'),
  ('C11','confirmed','five effective steps excluding wait/complete, or short-flow reason',CL+'#有效操作步',REQ+'#2 / #7.6'),
  ('C12','confirmed','text has no prohibited process/selector fragments; task titles use corner quotes; step_result excludes observation placeholders and known navigation noise',REQ+'#7.14–15',REQ+'#6.任务指令专有名词',A+'#步骤字段/step_result'),
@@ -229,11 +229,11 @@ def is_select_all_combination(keys):
         return False
 
 
-def delivered_call_matches_capture(executed, delivered, source_os=None):
-    """Preserve exact calls except the declared Windows shortcut mapping."""
+def delivered_call_matches_capture(executed, delivered, source_os=None, *, legacy_windows=False):
+    """Actual calls match exactly; the old mapping needs explicit historical use."""
     if executed == delivered:
         return True
-    if not isinstance(executed, dict) or executed.get('tool_name') != 'hotkey':
+    if not legacy_windows or not isinstance(executed, dict) or executed.get('tool_name') != 'hotkey':
         return False
     arguments = executed.get('arguments')
     if not isinstance(arguments, dict):
@@ -392,17 +392,10 @@ def sample_check(directory,diagnostic_allow_empty_task_type=False):
         if t=='type' and ac['input_text']!=args.get('text'):errors.append(problem('C09',label+'/input_text','Typed text differs from tool arguments.'))
         if t=='hotkey' and isinstance(args.get('keys'),list) and ac['input_text']!='+'.join(x for x in args['keys'] if isinstance(x,str)):errors.append(problem('C09',label+'/input_text','Hotkey text differs from keys.'))
         if t=='hotkey':
-            try:
-                canonical_keys = canonical_windows_keys(args.get('keys'), a['device_info'].get('os_name'))
-            except ValueError:
-                errors.append(problem('C09',label+'/tool_call/arguments/keys','WINDOWS_SHORTCUT_MAPPING_REQUIRED: hotkey must use declared Windows key names and an unambiguous platform mapping.'))
-            else:
-                if args['keys'] != canonical_keys:
-                    errors.append(problem('C09',label+'/tool_call/arguments/keys','Hotkey delivery must use canonical Windows keys; raw capture keys stay unchanged.'))
-                if ac['input_text'] != '+'.join(canonical_keys):
-                    errors.append(problem('C09',label+'/input_text','Hotkey delivery input_text must match the canonical Windows keys.'))
-                if ac['target_text'] != windows_key_label(canonical_keys):
-                    errors.append(problem('C09',label+'/target_text','Hotkey delivery target_text must use the canonical Windows display names.'))
+            keys = args.get('keys')
+            if (not isinstance(keys, list) or not keys or
+                    any(not isinstance(key, str) or not key.strip() or key != key.strip() for key in keys)):
+                errors.append(problem('C09',label+'/tool_call/arguments/keys','Hotkey must retain nonempty actual executed key names.'))
         if t=='hotkey' and (not ac['target_text'].strip() or ac['target_element_id'] or 'target_bbox' in ac):
             errors.append(problem('C09',label+'/target_text','Hotkey must name the key/combination and must not reference a control or box.'))
         if t not in ('type','hotkey') and ac['input_text']:errors.append(problem('C09',label+'/input_text','Non-input action has input_text.'))
@@ -465,6 +458,52 @@ def batch_check(batch,samples,layout=None):
     if docs['SHA256SUMS']:
         checked_manifest=verify_manifest(batch)
         for message in checked_manifest['errors']:errors.append(problem('C13',batch/'SHA256SUMS',message))
+    execution_path=batch/'actual-execution.json'
+    if execution_path.exists():
+        try:
+            attachment=load(execution_path)
+            if (attachment.get('schema_version')!='webcollect-actual-execution-1' or
+                    attachment.get('keyboard_policy')!='delivery-actual-keys-1' or
+                    set(attachment)!={'schema_version','keyboard_policy','samples'}):
+                raise ValueError('Invalid actual execution attachment version')
+            entries=attachment['samples']; mapping={row['sample_id']:row for row in entries}
+            if len(mapping)!=len(entries) or set(mapping)!={s['sample_id'] for s in samples}:
+                raise ValueError('Actual execution attachment sample coverage differs')
+            for sample in samples:
+                path=Path(sample['sample_path'])/'annotation.json'; annotation=load(path)
+                row=mapping[sample['sample_id']]
+                if (set(row)!={'sample_id','annotation_sha256','platform','steps'} or
+                        hashlib.sha256(path.read_bytes()).hexdigest()!=row['annotation_sha256'] or
+                        row['platform']!=annotation['device_info'].get('os_name','') or
+                        len(row['steps'])!=len(annotation['steps'])):
+                    raise ValueError('Actual execution annotation/platform binding differs')
+                for step,actual in zip(annotation['steps'],row['steps']):
+                    status=actual.get('status'); fields={'step_id','tool_name','arguments','status'}
+                    if status=='VERIFIED_DISPATCH':
+                        fields|={'dispatch_ref','execution_ref','operation_id'}; ref=actual.get('dispatch_ref',{})
+                        execution_ref=actual.get('execution_ref',{})
+                        if (set(execution_ref)!={'file','sha256'} or
+                                not isinstance(execution_ref['file'],str) or not execution_ref['file'] or
+                                execution_ref['file'] in {'.','..'} or '/' in execution_ref['file'] or '\\' in execution_ref['file'] or
+                                not re.fullmatch('[0-9a-f]{64}',str(execution_ref['sha256']))):
+                            raise ValueError('Invalid actual execution reference')
+                        if (set(ref)!={'file','sha256'} or not isinstance(ref['file'],str) or
+                                not ref['file'] or ref['file'] in {'.','..'} or '/' in ref['file'] or '\\' in ref['file'] or
+                                not re.fullmatch('[0-9a-f]{64}',str(ref['sha256'])) or
+                                not isinstance(actual.get('operation_id'),str)):
+                            raise ValueError('Invalid actual dispatch reference')
+                    elif status not in {'UNAVAILABLE','HOST_TERMINAL'}:
+                        raise ValueError('Unknown actual execution step status')
+                    if (set(actual)!=fields or actual['step_id']!=step['step_id'] or
+                            actual['tool_name']!=step['tool_call']['tool_name'] or
+                            actual['arguments']!=step['tool_call']['arguments'] or
+                            (status=='HOST_TERMINAL')!=(step['action']['action_type']=='complete') or
+                            (step['action']['action_type']=='hotkey' and status!='VERIFIED_DISPATCH')):
+                        raise ValueError('Actual execution steps differ from delivered annotation')
+        except (OSError,ValueError,KeyError,TypeError) as error:
+            errors.append(problem('C09',execution_path,str(error)))
+    else:
+        observations.append(problem('I02',execution_path,'Historical package has no actual execution attachment; actual dispatch evidence remains unverified.'))
     ground_truth_checked=0
     for sample in samples:
         if 'sample_id' not in sample:continue

@@ -9,7 +9,7 @@ import json
 
 RULE_VERSIONS = {
     'visual_alignment': 'all-original-frames-actions-trees-dynamic-regions-2',
-    'terminal_semantics': 'truthful-fragment-five-ten-ending-8',
+    'terminal_semantics': 'original-goal-completion-and-internal-fragment-9',
     'language': 'chinese-pages-control-consistency-and-chinese-narratives-3',
     'privacy': 'all-original-frames-sensitive-content-1',
     'substantive_difference': 'actual-trajectories-bound-pair-dynamic-regions-4',

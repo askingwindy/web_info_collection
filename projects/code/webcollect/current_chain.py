@@ -158,38 +158,42 @@ def read_chain_scope(manifest_path):
 def read_chain_history(manifest_path):
     scope = read_chain_scope(manifest_path)
     with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True)) as con:
-        stored = list(con.execute('SELECT sample_id,annotation_path,annotation_sha256,site_uri,task_key '
-                                  'FROM current_chain_results ORDER BY sample_id'))
-        records, references, research_references = [], [], []
-        for sample_id, annotation_path, digest, site_uri, task_key in stored:
-            path = assert_current_result_path(scope, annotation_path)
-            _require(_ref(path)['sha256'] == digest, 'current result annotation changed')
-            annotation = load_json(path)
-            _require(annotation.get('sample_id') == sample_id and path.parent.name == sample_id,
-                     'current result identity changed')
-            _require(con.execute('SELECT 1 FROM m4_attempts WHERE sample_id=? AND task_key=?',
-                                 (sample_id, task_key)).fetchone() is not None,
-                     'result is not an actual attempt in the dedicated registry')
-            task_row = con.execute('SELECT task_json FROM m4_tasks WHERE task_key=?', (task_key,)).fetchone()
-            if task_row:
-                from .candidate_contract import research_duplicate_basis
-                research = research_duplicate_basis(json.loads(task_row[0]), scope['registry'])
-                if research:
-                    research_references.append({'sample_id':sample_id,'annotation':{'path':str(path),'sha256':digest},
-                                                'claim_id':research['research_claim_id'],'production_counted':False})
-                    continue
-            uri = urlsplit(site_uri)
-            _require(uri.scheme in ('http', 'https') and uri.hostname and not uri.username and not uri.password,
-                     'public current result site identity required')
-            from .task_generation import annotation_business_strategy, semantic_signature
-            strategy = annotation_business_strategy(annotation, path.parent)
-            references.append({'path': str(path), 'sha256': digest})
-            records.append({'sample_id': sample_id, 'annotation_path': str(path), 'annotation_sha256': digest,
-                            'site_uri': site_uri, 'origin': urlunsplit((uri.scheme, uri.netloc, '', '', '')),
-                            'strategy_id': strategy,
-                            'classification': 'KNOWN_STRATEGY' if strategy else 'UNKNOWN_REQUIRES_COMPARISON',
-                            'semantic_signature': semantic_signature({'site_uri': site_uri,
-                                'deterministic_strategy': {'id': strategy}}) if strategy else None})
+        # Pin membership and task/attempt identity to one SQLite read snapshot;
+        # peer consumers may append while original files are being checked.
+        con.execute('BEGIN')
+        stored = list(con.execute(
+            'SELECT r.sample_id,r.annotation_path,r.annotation_sha256,r.site_uri,r.task_key,t.task_json, '
+            'EXISTS(SELECT 1 FROM m4_attempts a WHERE a.sample_id=r.sample_id AND a.task_key=r.task_key) '
+            'FROM current_chain_results r LEFT JOIN m4_tasks t ON t.task_key=r.task_key ORDER BY r.sample_id'))
+        # Release the short read transaction before hashing original files.
+        con.rollback()
+    records, references, research_references = [], [], []
+    for sample_id, annotation_path, digest, site_uri, task_key, task_json, actual_attempt in stored:
+        path = assert_current_result_path(scope, annotation_path)
+        _require(_ref(path)['sha256'] == digest, 'current result annotation changed')
+        annotation = load_json(path)
+        _require(annotation.get('sample_id') == sample_id and path.parent.name == sample_id,
+                 'current result identity changed')
+        _require(actual_attempt, 'result is not an actual attempt in the dedicated registry')
+        if task_json:
+            from .candidate_contract import research_duplicate_basis
+            research = research_duplicate_basis(json.loads(task_json), scope['registry'])
+            if research:
+                research_references.append({'sample_id':sample_id,'annotation':{'path':str(path),'sha256':digest},
+                                            'claim_id':research['research_claim_id'],'production_counted':False})
+                continue
+        uri = urlsplit(site_uri)
+        _require(uri.scheme in ('http', 'https') and uri.hostname and not uri.username and not uri.password,
+                 'public current result site identity required')
+        from .task_generation import annotation_business_strategy, semantic_signature
+        strategy = annotation_business_strategy(annotation, path.parent)
+        references.append({'path': str(path), 'sha256': digest})
+        records.append({'sample_id': sample_id, 'annotation_path': str(path), 'annotation_sha256': digest,
+                        'site_uri': site_uri, 'origin': urlunsplit((uri.scheme, uri.netloc, '', '', '')),
+                        'strategy_id': strategy,
+                        'classification': 'KNOWN_STRATEGY' if strategy else 'UNKNOWN_REQUIRES_COMPARISON',
+                        'semantic_signature': semantic_signature({'site_uri': site_uri,
+                            'deterministic_strategy': {'id': strategy}}) if strategy else None})
     scope.update(current_results_refs=references, customer_samples=len(records), package_count=0, packages=[],
                  research_results_refs=research_references, research_samples=len(research_references),
                  known_strategy_samples=sum(r['strategy_id'] is not None for r in records),
@@ -235,6 +239,32 @@ def same_chain(left, right):
     return (isinstance(left, dict) and isinstance(right, dict)
             and left.get('schema_version') == right.get('schema_version') == SCOPE_SCHEMA
             and all(left.get(key) == right.get(key) for key in keys))
+
+
+def history_scope_extends(bound, actual):
+    """Candidate-project history v2: immutable binding with append-only results.
+
+    Frozen legacy chains retain exact population semantics. Every bound result
+    must still exist with the original reference; read_chain_history validates
+    bytes and registry identity before this comparison.
+    """
+    if not same_chain(bound, actual) or not bound.get('candidate_project'):
+        return bound == actual
+    changing = {'current_results_refs', 'research_results_refs', 'customer_samples',
+                'research_samples', 'known_strategy_samples', 'unknown_strategy_samples'}
+    if {k: v for k, v in bound.items() if k not in changing} != {
+            k: v for k, v in actual.items() if k not in changing}:
+        return False
+    for value in (bound, actual):
+        if (value.get('customer_samples') != len(value.get('current_results_refs', []))
+                or value.get('research_samples') != len(value.get('research_results_refs', []))
+                or value.get('known_strategy_samples', 0) + value.get('unknown_strategy_samples', 0)
+                   != value.get('customer_samples')):
+            return False
+    for key in ('current_results_refs', 'research_results_refs'):
+        if any(ref not in actual.get(key, []) for ref in bound.get(key, [])):
+            return False
+    return True
 
 
 def registry_project(con):
@@ -397,7 +427,10 @@ def assert_current_evidence(scope, value):
 
 def history_context(scope, records, registry, *, exclude_scope=None, own_tasks=()):
     actual_records, actual_scope = read_chain_history(scope['manifest']['path'])
-    _require(scope == actual_scope and records == actual_records, 'current population or scope changed')
+    _require(history_scope_extends(scope, actual_scope)
+             and (records == actual_records or (scope.get('candidate_project')
+                  and all(record in actual_records for record in records))),
+             'current population or scope changed')
     snapshot = registry_snapshot(scope, registry, exclude_scope=exclude_scope, own_tasks=own_tasks)
     comparisons = [{'id': 'customer:' + row['sample_id'], 'record': row} for row in records]
     comparisons += [{'id': 'm4:' + object_sha256(row), 'record': row} for row in snapshot['rows']]

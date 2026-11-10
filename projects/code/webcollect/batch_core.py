@@ -635,6 +635,16 @@ class BatchLedger:
             if (row['state'] == 'reserved_for_dispatch' and job.get('state') == 'running'
                     and (job.get('lease') or 0) > time.time()):
                 continue  # A live visit is not an interrupted UNKNOWN fact.
+            if row['state'] == 'reserved_for_dispatch':
+                # jobs and visits above are separate snapshots. Recheck the
+                # original pair before turning a concurrent live GET unknown.
+                with self.connect() as con:
+                    current = con.execute(
+                        'SELECT v.state,j.state AS job_state,j.lease FROM top_level_visits v '
+                        'JOIN jobs j ON j.id=v.job_id WHERE v.id=?', (row['id'],)).fetchone()
+                if current and (current['state'] == 'succeeded' or (
+                        current['job_state'] == 'running' and (current['lease'] or 0) > time.time())):
+                    continue
             responsibility=row['metrics'].get('responsibility')
             if row['state']=='failed' and responsibility in ('model','configuration','interface','collector'):
                 continue  # Retained visit failure, no conviction of this application.
@@ -807,8 +817,12 @@ class BatchLedger:
             else:
                 original = old[0]
             ordinal = con.execute('SELECT COALESCE(MAX(rowid),0) FROM model_sessions').fetchone()[0] if original is None else 0
-            secret = credential(self.config['model'], excluded_accounts=() if consumer else self._unavailable_model_accounts(con),
-                                required_account=original, selection_index=ordinal)
+            excluded = self._unavailable_model_accounts(con) if original is None else set()
+            if consumer and original is None:
+                from .key_health import unavailable_accounts
+                excluded = unavailable_accounts(self, con, historical=excluded)
+            secret = credential(self.config['model'], excluded_accounts=excluded,
+                                required_account=original, selection_index=None if consumer else ordinal)
             con.execute('INSERT OR IGNORE INTO model_sessions VALUES(?,?)', (session_id, account_id(secret)))
             return secret
 

@@ -272,9 +272,16 @@ def verify_record(record, *, _verified=None):
         raise ValueError('DIRECT_ARTICLE_SAVED_GOAL_NOT_REPRODUCIBLE')
 
 
-def protocol_schema(value,contract,*,completion=False,max_steps=8):
+def protocol_schema(value,contract,*,completion=False,max_steps=8,wiki=False):
     """Same explicit capability projection for first turn, branch and boundary."""
-    if (contract or {}).get('version')!=VERSION:return value
+    if wiki:
+        from .wiki_reading import schema
+        return schema(value,max_steps=max_steps)
+    if (contract or {}).get('version')!=VERSION:
+        if completion:
+            from .direct_completion import schema
+            return schema(value,max_steps=max_steps)
+        return value
     from copy import deepcopy
     result=deepcopy(value)
     def visit(item):

@@ -11,6 +11,7 @@ from webcollect.batch_core import BatchLedger, BudgetStop, OutcomeUnknown, load_
 from webcollect.model_gateway import ModelGateway
 from webcollect.planning import object_sha256, verify_evidence
 from .discovery_tools import DiscoveryBrowser, glm_search, reference
+from .candidate_pool import entry_identity
 from .qualification import CANONICAL_CATEGORIES
 from .site_pool import SitePool, host_identity
 
@@ -113,6 +114,15 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
                 # not an UNKNOWN outcome and must not lock the whole ledger.
                 if unresolved['state']=='reserved':continue
                 original=json.loads(unresolved['payload']).get('input',{})
+                if (unresolved['kind']=='ai-target-page-purpose-1' and current_urls
+                        and original.get('source_uris')
+                        and {entry_identity(u) for u in current_urls}.isdisjoint(
+                            {entry_identity(u) for u in original['source_uris']})):
+                    # A purpose UNKNOWN belongs to its exact original pages, not
+                    # every page sharing this host (page-scoped holds in
+                    # producer_business_content); page-disjoint new work is
+                    # not blocked by it, whatever the original error type.
+                    continue
                 original_urls=(original.get('source_uris',[]) if unresolved['kind']=='ai-target-page-purpose-1'
                                else [original['homepage_uri']] if unresolved['kind']=='ai-application-site-classification-1' and original.get('homepage_uri') else [])
                 original_hosts={isolation_host(uri,registry) for uri in original_urls}

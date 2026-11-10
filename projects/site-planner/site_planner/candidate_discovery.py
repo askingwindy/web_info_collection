@@ -25,7 +25,7 @@ from .site_pool import SitePool, page_uri, host_identity
 from .discovery_tools import glm_search, reference
 from .entry_access import POLICY as ENTRY_HTTP_POLICY, check_entry
 from .discovery_agent import model_decision, model_tool_decision, SettledSelectionRejected
-from .qualification import CANONICAL_CATEGORIES
+from .qualification import CANONICAL_CATEGORIES, BUSINESS_CATEGORIES
 from . import entry_selection as selection
 from .producer_authority import isolation_host
 from . import application_discovery as site_tables
@@ -545,7 +545,7 @@ def extract_entry_hints(row):
     value = row.get('category_hint')
     if value is None or value == 'UNKNOWN':
         hints['category_hint'] = value
-    elif value in CANONICAL_CATEGORIES:
+    elif value in BUSINESS_CATEGORIES:
         hints['category_hint'] = value
     else:
         hints['category_hint'] = 'UNKNOWN'
@@ -784,10 +784,10 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
             return pool.publish_row(header,candidate,source,application_id=application_id)
     try:
         shared=None
-        if source.get('model_protocol') in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13') and not source.get('entry_recheck'):
+        if source.get('model_protocol') in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and not source.get('entry_recheck'):
             from .producer_observation import entry_receipt
             shared=entry_receipt(pool,ledger,candidate['entry_url'],root)
-            if source['model_protocol'] in ('entry-tools-11','entry-tools-12','entry-tools-13') and shared is None:
+            if source['model_protocol'] in ('entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and shared is None:
                 raise OutcomeUnknown('Original supply observation missing; no replacement GET')
         access, ref = shared if shared else check_entry(ledger,batch,candidate['entry_url'],root,recheck=source.get('entry_recheck'))
     except (SiteStopped,OutcomeUnknown) as held:
@@ -815,7 +815,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
     Per-response-row publication with stable identities; interruption resumes
     from the original response only. No browser, no full-pool entity loads.
     """
-    if model_protocol is not None and model_protocol not in ('entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
+    if model_protocol is not None and model_protocol not in ('entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
         raise ValueError('Unsupported entry model protocol')
     if producer_pipeline not in (None, 'serial', 'overlap-1'):
         raise ValueError('producer_pipeline must be serial or overlap-1')
@@ -846,7 +846,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
     category_only=bool(categories and discovery_mode=='new-sites' and not (queries or sources or directions or goals_path))
     if search_engine is None:
         search_engine=previous_batch.get('search_engine') or ('public' if category_only else 'search_std')
-    scoped_expand=bool(discovery_mode=='expand' and allowed_hosts and model_protocol=='entry-tools-13')
+    scoped_expand=bool(discovery_mode=='expand' and allowed_hosts and model_protocol in ('entry-tools-13','entry-tools-14'))
     if search_engine=='public' and (not (category_only or scoped_expand) or probe_search_hold):
         raise ValueError('Public search requires category-only new-sites. A paid probe requires an explicit BigModel search engine.')
     table_policy = previous_batch.get('table_policy') if previous_batch else site_tables.POLICY
@@ -872,7 +872,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             model = config.get('model') or {}
             model_protocol = (('entry-tools-7' if table_policy else selection.TOOL_PROTOCOL) if model.get('provider') == 'glm'
                               and model.get('model') == 'glm-5.3-flash' else 'entry-content-1')
-    if model_protocol in ('entry-tools-3','entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'):
+    if model_protocol in ('entry-tools-3','entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
         from .grounded_entries import produce as produce_grounded
         return produce_grounded(config,pool_path=pool_path,ledger_path=ledger_path,output=output or previous_batch.get('output'),
             history_set=history_set or previous.get('current_chain_manifest',{}).get('path'),
@@ -1487,7 +1487,7 @@ def main(argv=None):
     entry.add_argument('--sources',help='JSON list of uri/title/content/reference')
     entry.add_argument('--directions',help='JSON file: [{"direction","category","queries":[...]}]')
     entry.add_argument('--goals',help='JSON file {"schema_version":"webcollect-caller-goals-1","goals":[{"uri","requested_goal"}]}')
-    entry.add_argument('--model-protocol', choices=['entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13'],
+    entry.add_argument('--model-protocol', choices=['entry-content-1', ENTRY_TOOL_PROTOCOL, selection.TOOL_PROTOCOL, 'entry-tools-3', 'entry-tools-4', 'entry-tools-5', 'entry-tools-6', 'entry-tools-7', 'entry-tools-8', 'entry-tools-9', 'entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'],
                        help='New GLM-5.3-Flash sessions use native tools; existing sessions use their frozen protocol')
     entry.add_argument('--discovery-mode', choices=['new-sites','expand','mixed'])
     entry.add_argument('--entry-selection', choices=['rule','model'], default='rule',

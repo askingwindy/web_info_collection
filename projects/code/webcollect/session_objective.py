@@ -52,6 +52,8 @@ def progress(session,initial_observation_id):
     No URL, action sequence or answer is supplied here. This is a verifier of
     this session's actual trace and synchronized visible nodes, not an executor.
     """
+    from .wiki_reading import enabled as wiki, progress as wiki_progress
+    if wiki(session.task):return wiki_progress(session,initial_observation_id)
     from .goal_evidence import contract_for, progress as contracted_progress
     contract = contract_for(session.task)
     if contract:

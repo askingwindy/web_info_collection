@@ -73,6 +73,14 @@ def source_identity():
              'admission_cohort.py', 'production_identity.py', 'batch_protocol.py',
              'workflow_proposal.py', 'fragment_workflow.py', 'agent_controller.py', 'agent_observation.py', 'agent_audit.py', 'agent_feedback.py', 'sampling_context.py', 'current_chain.py', 'application_identity.py', 'site_failure_stop.py', 'site_pool_sync.py',
              'react_session.py', 'react_context.py', 'collection_context.py', 'postprocess.py', 'request_quarantine.py','closing_policy.py','trusted_prefix.py','action_stability.py','goal_evidence.py']
+    # Bind both model-facing execution and the owning candidate/campaign
+    # adapters. Hash source only; credential/configuration values never enter
+    # the receipt. Existing frozen receipts are preserved and not rewritten.
+    names += ['banded_plan.py', 'plan_evidence.py', 'plan_execution.py',
+              'direct_completion.py', 'direct_article.py', 'session_objective.py',
+              'wiki_reading.py', 'reading_sections.py', 'numeric_result_evidence.py',
+              'key_health.py', 'model_gateway.py', 'model_credentials.py',
+              'candidate_consumer.py', 'consumer_campaign.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -163,8 +171,8 @@ def verify_committed_samples(output, attempts):
 
 async def heartbeat_lease(store, attempt, seconds):
     while True:
+        await asyncio.to_thread(store.heartbeat, attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'])
         await asyncio.sleep(max(0.1, seconds / 3))
-        store.heartbeat(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'])
 
 
 def _evidence(path):
@@ -251,7 +259,16 @@ async def _with_lease(job, store, attempt, lease_seconds):
         done, _ = await asyncio.wait((running, heartbeat), return_when=asyncio.FIRST_COMPLETED)
         if heartbeat in done and running not in done:
             # A lost lease fences further page actions, not just the final commit.
-            heartbeat.result()
+            from .runtime import OwnedAttemptClosed
+            try:
+                heartbeat.result()
+            except OwnedAttemptClosed:
+                # finish_attempt committed while its thread's return was still
+                # pending. Only same-owner normal completion reaches this type;
+                # expiry, recovery and owner changes still cancel the runner.
+                # Remaining work is close-out; RuntimeStore still rejects every
+                # attempt operation after terminal status.
+                return await running
             raise ValueError('租约心跳意外结束')
         return await running
     finally:
@@ -383,7 +400,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             ledger.consume('probe_pages', (parent_job or {'id': 'collection'})['id'] + ':react-preflight', 1)
         from .preflight import inspect_page
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
-    feedback_context = site_context(registry, task['site_uri'], model_ledger=ledger,
+    feedback_context = await asyncio.to_thread(site_context, registry, task['site_uri'], model_ledger=ledger,
         candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
     if task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5') and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
@@ -419,7 +436,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
             feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
                                                    'rejected', root_cause)
-        store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+        await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
             evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
         if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5'):
@@ -541,7 +558,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                        'sha256': sha(evidence / 'derived.json')}
         from .runtime import ImageCommitConflict
         try:
-            store.finish_attempt(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+            await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
                 'collected_pending_review',
                 evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
                 exact_images=index.sample_images(sample))
@@ -553,7 +570,11 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             return await finish_failure('collector', 'react_exact_image_commit_conflict',
                                   _evidence(collision) + [derived_ref])
         index.add_sample(sample)
+    from .closing_policy import completion_delivery_decision
+    completion_decision = completion_delivery_decision(read_json(sample/'annotation.json'), read_json(saved)['raw_execution'])
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
+            'completion_delivery':completion_decision,
+            'original_goal_completed':completion_decision['original_goal_completed'],
             **({'collection_ending':ending} if ending else {}),
             **({'trusted_prefix':derived['trusted_prefix'],'original_goal_completed':False} if derived.get('trusted_prefix') else {}),
             'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
@@ -778,8 +799,15 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         await asyncio.sleep(1)
                         continue
                     break
-                snapshot = sync_manifest(store, output, manifest)
-                attempt = store.start_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'])
+                async def prepare_attempt():
+                    # A reservation already owns a lease. Keep renewing while
+                    # history/manifest preparation runs outside the event loop.
+                    prepared_snapshot = await asyncio.to_thread(sync_manifest, store, output, manifest)
+                    started = await asyncio.to_thread(store.start_attempt, attempt['attempt_id'],
+                                                     worker_id, attempt['lease_token'])
+                    return prepared_snapshot, started
+                snapshot, attempt = await _with_lease(prepare_attempt(), store, attempt,
+                                                      snapshot['policy']['lease_seconds'])
                 if entry_session is not None:
                     entry_session['bind_attempt'](attempt)
                 sample = output / 'samples' / attempt['sample_id']
@@ -818,7 +846,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                     raise ValueError('Dynamic controller requires original BatchLedger')
                                 from .agent_feedback import site_context
                                 planning_context = plan.get('generation',{}).get('site_planning_context') or {}
-                                feedback_context = site_context(registry, task['site_uri'], model_ledger=controller_ledger,
+                                feedback_context = await asyncio.to_thread(site_context, registry, task['site_uri'], model_ledger=controller_ledger,
                                     candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'),
                                     generation=planning_context.get('history',[]),
                                     quality=[q['reference'] for q in planning_context.get('quality_feedback',[])])
@@ -867,7 +895,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 'sample_files_sha256': await asyncio.to_thread(sample_hashes, sample),
                                 'capture_files_sha256': await asyncio.to_thread(sample_hashes, evidence),
                                 'semantic_review': 'REVIEW_REQUIRED'})
-                            store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
+                            await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                                                  'collected_pending_review', evidence=_evidence(saved) + [feedback_ref],
                                                  exact_images=index.sample_images(sample))
                             index.add_sample(sample)
@@ -887,7 +915,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             # Settle the ledger first: a cleanup failure must not
                             # mask the primary outcome or strand a running row.
                             try:
-                                store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
+                                await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                                     'rejected', failure_class='interrupted', root_cause='runner_cancelled',
                                     evidence=_evidence(failure))
                             except ValueError as cancellation_error:
@@ -919,13 +947,13 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
                                 'failure_class': classify_failure(error)})
                         from .agent_feedback import save_attempt_feedback
-                        feedback_ref = save_attempt_feedback(evidence, attempt, 'rejected', str(error))
+                        feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt, 'rejected', str(error))
                         # The attempt ledger settles before any file relocation:
                         # a later quarantine crash (e.g. a destination already
                         # materialized by the feedback receipt) must not strand
                         # this attempt as running. Cleanup errors are recorded
                         # separately and never mask the primary failure.
-                        store.finish_attempt(attempt['attempt_id'], worker_id, attempt['lease_token'],
+                        await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                             'rejected', failure_class=classify_failure(error), root_cause=_root_cause(error),
                             evidence=_evidence(failure) + [feedback_ref])
                         try:

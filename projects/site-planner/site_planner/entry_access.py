@@ -24,8 +24,11 @@ def document_http_failure(con, job_id):
     """A sealed HTTP error can be replayed from the original visit, including legacy jobs."""
     return con.execute(
         "SELECT v.id,v.target_uri,v.response_status FROM top_level_visits v JOIN jobs j ON j.id=v.job_id "
-        "WHERE j.id=? AND j.kind='application-evidence-get' AND j.state='review_required' AND j.error='HTTPError' "
-        "AND v.purpose=j.kind AND v.state='failed' AND v.error_type='HTTPError' "
+        "WHERE j.id=? AND j.kind='application-evidence-get' "
+        "AND ((j.state='review_required' AND j.error='HTTPError' AND v.error_type='HTTPError') "
+        "OR (j.state='failed' AND j.error='RedirectBoundaryError' AND v.error_type='RedirectBoundaryError' "
+        "AND j.result IS NOT NULL AND v.response_status BETWEEN 300 AND 399)) "
+        "AND v.purpose=j.kind AND v.state='failed' "
         "AND v.finished_at IS NOT NULL AND v.response_status BETWEEN 300 AND 599 "
         "AND NOT EXISTS (SELECT 1 FROM top_level_visits other WHERE other.job_id=j.id AND other.id<>v.id)",
         (job_id,)).fetchone()

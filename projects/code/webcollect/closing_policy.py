@@ -126,6 +126,8 @@ def validate_plan_page_bindings(record):
 
 def validate_reading_completion(record, basis):
     """Recompute the flag's early-end coverage from its sealed plan and facts."""
+    from .wiki_reading import enabled as wiki
+    if wiki(record['task']):return  # Explicit original checks, not optional route coverage.
     from .plan_evidence import READING_COMPLETION_POLICY, facts, remaining_plan_coverage
     if record['task']['fragment'].get('reading_completion_policy')!=READING_COMPLETION_POLICY:return
     from pathlib import Path
@@ -186,12 +188,14 @@ def validate_reading_completion(record, basis):
                         or matches[0]['after_observation_id']!=actual.get('observation_id')
                         or late.get('evidence')!={key:value for key,value in record['observations'][oid]['evidence'].items() if key!='html'}):
                     raise ValueError('Late plan effect lost its original action or synchronized observation')
-                late_observations={key:project(state(record,key),{k:value['evidence'][k] for k in ('image','state','capture')})
+                late_observations={key:project(state(record,key),{k:value['evidence'][k] for k in ('image','state','capture')},
+                    extended_actions=record['task'].get('fragment',{}).get('plan_protocol')=='webcollect-banded-conditional-plan-13')
                                    for key,value in record['observations'].items()}
                 for key,observation in late_observations.items():
                     observation['html']=Path(record['observations'][key]['evidence']['html']['path']).read_text()
                 late_session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],
                     observation_records=late_observations,current=late_observations[oid],
+                    business_attempt_refs=(record['terminal'].get('collection_ending') or {}).get('attempt_refs',[]),
                     requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
                 from .banded_plan import Controller
                 controller=Controller();controller.plan=plan;controller.frozen_plan=original['plan']
@@ -228,8 +232,10 @@ def validate_reading_completion(record, basis):
         raise ValueError('Reading remaining-plan position skips unexecuted or unresolved actions')
     observations={}
     for oid,row in record['observations'].items():
-        observations[oid]=project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')})
+        observations[oid]=project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')},
+                    extended_actions=record['task'].get('fragment',{}).get('plan_protocol')=='webcollect-banded-conditional-plan-13')
     session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],observation_records=observations,
+        business_attempt_refs=(record['terminal'].get('collection_ending') or {}).get('attempt_refs',[]),
         requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
     evidence=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}),
                    page_binding=original.get('page_binding') if execution_policy else None)
@@ -239,6 +245,43 @@ def validate_reading_completion(record, basis):
     return receipt
 
 
+def validate_result_completion(record):
+    """Recompute the new result gate from the sealed original plan and raws."""
+    from .result_execution import VERSION as RESULT_VERSION
+    if record['task'].get('fragment',{}).get('result_execution_policy')!=RESULT_VERSION:return
+    from pathlib import Path
+    from types import SimpleNamespace
+    from .agent_observation import project
+    from .react_session import struct_goal
+    from .plan_evidence import facts, unverified_required_checks
+    root=Path(record['receipt']['boundary']['path']).parent
+    sealed=record['receipt']['files_sha256']
+    plans=sorted(name for name in sealed if name.endswith('-conditional-plan.json'))
+    if not plans:
+        if record['terminal'].get('goal_evidence'):
+            raise ValueError('Result evidence has no sealed original plan')
+        return
+    path=root/plans[0];verify_evidence([{'path':str(path),'sha256':sealed[path.name]}])
+    original=load_json(path)
+    observations={oid:project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')},
+                    extended_actions=record['task'].get('fragment',{}).get('plan_protocol')=='webcollect-banded-conditional-plan-13')
+                  for oid,row in record['observations'].items()}
+    marker=record['terminal'].get('collection_ending') or {}
+    for ref in marker.get('attempt_refs',[]):
+        verify_evidence([ref])
+        for raw in load_json(ref['path']).get('raw_steps',[]):verify_evidence([raw])
+    session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],observation_records=observations,
+        business_attempt_refs=marker.get('attempt_refs',[]),requested_goal=struct_goal(record['task']),
+        working_goal=record['terminal'].get('working_goal'))
+    stored=record['terminal'].get('goal_evidence') or {}
+    actual=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}),
+        objective_evidence=stored.get('session_objective'),page_binding=original.get('page_binding'))
+    if actual!={k:v for k,v in stored.items() if k!='session_objective'}:
+        raise ValueError('Result completion facts differ from sealed input, submit and result observations')
+    if marker.get('kind')=='HOST_PLAN_ENDPOINT' and unverified_required_checks(actual):
+        raise ValueError('Host result endpoint is missing required executed result evidence')
+
+
 def validate_record(record):
     """Recompute tail accounting from immutable attempt/raw references."""
     marker=record['terminal'].get('collection_ending')
@@ -246,6 +289,7 @@ def validate_record(record):
     if not enabled(record['task']) or not marker or marker.get('protocol')!=policy:
         raise ValueError('Missing versioned closure binding')
     validate_plan_page_bindings(record)
+    validate_result_completion(record)
     band=marker.get('attempt_band')
     limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) else MAXIMUM
     if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
@@ -340,18 +384,24 @@ def validate_record(record):
         final_evidence=record['observations'][final]['evidence']
         if basis.get('image')!=final_evidence['image']:
             raise ValueError('Endpoint image differs from sealed final observation')
-        if record['task']['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11'):
+        from .wiki_reading import enabled as wiki, replay as replay_wiki
+        ordinary_wiki=wiki(record['task'])
+        if ordinary_wiki:
+            actual=replay_wiki(record,basis.get('session_objective_evidence'),basis=basis)
+        if not ordinary_wiki and record['task']['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13'):
             from types import SimpleNamespace
             from pathlib import Path
             from .agent_observation import project
             from .session_objective import progress
             observations={}
             for oid,row in record['observations'].items():
-                ob=project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')})
+                ob=project(state(record,oid),{k:row['evidence'][k] for k in ('image','state','capture')},
+                    extended_actions=record['task'].get('fragment',{}).get('plan_protocol')=='webcollect-banded-conditional-plan-13')
                 ob['html']=Path(row['evidence']['html']['path']).read_text()
                 observations[oid]=ob
             session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],
-                observation_records=observations,current=observations[final])
+                observation_records=observations,current=observations[final],
+                business_attempt_refs=marker.get('attempt_refs',[]))
             # The live session exposes its structured goal to the evidence
             # machinery; the offline replay must reconstruct the same surface,
             # or objective requirements derived from the goal description
@@ -381,10 +431,17 @@ def validate_record(record):
             actual=progress(session,basis.get('initial_observation_id'))
             if actual['required'] and (actual['status']!='VERIFIED' or actual!=basis.get('session_objective_evidence')):
                 raise ValueError('Explicit session objective is not established by the sealed original trace')
-        if basis.get('source')=='host_rendered_state':
+        if ordinary_wiki:
+            # V1 initially mislabeled explicit completion as rendered text.
+            # Accept that sealed label only after the same strict Wiki replay;
+            # tasks without this protocol or without an original decision never enter here.
+            if basis.get('source') not in ('host_wiki_reading_completion','host_rendered_state'):
+                raise ValueError('Unknown Wiki explicit completion evidence source')
+        elif basis.get('source')=='host_rendered_state':
             from .agent_observation import project
             from .banded_plan import proves
-            observation=project(state(record,final),{k:final_evidence[k] for k in ('image','state','capture')})
+            observation=project(state(record,final),{k:final_evidence[k] for k in ('image','state','capture')},
+                    extended_actions=record['task'].get('fragment',{}).get('plan_protocol')=='webcollect-banded-conditional-plan-13')
             if not proves(basis['predicate'],observation):
                 raise ValueError('Sealed host endpoint predicate is not independently established')
         elif basis.get('source')=='host_goal_evidence':
@@ -436,7 +493,7 @@ def annotation_errors(annotation):
             or marker.get('finish_origin') not in ('host','agent')
             or marker.get('finish_is_business_action') is not False or marker.get('wait_is_business_action') is not False
             or len(marker.get('attempt_refs',[]))!=attempts
-            or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED')
+            or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED','AGENT_STOP','HOST_INTERRUPTED')
                 or attempts < (1 if policy in (VERSION,EFFECTIVE_VERSION) else 5) or (limit is not None and policy!=EFFECTIVE_VERSION and attempts>limit)))
             or (kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') and (attempts!=limit or kind!=limit_kind(limit)))
             or (kind=='TEN_EFFECTIVE_STEP_LIMIT' and (policy!=EFFECTIVE_VERSION or effective!=EFFECTIVE_MAXIMUM))
@@ -445,11 +502,53 @@ def annotation_errors(annotation):
     if kind=='HOST_BOUNDARY_RETURN':
         from .consumer_page_policy import VERSION as PAGE_POLICY, PLAN_PROTOCOL
         proof=marker.get('boundary_return_evidence') or {}
-        if (marker.get('plan_protocol') not in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11') or proof.get('policy')!=PAGE_POLICY
+        if (marker.get('plan_protocol') not in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13') or proof.get('policy')!=PAGE_POLICY
                 or marker.get('goal_completion')!='NOT_CLAIMED' or marker.get('finish_origin')!='host'
                 or effective<2 or marker.get('unverified_tail_dispatches')!=0):
             errors.append('Boundary return must preserve two verified operations without a login/download success claim')
-    if kind=='HOST_PLAN_ENDPOINT' and (marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11')
+    if kind=='HOST_PLAN_ENDPOINT' and (marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13')
             or marker.get('finish_origin')!='host' or marker.get('goal_completion')!='NOT_CLAIMED'):
         errors.append('Host endpoint requires frozen conditional-plan binding and no business-success claim')
     return errors
+
+
+COMPLETED_GOAL_DELIVERY = 'completed-goal-five-ten-delivery-1'
+
+
+def completion_delivery_decision(annotation, raw_execution):
+    """New delivery eligibility from sealed collection facts, never a QC grant."""
+    effective = sum(s.get('action', {}).get('action_type') not in
+                    ('wait', 'finish', 'complete') for s in annotation.get('steps', []))
+    ending = raw_execution.get('collection_ending') or {}
+    basis = ending.get('endpoint_evidence') or {}
+    objective = basis.get('session_objective_evidence') or {}
+    goal = raw_execution.get('goal_evidence') or {}
+    checks = goal.get('checks') or []
+    # Provenance and a visible keyword/URL are insufficient by themselves.
+    # Ordinary checks must all be established. The cumulative Wiki protocol
+    # instead binds every original question to its sealed completion answer.
+    completion = objective.get('completion') or {}
+    original_checks = completion.get('original_checks') or []
+    answers = (completion.get('answer') or {}).get('check_answers') or []
+    wiki_complete = bool(
+        objective.get('protocol') == 'webcollect-wiki-reading-completion-2'
+        and objective.get('status') == 'VERIFIED'
+        and objective == goal.get('session_objective')
+        and completion.get('schema_version') == 'webcollect-wiki-reading-completion-2'
+        and completion.get('decision') and completion.get('original_working_goal')
+        and completion.get('original_plan_sha256') and original_checks
+        and [a.get('check_index') for a in answers] == list(range(len(original_checks))))
+    complete_checks = bool(checks) and all(c.get('status') == 'VERIFIED' for c in checks)
+    proof = bool(ending.get('kind') == 'HOST_PLAN_ENDPOINT'
+                 and ending.get('safe_for_pending_sample') is True
+                 and basis.get('image') and (wiki_complete or complete_checks))
+    completed = bool(proof and annotation.get('completion_status') == 'success'
+                     and not raw_execution.get('trusted_prefix')
+                     and not ending.get('flagged')
+                     and not ending.get('external_effect_unknown')
+                     and raw_execution.get('stop_reason') == 'ready')
+    eligible = completed and 5 <= effective <= 10
+    return {'delivery_policy': COMPLETED_GOAL_DELIVERY,
+            'effective_steps': effective, 'completion_status': annotation.get('completion_status'),
+            'original_goal_completed': completed, 'ordinary_target_eligible': eligible,
+            'delivery_eligible': eligible, 'QC_approval': False}

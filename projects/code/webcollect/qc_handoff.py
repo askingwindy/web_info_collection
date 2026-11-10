@@ -127,11 +127,14 @@ def _attempts(scope, dataset, sample_ids):
                     raise ValueError('Customer export sample files changed: ' + sample_id)
             prefix=receipt.get('raw_execution',{}).get('trusted_prefix')
             rows.append({**attempt, 'saved_sample': saved[0],
-                **({'trusted_prefix':prefix} if prefix else {})})
+                **({'trusted_prefix':prefix} if prefix else {}),
+                'collection_completion': {'saved_sample':saved[0], 'raw_execution':receipt.get('raw_execution', {}),
+                    'completion_evidence':{'path':str(receipt_path.parent/'completion-evidence.json'),
+                        'sha256':file_sha(receipt_path.parent/'completion-evidence.json')}}})
     return rows
 
 
-def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent, seed, collection_checks=None, stratify='batch', risk_selected=None, production_sampling=False):
+def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent, seed, collection_checks=None, stratify='batch', risk_selected=None, production_sampling=False, delivery_policy=None):
     """Create immutable sampling/effective-set inputs without granting QC approval.
 
     Ratios are explicit, independent parameters. No model/provider configuration,
@@ -164,7 +167,20 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     if len(sample_ids) != len(set(sample_ids)):
         raise ValueError('Candidate sample IDs must be unique')
     attempts = _attempts(scope, dataset, sample_ids)
-    needs_checks=collection_checks is not None or any(row.get('trusted_prefix') for row in attempts)
+    completion_bindings = []
+    def bind_delivery(root, rows):
+        if delivery_policy is None:return
+        from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
+        if delivery_policy != COMPLETED_GOAL_DELIVERY:raise ValueError('Unknown delivery policy')
+        for row in rows:
+            annotation = root/'samples'/row['sample_id']/'annotation.json'
+            decision = completion_delivery_decision(json.loads(annotation.read_text()), row['collection_completion']['raw_execution'])
+            if not decision['delivery_eligible']:
+                raise ValueError('Explicit delivery set contains an ineligible original goal: '+row['sample_id'])
+            completion_bindings.append({'sample_id':row['sample_id'], 'annotation_sha256':file_sha(annotation),
+                'saved_sample':row['saved_sample'], 'delivery_decision':decision})
+    bind_delivery(dataset, attempts)
+    needs_checks=collection_checks is not None or any(row.get('collection_completion') for row in attempts)
     if collection_checks is None:checks={'checks':[]}
     production_context = None
     if production_sampling:
@@ -192,8 +208,15 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
         ids = {json.loads(path.read_text())['sample_id'] for path in (root / 'samples').glob('*/annotation.json')}
         if ids != registered:
             raise ValueError('Prior package contains unregistered current results')
-        _attempts(scope, root, sorted(ids))
         manifest['packages'].append({'path': str(root), 'package_files_sha256': package_files(root)})
+    if delivery_policy is not None:
+        manifest['delivery_policy'] = delivery_policy
+        # Prior indexed packages are comparison evidence, not new delivery
+        # targets. Keep their original files and historical completion policy.
+        manifest['delivery_sample_ids'] = sorted(sample_ids)
+        manifest['delivery_target'] = {'protocol': 'webcollect-qc-delivery-target-1',
+            'package': str(dataset)}
+        manifest['completion_bindings'] = completion_bindings
     request = {'dataset': str(dataset), 'history_scope': scope, 'attempts': attempts,
                'candidate_files_sha256': original, 'effective_set': manifest,
                'ai_percent': ai_percent, 'human_percent': human_percent, 'seed': seed,
@@ -233,13 +256,16 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
             bindings = [{key: row[key] for key in ('sample_id', 'task_id', 'task_version', 'task_key')}
                         for row in attempts]
             for row,binding in zip(attempts,bindings):
+                binding['collection_completion'] = {**row['collection_completion'],
+                    'candidate_sample':{'sample_id':row['sample_id'],
+                        'files_sha256':package_files(dataset/'samples'/row['sample_id'])}}
                 if row.get('trusted_prefix'):
                     binding['trusted_prefix']={'saved_sample':row['saved_sample'],'binding':row['trusted_prefix'],
                         'candidate_sample':{'sample_id':row['sample_id'],
                             'files_sha256':package_files(dataset/'samples'/row['sample_id'])}}
             save_json(staged / 'collection-checks.json', {
                 'schema_version': 'webcollect-qc-collection-checks-1', 'source': collection_checks,
-                **({'prefix_only':True} if collection_checks is None else {}),
+                **({'completion_only':True} if collection_checks is None else {}),
                 'sample_bindings': bindings, 'checks': checks['checks'],
                 'QC_approval': False, 'requires_independent_QC': True})
         if (package_files(dataset) != original or read_chain_history(history_set) != (records, scope)

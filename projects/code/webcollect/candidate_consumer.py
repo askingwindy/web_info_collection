@@ -369,7 +369,7 @@ def _entry_hints(claim):
     """Display hints for webcollect-data-candidate-2 entries: the body carries
     only protocol/kind/URL/goal, so classification stays in frozen sources."""
     from site_planner.site_pool import host_identity
-    from site_planner.qualification import CANONICAL_CATEGORIES
+    from site_planner.qualification import BUSINESS_CATEGORIES as CANONICAL_CATEGORIES
     snapshot = claim['snapshot']
     category = 'UNKNOWN'
     category_proven = False
@@ -595,7 +595,70 @@ def tasked_entry_index(registry_path):
         con.close()
 
 
-async def consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
+def settle_cancelled_claim(pool, claim):
+    """Local receipt close-out only; a valid owner fence remains mandatory."""
+    current = pool.get_claim(claim['claim_id'])
+    if current['state'] != 'consuming':
+        return {'state':current['state'], 'cancel_closeout':'already_settled'}
+    with pool.transaction() as con:
+        pool._fence(con, claim)
+    # Reuse the normal committed-save validator and commit path. This never
+    # dispatches browser/model work, nor touches request/runtime UNKNOWN state.
+    result = finish_or_reconcile(pool, claim)
+    if result.get('saved'):
+        return result
+    current = pool.get_claim(claim['claim_id'])
+    if current['state'] != 'consuming':
+        return {'state':current['state'], 'cancel_closeout':'already_settled'}
+    # The claimed stage precedes observation dispatch. All later stages can
+    # contain in-flight or UNKNOWN work and require explicit reconciliation.
+    undispatched = current['stage'] == 'claimed' and not _original_attempts(current)
+    state = 'failed' if undispatched else 'reconcile'
+    pool.finish(claim, state=state, stage=current['stage'],
+                reason='Cancelled before dispatch' if undispatched else
+                       'Cancelled without committed complete save; retain original requests and attempts; no resend')
+    return {'state':state, 'saved':False, 'cancel_closeout':'local_facts_only'}
+
+
+async def consume(pool, claim, ledger, **kwargs):
+    """Renew from claim preparation through close-out, including synchronous IO."""
+    import threading
+    if claim.get('state') != 'consuming':
+        return {'state':claim.get('state'), 'dispatched':False}
+    pool.heartbeat(claim)
+    loop = asyncio.get_running_loop()
+    owner = asyncio.current_task()
+    stop = threading.Event()
+    lost = []
+    def renew_claim():
+        while not stop.wait(2):
+            try:
+                current = pool.get_claim(claim['claim_id'])
+                if current['state'] != 'consuming':
+                    return
+                pool.heartbeat(claim)
+            except Exception as error:
+                lost.append(error)
+                loop.call_soon_threadsafe(owner.cancel)
+                return
+    thread = threading.Thread(target=renew_claim, daemon=True)
+    thread.start()
+    try:
+        return await _consume(pool, claim, ledger, **kwargs)
+    except asyncio.CancelledError:
+        if lost:
+            raise ValueError('Candidate lease lost; original claim remains fenced') from lost[0]
+        try:
+            settle_cancelled_claim(pool, claim)
+        except Exception:
+            pass  # Lost ownership or unverifiable receipt remains for explicit reconciliation.
+        raise
+    finally:
+        stop.set()
+        await asyncio.to_thread(thread.join)
+
+
+async def _consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
                   session_soft_seconds=None, session_hard_seconds=None):
     """Exactly one original claim, one goal and at most one saved result."""
     # Historical duration arguments are accepted but no longer stop consumption.
@@ -654,7 +717,7 @@ async def consume(pool, claim, ledger, *, output, registry, policy, history_set,
     pool.stage(claim, 'observation', {'claim_reference':claim_ref})
     async def renew():
         while True:
-            await asyncio.sleep(2); pool.heartbeat(claim)
+            await asyncio.sleep(2)
     stage='observation'
     async def work_in(stack):
         nonlocal stage
@@ -834,9 +897,14 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     while limit is None or processed < limit:
         if campaign:
             from .consumer_campaign import stopped
-            if stopped(campaign):
+            if stopped(campaign, application_id):
                 stop_reason = 'campaign_stopped'
                 break
+        from .key_health import pool_available
+        if not await asyncio.to_thread(pool_available, ledger):
+            record('key_pool_paused', reason='no_available_model_account', application_id=application_id)
+            await asyncio.sleep(delay)
+            continue
         if rows is not None and poll >= len(rows):
             stop_reason = 'cohort_exhausted'
             break
@@ -856,7 +924,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                     **({'recovery_version':recovery_version} if recovery_version else {}))
             if campaign:
                 from .consumer_campaign import claim_if_open
-                claim = claim_if_open(campaign, claim_next)
+                claim = claim_if_open(campaign, claim_next, application_id)
                 if claim is None:
                     stop_reason = 'campaign_stopped'
                     break

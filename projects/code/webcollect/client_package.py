@@ -13,11 +13,13 @@ from PIL import Image
 from .metadata import COLUMNS
 from .validate import SCHEMAS, StrictValidator, read_json
 from .task_instruction import validate_task_instruction
-from .action_normalization import WINDOWS_KEYBOARD_NORMALIZATION_VERSION, normalize_delivery_step
+from .action_normalization import ACTUAL_KEYBOARD_VERSION, normalize_delivery_step
 
 ROOT_FILES = {'README.md', 'metadata.csv', 'qc_report.md', 'SHA256SUMS', 'site-list.json',
               '附件A-字段说明.md', '附件B-动作空间与坐标系.md', '合成方式说明.md',
               '来源与合规说明.md', '动作空间与系统提示.md'}
+EXECUTION_FILE = 'actual-execution.json'
+EXECUTION_VERSION = 'webcollect-actual-execution-1'
 CHECKS = {'visual_alignment', 'terminal_semantics', 'language', 'privacy', 'substantive_difference'}
 PARAMS = {'click': {'x', 'y'}, 'double_click': {'x', 'y'}, 'right_click': {'x', 'y'},
           'type': {'text'}, 'hotkey': {'keys'}, 'scroll': {'x', 'y', 'direction'},
@@ -149,7 +151,7 @@ def validate_client_sample(sample, *, allow_legacy_narrative=False, allow_legacy
                                 action['input_text'] != '+'.join(args['keys'])):
             raise ValueError('Hotkey input_text must preserve actual keys')
         if not allow_legacy_hotkeys and normalize_delivery_step(step, data['device_info'].get('os_name')) != step:
-            raise ValueError('Windows keyboard delivery requires canonical keys, input_text and target_text')
+            raise ValueError('Actual keyboard delivery requires matching keys, input_text and key display')
         if name == 'type' and action['input_text'] != args['text']:
             raise ValueError('Type input_text differs from executed text')
         if name not in ('type', 'hotkey') and action['input_text']:
@@ -220,6 +222,135 @@ def validate_client_sample(sample, *, allow_legacy_narrative=False, allow_legacy
     if set(sample_hashes(sample)) != expected:
         raise ValueError('Sample contains unreferenced or missing files')
     return data
+
+
+def _unavailable_execution(record):
+    data = record['data']
+    return {'sample_id': data['sample_id'],
+            'annotation_sha256': record.get('hashes', {}).get('annotation.json'),
+            'platform': data['device_info'].get('os_name', ''),
+            'steps': [{'step_id': step['step_id'], 'tool_name': step['tool_call']['tool_name'],
+                       'arguments': copy.deepcopy(step['tool_call']['arguments']),
+                       'status': 'HOST_TERMINAL' if step['action']['action_type'] == 'complete' else 'UNAVAILABLE'}
+                      for step in data['steps']]}
+
+
+def _execution_record(record, supplied=None):
+    """Bind delivered actions to immutable dispatches; never fix their values.
+
+    Supplied entries use sample_id/annotation_sha256/platform/steps. Each actual
+    step contains step_id/tool_name/arguments and dispatch_ref/raw_step_ref
+    {path,sha256}; the latter proves successful execution of that dispatch.
+    Only the whitelisted operation fields are copied into the customer file.
+    """
+    data = record['data']; sid = record['sample_id']
+    if supplied is not None:
+        if (supplied.get('sample_id') != sid or
+                supplied.get('annotation_sha256') != record['hashes']['annotation.json'] or
+                supplied.get('platform') != data['device_info'].get('os_name', '')):
+            raise ValueError('Actual execution source annotation/platform binding differs')
+        entries = supplied['steps']
+    else:
+        raw_root = record['batch'] / 'evidence' / sid / 'raw'
+        if (raw_root / 'raw-receipt.json').is_file():
+            from .postprocess import session_record, effective_trajectory
+            raw = session_record(raw_root)
+            rows = effective_trajectory(raw)
+            entries = [{'step_id': index, 'tool_name': row['action'],
+                        'arguments': row['arguments'], 'dispatch_ref': row['dispatch'],
+                        'raw_step_ref': row['raw_step']}
+                       for index, row in enumerate(rows, 1)]
+        elif (record['batch'] / EXECUTION_FILE).is_file():
+            validate_execution_attachment(record['batch'])
+            matches = [row for row in read_json(record['batch'] / EXECUTION_FILE)['samples'] if row['sample_id'] == sid]
+            if len(matches) != 1:
+                raise ValueError('Actual execution attachment sample missing')
+            return copy.deepcopy(matches[0])
+        else:
+            result = _unavailable_execution(record)
+            if any(step['action']['action_type'] == 'hotkey' for step in data['steps']):
+                raise ValueError('Actual hotkey dispatch evidence missing; do not infer keys from OS')
+            return result
+    mapping = {row['step_id']: row for row in entries}
+    business = [step for step in data['steps'] if step['action']['action_type'] != 'complete']
+    if len(mapping) != len(entries) or set(mapping) != {step['step_id'] for step in business}:
+        raise ValueError('Actual execution step coverage differs')
+    result = _unavailable_execution(record)
+    for step, actual in zip(data['steps'], result['steps']):
+        if step['action']['action_type'] == 'complete':
+            continue
+        row = mapping[step['step_id']]; ref = row['dispatch_ref']
+        path = Path(ref['path'])
+        if (path.is_symlink() or not path.is_file() or
+                not re.fullmatch('[0-9a-f]{64}', str(ref.get('sha256', ''))) or sha(path) != ref['sha256']):
+            raise ValueError('Actual dispatch original file/hash differs')
+        dispatch = read_json(path); operation = dispatch.get('operation', {})
+        if (operation.get('action_type') != row['tool_name'] or
+                operation.get('arguments') != row['arguments'] or
+                step['tool_call']['tool_name'] != row['tool_name'] or
+                step['tool_call']['arguments'] != row['arguments']):
+            raise ValueError('Delivered action differs from actual dispatch; explicit revision required')
+        execution_ref = row['raw_step_ref']; execution_path = Path(execution_ref['path'])
+        if (execution_path.is_symlink() or not execution_path.is_file() or
+                sha(execution_path) != execution_ref.get('sha256')):
+            raise ValueError('Actual execution receipt hash differs')
+        execution = read_json(execution_path)
+        if (execution.get('dispatched') is not True or execution.get('action_executed') is not True or
+                execution.get('postconditions_checked') is not True or execution.get('execution_error') or
+                execution.get('controller_dispatch', {}).get('sha256') != ref['sha256'] or
+                execution.get('operation') != operation):
+            raise ValueError('Dispatch lacks matching successful actual execution receipt')
+        actual['execution_ref'] = {'file': execution_path.name, 'sha256': execution_ref['sha256']}
+        actual.update(status='VERIFIED_DISPATCH', dispatch_ref={
+            'file': path.name, 'sha256': ref['sha256']},
+            operation_id=operation.get('operation_id', ''))
+    return result
+
+
+def validate_execution_attachment(root):
+    """Validate the public minimal receipt without reading private raw logs."""
+    root = Path(root); document = read_json(root / EXECUTION_FILE)
+    if (set(document) != {'schema_version', 'keyboard_policy', 'samples'} or
+            document['schema_version'] != EXECUTION_VERSION or
+            document['keyboard_policy'] != ACTUAL_KEYBOARD_VERSION or
+            not isinstance(document['samples'], list)):
+        raise ValueError('Invalid actual execution attachment version')
+    rows = document['samples']; ids = {p.name for p in (root / 'samples').iterdir()}
+    if len({row['sample_id'] for row in rows}) != len(rows) or {row['sample_id'] for row in rows} != ids:
+        raise ValueError('Actual execution sample coverage differs')
+    for row in rows:
+        if set(row) != {'sample_id', 'annotation_sha256', 'platform', 'steps'}:
+            raise ValueError('Actual execution sample contains unsupported fields')
+        sample = root / 'samples' / safe_name(row['sample_id'])
+        annotation = read_json(sample / 'annotation.json')
+        if (sha(sample / 'annotation.json') != row['annotation_sha256'] or
+                row['platform'] != annotation['device_info'].get('os_name', '') or
+                len(row['steps']) != len(annotation['steps'])):
+            raise ValueError('Actual execution annotation/platform/step binding differs')
+        for step, actual in zip(annotation['steps'], row['steps']):
+            status = actual.get('status')
+            fields = {'step_id', 'tool_name', 'arguments', 'status'}
+            if status == 'VERIFIED_DISPATCH':
+                fields |= {'dispatch_ref', 'execution_ref', 'operation_id'}
+                ref = actual.get('dispatch_ref', {})
+                execution_ref = actual.get('execution_ref', {})
+                if (set(execution_ref) != {'file', 'sha256'} or
+                        safe_name(execution_ref['file']) != execution_ref['file'] or
+                        not re.fullmatch('[0-9a-f]{64}', str(execution_ref['sha256']))):
+                    raise ValueError('Invalid actual execution reference')
+                if (set(ref) != {'file', 'sha256'} or safe_name(ref['file']) != ref['file'] or
+                        not re.fullmatch('[0-9a-f]{64}', str(ref['sha256'])) or
+                        not isinstance(actual.get('operation_id'), str)):
+                    raise ValueError('Invalid original dispatch reference')
+            elif status not in {'UNAVAILABLE', 'HOST_TERMINAL'}:
+                raise ValueError('Unknown actual execution status')
+            if (set(actual) != fields or actual['step_id'] != step['step_id'] or
+                    actual['tool_name'] != step['tool_call']['tool_name'] or
+                    actual['arguments'] != step['tool_call']['arguments'] or
+                    (status == 'HOST_TERMINAL') != (step['action']['action_type'] == 'complete') or
+                    (step['action']['action_type'] == 'hotkey' and status != 'VERIFIED_DISPATCH')):
+                raise ValueError('Actual execution step differs or hotkey evidence missing')
+    return document
 
 
 def _discover(source):
@@ -294,6 +425,8 @@ def _discover(source):
             raw_hashes = {p.relative_to(batch).as_posix(): sha(real_file(p, batch))
                           for p in sorted(raw_dir.rglob('*')) if p.is_file() or p.is_symlink()} if raw_dir.is_dir() else {}
             files = dict(raw_hashes)
+            if (batch / EXECUTION_FILE).exists():
+                files[EXECUTION_FILE] = sha(real_file(batch / EXECUTION_FILE, batch))
             if manifest:
                 files['manifest.json'] = sha(manifest_path)
             records.append(dict(sample_id=sid, sample=sample, batch=batch, data=data, site=dict(site_id=site_id, uri=site['uri'], site_category=site['site_category']), truth=truth,
@@ -417,9 +550,9 @@ def _documents(repo, out, records):
         version = '实际声明的action_space版本为' + '、'.join(spaces) + '。'
         known = dtype == 'webcollect_agent_v1' and set(origins) <= {'agent', 'human_agent_hybrid'}
         chapters.append('\n## ' + dtype + '\n\n原始source_type为' + '、'.join(origins) + '。' + version + '本类型的输出动作格式采用第1节Web子集，坐标采用第2节。第3节是随附参考系统提示，不据此声称历史采集实际调用了该提示。' + ('本线为计划驱动采集；采集参数和原始记录在包外证据索引绑定。' if known else '原始操作/提示生成过程为待核验项；导出器没有改写来源或补造历史系统提示。') + '\n')
-        descriptions.append('## ' + dtype + '\n\n来源身份保留为' + '、'.join(origins) + '。' + version + '同名动作格式章节见[动作空间与系统提示](动作空间与系统提示.md)。PNG和界面树按字节复制；标注中的所有快捷键按用户确认的Windows交付口径归一化，其他标注修订见包外追溯清单；导出器未进行新采集、模型重写或真人审核。' + ('本线采集状态差异模板的声明与离线标注修订须结合包外记录核验，不能将全部历史文字笼统称为模板生成。' if known else '历史文字生成方式和原始系统提示缺少可验证记录时保持UNKNOWN。') + '\n')
+        descriptions.append('## ' + dtype + '\n\n来源身份保留为' + '、'.join(origins) + '。' + version + '同名动作格式章节见[动作空间与系统提示](动作空间与系统提示.md)。PNG和界面树按字节复制；标注中的快捷键保留实际执行键，不作跨平台功能替换，其他标注修订见包外追溯清单；导出器未进行新采集、模型重写或真人审核。' + ('本线采集状态差异模板的声明与离线标注修订须结合包外记录核验，不能将全部历史文字笼统称为模板生成。' if known else '历史文字生成方式和原始系统提示缺少可验证记录时保持UNKNOWN。') + '\n')
     (out / '动作空间与系统提示.md').write_text(annex + '\n' + '\n'.join(chapters))
-    mapping = '''\n## 动作映射与坐标\n\n输出tool_call遵循统一动作空间，所有快捷键按已确认的Windows表达及跨平台功能映射归一化，其他动作保留原始参数：click→{x,y}；type→{text}；hotkey→{keys}；scroll→{x,y,direction}；back→{}；complete→{status}，其他Web动作遵循[附件B](附件B-动作空间与坐标系.md)。指针坐标来自原采集同步树，采用PNG截图像素整数，原点左上。向下阅读对应direction=down；执行滚动距离不另加进统一参数。\n\n当前采集器的对应实现为mouse.click→click，keyboard.insert_text→type，keyboard.press→hotkey，mouse.move+mouse.wheel→scroll，go_back→back，终态断言后结束→complete。历史实现可能不同，实际动作及参数以包外绑定的原始记录为准。所有hotkey统一Windows键名及显示，例如复制Ctrl+C、粘贴Ctrl+V、剪切Ctrl+X、全选Ctrl+A；keys与input_text使用规范小写，显示使用Ctrl+V、Enter、Tab、Home等。macOS实际Command组合按已声明同功能映射为Ctrl，Windows原生Meta则为Win；未定义Mac特殊组合须显式阻止交付。原始证据保持真实按键；变更前后标注哈希及逐步映射保存在包外追溯清单，不能将归一化的交付参数冒称为未改写的原始执行。\n\n图像为本步动作前界面，末步complete的图像同时为终态。相邻图与step_result提供变化证据；生成器不在此宣告视觉语义或客户验收通过。\n'''
+    mapping = '\n## 动作映射与坐标\n\n输出采用附件B动作空间，坐标为原PNG像素。hotkey的keys与input_text保留实际执行键；Meta、Command与Ctrl不互换。历史delivery-windows-keys-2映射仅说明旧版本，不适用于本次输出。实际参数、平台、步骤与原派发哈希见actual-execution.json；原始日志、模型请求和网络头留在包外。附件中UNAVAILABLE表示缺原派发证据，不能当作已经核实。complete是宿主终态声明，不冒称浏览器派发。\n\n图像为动作前界面，末步complete同时为终态；结构自检不表示独立QC或客户验收通过。\n'
     (out / '合成方式说明.md').write_text('# 合成方式说明\n\n' + '\n'.join(descriptions) + mapping)
     capture_configuration = []
     for manifest_path in sorted({r['manifest_path'] for r in records if r['manifest_path']}):
@@ -448,17 +581,19 @@ def _documents(repo, out, records):
         'frames': sum(len(r['data']['steps']) for r in records),
         'actions': dict(Counter(s['action']['action_type'] for r in records for s in r['data']['steps'])),
     }
-    (out / 'README.md').write_text('# Web轨迹样本\n\n样本位于samples/<sample_id>/，每条仅有annotation.json、images和ui_tree。字段与动作见根目录附件A/B；原采集目标真值位于ground_truth/<sample_id>.json。站点归属见site-list.json，索引见metadata.csv。\n\n```text\nsamples/<sample_id>/\n  annotation.json\n  images/step_NNN.png\n  ui_tree/step_NNN.json\n```\n\n## 实际分布\n\n统计取自本目录实际选入的样本，不重命名类目或变更原输入总体分母。\n\n```json\n' + json.dumps(statistics, ensure_ascii=False, indent=2) + '\n```\n\n本次导出样本' + str(len(records)) + '条；不包含内部raw、审核记录、批次manifest或追溯档案。导出结构检查不代表独立QC、真人审核或客户验收。当前独立QC状态：NOT_RUN；客户验收：UNKNOWN。\n')
+    (out / 'README.md').write_text('# Web轨迹样本\n\n样本位于samples/<sample_id>/，每条仅有annotation.json、images和ui_tree。字段与动作见根目录附件A/B；原采集目标真值位于ground_truth/<sample_id>.json。站点归属见site-list.json，索引见metadata.csv；实际执行依据见actual-execution.json。\n\n```text\nsamples/<sample_id>/\n  annotation.json\n  images/step_NNN.png\n  ui_tree/step_NNN.json\n```\n\n## 实际分布\n\n统计取自本目录实际选入的样本，不重命名类目或变更原输入总体分母。\n\n```json\n' + json.dumps(statistics, ensure_ascii=False, indent=2) + '\n```\n\n本次导出样本' + str(len(records)) + '条；不包含内部raw、审核记录、批次manifest或追溯档案。导出结构检查不代表独立QC、真人审核或客户验收。当前独立QC状态：NOT_RUN；客户验收：UNKNOWN。\n')
     (out / 'qc_report.md').write_text('# 质检状态\n\n独立QC：NOT_RUN（本次仅完成导出与结构自检）。客户验收：UNKNOWN。真实QC报告必须由后续程序在包外生成，不能回写或伪称本输入包已经通过。\n')
 
 
 def validate_client_layout(root):
     root = Path(root)
-    if {p.name for p in root.iterdir()} != ROOT_FILES | {'samples', 'ground_truth'}:
+    if {p.name for p in root.iterdir()} not in (ROOT_FILES | {'samples', 'ground_truth'}, ROOT_FILES | {'samples', 'ground_truth', EXECUTION_FILE}):
         raise ValueError('Customer root contains missing or internal files')
     for p in root.rglob('*'):
         if p.is_symlink():
             raise ValueError('Customer export must not contain symlinks')
+    if (root / EXECUTION_FILE).exists():
+        validate_execution_attachment(root)
     site_list = read_json(root / 'site-list.json')
     if site_list.get('schema_version') != 'webcollect-site-list-1':
         raise ValueError('Unknown site-list schema')
@@ -528,6 +663,12 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
     if files_sha256 != {p.relative_to(source).as_posix(): sha(p)
                        for p in source.rglob('*') if p.is_file()}:
         raise ValueError('Saved customer export changed before delivery')
+    if (source / EXECUTION_FILE).exists():
+        validate_execution_attachment(source)
+    elif any(step['action']['action_type'] == 'hotkey'
+             for path in (source / 'samples').iterdir()
+             for step in read_json(path / 'annotation.json')['steps']):
+        raise ValueError('Append requires actual hotkey execution evidence')
     source_sites = read_json(source / 'site-list.json')
     with (source / 'metadata.csv').open(newline='', encoding='utf-8') as stream:
         incoming = list(csv.DictReader(stream))
@@ -545,6 +686,12 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
                 (output / name).mkdir(exist_ok=True)
             current = read_json(output / 'site-list.json') if (output / 'site-list.json').exists() else {
                 'schema_version':'webcollect-site-list-1', 'sites':[], 'samples':[]}
+            if (output / EXECUTION_FILE).exists():
+                validate_execution_attachment(output)
+            elif any(step['action']['action_type'] == 'hotkey'
+                     for path in (output / 'samples').iterdir()
+                     for step in read_json(path / 'annotation.json')['steps']):
+                raise ValueError('Historical hotkeys need an explicit revision before append')
             sites = {row['site_id']:row for row in current['sites']}
             members = {row['sample_id']:row['site_id'] for row in current['samples']}
             for row in source_sites['sites']:
@@ -585,7 +732,19 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
                 writer=csv.DictWriter(stream, fieldnames=COLUMNS); writer.writeheader()
                 writer.writerows(metadata.values())
             records=[{'sample_id':sid, 'data':read_json(output/'samples'/sid/'annotation.json'),
-                      'site':sites[owner], 'manifest_path':None} for sid,owner in members.items()]
+                      'site':sites[owner], 'manifest_path':None,
+                      'hashes':{'annotation.json':sha(output/'samples'/sid/'annotation.json')}} for sid,owner in members.items()]
+            execution_rows = {}
+            for package_root in (output, source):
+                if (package_root / EXECUTION_FILE).exists():
+                    for item in read_json(package_root / EXECUTION_FILE)['samples']:
+                        if item['sample_id'] in execution_rows and execution_rows[item['sample_id']] != item:
+                            raise ValueError('Conflicting actual execution evidence')
+                        execution_rows[item['sample_id']] = item
+            for record in records:
+                execution_rows.setdefault(record['sample_id'], _unavailable_execution(record))
+            write_json(stage / EXECUTION_FILE, {'schema_version': EXECUTION_VERSION,
+                'keyboard_policy': ACTUAL_KEYBOARD_VERSION, 'samples': list(execution_rows.values())})
             _documents(repo, stage, records)
             hashes = {}
             if (output / 'SHA256SUMS').exists():
@@ -593,7 +752,7 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
                     digest, relative = line.split('  ',1); hashes[relative]=digest
             hashes.update({relative:digest for relative,digest in files_sha256.items()
                            if relative.startswith(('samples/','ground_truth/'))})
-            for name in sorted(ROOT_FILES - {'SHA256SUMS'}):
+            for name in sorted((ROOT_FILES | {EXECUTION_FILE}) - {'SHA256SUMS'}):
                 hashes[name] = sha(stage / name)
                 (stage / name).replace(output / name)
             (stage / 'SHA256SUMS').write_text(''.join(
@@ -604,7 +763,7 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
 
 def build_client_package(repo, source, output, *, reviews=None, approved_only=False,
                          evidence_output=None, review_output=None, facts=None, revisions=None,
-                         selection_report=None, source_packages=None):
+                         selection_report=None, source_packages=None, delivery_policy=None, execution_evidence=None):
     repo = Path(repo).resolve(); source = Path(source).resolve(); output = Path(output).absolute()
     from .contract_documents import load_facts, render as render_documents
     from .narrative_revisions import load_plan, apply as revise_narratives
@@ -639,6 +798,35 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
     if len({record['sample_id'] for record in records})!=len(records):raise ValueError('Duplicate original sample across batch sources')
     if not records:
         raise ValueError('No samples found')
+    # New completed-goal plan sources cannot fall back to legacy export by
+    # omitting an option. Raw capture stays internal; candidate is customer form.
+    if delivery_policy is None:
+        for record in records:
+            boundary = record['batch']/'evidence'/record['sample_id']/'raw'/'boundary.json'
+            if boundary.is_file():
+                original_task = read_json(real_file(boundary, record['batch'])).get('task', {})
+                if original_task.get('fragment', {}).get('plan_protocol') in (
+                        'webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13'):
+                    from .closing_policy import COMPLETED_GOAL_DELIVERY
+                    delivery_policy = COMPLETED_GOAL_DELIVERY
+                    break
+    delivery_decisions = {}
+    if delivery_policy is not None:
+        from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
+        if delivery_policy != COMPLETED_GOAL_DELIVERY:
+            raise ValueError('Unknown explicit customer delivery policy')
+        eligible = []
+        for record in records:
+            saved_path = record['batch'] / 'evidence' / record['sample_id'] / 'saved_sample.json'
+            saved = read_json(real_file(saved_path, record['batch']))
+            if saved.get('sample_files_sha256') != record['hashes']:
+                raise ValueError('Delivery policy needs the original saved sample binding')
+            decision = completion_delivery_decision(record['data'], saved.get('raw_execution', {}))
+            delivery_decisions[record['sample_id']] = decision
+            if decision['delivery_eligible']:
+                eligible.append(record)
+        if not eligible:
+            raise ValueError('No original-goal-complete ordinary delivery candidates')
     baseline = repo / 'projects/quality-inspector/config/customer-samples.json'
     if reviews and not baseline.is_file():
         raise ValueError('Customer review baseline is missing')
@@ -651,9 +839,10 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
             raise ValueError('--selection-report is only supported for qc-review-2')
         review_map, review_export = _review_records(Path(reviews) if reviews else None, records, approved_only,
                                                    sha(baseline) if reviews else None)
-    selected = [r for r in records if not approved_only or
-                (_approved(review_map.get(r['sample_id'])) and
-                 (selection_rows is None or selection_rows[r['sample_id']]['status'] == 'PASS'))]
+    selected = [r for r in records if
+                (delivery_policy is None or delivery_decisions[r['sample_id']]['delivery_eligible']) and
+                (not approved_only or (_approved(review_map.get(r['sample_id'])) and
+                 (selection_rows is None or selection_rows[r['sample_id']]['status'] == 'PASS')))]
     if not selected:
         raise ValueError('No selected samples; approved-only never infers approval')
     if selection_rows is not None and approved_only and production_facts is not None:
@@ -664,20 +853,19 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
         raise ValueError('Narrative revision refers to an unselected sample')
     if revision_plan is not None and reviews is not None:
         raise ValueError('Revised annotations require fresh QC reviews; do not re-sign old records')
-    normalization_map = {}
-    for record in selected:
-        changes = []
-        for step in record['data']['steps']:
-            normalized = normalize_delivery_step(step, record['data']['device_info'].get('os_name'))
-            if normalized != step:
-                changes.append({'step_id': step['step_id'],
-                    'before': {'action': step['action'], 'tool_call': step['tool_call']},
-                    'after': {'action': normalized['action'], 'tool_call': normalized['tool_call']}})
-        if changes:
-            normalization_map[record['sample_id']] = changes
-    if normalization_map and reviews is not None:
-        raise ValueError('Normalized annotations require fresh QC reviews; do not re-sign old records')
+    # Export never repairs historical keys implicitly. Actual dispatch mismatch
+    # is rejected by the execution evidence binding below.
+    execution_plan = read_json(execution_evidence) if isinstance(execution_evidence, (str, Path)) else execution_evidence
+    if execution_plan is not None and execution_plan.get('schema_version') != EXECUTION_VERSION:
+        raise ValueError('Unknown actual execution evidence version')
+    execution_inputs = {row['sample_id']: row for row in execution_plan['samples']} if execution_plan else {}
+    if set(execution_inputs) - {record['sample_id'] for record in selected}:
+        raise ValueError('Actual execution evidence refers to an unselected sample')
+    if execution_plan and len(execution_inputs) != len(execution_plan['samples']):
+        raise ValueError('Duplicate actual execution sample')
+    execution_rows = [_execution_record(record, execution_inputs.get(record['sample_id'])) for record in selected]
     excluded = [dict(sample_id=r['sample_id'], reason=(
+        'ORIGINAL_GOAL_DELIVERY_POLICY_EXCLUDED' if delivery_policy is not None and not delivery_decisions[r['sample_id']]['delivery_eligible'] else
         'CURRENT_QC_SAMPLE_NOT_PASS' if selection_rows is not None and selection_rows[r['sample_id']]['status'] != 'PASS'
         else 'HUMAN_FIVE_CHECKS_NOT_ALL_PASS' if r['sample_id'] in review_map else 'MISSING_REVIEW'),
         review=review_map.get(r['sample_id'])) for r in records if r not in selected]
@@ -694,11 +882,6 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
                 raise ValueError('Copied sample hashes differ')
             if sid in revision_map:
                 revise_narratives(staged / 'samples' / sid, revision_map[sid])
-            if sid in normalization_map:
-                annotation_path = staged / 'samples' / sid / 'annotation.json'
-                annotation = read_json(annotation_path)
-                annotation['steps'] = [normalize_delivery_step(step, annotation['device_info'].get('os_name')) for step in annotation['steps']]
-                write_json(annotation_path, annotation)
             current = validate_client_sample(staged / 'samples' / sid)
             current_hashes = sample_hashes(staged / 'samples' / sid)
             if any(h != current_hashes[k] for k, h in record['hashes'].items() if k != 'annotation.json'):
@@ -715,6 +898,10 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
             writer = csv.DictWriter(stream, fieldnames=COLUMNS); writer.writeheader()
             for r in exported:
                 a = r['data']; writer.writerow(dict(sample_id=r['sample_id'], site_id=r['site']['site_id'], site_category=r['site']['site_category'], app_name=a['app_info']['app_name'], task_type=json.dumps(a['task_type'], ensure_ascii=False), task_instruction=a['task_instruction'], steps=len(a['steps']), screen_resolution=json.dumps(a['device_info']['screen_resolution']), completion_status=a['completion_status'], actions=json.dumps([s['action']['action_type'] for s in a['steps']], ensure_ascii=False), bytes=sum(p.stat().st_size for p in (staged / 'samples' / r['sample_id']).rglob('*') if p.is_file())))
+        final_annotations = {r['sample_id']: r['export_hashes']['annotation.json'] for r in exported}
+        for execution_row in execution_rows:
+            execution_row['annotation_sha256'] = final_annotations[execution_row['sample_id']]
+        write_json(staged / EXECUTION_FILE, {'schema_version': EXECUTION_VERSION, 'keyboard_policy': ACTUAL_KEYBOARD_VERSION, 'samples': execution_rows})
         _documents(repo, staged, exported)
         render_documents(staged, exported, production_facts, revision_plan)
         (staged / 'SHA256SUMS').write_text(''.join(sha(p) + '  ' + p.relative_to(staged).as_posix() + '\n' for p in sorted(staged.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS'))
@@ -723,7 +910,17 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
         for r in records:
             sidecar_samples.append(dict(sample_id=r['sample_id'], selected=r in selected, source_sample_path=str(r['sample']), source_batch_path=str(r['batch']), annotation_sha256=r['hashes']['annotation.json'], evidence_sha256={k: v for k, v in r['hashes'].items() if k != 'annotation.json'}, ground_truth_sha256=r['truth_sha256'], source_ground_truth_path=str(r['truth']), source_manifest_path=str(r['manifest_path']) if r['manifest_path'] else None, source_manifest_sha256=sha(r['manifest_path']) if r['manifest_path'] else None, raw_evidence_files_sha256=r['raw_hashes'], source_files_sha256=r['source_files'], machine_evidence_status='AVAILABLE' if r['manifest_path'] and r['raw_hashes'] else 'UNAVAILABLE'))
         selected_sidecar = [r for r in sidecar_samples if r['selected']]
-        evidence = dict(schema_version='webcollect-client-evidence-1', created_at=datetime.now(timezone.utc).isoformat(), client_root=str(output), source_root=str(source), samples=selected_sidecar, source_population=dict(total_samples=len(records), selected_count=len(selected), excluded_count=len(excluded)), source_samples=sidecar_samples, excluded_samples=excluded, source_review_export=dict(path=str(Path(reviews).resolve()), sha256=sha(reviews)) if reviews else None, source_review_records=review_export['records'] if review_export else None, source_review_document=review_export, source_package_review_applied=False, selected_review_output=str(review_output.resolve()) if reviews else None, independent_qc_status='NOT_RUN', customer_acceptance='UNKNOWN')
+        evidence = dict(delivery_policy=delivery_policy, completion_delivery_decisions=delivery_decisions, schema_version='webcollect-client-evidence-1', created_at=datetime.now(timezone.utc).isoformat(), client_root=str(output), source_root=str(source), samples=selected_sidecar, source_population=dict(total_samples=len(records), selected_count=len(selected), excluded_count=len(excluded)), source_samples=sidecar_samples, excluded_samples=excluded, source_review_export=dict(path=str(Path(reviews).resolve()), sha256=sha(reviews)) if reviews else None, source_review_records=review_export['records'] if review_export else None, source_review_document=review_export, source_package_review_applied=False, selected_review_output=str(review_output.resolve()) if reviews else None, independent_qc_status='NOT_RUN', customer_acceptance='UNKNOWN')
+        evidence['actual_execution_attachment'] = {'file': EXECUTION_FILE,
+            'sha256': sha(staged / EXECUTION_FILE), 'schema_version': EXECUTION_VERSION,
+            'keyboard_policy': ACTUAL_KEYBOARD_VERSION}
+        if execution_inputs:
+            evidence['actual_execution_sources'] = [{
+                'sample_id': row['sample_id'], 'annotation_sha256': row['annotation_sha256'],
+                'steps': [{'step_id': step['step_id'],
+                           'dispatch_ref': {key: step['dispatch_ref'][key] for key in ('path', 'sha256')},
+                           'raw_step_ref': {key: step['raw_step_ref'][key] for key in ('path', 'sha256')}}
+                          for step in row['steps']]} for row in execution_inputs.values()]
         if selection_report is not None:
             evidence['selection_qc_report'] = {'path': str(Path(selection_report).resolve()),
                                                'sha256': sha(selection_report)}
@@ -751,25 +948,14 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
                             revision_plan={'path': str(revision_path), 'sha256': revision_sha256,
                                            'canonical_sha256': hashlib.sha256(json.dumps(revision_plan, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()},
                             requires_fresh_export_review=True)
-        if normalization_map:
-            exports_by_id = {r['sample_id']: r for r in exported}
-            for row in sidecar_samples:
-                row['source_annotation_sha256'] = row.pop('annotation_sha256', row.get('source_annotation_sha256'))
-                exported_record = exports_by_id.get(row['sample_id'])
-                row['export_annotation_sha256'] = exported_record['export_hashes']['annotation.json'] if exported_record else None
-                row['export_sample_path'] = str(output / 'samples' / row['sample_id']) if exported_record else None
-                row['source_capture_evidence_status'] = row.pop('machine_evidence_status', row.get('source_capture_evidence_status'))
-                row['capture_binding_status'] = 'NOT_A_CAPTURE_BINDING'
-                row['action_normalization_changes'] = normalization_map.get(row['sample_id'], [])
-            evidence.update(schema_version='webcollect-action-normalization-provenance-1',
-                            capture_binding=False,
-                            provenance_scope='Source-to-export annotation normalization; original executed keys remain in source capture evidence',
-                            action_normalization_policy=WINDOWS_KEYBOARD_NORMALIZATION_VERSION,
-                            requires_fresh_export_review=True)
         # Recheck source bytes after staging; do not silently bind changed sources.
         if any(sample_hashes(r['sample']) != r['hashes'] or sha(r['truth']) != r['truth_sha256'] or
                any(sha(r['batch'] / k) != h for k, h in r['source_files'].items()) for r in records):
             raise ValueError('Source changed during export')
+        if any(sha(step[key]['path']) != step[key]['sha256']
+               for row in execution_inputs.values() for step in row['steps']
+               for key in ('dispatch_ref', 'raw_step_ref')):
+            raise ValueError('Original actual execution evidence changed during export')
         if revision_plan is not None and sha(revision_path) != revision_sha256:
             raise ValueError('Narrative revision plan changed before provenance was sealed')
         if (reviews and sha(reviews) != frozen_review_sha) or (selection_report and sha(selection_report) != frozen_selection_sha):

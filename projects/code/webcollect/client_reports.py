@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import zipfile
 
-from .client_package import read_json, sample_hashes, sha, validate_client_layout
+from .client_package import EXECUTION_FILE, read_json, sample_hashes, sha, validate_client_layout
 
 
 def _file_hashes(root):
@@ -321,6 +321,8 @@ def finalize_client_package(repo, source, qc_report, output, *, effective_set=No
                                                   for path in sorted(staged.rglob('*'))
                                                   if path.is_file() and path != staged / 'SHA256SUMS'), encoding='utf-8')
         validate_client_layout(staged)
+        if (source / EXECUTION_FILE).is_file() and sha(source / EXECUTION_FILE) != sha(staged / EXECUTION_FILE):
+            raise ValueError('Finalization modified actual execution evidence')
         for sample in (source / 'samples').iterdir():
             if sample_hashes(sample) != sample_hashes(staged / 'samples' / sample.name):
                 raise ValueError('Finalization modified an already-reviewed sample')

@@ -1,5 +1,6 @@
 """Read original attempt/QC evidence into site context, never issue reviews."""
 import json
+from functools import lru_cache
 from pathlib import Path
 import sqlite3
 from .batch_core import load_json, file_sha
@@ -91,6 +92,27 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
     return exclusive(path, body)
 
 
+# Local feedback verification v2. Cache only successful byte verification, bound
+# to the expected digest and the file's current identity/version. References and
+# files remain original; a changed/replaced file is hashed again on the next read.
+@lru_cache(maxsize=512)
+def _verified_feedback_versions(versions):
+    verify_evidence([{'path': path, 'sha256': digest} for path, digest, _ in versions])
+
+
+def _verify_feedback_evidence(refs):
+    versions = []
+    for ref in refs:
+        path = Path(ref['path'])
+        # Always recheck path identity, even on a cache hit.
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ValueError('证据路径必须为已有绝对文件路径')
+        stat = path.stat()
+        versions.append((str(path), ref.get('sha256'), (stat.st_dev, stat.st_ino,
+            stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)))
+    _verified_feedback_versions(tuple(versions))
+
+
 def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None, collection_report=None,
                  candidate_id=None):
     from urllib.parse import urlsplit
@@ -121,7 +143,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                     if context_host(task['site_uri']) != host and not (owner_id and owner_id == candidate_id):
                         continue
                     refs = json.loads(row['evidence_json'] or '[]')
-                    if refs: verify_evidence(refs)
+                    if refs: _verify_feedback_evidence(refs)
                     entry = {'attempt_id':row['attempt_id'], 'sample_id':row['sample_id'], 'task_id':task['task_id'],
                         'instruction':task.get('instruction'), 'status':row['status'], 'root_cause':row['root_cause'],
                         'failure_class':row['failure_class'], 'references':refs, 'feedback_status':'LEGACY_NO_STEP_BINDING'}
@@ -130,19 +152,19 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                         except (ValueError, UnicodeError): continue
                         if value.get('schema_version') == VERSION:
                             step_refs = [s['raw'] for s in value['steps']] + [s['image'] for s in value['steps']]
-                            if step_refs: verify_evidence(step_refs)
+                            if step_refs: _verify_feedback_evidence(step_refs)
                             for step in value['steps']:
                                 raw=load_json(step['raw']['path'])
                                 dispatch=raw.get('controller_dispatch')
                                 if not dispatch:continue
-                                verify_evidence([dispatch]);formal=load_json(dispatch['path']).get('formal_frame')
+                                _verify_feedback_evidence([dispatch]);formal=load_json(dispatch['path']).get('formal_frame')
                                 if formal and not Path(formal['path']).exists():
                                     result.setdefault('frame_relocations',[]).append({
                                         'schema_version':'webcollect-rejected-frame-relocation-1',
                                         'original_path':formal['path'],'original_sha256':formal['sha256'],
                                         'current':step['image'],'dispatch':dispatch})
                             diagnostic_refs = [d['reference'] for d in value['diagnostics']] + [d['image'] for d in value['diagnostics'] if 'image' in d]
-                            if diagnostic_refs: verify_evidence(diagnostic_refs)
+                            if diagnostic_refs: _verify_feedback_evidence(diagnostic_refs)
                             # Rolling context bound: only the two most recent attempts
                             # (rows arrive newest-first) keep full step states and
                             # attach images. Older attempts keep every reason,

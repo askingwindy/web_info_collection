@@ -95,8 +95,13 @@ def register(pool, ledger, result):
     if result.get('image_policy') not in (LEGACY_VERSION,VERSION):raise ValueError('Versioned producer image probe required')
     refs=[result['observation'],result['image']];verify_evidence(refs)
     observation=load_json(result['observation']['path']);job=ledger.get(result['job_id'])
-    if (job['state']!='done' or job['result']!=result or job['payload'].get('image_policy')!=result['image_policy']
+    if (job['payload'].get('image_policy')!=result['image_policy']
         or job['kind']!='site-discovery-page' or entry_identity(job['payload']['uri'])!=entry_identity(result['uri'])):raise ValueError('Original producer probe job mismatch')
+    # Tool success is committed just before the original ledger job completes.
+    # Another worker may observe that short window; hold, never redispatch.
+    if job['state']=='running':
+        raise ObservationUnavailable('Original producer probe job not settled')
+    if job['state']!='done' or job['result']!=result:raise ValueError('Original producer probe job mismatch')
     with ledger.connect() as con:visit=con.execute('SELECT * FROM top_level_visits WHERE id=?',(result['visit_id'],)).fetchone()
     if (not visit or visit['job_id']!=job['id'] or visit['state'] not in ('succeeded','failed')
         or observation.get('http_status')!=visit['response_status']
@@ -138,7 +143,7 @@ async def _probe(pool,ledger,uri,root):
         return await browser.read(uri)
 
 
-def screen(pool,ledger,links,root,*,probe=None):
+def screen(pool,ledger,links,root,*,probe=None,eligibility_policy=None):
     """Before purpose-model dispatch; one project-shared probe per entry URI."""
     admitted=[];records=[]
     for link in links:
@@ -160,14 +165,21 @@ def screen(pool,ledger,links,root,*,probe=None):
             except OutcomeUnknown:
                 records.append({'uri':uri,'decision':{'status':'HELD','reason':'image_probe_outcome_unknown','tool_request_id':identity}});continue
             except Exception as error:
-                # Browser libraries have their own timeout/error types. Only a
-                # durably settled page failure may be isolated here; launch or
-                # unrecorded host failures still stop for diagnosis.
+                # Browser errors and concurrent reservations both leave an
+                # original tool record. Unrecorded host failures still stop
+                # for diagnosis.
                 with pool.pool.connect() as con:
-                    failed=con.execute('SELECT state FROM tool_requests WHERE id=?',(identity,)).fetchone()
-                if not failed or failed['state'] not in ('failed','unknown'):raise
-                records.append({'uri':uri,'decision':{'status':'HELD','reason':'original_image_probe_failed',
-                    'original_state':failed['state'],'error_type':type(error).__name__,'tool_request_id':identity}});continue
+                    original=con.execute('SELECT state,result FROM tool_requests WHERE id=?',(identity,)).fetchone()
+                if not original:raise
+                # Another worker may have reserved or finished the shared
+                # probe after our initial read. Respect its exclusive record.
+                if original['state']=='succeeded':
+                    prior=original
+                    result=json.loads(original['result'] or '{}')
+                else:
+                    records.append({'uri':uri,'decision':{'status':'HELD','reason':'original_image_probe_unsettled',
+                        'original_state':original['state'],'error_type':type(error).__name__,'tool_request_id':identity}})
+                    continue
         if result.get('http_failure'):
             from .producer_read_policy import validate_http_failure
             verdict=validate_http_failure(pool,ledger,result,identity)
@@ -188,6 +200,11 @@ def screen(pool,ledger,links,root,*,probe=None):
                 verdict = blank
             elif language['excluded']:
                 verdict = {**language, 'status':'REJECTED', 'references':[result['observation'],result['image']]}
+        if eligibility_policy:
+            from .producer_eligibility import assess as assess_entry, VERSION as entry_policy
+            if eligibility_policy!=entry_policy:raise ValueError('Unsupported page eligibility policy')
+            stricter=assess_entry(load_json(result['observation']['path']))
+            if stricter['status']=='REJECTED':verdict={**stricter,'references':[result['observation'],result['image']]}
         records.append({'uri':uri,'decision':verdict,'reused':bool(prior),'probe':probe_refs})
         if verdict['status'] not in ('NO_CONSUME','REJECTED'):admitted.append(link)
     return admitted,records

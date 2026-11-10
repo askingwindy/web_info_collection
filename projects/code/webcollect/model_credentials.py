@@ -1,5 +1,6 @@
 """Runtime-only model credentials; never return them in configuration or logs."""
 import hashlib
+import secrets
 import os
 import re
 from pathlib import Path
@@ -18,7 +19,7 @@ def account_id(value):
 
 
 def _glm_session_key(account_keys, excluded_accounts=(), required_account=None, selection_index=0):
-    """Use YAML list order for new reservations; recover an existing account by its identity."""
+    """Use random selection when requested; recover an existing account by identity."""
     available = []
     seen = set()
     for entry in account_keys:
@@ -38,7 +39,7 @@ def _glm_session_key(account_keys, excluded_accounts=(), required_account=None, 
             if account_id(key) == required_account:
                 return key
         raise ValueError('Original credential account unavailable; no replacement selection')
-    return account_keys[selection_index % len(account_keys)]
+    return secrets.choice(account_keys) if selection_index is None else account_keys[selection_index % len(account_keys)]
 
 
 def _yaml_account(path, account, excluded_accounts=(), required_account=None, selection_index=0):
@@ -131,3 +132,20 @@ def credential(model, *, excluded_accounts=(), required_account=None, selection_
     if required_account is not None and account_id(value) != required_account:
         raise ValueError('Original credential account unavailable; secret content suppressed')
     return value
+
+
+def configured_credentials(model):
+    """Enumerate runtime secrets without exposing them in configuration or evidence."""
+    excluded = set()
+    while True:
+        try:
+            secret = credential(model, excluded_accounts=excluded)
+        except ValueError:
+            if not excluded:
+                raise
+            return
+        identity = account_id(secret)
+        if identity in excluded:
+            return
+        excluded.add(identity)
+        yield identity, secret

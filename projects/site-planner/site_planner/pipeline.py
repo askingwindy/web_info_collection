@@ -81,12 +81,15 @@ def open_public_get(uri, deadline, metrics, check_url=verify_public_url):
     check_url(uri)
     class Redirects(HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
-            check_url(newurl)
             metrics['redirect_request_events'] = metrics.get('redirect_request_events',0) + 1
-            metrics.setdefault('redirects',[]).append({'from':req.full_url,'to':newurl,'status':code})
+            observed={'from':req.full_url,'to':newurl,'status':code,'observed':True,'followed':False}
+            metrics.setdefault('redirects',[]).append(observed)
+            check_url(newurl)
             req.timeout = max(0.01, deadline-time.monotonic())
             if time.monotonic() >= deadline: raise TimeoutError('Source fetch total deadline reached during redirect')
-            return super().redirect_request(req,fp,code,msg,headers,request_uri(newurl))
+            redirected=super().redirect_request(req,fp,code,msg,headers,request_uri(newurl))
+            observed['followed']=redirected is not None
+            return redirected
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError('Source fetch total deadline reached before dispatch')

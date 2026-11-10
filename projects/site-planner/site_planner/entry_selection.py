@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from webcollect.collect import verify_public_url
 from webcollect.planning import object_sha256, verify_evidence
 from .candidate_pool import candidate_dedup_key, entry_identity
-from .qualification import CANONICAL_CATEGORIES, CATEGORY_TAXONOMY_VERSION
+from .qualification import CANONICAL_CATEGORIES, CATEGORY_TAXONOMY_VERSION, taxonomy_categories
 from .site_pool import host_identity
 
 VERSION = 'entry-selection-2'
@@ -261,7 +261,7 @@ def confirmed_category(sources):
     if not current:
         return None  # Legacy frozen source semantics.
     cats = {d.get('parent_category') for d in current if d.get('status')=='EVIDENCE_BOUND_AI'
-            and d.get('version')==VERSION and d.get('taxonomy_version')==CATEGORY_TAXONOMY_VERSION
+            and d.get('version')==VERSION and d.get('parent_category') in taxonomy_categories(d.get('taxonomy_version'))
             and {e.get('role') for e in d.get('evidence',[])}=={'identity','function'}}
     if any(d.get('status')=='CONFLICT' for d in current) or len(cats)!=1:
         return 'UNKNOWN'

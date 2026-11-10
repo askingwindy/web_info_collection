@@ -42,6 +42,18 @@ CANONICAL_CATEGORIES = (
 )
 CANONICAL_SCHEMA = deepcopy(LEGACY_SCHEMA)
 CANONICAL_SCHEMA['properties']['category'] = {'type': 'string', 'enum': list(CANONICAL_CATEGORIES)}
+BUSINESS_TAXONOMY_VERSION = 'site-parent-categories-20261110-2'
+BUSINESS_CATEGORIES = tuple(dict.fromkeys((*CANONICAL_CATEGORIES,
+    '即时通讯', '邮件', '日历', '地图导航', '支付', '外卖', '打车', '短视频', '音乐', '视频',
+    '相册', '文件管理', '办公文档', '银行', '旅行出行')))
+BUSINESS_SCHEMA = deepcopy(CANONICAL_SCHEMA)
+BUSINESS_SCHEMA['properties']['category'] = {'type':'string','enum':list(BUSINESS_CATEGORIES)}
+
+
+def taxonomy_categories(version):
+    if version == CATEGORY_TAXONOMY_VERSION:return CANONICAL_CATEGORIES
+    if version == BUSINESS_TAXONOMY_VERSION:return BUSINESS_CATEGORIES
+    return ()
 
 
 def _category_contract(metadata):

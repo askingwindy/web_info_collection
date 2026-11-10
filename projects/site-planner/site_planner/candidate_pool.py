@@ -512,13 +512,21 @@ class CandidatePool:
         from .page_consumption import exclusion
         return exclusion(self,uri,kind=kind,con=con)
 
-    def reject_unconsumed(self, candidate_id, reason):
+    def reject_unconsumed(self, candidate_id, reason, *, evidence=None, only_never_claimed=False):
         if not reason: raise ValueError('Rejection reason required')
+        if only_never_claimed:
+            if not evidence:raise ValueError('Evidence required for producer business quarantine')
+            verify_evidence(evidence)
         with self.transaction() as con:
             row=con.execute('SELECT state FROM data_candidates WHERE candidate_id=?',(candidate_id,)).fetchone()
+            if only_never_claimed and (not row or row[0]!='pending' or con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=?',(candidate_id,)).fetchone()):
+                return {'result':'SKIPPED','reason':'not_never_claimed_pending','candidate_id':candidate_id}
             if not row or row[0] not in ('pending','failed'): raise ValueError('Cannot quarantine an active or saved candidate')
             con.execute("UPDATE data_candidates SET state='failed' WHERE candidate_id=?",(candidate_id,))
-            self.event(con,candidate_id,None,'producer_target_rejected',{'reason':reason})
+            receipt={'reason':reason}
+            if only_never_claimed:receipt.update(policy='producer-business-quarantine-1',evidence=evidence,original_state='pending',candidate_id=candidate_id,result='QUARANTINED')
+            self.event(con,candidate_id,None,'producer_target_rejected',receipt)
+            if only_never_claimed:return receipt
 
     def rows(self, *, categories=None, application_id=None, state=None, protocols=None):
         """Rows visible to one protocol generation. Callers that did not opt in

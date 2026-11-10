@@ -222,11 +222,41 @@ def parse_content(content, provider):
     return json.loads(content), normalized
 
 
+def normalize_structured_fields(value):
+    """Decode only declared structural containers; never infer missing plan data.
+
+    Providers sometimes JSON-encode nested objects/arrays inside valid arguments.
+    Raw assistant/provider messages remain untouched in their evidence receipts.
+    """
+    objects = {'plan', 'finish_when', 'target', 'end_target', 'expected', 'reading_answer',
+               'visual_evidence', 'response_shape'}
+    arrays = {'steps', 'checks', 'citations', 'keys', 'evidence_refs', 'section_ids',
+              'check_answers', 'passages', 'evidence_ids', 'operation_ids',
+              'required_step_indices'}
+    if isinstance(value, list):
+        return [normalize_structured_fields(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    for key, item in value.items():
+        expected = dict if key in objects else list if key in arrays else None
+        if expected is not None and isinstance(item, str):
+            try:
+                decoded = json.loads(item)
+            except ValueError:
+                pass
+            else:
+                if isinstance(decoded, expected):
+                    item = decoded
+        out[key] = normalize_structured_fields(item)
+    return out
+
+
 def strict_plan_content(message, declared):
     """One complete strict JSON plan, with original content provenance; no call ID."""
     if set(declared)!={'submit_plan'} or message.get('tool_calls'):
         raise ValueError('Content plan requires the sole declared submit_plan and no tool calls')
-    arguments=json.loads(message.get('content') or '')
+    arguments=normalize_structured_fields(json.loads(message.get('content') or ''))
     if not isinstance(arguments,dict):raise ValueError('Content plan must be an object')
     if 'evidence_kind' in declared['submit_plan'].get('properties',{}).get('checks',{}).get('items',{}).get('properties',{}):
         arguments=executable_plan(arguments)
@@ -236,17 +266,23 @@ def strict_plan_content(message, declared):
 
 def executable_plan(plan):
     """Keep the existing executor fields; source annotations stay in raw replies."""
+    if plan.get('choice') == 'stop':
+        return deepcopy(plan)
     from .banded_plan import PLAN,TARGET,PREDICATE
     out={k:deepcopy(v) for k,v in plan.items() if k in PLAN['properties'] or k=='notes'}
-    fields={'click':{'target'},'type':{'target','value'},'select':{'target','value'},
+    fields={'double_click':{'target'},'right_click':{'target'},'drag':{'target','end_target'},'wait':{'duration_ms'},'click':{'target'},'type':{'target','value'},'select':{'target','value'},
         'hotkey':{'keys'},'scroll':{'direction'},'open_url':{'page_id'},'back':set(),
         'finish_reading':set()}
     if not isinstance(out.get('steps'),list):return out
     for i,step in enumerate(out['steps']):
         if not isinstance(step,dict):continue
         if step.get('action') in fields:
-            step={k:v for k,v in step.items() if k in {'action','purpose','expected'}|fields[step['action']]}
+            step={k:v for k,v in step.items() if k in {'action','purpose','expected','rationale','expected_result'}|fields[step['action']]}
             out['steps'][i]=step
+        endpoint=step.get('end_target')
+        if isinstance(endpoint,dict):
+            if 'label' in endpoint and 'text' not in endpoint:endpoint['text']=endpoint.pop('label')
+            step['end_target']={k:v for k,v in endpoint.items() if k in TARGET['properties']}
         target=step.get('target')
         if isinstance(target,dict):
             if 'label' in target:
@@ -270,6 +306,9 @@ def parse_decision_content(content, envelope):
         if match and '```' not in match.group(1):content=match.group(1);normalized=True
     if envelope=='single-json-commentary-1':
         value,end=json.JSONDecoder().raw_decode(content.lstrip())
+        original_value=value
+        value=normalize_structured_fields(value)
+        normalized=normalized or value!=original_value
         tail=content.lstrip()[end:].strip()
         if not isinstance(value,dict) or any(token in tail for token in ('{','}','[',']','```')):
             raise ValueError('Decision must contain one JSON object without another structured payload')
@@ -297,7 +336,9 @@ def parse_decision_content(content, envelope):
             clean=executable_plan(plan)
             normalized=normalized or clean!=plan;value={**value,'plan':clean}
         return value,normalized
-    return json.loads(content),normalized
+    original_value=json.loads(content)
+    value=normalize_structured_fields(original_value)
+    return value,normalized or value!=original_value
 
 
 def branch_wire_schema(schema, prompt):
@@ -307,6 +348,9 @@ def branch_wire_schema(schema, prompt):
     protocol already defines, so both dispatch paths offer the same field and
     the same rules generate what the model sees and what the host validates.
     """
+    if prompt.get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+        from .wiki_reading import schema as wiki_schema
+        schema=wiki_schema(schema,max_steps=10,evidence_ids=True)
     value=deepcopy(schema.get('oneOf',[schema])[0])
     props=value.get('properties',{})
     choices=[o['choice'] for o in prompt.get('options',[])]
@@ -329,6 +373,9 @@ def branch_wire_schema(schema, prompt):
 def normalize_branch(value, prompt):
     """Resolve only exact source references and an inherited non-action end marker."""
     value=deepcopy(value)
+    if prompt.get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+        from .wiki_reading import bind_reply
+        value=bind_reply(value,prompt)
     if not value.get('choice') and 'action' in value:
         raise ValueError('BRANCH_CHOICE_REQUIRED: return choice=continue_plan to execute current_step unchanged; to change the next action return choice=replan with plan.steps and each step.expected. A top-level action/options is not a branch choice.')
     if value.get('citations'):
@@ -394,6 +441,19 @@ def schema_error_feedback(error):
             leaves.append({'field_path':path,'detail':e.message[:350]})
     visit(current)
     return leaves[:6] or [{'field_path':list(getattr(error,'absolute_path',())), 'detail':getattr(error,'message',str(error).splitlines()[0])[:350]}]
+
+
+def native_generation_options(model, *, output_limit=None, reasoning_effort=None):
+    """Shared native-call generation options, including the startup health probe."""
+    compatible = model['provider'] in ('deepseek', 'glm', 'ark')
+    result = {'max_tokens' if compatible else 'max_completion_tokens':
+              output_limit or model['max_completion_tokens']}
+    if model['provider'] == 'glm':
+        result['thinking'] = {'type':'enabled', 'clear_thinking':False}
+    effort = reasoning_effort or model.get('reasoning_effort')
+    if effort is not None:
+        result['reasoning_effort'] = effort
+    return result
 
 
 class ModelGateway:
@@ -542,7 +602,9 @@ class ModelGateway:
             system += '\n本轮输出协议（字段只在这里定义一次）：\n'+json.dumps(wire,ensure_ascii=False,separators=(',',':'))
             system += '\n只返回一个choice对象的JSON，或直接返回剩余步骤计划（宿主按replan处理）；不输出解释或第二个结构。'
             system += '\nchoice只能取本轮options中列出的值；只执行 current_step 及原剩余计划时选相应继续项，更改下一动作必须 replan。replan的每个业务步骤必须给 action、purpose、expected 及动作参数。decision_summary 一句话概括本轮决定，不输出推理过程。'
-            if 'citations' in json.dumps(wire):
+            if prompt.get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+                system += '\nfinish_reading 用 reading_answer={answer,check_answers}，每项包含 check_index、answer、evidence_ids；只选本轮允许的稳定证据编号，不重抄原文元数据。'
+            elif 'citations' in json.dumps(wire):
                 system += '\ncitations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}；finish_reading 是含 reading_answer 的分支决定，不是业务步骤。'
         adapter_version=('banded-plain-json-3' if content_envelope=='single-json-commentary-1' else 'banded-plain-json-2') if content_envelope else 'banded-plain-json-1'
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
@@ -635,7 +697,7 @@ class ModelGateway:
         if settled:
             with self.ledger.transaction() as con:
                 self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':settled[-1]['id']})
-            return json.loads(settled[-1]['response'])['result']
+            return normalize_structured_fields(json.loads(settled[-1]['response'])['result'])
         if qc_transport and any(row['state']=='invalid_response' for row in original_requests):
             raise ValueError('Original QC protocol failure retained; no automatic replacement request')
         with self.ledger.connect() as con:
@@ -665,6 +727,23 @@ class ModelGateway:
                               if isinstance(material.get(name), str)}
         timeout_retry = {}
         timeout_retries = invalid_attempts = 0
+        protocol_failures = set()
+        # The purpose freezes observation, history and schema. A recurring error
+        # within this call has no new browser evidence, regardless of answer prose.
+        def protocol_failure_key(error):
+            from jsonschema.exceptions import ValidationError
+            if isinstance(error, ValidationError):
+                def shape(item):
+                    path = ['*' if isinstance(part, int) else part
+                            for part in item.absolute_path]
+                    missing = (sorted(set(item.validator_value) - set(item.instance))
+                        if item.validator == 'required' and isinstance(item.instance, dict) else [])
+                    return {'validator': item.validator, 'path': path, 'missing': missing,
+                            'children': [shape(child) for child in item.context]}
+                signature = shape(error)
+            else:
+                signature = re.sub(r'\b\d+\b', '#', str(error).splitlines()[0][:350])
+            return object_sha256({'type': type(error).__name__, 'error': signature})
         for attempt in (count() if consumer else range(attempts + 3)):
             if consumer:
                 self.ledger.heartbeat(job)
@@ -727,9 +806,11 @@ class ModelGateway:
             if request['state'] == 'succeeded':
                 with self.ledger.transaction() as con:
                     self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':request['id']})
-                return json.loads(request['response'])['result']
+                return normalize_structured_fields(json.loads(request['response'])['result'])
             if request['state'] != 'new':
                 if request['state'] == 'invalid_response':
+                    if consumer:
+                        raise ValueError('consumer_protocol_no_progress: original invalid response retained; no replacement dispatch')
                     invalid_attempts += 1
                     if not consumer and invalid_attempts >= attempts:
                         break
@@ -757,12 +838,8 @@ class ModelGateway:
                             payload['messages'][-1]['content'] = deepcopy(parts) + [{'type':'text','text':correction}]
                         if not native_context.get('plain_json'):
                             payload.update(tools=tools, tool_choice='auto')
-                        payload['max_tokens' if compatible_provider else 'max_completion_tokens'] = output_limit or model['max_completion_tokens']
-                        if model['provider'] == 'glm':
-                            payload['thinking'] = {'type':'enabled', 'clear_thinking':False}
-                        effort = native_context['reasoning_effort'] or model.get('reasoning_effort')
-                        if effort is not None:
-                            payload['reasoning_effort'] = effort
+                        payload.update(native_generation_options(model, output_limit=output_limit,
+                                                                 reasoning_effort=native_context['reasoning_effort']))
                     elif compatible_provider:
                         # Ark's total-output limit includes reasoning. max_tokens
                         # only bounds the final answer for its GLM model.
@@ -844,7 +921,7 @@ class ModelGateway:
                         parsed={'response_kind':'strict_plan_content','content_plan_protocol':'strict-plan-content-1',
                                 'arguments':arguments,'request_id':rid,'source':'provider_content',
                                 'assistant_message':{**deepcopy(choice['message']),'role':'assistant'}}
-                        normalized=False
+                        normalized=arguments!=json.loads(choice['message'].get('content') or '')
                     else:
                         if not isinstance(tool_calls, list) or len(tool_calls) != 1:
                             raise ValueError('Tool protocol requires exactly one tool call')
@@ -856,7 +933,8 @@ class ModelGateway:
                         name = function.get('name')
                         if call.get('type') != 'function' or name not in native_context['declared']:
                             raise ValueError('Tool name not declared')
-                        arguments = json.loads(function.get('arguments') or '')
+                        original_arguments = json.loads(function.get('arguments') or '')
+                        arguments = normalize_structured_fields(original_arguments)
                         if not isinstance(arguments, dict):
                             raise ValueError('Tool arguments must be an object')
                         declared=native_context['declared'][name]
@@ -866,7 +944,7 @@ class ModelGateway:
                         parsed = {'name':name, 'arguments':arguments, 'tool_call_id':cid,
                                   'assistant_message':{**deepcopy(choice['message']), 'role':'assistant'},
                                   'user_message':deepcopy(user_message), 'request_id':rid}
-                        normalized = False
+                        normalized = arguments != original_arguments
                 elif native_context and native_context.get('plain_json'):
                     if tool_calls:
                         raise ValueError('Plain decision must not contain provider tool calls')
@@ -875,7 +953,11 @@ class ModelGateway:
                         original_parsed=parsed
                         parsed=normalize_branch(parsed,json.loads(text))
                         normalized=normalized or parsed!=original_parsed
-                        validate_branch(parsed,schema)
+                        branch_schema=schema
+                        if json.loads(text).get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+                            from .wiki_reading import schema as wiki_schema
+                            branch_schema=wiki_schema(schema,max_steps=10,evidence_ids=True)
+                        validate_branch(parsed,branch_schema)
                     else:
                         Draft202012Validator(schema).validate(parsed)
                 elif tool_calls:
@@ -883,9 +965,14 @@ class ModelGateway:
                     tool_name = first.get('name')
                     # Provider-generated arguments are already one JSON object;
                     # strict load, no envelope tolerance for this path.
-                    parsed, normalized = json.loads(first.get('arguments') or ''), False
+                    original_parsed = json.loads(first.get('arguments') or '')
+                    parsed = normalize_structured_fields(original_parsed)
+                    normalized = parsed != original_parsed
                 else:
                     parsed, normalized = parse_content(choice['message']['content'], model['provider'])
+                    original_parsed = parsed
+                    parsed = normalize_structured_fields(parsed)
+                    normalized = normalized or parsed != original_parsed
                 if not native_context:
                     Draft202012Validator(schema).validate(parsed)
             except urllib.error.HTTPError as error:
@@ -903,6 +990,10 @@ class ModelGateway:
                             and retry_after.isdigit() and len(retry_after) <= 8 else 60)
                 except (ValueError, OSError, AttributeError, TypeError):
                     pass
+                if consumer and self.ledger.real_glm:
+                    from .key_health import record_result
+                    record_result(self.ledger, self._account_id(), code=detail.get('provider_code'),
+                                  retry_after=detail.get('retry_after_seconds', 60))
                 self._settle_failure(job,rid, state='unknown', error='HTTPError:' + str(error.code),
                                            response={'provider_error': detail, **transport_receipt})
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
@@ -950,10 +1041,27 @@ class ModelGateway:
                     for k in ('input_tokens', 'output_tokens', 'cached_input_tokens')) and usage['cached_input_tokens']<=usage['input_tokens']
                 self._settle_failure(job,rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
-                                           response={'result': parsed, 'provider_response': raw, **transport_receipt}, error=type(error).__name__)
+                                           response={'result': parsed, 'provider_response': raw, **transport_receipt,
+                                               'failure_diagnostic': {
+                                                   'source': 'no_provider_response' if raw is None else 'response_validation',
+                                                   'error_type': type(error).__name__,
+                                                   **({'local_cause': str(error)[:350]}
+                                                      if raw is None and isinstance(error, (AssertionError, KeyError)) else {})}},
+                                           error=type(error).__name__)
                 if not valid_usage:
-                    raise OutcomeUnknown('Missing provider usage; reservation retained') from None
+                    raise OutcomeUnknown('Missing provider usage; reservation retained; source='
+                        + ('no_provider_response' if raw is None else 'provider_usage_invalid')
+                        + '; error=' + type(error).__name__) from None
                 invalid_attempts += 1
+                failure_key = protocol_failure_key(error)
+                if consumer and failure_key in protocol_failures:
+                    with self.ledger.transaction() as con:
+                        self.ledger.event(con, 'consumer_protocol_no_progress', {
+                            'job_id': job['id'], 'request_id': rid,
+                            'error_fingerprint': failure_key,
+                            'reason': 'repeated_protocol_error_same_observation'})
+                    raise ValueError('consumer_protocol_no_progress: repeated protocol error on unchanged observation') from None
+                protocol_failures.add(failure_key)
                 timeout_retry = {}
                 if qc_transport or (not consumer and invalid_attempts >= attempts):
                     break

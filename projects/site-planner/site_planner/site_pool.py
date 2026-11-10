@@ -27,7 +27,7 @@ def host_identity(uri):
 
 
 def category(value):
-    from .qualification import CANONICAL_CATEGORIES
+    from .qualification import BUSINESS_CATEGORIES as CANONICAL_CATEGORIES
     if value != 'UNKNOWN' and value not in CANONICAL_CATEGORIES:
         raise ValueError('Use a canonical parent category or UNKNOWN')
     return value

@@ -873,6 +873,19 @@ def prepare_action(state, operation):
     return parameters,element
 
 
+async def verify_drag_destination(page, binding, arguments):
+    """Recheck the observed destination immediately before pressing the mouse."""
+    result=await page.evaluate('''({selector,index,x,y})=>{
+      const node=document.querySelectorAll(selector)[index];
+      if(!node)return null;const r=node.getBoundingClientRect();
+      const hit=document.elementFromPoint(x,y);
+      return {bbox:[r.left,r.top,r.right,r.bottom],hit:!!hit&&(hit===node||node.contains(hit))};
+    }''',{'selector':binding['selector'],'index':binding['index'],
+          'x':arguments['end_x'],'y':arguments['end_y']})
+    if not result or not result['hit'] or any(abs(a-b)>1 for a,b in zip(result['bbox'],binding['bbox'])):
+        raise EvidenceStale('DRAG_DESTINATION_CHANGED_OR_OCCLUDED')
+
+
 async def _execute_action(page, action, args, execution=None):
     execution=execution or {}
     if action in {'click','double_click','right_click'}:
@@ -907,7 +920,8 @@ async def _execute_action(page, action, args, execution=None):
         await page.mouse.wheel(dx,dy)
     elif action=='drag':
         await page.mouse.move(args['x'],args['y']);await page.mouse.down()
-        await page.mouse.move(args['end_x'],args['end_y'],steps=execution.get('steps',10));await page.mouse.up()
+        try:await page.mouse.move(args['end_x'],args['end_y'],steps=execution.get('steps',10))
+        finally:await page.mouse.up()
     elif action=='select':
         handle=await page.evaluate_handle('({x,y})=>document.elementFromPoint(x,y)',args)
         element=handle.as_element()

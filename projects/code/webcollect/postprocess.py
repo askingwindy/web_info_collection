@@ -20,7 +20,7 @@ from .agent_controller import exclusive
 from .react_session import REACT_VERSION, is_react_task, struct_goal, describe_goal, validate_task
 from .react_protocol import VERSION as NATIVE_VERSION, NATIVE_VERSIONS, atomic_effect, RULE_VERSION
 
-VERSION = 'webcollect-postprocess-3'
+VERSION = 'webcollect-postprocess-4'
 
 
 def _observation_state(record, observation_id):
@@ -76,7 +76,8 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False, _verification=No
         # observation_id hashes the canonical three-key evidence; html stays a
         # separate reference exactly as at capture time.
         canonical = {k: evidence[k] for k in ('image', 'state', 'capture')}
-        projected = project(state, canonical)
+        projected = project(state, canonical, extended_actions=(
+            task['fragment'].get('plan_protocol') == 'webcollect-banded-conditional-plan-13'))
         if _verification is not None:
             projected_observations[projected['observation_id']] = projected
         observations[projected['observation_id']] = {
@@ -253,16 +254,30 @@ def validate_effective_limit(task, count):
         raise ValueError('V5 saved interval exceeds ten effective business actions')
 
 
-def required_result_checks(terminal):
+def required_result_checks(terminal, task=None):
     """The same evidence gate as the online conditional-plan finish."""
     from .plan_evidence import unverified_required_checks
+    if ((task or {}).get('fragment', {}).get('result_execution_policy') == 'webcollect-result-execution-1'
+            and (terminal.get('goal_evidence') or {}).get('result_execution_status') == 'UNVERIFIED'):
+        return [{'field': '本次输入、提交与实际结果的执行绑定', 'status': 'UNVERIFIED'}]
+    if (task or {}).get('fragment', {}).get('wiki_reading_completion_protocol') == 'webcollect-wiki-reading-completion-2':
+        ending = terminal.get('collection_ending') or {}
+        basis = ending.get('endpoint_evidence') or {}
+        objective = basis.get('session_objective_evidence') or {}
+        if (ending.get('kind') == 'HOST_PLAN_ENDPOINT' and not ending.get('flagged')
+                and ending.get('safe_for_pending_sample') is True
+                and objective.get('status') == 'VERIFIED'
+                and objective == (terminal.get('goal_evidence') or {}).get('session_objective')):
+            # completion-2 owns cumulative original checks and source binding;
+            # its sealed replay remains mandatory in validate_record.
+            return []
     return unverified_required_checks(terminal.get('goal_evidence') or {})
 
 
 def ready_requires_prefix(task, terminal):
     from .closing_policy import EFFECTIVE_VERSION
     return (task.get('fragment',{}).get('ending_policy')==EFFECTIVE_VERSION
-            and terminal.get('stop_reason')=='ready' and bool(required_result_checks(terminal)))
+            and terminal.get('stop_reason')=='ready' and bool(required_result_checks(terminal, task)))
 
 
 def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
@@ -366,6 +381,8 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
             raise ValueError('末帧导航缺少原点击与延迟落地绑定')
     from .direct_article import verify_record
     verify_record(record, _verified=_verified)
+    from .wiki_reading import verify_record as verify_wiki
+    verify_wiki(record, _verified=_verified)
     validate_effective_limit(record['task'],len(rows))
     return rows
 
@@ -544,7 +561,7 @@ def terminal_outcome(task, record, final_state):
         return 'failed', description
     if task['fragment'].get('ending_policy'):
         checks=(terminal.get('goal_evidence') or {}).get('checks') or []
-        unverified=[str(c.get('field') or '未命名检查项') for c in required_result_checks(terminal)]
+        unverified=[str(c.get('field') or '未命名检查项') for c in required_result_checks(terminal, task)]
         if unverified:
             # Declared result checks that remain UNVERIFIED can never export as
             # success. PENDING auxiliary checks keep their established
@@ -554,7 +571,7 @@ def terminal_outcome(task, record, final_state):
         if verified:
             # The delivery summary quotes host-verified goal facts first,
             # never arbitrary viewport prose such as FAQ or page descriptions.
-            facts='；'.join(str(c.get('field') or '已核验项')+'「'+str(c['visible_text']).strip()[:120]+'」'
+            facts='；'.join(str(c.get('field') or '已核验项')+'「'+str(c.get('observed_visible_text') or c['visible_text']).strip()[:120]+'」'
                            for c in verified[:3])
             description='已核验目标事实：'+facts+'。'+description
     return 'success', description
@@ -564,6 +581,52 @@ def terminal_judgement(completion_status, final_result):
     """Identify the visible terminal basis without repeating the whole viewport."""
     prefix = '末帧完成判定依据：' if completion_status == 'success' else '末帧状态判定依据：'
     return prefix + final_result
+
+
+def planned_terminal_narrative(record, final_state, final_id):
+    """Describe verified goal evidence separately from the final viewport.
+
+    Used only for first generation of V13 samples, never historical status
+    correction. Reading may have cumulative evidence outside the final frame.
+    """
+    evidence = record['terminal'].get('goal_evidence') or {}
+    from .result_execution import completion_result_summary
+    numeric = completion_result_summary(evidence, final_observation_id=final_id)
+    if numeric:
+        return numeric
+    objective = evidence.get('session_objective') or {}
+    completion = objective.get('completion') or {}
+    checks = completion.get('original_checks') or []
+    answers = (completion.get('answer') or {}).get('check_answers') or []
+    if objective.get('status') != 'VERIFIED' or not checks or len(answers) != len(checks):
+        return None
+    basis = []
+    final_quotes = []
+    for answer in answers:
+        index = answer.get('check_index')
+        if type(index) is not int or not 0 <= index < len(checks):
+            return None
+        passages = answer.get('passages') or []
+        quotes = list(dict.fromkeys(p['quote'] for p in passages if p.get('quote')))
+        final_quotes.extend(p['quote'] for p in passages if p.get('observation_id') == final_id
+                            and p.get('quote') and p['quote'] in final_state.get('visible_text', ''))
+        field = str(checks[index].get('field') or f'第{index + 1}项')
+        if quotes:
+            basis.append(field + '，已观察的正文或操作目标包括' + '、'.join('「' + q + '」' for q in quotes[:2]))
+        elif answer.get('operation_ids'):
+            basis.append(field + '，已有对应实际操作记录')
+        else:
+            return None
+    title = str(final_state.get('title') or '任务页面')
+    last = record['trajectory'][-1]
+    if last['action'] == 'back':
+        final_result = '完成任务内查阅并返回后，当前页面为「' + title + '」。'
+    elif final_quotes:
+        final_result = '最终页面「' + title + '」可见' + '、'.join('「' + q + '」' for q in list(dict.fromkeys(final_quotes))[:2]) + '。'
+    else:
+        final_result = '阅读结束时停留在「' + title + '」；原问题的正文依据保留在先前已观察页面中。'
+    return {'final_result': final_result, 'completion_judgement': '原任务各项依据：' + '；'.join(basis) + '。',
+            'basis': answers, 'is_ai_review': False}
 
 
 def delivery_expectation(expected, action, element, label):
@@ -624,6 +687,14 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     final_id = record['terminal'].get('final_observation_id') or trajectory[-1]['after_observation_id']
     final_state = _observation_state(record, final_id)
     completion_status, final_result = terminal_outcome(task, record, final_state) if native else ('success', None)
+    # New capture narration reuses deterministic, pre-action facts. The
+    # separately callable correction API never re-runs this status derivation.
+    new_narration = task['fragment'].get('plan_protocol') == 'webcollect-banded-conditional-plan-13'
+    terminal_narrative = None
+    if new_narration and completion_status == 'success':
+        terminal_narrative = planned_terminal_narrative(record, final_state, final_id)
+        if terminal_narrative:
+            final_result = terminal_narrative['final_result']
     if completion_status == 'failed':
         return {**result, 'status': 'terminal_failed', 'completion_status': 'failed',
                 'final_result': final_result}
@@ -690,6 +761,17 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                 'next_step_rationale': row.get('semantic_goal') or row['goal'],
                 'step_result': observed_result, 'exception_evidence': []}
         step = normalize_delivery_step(step, platform.system())
+        if new_narration:
+            from .annotation_corrections import step_narratives
+            wording = step_narratives(row, before, element)
+            # These strings were emitted by the existing visual planning call
+            # before execution; expected is still the separate machine predicate.
+            expected_prose = row.get('semantic_expected_result') or wording.get('expected_result')
+            rationale = row.get('semantic_rationale') or wording.get('next_step_rationale')
+            if expected_prose:
+                step['action']['expected_result'] = expected_prose
+            if rationale:
+                step['next_step_rationale'] = rationale
         steps.append(step)
         narrative_rows.append({'step_id': index, 'source_operation_id': row['operation_id'],
                                'before_observation_id': row['before_observation_id'],
@@ -747,6 +829,10 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     stop_summary = (record['terminal'].get('stop_summary') or '').strip()
     final_result = final_result if native else stop_summary or task['final_result']
     completion_judgement = terminal_judgement(completion_status, final_result) if native else final_result
+    if terminal_narrative:
+        completion_judgement = terminal_narrative['completion_judgement']
+        steps[-1]['next_step_rationale'] = completion_judgement
+        steps[-1]['action']['expected_result'] = '预期结束页面保留本次操作的最终状态，可据已保存的任务证据核对完成情况。'
     from .trajectory_types import classify
     actual_types=classify(record) if task['fragment'].get('planning_intent_protocol') else {'task_type':task['task_type'],'status':'LEGACY'}
     result['actual_task_types']=actual_types
@@ -777,6 +863,9 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     result.update(status='derived', structural_report=report,
                   source_mapping=narrative_rows,
                   instruction=instruction, final_result=final_result)
+    if new_narration:
+        result['annotation_rule_version'] = 'webcollect-annotation-corrections-1'
+        result['terminal_narrative_basis'] = terminal_narrative
     return result
 
 

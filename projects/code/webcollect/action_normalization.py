@@ -1,12 +1,9 @@
-"""Windows delivery spelling with explicit source-platform shortcut mappings.
-
-Only annotations are normalized. Operations and raw capture evidence retain the
-keys actually executed. Unsupported native shortcuts cannot be relabelled.
-"""
+"""Actual executed key delivery; explicit Windows helpers describe historical exports."""
 from copy import deepcopy
 import re
 
 WINDOWS_KEYBOARD_NORMALIZATION_VERSION = 'delivery-windows-keys-2'
+ACTUAL_KEYBOARD_VERSION = 'delivery-actual-keys-1'
 SELECT_ALL_NORMALIZATION_VERSION = WINDOWS_KEYBOARD_NORMALIZATION_VERSION  # API compatibility
 _MODIFIERS = ('ctrl', 'alt', 'shift', 'win')
 _MODIFIER_ALIASES = {'control': 'ctrl', 'ctl': 'ctrl', 'windows': 'win', 'super': 'win'}
@@ -95,8 +92,12 @@ def normalize_delivery_arguments(tool_name, arguments, source_os=None):
     result = deepcopy(arguments)
     if tool_name == 'hotkey':
         if not isinstance(result, dict):
-            raise ValueError('WINDOWS_SHORTCUT_MAPPING_REQUIRED: hotkey arguments must be an object')
-        result['keys'] = canonical_windows_keys(result.get('keys'), source_os)
+            raise ValueError('Actual hotkey arguments must be an object')
+        keys = result.get('keys')
+        if (not isinstance(keys, list) or not keys or
+                any(not isinstance(key, str) or not key.strip() or key != key.strip() for key in keys)):
+            raise ValueError('Actual hotkey requires nonempty executed key names')
+        result['keys'] = list(keys)
     return result
 
 
@@ -107,5 +108,11 @@ def normalize_delivery_step(step, source_os=None):
         call['arguments'] = normalize_delivery_arguments('hotkey', call.get('arguments'), source_os)
         keys = call['arguments']['keys']
         action['input_text'] = '+'.join(keys)
-        action['target_text'] = display_windows_keys(keys)
+        action['target_text'] = display_actual_keys(keys)
     return result
+
+
+def display_actual_keys(keys):
+    labels = {**_DISPLAY, 'meta': 'Meta', 'command': 'Command', 'cmd': 'Cmd',
+              'option': 'Option', 'opt': 'Opt', '⌘': '⌘', '⌥': '⌥'}
+    return '+'.join(labels.get(key.casefold(), key.upper() if len(key) == 1 else key) for key in keys)

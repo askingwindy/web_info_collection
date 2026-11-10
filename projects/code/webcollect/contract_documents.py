@@ -26,9 +26,10 @@ def render(out, records, facts, revisions=None):
     mapping = ('click/double_click/right_click→{x,y}；type→{text}；hotkey→{keys}；'
                'scroll→{x,y,direction}；drag→{x,y,end_x,end_y}；select→{x,y,option}；'
                'open_url→{url}；back/wait→{}；complete→{status}。\n\n'
-               'type只作用于当前已聚焦输入框；所有hotkey统一交付Windows表达，例如粘贴为keys=["ctrl","v"]、input_text=ctrl+v、target_text=Ctrl+V；单键显示Enter、Tab、Home等。'
-               'macOS的Command组合依已声明同功能映射交付为Ctrl组合，Windows原生Meta则为Win；无明确定义的Mac特殊组合明确阻止交付，不机械替换。'
-               '真实执行参数保留在包外原始证据；发生导出归一化时，包外追溯清单绑定变更前后标注SHA及逐步映射，不冒充未变更的采集证据。'
+               'type只作用于当前已聚焦输入框；hotkey保留实际执行keys及input_text，显示名来自同一键数组，不将Meta或Command替换为Ctrl。'
+               'delivery-windows-keys-2只解释历史版本，不适用于新输出；本次采用delivery-actual-keys-1。'
+               '实际参数、平台、逐步对应与原派发/执行哈希见actual-execution.json；UNAVAILABLE明确表示缺原派发依据，complete为宿主终态。'
+               '原始日志和请求保留在包外，不将参数表达恢复冒称为新浏览器操作。'
                'scroll的down表示查看更下方内容；滚动距离不加入交付参数。'
                '每步只记录一个实际动作，等待和结束确认不计入有效操作。')
     synthesis = '# 合成方式说明\n\n' + '\n\n'.join(chapters)

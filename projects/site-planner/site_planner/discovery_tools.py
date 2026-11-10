@@ -151,7 +151,7 @@ def glm_search(pool, run_id, model, query, output, *, engine='search_std', maxim
 
 
 class DiscoveryBrowser:
-    def __init__(self, pool, ledger, run_id, output, *, image_screen=False, capture_document=False, fresh_pages=False, read_policy=None):
+    def __init__(self, pool, ledger, run_id, output, *, image_screen=False, capture_document=False, fresh_pages=False, read_policy=None, frame_policy=None):
         self.pool, self.ledger, self.run_id = pool, ledger, run_id
         self.output = Path(output)
         self.image_screen = image_screen
@@ -161,6 +161,8 @@ class DiscoveryBrowser:
         if read_policy not in (None,VERSION) or (read_policy and not capture_document):
             raise ValueError('Readiness policy requires a shared anonymous document observation')
         self.read_policy=read_policy
+        if frame_policy not in (None,'producer-frame-sync-1') or frame_policy and not capture_document:raise ValueError('Frame synchronization requires shared document capture')
+        self.frame_policy=frame_policy
 
     async def __aenter__(self):
         from playwright.async_api import async_playwright
@@ -177,16 +179,27 @@ class DiscoveryBrowser:
         return self
 
     async def __aexit__(self, *args):
+        async def close_stage(name, operation, timeout):
+            try:
+                await asyncio.wait_for(operation(), timeout=timeout)
+            except TimeoutError:
+                # Cleanup cannot invalidate already sealed observations. Keep
+                # the failure outside their receipts and continue driver stop.
+                receipt = {'schema_version': 'producer-browser-cleanup-1',
+                           'run_id': self.run_id, 'stage': name,
+                           'status': 'TIMEOUT', 'timeout_seconds': timeout,
+                           'recorded_at': time.time()}
+                save_json(self.output / ('browser-cleanup-' + str(time.time_ns()) + '.json'), receipt)
         try:
             if self.context:
-                await asyncio.wait_for(self.context.close(), timeout=10)
+                await close_stage('context.close', self.context.close, 10)
         finally:
             try:
                 if self.browser:
-                    await asyncio.wait_for(self.browser.close(), timeout=10)
+                    await close_stage('browser.close', self.browser.close, 10)
             finally:
                 if self.pw:
-                    await asyncio.wait_for(self.pw.stop(), timeout=5)
+                    await close_stage('playwright.stop', self.pw.stop, 5)
 
     async def read(self, uri):
         # Covers new_page, JS evaluation and screenshot as well as navigation.
@@ -208,6 +221,7 @@ class DiscoveryBrowser:
         else:uri=page_uri(uri)
         extra={'image_policy':image_policy} if self.image_screen else {}
         if self.capture_document:extra.update(document_policy='producer-shared-observation-1',access='fresh_context_no_login_get_only')
+        if self.frame_policy:extra['frame_policy']=self.frame_policy
         rid, cached = self.pool.reserve_tool(self.run_id, 'browser', uri, {'uri': uri,**extra})
         if cached is not None:
             verify_evidence([cached['observation'], cached['image']])
@@ -277,7 +291,7 @@ class DiscoveryBrowser:
                 from .producer_read_policy import wait_ready
                 timing=await wait_ready(page)
             else:await page.wait_for_timeout(1200)
-            observation = await page.evaluate('''() => ({
+            observation_js='''() => ({
                 title: document.title, landed_uri: location.href,
                 text: document.body ? document.body.innerText : '',
                 links: Array.from(document.querySelectorAll('a[href]')).filter(e=>e.getClientRects().length)
@@ -286,7 +300,8 @@ class DiscoveryBrowser:
                     .filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,type:e.type||'',
                         label:e.getAttribute('aria-label')||e.getAttribute('placeholder')||e.innerText||'',
                         disabled:e.disabled||false}))
-            })''')
+            })'''
+            observation = await page.evaluate(observation_js)
             try:
                 verify_public_url(observation['landed_uri']); landed_public = True
             except ValueError:
@@ -309,6 +324,27 @@ class DiscoveryBrowser:
                     timing.update(image_recheck_delay_ms=delay,image_recheck_reason=reason,
                         image_recheck_seconds=round(time.monotonic()-started,4))
                     observation['read_timing']=timing
+            confirmed_dom=None
+            if self.frame_policy:
+                from .producer_read_policy import READINESS_SCRIPT
+                save_json(directory/'frame-1-observation.json',observation)
+                first_image=reference(image)
+                before=await page.evaluate(READINESS_SCRIPT)
+                confirmed=await page.evaluate(observation_js)
+                confirmed['image_view']=await page.evaluate(image_script)
+                image=directory/'viewport-confirmed.png'
+                await page.screenshot(path=str(image),timeout=10000)
+                confirmed_dom=await page.content()
+                after=await page.evaluate(READINESS_SCRIPT)
+                confirmed['image_view_after']=await page.evaluate(image_script)
+                confirmed['frame_capture']={'policy':self.frame_policy,'first_image':first_image,
+                    'first_observation':reference(directory/'frame-1-observation.json'),
+                    'main_before':before,'main_after':after,'stable':before['signature']==after['signature'] and before['meaningful']}
+                if not confirmed['frame_capture']['stable']:
+                    save_json(directory/'frame-confirmation-unstable.json',confirmed)
+                    raise ValueError('Main business region changed during confirmed frame capture')
+                if timing is not None:confirmed['read_timing']=timing
+                observation=confirmed
             observation.update({'requested_uri': uri, 'http_status': status if status is not None else 'UNKNOWN',
                 'navigation_error': nav_error, 'redirect_observations': redirects, 'blocked_requests': blocked,
                 'navigation_error_code': nav_code, 'landed_public_http': landed_public,
@@ -322,7 +358,7 @@ class DiscoveryBrowser:
                 raw=await asyncio.wait_for(response.body(),timeout=5)
                 if len(raw)>4_000_000:raise ValueError('Original browser response exceeds evidence bound')
                 raw_path=directory/'response-body.bin';raw_path.write_bytes(raw)
-                dom_path=directory/'rendered-dom.html';dom_path.write_text(await page.content(),encoding='utf-8')
+                dom_path=directory/'rendered-dom.html';dom_path.write_text(confirmed_dom if confirmed_dom is not None else await page.content(),encoding='utf-8')
                 if page.url!=observation['landed_uri']:
                     raise (OutcomeUnknown if self.read_policy else ValueError)('Page route changed during shared capture')
                 encoding=await page.evaluate('document.characterSet')

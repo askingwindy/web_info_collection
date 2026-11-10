@@ -61,6 +61,51 @@ def verify_delivery_scope(effective_set_path, cross_package_report_path, *, data
             raise ValueError('Cross-package report binding changed: ' + key)
     if expected_contract is not None and current['contract_sha256'] != expected_contract:
         raise ValueError('Cross-package and payload contract identities differ')
+    if manifest.get('delivery_policy') is not None:
+        from webcollect.closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
+        if manifest['delivery_policy'] != COMPLETED_GOAL_DELIVERY:
+            raise ValueError('Unknown effective-set delivery policy')
+        bindings = manifest.get('completion_bindings', [])
+        bysample = {row['sample_id']:row for row in bindings}
+        members = current['version_comparison']['effective_samples']
+        member_ids = {r['sample_id'] for r in members}
+        # Older manifests bound the whole effective set. New handoffs freeze
+        # current delivery targets separately from historical dedup context.
+        targets = manifest.get('delivery_sample_ids', sorted(member_ids))
+        if (not isinstance(targets, list) or not targets
+                or any(not isinstance(sid, str) or not sid for sid in targets)
+                or len(targets) != len(set(targets)) or not set(targets) <= member_ids
+                or len(bysample) != len(bindings) or set(bysample) != set(targets)):
+            raise ValueError('Delivery completion bindings differ from explicit effective members')
+        explicit_target = 'delivery_sample_ids' in manifest or 'delivery_target' in manifest
+        if explicit_target:
+            target = manifest.get('delivery_target', {})
+            if target.get('protocol') != 'webcollect-qc-delivery-target-1':
+                raise ValueError('Unknown explicit QC delivery target protocol')
+            root = _path(target.get('package', ''))
+            if str(root) not in current['input_files_sha256']:
+                raise ValueError('Delivery target package is outside the frozen effective set')
+            target_ids = [json.loads(path.read_text())['sample_id']
+                          for path in (root/'samples').glob('*/annotation.json')]
+            if len(target_ids) != len(set(target_ids)) or set(target_ids) != set(targets):
+                raise ValueError('Delivery target must bind every sample in its frozen package')
+        payload_ids = {json.loads(path.read_text())['sample_id']
+                       for path in (Path(dataset)/'samples').glob('*/annotation.json')}
+        if (not payload_ids or not payload_ids <= set(targets)
+                or explicit_target and payload_ids != set(targets)):
+            raise ValueError('Dataset contains samples outside explicit delivery targets')
+        for member in members:
+            if member['sample_id'] not in bysample:
+                continue
+            binding = bysample[member['sample_id']]
+            annotation = Path(member['sample_path'])/'annotation.json'
+            saved_ref = _ref(binding['saved_sample']['path'])
+            if saved_ref != binding['saved_sample'] or sha(annotation) != binding['annotation_sha256']:
+                raise ValueError('Effective delivery completion binding changed')
+            saved = json.loads(Path(saved_ref['path']).read_text())
+            decision = completion_delivery_decision(json.loads(annotation.read_text()), saved.get('raw_execution', {}))
+            if not decision['delivery_eligible'] or decision != binding['delivery_decision']:
+                raise ValueError('Effective member lacks original-goal completion')
     dataset = _path(dataset); actual = package_files(dataset)
     actual_payload = payload_files(actual)
     versions = current['version_comparison']

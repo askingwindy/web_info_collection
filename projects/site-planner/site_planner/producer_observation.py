@@ -12,7 +12,7 @@ from webcollect.candidate_contract import application_matches
 VERSION='producer-shared-observation-1'
 RECEIPT_POLICY='producer-entry-observed-get-2'
 
-def screen(pool,ledger,links,root,*,read_policy=None):
+def screen(pool,ledger,links,root,*,read_policy=None,eligibility_policy=None):
     browser=None
     with asyncio.Runner() as runner:
         def probe(_pool,_ledger,uri,_root):
@@ -20,10 +20,10 @@ def screen(pool,ledger,links,root,*,read_policy=None):
             if ledger.config.get('mode')!='real':raise ValueError('Real shared observation requires mode=real')
             if browser is None:
                 browser=DiscoveryBrowser(pool.pool,ledger,images.SCREEN_RUN,root,image_screen=True,capture_document=True,fresh_pages=True,
-                                         **({'read_policy':read_policy} if read_policy else {}))
+                                         **({'read_policy':read_policy} if read_policy else {}),**({'frame_policy':'producer-frame-sync-1'} if eligibility_policy else {}))
                 runner.run(browser.__aenter__())
             return runner.run(browser.read(uri))
-        try:return images.screen(pool,ledger,links,root,probe=probe)
+        try:return images.screen(pool,ledger,links,root,probe=probe,**({'eligibility_policy':eligibility_policy} if eligibility_policy else {}))
         finally:
             if browser:runner.run(browser.__aexit__())
 

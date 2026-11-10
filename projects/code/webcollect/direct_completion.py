@@ -14,7 +14,8 @@ BRIDGE = 'webcollect-direct-terminal-overlay-1'
 
 def enabled(task):
     from .direct_article import enabled as direct
-    return direct(task) and task.get('fragment', {}).get('direct_completion_protocol') == VERSION
+    from .wiki_reading import enabled as wiki
+    return wiki(task) or (direct(task) and task.get('fragment', {}).get('direct_completion_protocol') == VERSION)
 
 
 def schema(value, *, max_steps=8):
@@ -191,6 +192,17 @@ def bind_answer(answer, plan, readings, trajectory):
                 item['operation_ids']=[r['operation_id'] for r in trajectory if r['action'] in ('click','back')]
             continue
         bound=[]
+        ids=item.get('evidence_ids')
+        if ids is not None:
+            if item.get('passages'):raise ValueError('DIRECT_COMPLETION_CONFLICTING_REFERENCE_FORMS')
+            if (not isinstance(ids,list) or not ids or not all(isinstance(eid,str) for eid in ids)
+                    or len(ids)!=len(set(ids))):
+                raise ValueError('DIRECT_COMPLETION_INVALID_EVIDENCE_IDS')
+            for eid in ids:
+                matches=[r for r in readings if r.get('evidence_id')==eid]
+                if len(matches)!=1:raise ValueError('DIRECT_COMPLETION_UNKNOWN_EVIDENCE_ID')
+                bound.append({k:matches[0][k] for k in
+                    ('evidence_id','observation_id','node','quote','operation_id','url','epoch','sections') if k in matches[0]})
         for raw in item.get('passages',[]):
             p={'quote':raw} if isinstance(raw,str) else raw
             if not isinstance(p,dict):raise ValueError('DIRECT_COMPLETION_PASSAGE_NOT_IN_ORIGINAL_READ_TRACE')
@@ -222,6 +234,11 @@ def completion(session, evidence):
     model_answer=reply.get('reading_answer') or {}
     answer=bind_answer(model_answer,plan,evidence['new_visible_body'],session.trajectory)
     checks=plan.get('checks',[])
+    from .wiki_reading import enabled as wiki, validate_sources
+    if wiki(getattr(session,'task',{})):
+        answered={r.get('check_index') for r in answer.get('check_answers',[])}
+        missing=[i for i in range(len(checks)) if i not in answered]
+        if missing:raise ValueError('WIKI_READING_MISSING_ORIGINAL_CHECKS: '+','.join(map(str,missing)))
     if (answer.get('working_goal')!=plan.get('goal') or not answer.get('answer','').strip()
             or [r.get('check_index') for r in answer.get('check_answers',[])]!=list(range(len(checks)))):
         raise ValueError('DIRECT_COMPLETION_ORIGINAL_GOAL_OR_CHECKS_CHANGED')
@@ -246,9 +263,10 @@ def completion(session, evidence):
             if (len(found)!=1 or found[0]['operation_id'] not in item['operation_ids']
                     or any(p[k]!=found[0].get(k) for k in ('epoch','operation_id','url') if k in p)):
                 raise ValueError('DIRECT_COMPLETION_PASSAGE_NOT_IN_ORIGINAL_READ_TRACE')
-    if not evidence.get('selected_passage') or evidence.get('return_required'):
+    if wiki(getattr(session,'task',{})):validate_sources(session,plan,answer,evidence)
+    if (not wiki(getattr(session,'task',{})) and not evidence.get('selected_passage')) or evidence.get('return_required'):
         raise ValueError('DIRECT_COMPLETION_CURRENT_CITATION_OR_RETURN_MISSING')
-    return {'schema_version':VERSION,'decision':reference,'original_working_goal':plan['goal'],
+    return {'schema_version':(session.task['fragment'][__import__('webcollect.wiki_reading',fromlist=['FIELD']).FIELD] if wiki(getattr(session,'task',{})) else VERSION),'decision':reference,'original_working_goal':plan['goal'],
         'original_checks':checks,'original_plan_sha256':object_sha256(plan),'answer':answer,
         'model_answer':model_answer,'reference_binding':'exact original passage identity and already executed operation references',
         'actual_operations':[{'operation_id':r['operation_id'],'action':r['action'],

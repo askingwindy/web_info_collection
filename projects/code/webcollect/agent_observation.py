@@ -9,8 +9,8 @@ from .planning import object_sha256, verify_evidence
 
 VERSION = 'webcollect-trusted-observation-1'
 PROVEN, UNAVAILABLE, INSUFFICIENT = 'PROVEN', 'UNAVAILABLE', 'INSUFFICIENT'
-CONTROL_ACTIONS = {'click', 'double_click', 'right_click', 'type', 'select', 'set_value'}
-ACTIONS = CONTROL_ACTIONS | {'scroll', 'open_url', 'back', 'hotkey'}
+CONTROL_ACTIONS = {'click', 'double_click', 'right_click', 'type', 'select', 'set_value', 'drag'}
+ACTIONS = CONTROL_ACTIONS | {'scroll', 'open_url', 'back', 'hotkey', 'wait'}
 LABEL_KINDS = {'rendered_target_text', 'rendered_associated_label', 'rendered_labelledby_text', 'rendered_grouped_button',
                'rendered_adjacent_input_group_label', 'visible_selected_option',
                'visible_native_value', 'visible_placeholder'}
@@ -59,6 +59,9 @@ def action_availability(state, element, binding, value, probe, action):
     elif action == 'select':
         if binding.get('tag') != 'select':
             return result(UNAVAILABLE, 'NOT_NATIVE_SELECT')
+    elif action=='drag':
+        if not binding.get('selector') or not box:
+            return result(INSUFFICIENT,'MISSING_DRAG_SOURCE_BINDING')
     elif element.get('clickable') is not True:
         return result(UNAVAILABLE, 'NOT_CLICKABLE')
     return result(PROVEN, 'CURRENT_RENDERED_TARGET_PROVED')
@@ -69,7 +72,7 @@ def readable_labels(probe):
             if row.get('kind') in LABEL_KINDS and isinstance(row.get('text'), str) and row['text'].strip()]
 
 
-def project(state, evidence):
+def project(state, evidence, *, extended_actions=False):
     verify_evidence(list(evidence.values()))
     from .batch_core import load_json
     if load_json(evidence['state']['path']) != state:
@@ -86,6 +89,8 @@ def project(state, evidence):
     elements = {e['element_id']: e for e in state.get('elements', [])}
     probe = state.get('target')
     controls = {}
+    control_actions=CONTROL_ACTIONS if extended_actions else CONTROL_ACTIONS-{'drag'}
+    page_actions=(ACTIONS-CONTROL_ACTIONS) if extended_actions else (ACTIONS-CONTROL_ACTIONS)-{'wait'}
     # Keep unavailable and unprobed inventory. Nothing is silently filtered out.
     for binding in state.get('capture_controls', []):
         eid = binding['element_id']; element = elements.get(eid)
@@ -96,7 +101,7 @@ def project(state, evidence):
         controls[eid] = {'element': deepcopy(element), 'binding': deepcopy(binding),
             'value': deepcopy(value), 'probe': deepcopy(current), 'readable_labels': readable_labels(current),
             'actions': {action: action_availability(state, element, binding, value, current, action)
-                        for action in sorted(CONTROL_ACTIONS)}}
+                        for action in sorted(control_actions)}}
     if not capture_verified:
         for control in controls.values():
             control['readable_labels'] = []
@@ -106,7 +111,7 @@ def project(state, evidence):
     result = {'schema_version': VERSION, 'url': state['url'], 'document_identity': identity,
         'capture_verified': capture_verified, 'viewport': state['screen_resolution'], 'scroll': state.get('scroll'), 'evidence': deepcopy(evidence),
         'state_sha256': object_sha256(state), 'visible_text': state.get('visible_text', ''), 'controls': controls,
-        'page_actions': sorted(ACTIONS - CONTROL_ACTIONS),
+        'page_actions': sorted(page_actions),
         'supplemental_observation': {'kind': 'capture_target', 'control_ids': list(controls),
             'read_only': True, 'state_changing_requests_must_be_actions': True}}
     if 'dynamic_region_contract' in state:

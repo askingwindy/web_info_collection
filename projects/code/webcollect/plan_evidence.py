@@ -25,6 +25,10 @@ def page_label(value, *, decorative_year=False):
 
 
 def page_matches(page,state,navigation=()):
+    # Bound URLs are complete identities; parentheses belong to Wiki paths.
+    if same_url(page,state['url']):return True
+    if urlsplit(page).scheme in ('http','https') and not re.search(r'\s',page):
+        return any(same_url(page,n.get('clicked_href')) and same_url(n.get('landed_url'),state['url']) for n in navigation)
     embedded=re.findall(r'https?://[^\s)）]+',page)
     if embedded:
         return any(same_url(u,state['url']) or any(same_url(u,n.get('clicked_href'))
@@ -46,9 +50,13 @@ def page_matches(page,state,navigation=()):
 
 def unverified_required_checks(evidence):
     """PENDING semantic auxiliary checks retain their non-blocking meaning."""
-    return [{'field':c.get('field'),'status':c.get('status'),
+    missing=[{'field':c.get('field'),'status':c.get('status'),
              'page':c.get('page'),'region':c.get('region')}
             for c in evidence.get('checks',[]) if c.get('status')=='UNVERIFIED']
+    if evidence.get('result_execution_status')=='UNVERIFIED':
+        missing.append({'field':'本次输入提交与实际结果绑定','status':'UNVERIFIED',
+                        'binding':'result_execution_status'})
+    return missing
 
 
 READING_COMPLETION_POLICY = 'webcollect-reading-plan-completion-1'
@@ -102,6 +110,8 @@ def region_matches(state, cid, region, *, business_aliases=False):
     bindings={b['element_id']:b for b in state.get('capture_controls',[])}
     e=elements.get(cid,{})
     selector=bindings.get(cid,{}).get('selector','')
+    if business_aliases and region in ('结果区','结果区域','计算结果','计算结果/正文','计算结果/业务区域','IRS计算器结果区') and bindings.get(cid,{}).get('result_region_selector'):
+        return True
     # A free result-area name is not proof that an arbitrary main paragraph
     # contains this execution's result. Demand captured semantic containment.
     if business_aliases and region in ('结果区','结果区域','计算结果','计算结果/正文','计算结果/业务区域','IRS计算器结果区'):
@@ -243,6 +253,8 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
                          'binding_status':'PENDING_SEMANTIC_MAPPING'})
             continue
         proofs=[];other=[];seen=set()
+        from .result_execution import VERSION as RESULT_VERSION, RESULT_REGIONS, result_execution_binding
+        execution_policy=getattr(s,'task',{}).get('fragment',{}).get('result_execution_policy')==RESULT_VERSION
         # A page ID denotes the URL shown in this plan's first request, even after navigation.
         bound_url = page_binding['resolved_pages'][check_index] if bound_plan else (page_urls or {}).get(check['page'])
         if (not bound_plan and bound_url is None and hasattr(s,'task')
@@ -255,6 +267,9 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
             urls=[(page_urls or {}).get(page_id) for page_id in page_ids]
             if all(urls) and len({urldefrag(url)[0] for url in urls})==1:
                 bound_url=urldefrag(urls[0])[0]
+        if execution_policy and bound_url is None:
+            known_pages=page_binding.get('pages',{}) if page_binding else (page_urls or {})
+            if check['page'] in known_pages.values():bound_url=check['page']
         for oid,obs in s.observation_records.items():
             if not obs.get('capture_verified'):continue
             state=load_json(obs['evidence']['state']['path'])
@@ -275,25 +290,56 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
                 if (check['visible_text'] not in quote and value.get('value_visible') is True
                         and value.get('display_value')==check['visible_text']):
                     quote=value['display_value'];source='host_synchronized_visible_input_value'
-                if e.get('visible') is not True or check['visible_text'] not in quote:continue
+                execution_binding=None
+                if execution_policy:
+                    from .numeric_result_evidence import numeric_target
+                    result_check=(check.get('region') in RESULT_REGIONS or numeric_target(check['visible_text'],check.get('field','')))
+                    if result_check:
+                        if not bound_url or not page_ok:continue
+                        execution_binding=result_execution_binding(s,oid,state,e)
+                        if not execution_binding:continue
+                numeric_match=None
+                numeric_policy=(getattr(s,'task',{}).get('fragment',{}).get('numeric_result_evidence_policy')
+                                =='webcollect-numeric-result-evidence-1')
+                if numeric_policy:
+                    from .numeric_result_evidence import match_result, numeric_target, weak_result_text
+                    if weak_result_text(check['visible_text']):continue
+                    numeric_match=match_result(check['visible_text'],quote,field=check.get('field',''),
+                        result_bound=bool(bound_url and page_ok and check.get('region') and
+                            region_matches(state,e['element_id'],check['region'],business_aliases=modern) and
+                            region_matches(state,e['element_id'],'结果区',business_aliases=True)),
+                        input_node=bool(e.get('inputable') or e.get('native_role') in ('input','select','textarea')
+                                        or source=='host_synchronized_visible_input_value'))
+                    if (check['region'] in ('结果区','结果区域','计算结果','计算结果/正文','计算结果/业务区域','IRS计算器结果区')
+                            and numeric_target(check['visible_text'],check.get('field','')) and not numeric_match):continue
+                if e.get('visible') is not True or (check['visible_text'] not in quote and not numeric_match):continue
                 key=(state['url'],e['element_id'],quote)
                 if key in seen:continue
                 seen.add(key)
                 proof={'observation_id':oid,'url':state['url'],'document_identity':state.get('document_identity'),
                        'image':obs['evidence']['image'],'state':obs['evidence']['state'],
                        'node':e['element_id'],'bbox':e.get('bbox'),'quote':quote,
-                       'source':source}
+                       'source':source, **({'result_execution_binding':execution_binding} if execution_binding else {}), **({'numeric_result_match':numeric_match} if numeric_match else {})}
                 if modern:
                     proof['action_refs']=[{'operation_id':r['operation_id'],'before_observation_id':r['before_observation_id'],'after_observation_id':r['after_observation_id']} for r in s.trajectory if oid in (r.get('before_observation_id'),r.get('after_observation_id'))]
                 (proofs if page_ok and region_matches(state,e['element_id'],check['region'],business_aliases=modern) else other).append(proof)
         rows.append({**check,**({'resolved_page':bound_url} if bound_url is not None else {}),
                      'status':'VERIFIED' if proofs else 'UNVERIFIED',
-                     'evidence':proofs,'seen_outside_allowed_source':other})
+                     'evidence':proofs,'seen_outside_allowed_source':other,
+                     **({'observed_visible_text':proofs[0]['quote']} if any(p.get('numeric_result_match') for p in proofs) else {})})
     done=sum(r['status']=='VERIFIED' for r in rows)
+    from .result_execution import VERSION as RESULT_VERSION
+    result_policy=getattr(s,'task',{}).get('fragment',{}).get('result_execution_policy')==RESULT_VERSION
+    result_task=result_policy and any(r.get('action') in ('type','select') for r in s.trajectory) and (
+        any(urlsplit(obs.get('url','')).hostname in ('muxtly.com','www.muxtly.com') for obs in s.observation_records.values())
+        or bool(re.search(r'计算|計算|换算|換算',s.requested_goal or s.working_goal or '')))
+    has_result=any(p.get('result_execution_binding') for row in rows for p in row.get('evidence',[]))
+    execution_status='VERIFIED' if has_result else 'UNVERIFIED' if result_task else 'NOT_REQUIRED'
     return {'protocol':VERSION if modern else LEGACY_VERSION,'requested_goal':s.requested_goal,'working_goal':s.working_goal,
             'checks':rows,'verified':done,'total':len(rows),
             **({'host_observed_basis':observed_basis(s, objective_evidence)} if any(r['status']=='PENDING' for r in rows) else {}),
-            'business_goal_status':('VERIFIED' if done==len(rows) else 'PARTIAL' if done else 'UNVERIFIED') if rows else 'NOT_SPECIFIED',
+            'business_goal_status':('UNVERIFIED' if execution_status=='UNVERIFIED' else ('VERIFIED' if done==len(rows) else 'PARTIAL' if done else 'UNVERIFIED') if rows else 'NOT_SPECIFIED'),
+            **({'result_execution_status':execution_status} if result_policy else {}),
             'fragment_effective_steps':len(s.trajectory),'is_ai_review':False}
 
 

@@ -77,6 +77,14 @@ def main(argv=None):
     package.add_argument('--review-output',type=Path,help='包外所选样本原始审核记录，不继承旧包级审核')
     package.add_argument('--facts',type=Path,help='实际生产事实，用于生成需求指定的来源与合成说明')
     package.add_argument('--revisions',type=Path,help='按原标注哈希及图树证据绑定的叙述修订计划；不改图树或动作')
+    package.add_argument('--execution-evidence',type=Path,help='可选的原实际派发/执行依据；用于独立订正版导出，不会订正标注')
+    correction=sub.add_parser('correct-annotations',help='可选交付后加工：仅依据封存原件订正确定字段，不调用模型或浏览器')
+    correction.add_argument('--source',required=True,type=Path)
+    correction.add_argument('--source-index',required=True,type=Path,help='sample_id及原save_receipt路径/哈希的JSONL')
+    correction.add_argument('--output',required=True,type=Path,help='独立新目录，原包不变')
+    correction.add_argument('--sample-id',action='append',dest='sample_ids')
+    correction.add_argument('--field',action='append',dest='fields',help='仅检查/订正指定字段，可重复；省略为全部安全规则')
+    correction.add_argument('--apply',action='store_true',help='生成修订候选；默认仅输出可改性报告')
     finalize=sub.add_parser('finalize-client',help='仅封装精确绑定且PASS的payload质检结果，再以final模式只读复验')
     finalize.add_argument('--source',required=True,type=Path)
     finalize.add_argument('--qc-report',required=True,type=Path)
@@ -90,7 +98,11 @@ def main(argv=None):
         release.add_argument('--cross-package-report',required=True,type=Path,help='绑定有效集合的独立跨包PASS报告')
     args=parser.parse_args(argv)
     try:
-        if args.command=='archive-client':
+        if args.command=='correct-annotations':
+            from .annotation_corrections import correct_annotations
+            result=correct_annotations(args.source,args.output,source_index=args.source_index,
+                sample_ids=args.sample_ids,fields=args.fields,apply=args.apply)
+        elif args.command=='archive-client':
             from .client_reports import archive_client_package
             result=archive_client_package(args.source,args.qc_report,args.output,
                 effective_set=args.effective_set,cross_package_report=args.cross_package_report)
@@ -100,7 +112,7 @@ def main(argv=None):
                 effective_set=args.effective_set,cross_package_report=args.cross_package_report)
         elif args.command=='package':
             if args.layout=='candidate':
-                if args.reviews or args.approved_only or args.evidence_output or args.review_output or args.facts or args.revisions or args.selection_report:
+                if args.reviews or args.approved_only or args.evidence_output or args.review_output or args.facts or args.revisions or args.selection_report or args.execution_evidence:
                     raise ValueError('人工筛选和包外证据参数仅用于 --layout client')
                 from .candidate import build_candidate
                 result=build_candidate(Path(__file__).resolve().parents[3],args.source,args.output)
@@ -109,7 +121,8 @@ def main(argv=None):
                 result=build_client_package(Path(__file__).resolve().parents[3],args.source,args.output,
                     reviews=args.reviews,approved_only=args.approved_only,
                     evidence_output=args.evidence_output,review_output=args.review_output,
-                    facts=args.facts,revisions=args.revisions,selection_report=args.selection_report)
+                    facts=args.facts,revisions=args.revisions,selection_report=args.selection_report,
+                    execution_evidence=read_json(args.execution_evidence) if args.execution_evidence else None)
         elif args.command=='preflight':
             import asyncio
             from .preflight import preflight_plan
