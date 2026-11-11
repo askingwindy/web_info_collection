@@ -111,27 +111,26 @@ def result_execution_binding(s, oid, state, node):
 
 
 def completion_result_summary(evidence, *, final_observation_id):
-    """Client-facing facts only when the required results bind the final frame.
+    """Client-facing facts from the actual captured result observations.
 
-    Return None rather than presenting a prior answer as final-state evidence.
+    Preserve prior source IDs rather than claiming every answer is in the last frame.
     This is an annotation basis, not an independent review or status override.
     """
     if evidence.get('business_goal_status')!='VERIFIED':return None
     rows=[]
     for check in evidence.get('checks',[]):
         if check.get('status')!='VERIFIED':return None
-        proofs=[p for p in check.get('evidence',[]) if p.get('result_execution_binding')
-                and p.get('observation_id')==final_observation_id]
+        proofs=[p for p in check.get('evidence',[]) if p.get('result_execution_binding')]
         if not proofs:continue
         quotes={p.get('quote') for p in proofs if p.get('quote')}
         if len(quotes)!=1:return None
         proof=proofs[0];execution=proof['result_execution_binding']
         rows.append({'field':check.get('field'),'visible_result':proof['quote'],
-            'observation_id':final_observation_id,'node':proof['node'],'url':proof['url'],
+            'observation_id':proof['observation_id'],'node':proof['node'],'url':proof['url'],
             'submission_operation_id':execution['submission']['operation_id'],
             'input_operation_ids':[r['operation_id'] for r in execution['submission']['input_refs']]})
     if not rows:return None
     final_result='；'.join((str(r['field'])+'：' if r['field'] else '')+r['visible_result'] for r in rows)
     return {'protocol':VERSION,'final_result':final_result,
-            'completion_judgement':'本次输入已提交，最终观察中的结果区域显示'+final_result+'。',
+            'completion_judgement':'本次输入已提交；各事项由所列原观察中的实际结果支持：'+final_result+'。',
             'basis':rows,'is_ai_review':False}

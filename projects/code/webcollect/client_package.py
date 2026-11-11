@@ -798,22 +798,15 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
     if len({record['sample_id'] for record in records})!=len(records):raise ValueError('Duplicate original sample across batch sources')
     if not records:
         raise ValueError('No samples found')
-    # New completed-goal plan sources cannot fall back to legacy export by
-    # omitting an option. Raw capture stays internal; candidate is customer form.
+    # Every newly generated customer package uses the current save criteria.
+    # Existing packages and their historical receipts remain untouched.
     if delivery_policy is None:
-        for record in records:
-            boundary = record['batch']/'evidence'/record['sample_id']/'raw'/'boundary.json'
-            if boundary.is_file():
-                original_task = read_json(real_file(boundary, record['batch'])).get('task', {})
-                if original_task.get('fragment', {}).get('plan_protocol') in (
-                        'webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13'):
-                    from .closing_policy import COMPLETED_GOAL_DELIVERY
-                    delivery_policy = COMPLETED_GOAL_DELIVERY
-                    break
+        from .closing_policy import COMPLETE_GOAL_V6_DELIVERY
+        delivery_policy = COMPLETE_GOAL_V6_DELIVERY
     delivery_decisions = {}
     if delivery_policy is not None:
-        from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
-        if delivery_policy != COMPLETED_GOAL_DELIVERY:
+        from .closing_policy import COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY, completion_delivery_decision
+        if delivery_policy not in (COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY):
             raise ValueError('Unknown explicit customer delivery policy')
         eligible = []
         for record in records:

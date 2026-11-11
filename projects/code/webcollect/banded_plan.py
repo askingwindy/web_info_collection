@@ -81,7 +81,10 @@ def remaining_step_allowance(s):
     return None if limit is None else max(0,limit-len(s.trajectory))
 
 
-def system_with_attempt_limit(text, limit):
+def system_with_attempt_limit(text, limit, complete_goal=False):
+    if complete_goal:
+        text=text.replace(V11_PLANNING_GUIDANCE,'').replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；','').replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。','')
+        return text+'\n首轮优先把自由目标设计为可用5–8个必要有效动作的完整自然路径，并逐步核算可达路径和终态证据；自然必要路径可以超过8步，不因长度淘汰。固定requested_goal不得改写，按原目标规划实际所需的全部动作，只有少于5步或无法完成才如实stop。目标冻结后不得缩成阶段目标；全部checks有实际证据且实际至少5步才能形成候选，不设首轮或累计最大步数。short_flow、可信前缀和controlled_exception均不形成有效样本，未完成只内部留证。重规划仅列剩余必要动作，完成即结束，不截断，也不凑步。'
     if limit is None:
         replacements = {
             '5步档自然5步，长档6–8步且第6步之后有具体业务用途；':'',
@@ -293,6 +296,9 @@ STEP = obj({'action':{'enum':['click','type','hotkey','scroll','open_url','back'
             'direction':{'enum':['up','down','left','right']}, 'page_id':text(12),
             'purpose':text(120),'expected':PREDICATE}, ['action','purpose','expected'])
 CHECK = obj({'field':text(120),'page':text(1000),'region':text(120),'visible_text':text(240)})
+# Host placeholder for result-completion tasks: the first round lists the
+# original business items only; the model never guesses a literal endpoint.
+RESULT_FINISH_WHEN={'kind':'visible_text','text':'本次结果由finish_result逐项核验','region':'结果区'}
 PLAN = obj({'attempt_id':text(200),'observation_id':text(200),'band':{'enum':['five','long','short']},
             'goal':text(300),'checks':{'type':'array','maxItems':12,'items':CHECK},'band_reason':text(200),'short_reason':{'type':'string','maxLength':200},
             'steps':{'type':'array','minItems':1,'maxItems':8,'items':STEP},
@@ -389,24 +395,31 @@ def v13_step_narratives(item):
     return item
 
 
-def strip_v13_wire(item, *, wiki=False):
-    """Remove host-owned fields from every nested V13 plan wire shape."""
+def strip_v13_wire(item, *, wiki=False, initial_complete=False, host_finish_when=False):
+    """Remove host-owned fields; 5–8 is a first-path preference, not a cap."""
     v13_step_narratives(item)
     if isinstance(item,dict):
         props=item.get('properties',{})
         if isinstance(props.get('steps'),dict) and 'goal' in props:
-            props['steps']['minItems']=1
+            props['steps']['minItems']=5 if initial_complete else 1
             props['steps'].pop('maxItems',None)
             props.pop('band',None)
-            if wiki:props.pop('finish_when',None)
+            if wiki or host_finish_when:props.pop('finish_when',None)
             item['required']=[key for key in item.get('required',[])
-                              if key!='band' and not (wiki and key=='finish_when')]
+                              if key!='band' and not ((wiki or host_finish_when) and key=='finish_when')]
         if 'source_step_index' in props:props['source_step_index'].pop('maximum',None)
-        if 'required_step_indices' in props:props['required_step_indices']['items'].pop('maximum',None)
-        for child in item.values():strip_v13_wire(child,wiki=wiki)
+        # Conditional allOf branches can contain only minItems/maxItems. Only
+        # the full array schema owns an items definition.
+        if ('required_step_indices' in props
+                and isinstance(props.get('required_step_indices').get('items'),dict)):
+            props['required_step_indices']['items'].pop('maximum',None)
+        for child in item.values():strip_v13_wire(child,wiki=wiki,initial_complete=initial_complete,
+                                                  host_finish_when=host_finish_when)
     elif isinstance(item,list):
-        for child in item:strip_v13_wire(child,wiki=wiki)
-    return item
+        for child in item:strip_v13_wire(child,wiki=wiki,initial_complete=initial_complete,
+                                         host_finish_when=host_finish_when)
+    from .result_completion import schema as result_schema
+    return result_schema(item)
 
 
 def bind_v13_result_checks(value, prompt):
@@ -469,6 +482,11 @@ def bind_reply_scope(arguments, prompt):
             from .wiki_reading import bind_plan_wire, FINISH_WHEN
             if prompt.get('protocol')==V13_VERSION:value['finish_when']=deepcopy(FINISH_WHEN)
             value=bind_plan_wire(value,prompt)
+        elif (prompt.get('result_completion_protocol') == 'webcollect-result-completion-1'
+                and prompt.get('protocol')==V13_VERSION):
+            # 宿主补协议占位：首轮不要求模型预猜终点字面（固定4条w01/w02缺口）。
+            # 旧习惯仍返回的finish_when按Wiki路径同规则被占位替换，原回包保留原值。
+            value['finish_when']=deepcopy(RESULT_FINISH_WHEN)
     rows = prompt['observation'].get('rendered_dom', [])
     # The DOM projection may omit nodes for budget; the current observation's
     # full control set is the honest membership scope for node references.
@@ -534,7 +552,7 @@ def band_for_steps(n):
     return 'short' if n < 5 else 'five' if n == 5 else 'long'
 
 
-def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recovery=False, grounded=False, inherited_band=None,pending_checks=False,direct_completion=False,max_steps=CLOSING_POLICY_ATTEMPT_CEILING,replanning=False,wiki=False,ordinary_minimum=False,extended_actions=False):
+def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recovery=False, grounded=False, inherited_band=None,pending_checks=False,direct_completion=False,max_steps=CLOSING_POLICY_ATTEMPT_CEILING,replanning=False,wiki=False,ordinary_minimum=False,ordinary_maximum=10,extended_actions=False):
     from jsonschema import Draft202012Validator
     schema=plan_schema(grounded,pending_checks=pending_checks,max_steps=max_steps)
     if direct_completion:
@@ -552,8 +570,11 @@ def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recove
     if plan['finish_when']['kind'] in ('scroll_changed','list_changed','value'):
         raise ValueError('ENDPOINT_REQUIRES_INDEPENDENT_CURRENT_FRAME_PREDICATE')
     n=sum(step['action'] not in ('wait','complete') for step in plan['steps'])
-    if ordinary_minimum and remaining is None and not replanning and not recovery and not 5<=n<=10:
-        raise ValueError('ORDINARY_INITIAL_PATH_REQUIRES_FIVE_TO_TEN_NECESSARY_ACTIONS')
+    if ordinary_minimum and remaining is None and not replanning and not recovery and (
+            n<5 or ordinary_maximum is not None and n>ordinary_maximum):
+        upper='' if ordinary_maximum is None else {8:'_TO_EIGHT',10:'_TO_TEN'}.get(
+            ordinary_maximum,f'_TO_{ordinary_maximum}')
+        raise ValueError(f'ORDINARY_INITIAL_PATH_REQUIRES_FIVE{upper}_OR_MORE_NECESSARY_ACTIONS')
     if remaining is not None:
         # A replan re-plans the remaining path inside the session's shared
         # business-step ceiling; the frozen band label is inherited as-is and
@@ -974,6 +995,41 @@ class Controller:
         self.budget_feedback=None
         self.budget_correction_contexts=set()
 
+    def _normalize_select_all_predicate(self,s,step):
+        """对齐全选语义：ctrl/cmd+a 的输入选择期望与实际按键、当前输入值对齐。
+
+        A model writing kind=selected for an input-text select-all (fixed-4
+        w02 shape) described the same determinable fact as text_selected; the
+        host rewrites it against the bound/focused input's current value so a
+        successful select-all is not vetoed by the enum difference. Ambiguous
+        or non-input targets keep the original predicate (binding checkpoint
+        handles them); the transform is journaled.
+        """
+        keys=execution_keys(step.get('keys') or [])
+        if keys not in (['ctrl','a'],['meta','a']):
+            return
+        control=None
+        if step.get('target'):
+            matches=self.targets(s,step['target'])
+            if len(matches)==1:control=s.current['controls'].get(matches[0])
+        else:
+            focused=[c for c in s.current['controls'].values()
+                     if (c.get('value') or {}).get('focused') is True
+                     and c.get('element',{}).get('native_role') in ('input','textarea')]
+            if len(focused)==1:control=focused[0]
+        value=(control or {}).get('value',{}).get('value')
+        if (not control or control.get('element',{}).get('native_role') not in ('input','textarea')
+                or not isinstance(value,str) or not value):
+            return
+        normalized={'kind':'text_selected','text':value}
+        if step['expected']==normalized:return
+        original=deepcopy(step['expected'])
+        step['expected']=normalized
+        self.plan['steps'][self.position]=step
+        s.event('plan-predicate-normalized',position=self.position,
+            original=original,normalized=deepcopy(normalized),
+            basis='hotkey ctrl/cmd+a on uniquely bound focused input replaces its whole text')
+
     def _band_advice(self,budget):
         keep=('targets','assigned_band','reservation_ordinal','assignment_basis','planned','pending_review','in_flight','deficits','short_reserve')
         result={k:deepcopy(budget[k]) for k in keep if k in budget}
@@ -1198,12 +1254,17 @@ class Controller:
         if s.task['fragment'].get('plan_protocol') == V11_VERSION and V11_PLANNING_GUIDANCE not in payload['system']:
             payload['system'] += V11_PLANNING_GUIDANCE
         limit=attempt_limit(s.task,planning_band(s.task,s.context) if first else getattr(self,'frozen_band',None))
+        from .closing_policy import completed_goal_only
+        complete_goal=completed_goal_only(s.task)
         payload['system'] = system_with_attempt_limit(
-            payload['system'] + (FIRST_GOAL_SEMANTICS if first else BRANCH_GOAL_SEMANTICS),limit)
-        if limit==10:
+            payload['system'] + (FIRST_GOAL_SEMANTICS if first else BRANCH_GOAL_SEMANTICS),limit,complete_goal)
+        if complete_goal:
+            payload['planning_range']={'ordinary_minimum':5,'initial_complete_path_maximum':None,'initial_complete_path_preferred_maximum':8,'cumulative_maximum':None,'remaining_effective_steps':None,'short_flow':'不属于有效候选'}
+            payload.setdefault('replan_contract',{}).update(budget_instruction='仅规划完整原目标的剩余必要动作，不设累计执行步数上限；不要重放已完成或无效果的动作。')
+        elif limit==10:
             payload['planning_range']={'ordinary_minimum':5,'cumulative_maximum':10,'remaining_effective_steps':remaining_step_allowance(s),'short_flow':'自然1–4步保留，不凑步'}
             payload.setdefault('replan_contract',{}).update(remaining_effective_limit=remaining_step_allowance(s),attempt_limit=10,budget_instruction='仅规划剩余有效动作，累计最多10步；重规划不重置。不要重放已完成或无效果的动作。')
-        if limit is None:
+        if limit is None and not complete_goal:
             payload.pop('bands',None)
             contract_payload=payload.get('replan_contract',{})
             for key in ('remaining_effective_limit','budget_instruction','attempt_limit'):
@@ -1212,7 +1273,8 @@ class Controller:
                 contract_payload['fields']='steps必填；其他字段继承原目标与证据，不设步数额度'
         from .plan_execution import enabled as execution_enabled
         if execution_enabled(s.task):
-            payload['system']+='动作效果与目标完成分开：目录或正文链接点击按原目标、实际href和实测落地核验；未来正文用原问题描述，不把预猜关键词当跳转成功的唯一依据。宿主确认落地只推进当前动作，原问题仍由checks和终点证据独立核验。输入必须先真实聚焦；单位已满足目标只核对不重选。无效前提反馈后只重规划剩余必要动作，累计最多10步，不凑步。'
+            execution_range='不设累计执行步数上限，完成即结束' if complete_goal else '累计最多10步'
+            payload['system']+=f'动作效果与目标完成分开：目录或正文链接点击按原目标、实际href和实测落地核验；未来正文用原问题描述，不把预猜关键词当跳转成功的唯一依据。宿主确认落地只推进当前动作，原问题仍由checks和终点证据独立核验。输入必须先真实聚焦；单位已满足目标只核对不重选。无效前提反馈后只重规划剩余必要动作，{execution_range}，不凑步。'
         from .plan_evidence import READING_COMPLETION_POLICY
         if (s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY
                 and not __import__('webcollect.wiki_reading',fromlist=['enabled']).enabled(s.task)):
@@ -1238,28 +1300,39 @@ class Controller:
                 if getattr(self,'completion_feedback',None):payload['completion_feedback']=deepcopy(self.completion_feedback)
         if s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION):
             payload['system']=payload['system'].replace(V11_PLANNING_GUIDANCE,'')
+            initial_ceiling=None if complete_goal else 10
+            step_ceiling=None if complete_goal else 10
+            path_range='5–8' if complete_goal else '5–10'
             if not first:
-                payload['system']=('保持已冻结原目标与checks，只返回本轮options允许的一个JSON决定。replan仅列剩余有用动作，可少于5步，不重复已执行动作；累计最多10步。'
-                    '目标已完成立即申请完成，实际1–4步仍标short_flow；缺证继续原目标或如实stop。动作expected核实真实操作效果，完成核验必须支持原目标。'
+                branch_completion=('全部原目标与checks有证据才能ready；实际不足5步、阶段完成或缺证都不形成有效候选，无法继续只内部留证。'
+                    if complete_goal else '目标已完成立即申请完成，实际1–4步仍标short_flow；缺证继续原目标或如实stop。')
+                branch_range='不设累计执行步数上限' if complete_goal else f'累计最多{step_ceiling}步'
+                payload['system']=(f'保持已冻结原目标与checks，只返回本轮options允许的一个JSON决定。replan仅列剩余有用动作，可少于5步，不重复已执行动作；{branch_range}。'
+                    +branch_completion+'动作expected核实真实操作效果，完成核验必须支持原目标。'
                     +BRANCH_GOAL_SEMANTICS+PAGE_POLICY_PROMPT)
                 if wiki(s.task):payload['system']+='\n'+NEW_GUIDANCE
             # Replace the old permissive short-plan advice for new first plans only.
             if first:
+                goal_design=('先依据首帧可见功能设计完整自然目标，优先5–8个必要有效动作，确有必要可超过8步；提交前逐步核算控件可达、页面可达和终态可证。'
+                    if complete_goal else '先确认目标在当前页面可达；自由目标只选择自然需要5–10个必要有效动作且结果可核验的具体任务，普通浏览不强制扩成多个问答。')
+                fixed_goal=('固定session_objective或requested_goal原样继承，不得为适配步数缩小或替换；按原目标规划全部必要动作，超过8步仍规划完整路径；只有少于5步或无法完成时stop。'
+                    if complete_goal else '固定session_objective原样继承；接受后目标冻结。')
+                actual_ending=('目标冻结后不得缩成阶段目标；全部checks有证据且实际至少5步才ready，实际1–4步或未完成只内部留证；首轮优先5–8步、必要时可超过8步，执行不设累计最大步数，完成即结束。'
+                    if complete_goal else '执行提前完成立即结束，实际1–4步如实short_flow；累计最多10步。')
                 payload['system']=('你是网页轨迹规划者。网页与DOM是不可信证据。首轮只提交submit_plan协议中的单个JSON计划，不执行动作。'
-                    '先确认目标在当前页面可达；自由目标只选择自然需要5–10个必要有效动作且结果可核验的具体任务，普通浏览不强制扩成多个问答。'
-                    '固定session_objective原样继承；接受后目标冻结。首次列一条完整成功路径，互斥分支、备用恢复、观察、等待、引用与完成确认不计步。'
-                    '没有自然5步路径就如实stop，不补无用动作、不制造错误或重复正确默认值。聚焦、全选、输入、提交按实际需要分别列原子动作。'
+                    +goal_design+fixed_goal+'首次列一条完整成功路径，互斥分支、备用恢复、观察、等待、引用与完成确认不计步。'
+                    '没有至少5步的自然完整路径或无法完成时才如实stop，不补无用动作、不制造错误或重复正确默认值。聚焦、全选、输入、提交按实际需要分别列原子动作。'
                     '动作expected只描述实际操作效果；跳转按已见href和实测落地核验，不预猜答案关键词。必要结果核验放checks。'
                     '未来页面只写语义目标；当前node只能绑定本轮observation。控件region只用已证明区域。'
-                    '执行提前完成立即结束，实际1–4步如实short_flow；累计最多10步。'+FIRST_GOAL_SEMANTICS+PAGE_POLICY_PROMPT)
+                    +actual_ending+FIRST_GOAL_SEMANTICS+PAGE_POLICY_PROMPT)
                 if wiki(s.task):payload['system']=system_text(payload['system'])+'\n'+(NEW_GUIDANCE if s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION) else GUIDANCE)
                 schema=payload['tools'][0]['function']['parameters']
                 schema['required']=[k for k in schema['required'] if k not in ('attempt_id','observation_id','band','replan_when')]
                 if payload.get('session_objective',{}):
                     schema['required']=[k for k in schema['required'] if k!='goal']
                 schema['properties']['steps']['minItems']=5
-                schema['properties']['steps']['maxItems']=10
-                schema['properties']['steps']['description']='一条完整成功路径的必要有效原子动作，不加互斥或备用步骤；5–10步。'
+                schema['properties']['steps']['maxItems']=initial_ceiling
+                schema['properties']['steps']['description']=f'一条完整成功路径的必要有效原子动作，不加互斥或备用步骤；{path_range}步。'
                 # Native tool providers must see the fillable fields at the
                 # root. The real fixed baseline returned empty arguments with
                 # a root-only oneOf. Keep both routes explicit in one object;
@@ -1273,11 +1346,20 @@ class Controller:
                             'properties':{key:False for key in plan_fields}},
                     'else':{'required':plan_required,'properties':{'reason':False}}}]
                 payload['tools'][0]['function']['parameters']=schema
-                payload['system']+='submit_plan直接填写顶层goal、steps、checks、finish_when等计划字段，choice可省或为plan；attempt_id、observation_id、band、replan_when可省，由工程按本请求和动作数补齐，显式冲突仍拒绝。steps和checks须为JSON数组，expected和target须为JSON对象，不将其编码为字符串。没有自然5步完整路径时只提交{"choice":"stop","reason":"实际原因"}；宿主记录本任务不适合普通长流程，不废弃生产者页面。'
-            payload['planning_range']={'protocol':V12_VERSION,'initial_complete_path_minimum':5,'cumulative_maximum':10,'remaining_effective_steps':remaining_step_allowance(s),'replanning_minimum':1,'actual_short_flow':'按最终有效动作事实标记，完成即结束'}
+                payload['system']+='submit_plan直接填写顶层goal、steps、checks、finish_when等计划字段，choice可省或为plan；attempt_id、observation_id、band、replan_when可省，由工程按本请求和动作数补齐，显式冲突仍拒绝。steps和checks须为JSON数组，expected和target须为JSON对象，不将其编码为字符串。没有至少5步的自然完整路径或无法完成时只提交{"choice":"stop","reason":"实际原因"}；宿主记录本任务不适合普通长流程，不废弃生产者页面。'
+                if s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1':
+                    # 收口新计算完成协议的首轮接口：不要求预猜finish_when字面，
+                    # 由宿主补协议占位；执行后沿finish_result逐项绑定结果。
+                    payload['result_completion_protocol']='webcollect-result-completion-1'
+                    payload['system']=payload['system'].replace(
+                        'submit_plan直接填写顶层goal、steps、checks、finish_when等计划字段，',
+                        'submit_plan直接填写顶层goal、steps、checks等计划字段，finish_when由工程生成且禁止填写，')
+                    payload['system']=payload['system'].replace(
+                        '必要结果核验放checks。','必要结果核验放checks，只描述要看的业务结果，不预猜答案字面。')
+            payload['planning_range']={'protocol':V12_VERSION,'initial_complete_path_minimum':5,'initial_complete_path_maximum':initial_ceiling,'initial_complete_path_preferred_maximum':8 if complete_goal else None,'cumulative_maximum':step_ceiling,'remaining_effective_steps':remaining_step_allowance(s),'replanning_minimum':1,'actual_short_flow':'不属于有效候选' if complete_goal else '按最终有效动作事实标记，完成即结束'}
         if s.task['fragment'].get('plan_protocol')==V13_VERSION:
             payload['system']+='\n每步rationale说明原目标与已知规划依据为何需要此动作，区别purpose的步骤目标；当前观察可见事实才能用当前时态，后续步骤用计划依据，不冒称未来界面已看见。expected_result描述执行后的预期可见变化，不写成实测结果，不仅复述控件名或内部状态；计算只写结果区应出现本次输入的结果，不预猜数值。两项均用简体中文，原界面文字引用保持原样。'
-            payload['system']+='\n动作空间含click、double_click、right_click、drag、type、select、hotkey、scroll、open_url、back、wait；complete由完成申请收尾。按真实页面用途选择，无动作类型配额。drag用target和end_target两个有据语义目标，宿主重绑并生成坐标；禁止提供猜测坐标。wait仅用于真实加载，duration_ms指定等待，零有效步；首轮仍须5–10个必要业务动作。'
+            payload['system']+=f'\n动作空间含click、double_click、right_click、drag、type、select、hotkey、scroll、open_url、back、wait；complete由完成申请收尾。按真实页面用途选择，无动作类型配额。drag用target和end_target两个有据语义目标，宿主重绑并生成坐标；禁止提供猜测坐标。wait仅用于真实加载，duration_ms指定等待，零有效步；首轮优先{path_range}个必要业务动作，完整自然路径可超过该偏好范围。'
             if s.task['fragment'].get('result_execution_policy'):
                 from .result_execution import page_feedback
                 payload['page_feedback']=page_feedback(load_json(s.current['evidence']['state']['path']))
@@ -1289,12 +1371,19 @@ class Controller:
                 payload['system']=payload['system'].replace(
                     'submit_plan直接填写顶层goal、steps、checks、finish_when等计划字段',
                     'submit_plan直接填写顶层goal、steps、checks等计划字段，finish_when由工程生成且禁止填写')
+                if complete_goal:
+                    # V13 Wiki uses the same unlimited execution policy as other
+                    # V6 tasks; historical V11/V12 guidance remains unchanged.
+                    payload['system']=payload['system'].replace(
+                        '累计最多10有效动作，不补无用动作',
+                        '首轮规划5–8个必要有效动作，执行不设累计有效动作上限，完成即结束，不补无用动作')
             payload['system']+=('\nband和Wiki固定finish_when均由宿主生成，禁止填写。checks只列最终必要业务结果；输入值、聚焦、滚动等过程效果写steps.expected，不另列checks。'
                 '数值结果以本次输入与提交后的真实结果区域为准；宿主不代算，不要求预猜数值；原目标已有指定数值时照实核对，否则读取执行后的真实结果；不把输入回显或静态说明标签作为完成依据。'
                 'checks.page只用已注册page_id或真实URL；同页数值结果缺page由宿主绑定p0，缺region由宿主绑定结果区；跨页结果必须给已注册落地page_id，不填描述性页名或臆测URL。'
                 '计算或格式验证页已经露出计算/提交按钮且尚无本次新结果时，下一必要动作必须实际click提交，不得连续滚动消耗预算；已实测自动更新时以真实结果为准，不强制增加点击。')
             for key in ('tools','plan_schema'):
-                if key in payload:strip_v13_wire(payload[key],wiki=wiki(s.task))
+                if key in payload:strip_v13_wire(payload[key],wiki=wiki(s.task),initial_complete=first and complete_goal,
+                    host_finish_when=s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1')
             payload['protocol']=V13_VERSION
             if 'planning_range' in payload:payload['planning_range']['protocol']=V13_VERSION
         else:
@@ -1309,6 +1398,13 @@ class Controller:
                     for child in item:legacy(child)
             for key in ('tools','plan_schema'):
                 if key in payload:legacy(payload[key])
+        if not first and complete_goal and not wiki(s.task) and s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1':
+            from .result_completion import catalog
+            payload['result_completion_protocol']='webcollect-result-completion-1'
+            payload['result_evidence_catalog']=catalog(s)
+            payload['original_result_checks']=deepcopy(self.frozen_plan.get('checks',[]))
+            payload['system']+='\n原目标结果已经出现时选择finish_result，并提交result_answer={check_answers:[{check_index:原checks零起始编号,evidence_ids:[result_evidence_catalog中的编号]}]}。逐项覆盖原目标全部checks；只引用实际输出，不引用标题、标签或输入回显。缺项继续剩余动作或重规划，不改目标，不用stop表示完成。'
+            if getattr(self,'completion_feedback',None):payload['completion_feedback']=deepcopy(self.completion_feedback)
         return payload
 
     def _executed_summary(self,s):
@@ -1324,14 +1420,22 @@ class Controller:
         return rows
 
     def _attempt_facts(self,s):
-        """Definite failures, zero-effect and unresolved attempts stay visible."""
+        """Read sealed attempt events, not their path/sha256 reference rows."""
         facts=[]
         for ref in getattr(s,'business_attempt_refs',[]):
-            if ref.get('outcome')=='VERIFIED':continue
-            facts.append({'number':ref.get('number'),'outcome':ref.get('outcome'),
-                'dispatched':ref.get('actual_dispatches_delta',0)>0,
-                'effective':ref.get('effective_steps_delta',0)>0,
-                'reason':str(ref.get('reason') or '')[:160]})
+            verify_evidence([ref])
+            attempt=load_json(ref['path'])
+            if attempt.get('kind')!='business-attempt':
+                raise ValueError('Attempt feedback reference is not a sealed business-attempt event')
+            if attempt.get('outcome')=='VERIFIED':continue
+            step=attempt.get('step') or {}
+            facts.append({'number':attempt.get('number'),'outcome':attempt.get('outcome'),
+                'action':step.get('action'),'target':step.get('target'),'value':step.get('value'),
+                'actual_dispatches_delta':attempt.get('actual_dispatches_delta'),
+                'effective_steps_delta':attempt.get('effective_steps_delta'),
+                'dispatched':attempt.get('actual_dispatches_delta',0)>0,
+                'effective':attempt.get('effective_steps_delta',0)>0,
+                'reason':str(attempt.get('reason') or '')[:160]})
         return facts
 
     def _remaining_plan(self):
@@ -1344,6 +1448,15 @@ class Controller:
                 **{k:deepcopy(step[k]) for k in ('value','keys','direction','page_id') if k in step},
                 **({'target':deepcopy(step['target'])} if step.get('target') else {})})
         return rows
+
+    def pending_followup_options(self):
+        # Waiting/scrolling can reveal a delayed result. This advances only the
+        # plan cursor; the unproved action never gains an effective-step credit.
+        remaining=(self.plan or {}).get('steps',[])[self.position+1:]
+        if remaining and remaining[0].get('action') in ('wait','scroll'):
+            return [{'choice':'continue','observe_after_pending':True,
+                     'meaning':'上一步已派发但效果尚未证实；继续原计划下一步等待/滚动取结果，不重复提交，不补有效步'}]
+        return []
 
     def _branch_reason(self,s):
         if self.pending_effect is not None:
@@ -1374,6 +1487,11 @@ class Controller:
         from .wiki_reading import enabled as wiki
         if wiki(s.task) and self.plan and predicate==self.plan['finish_when']:
             return self.fact_progress(s)['session_objective']['status']=='VERIFIED'
+        from .result_completion import enabled as result_completion_task
+        if (result_completion_task(s.task) and self.plan and predicate==self.plan['finish_when']
+                and predicate==RESULT_FINISH_WHEN):
+            # 占位终点由finish_result核验结果驱动，不做字面证明。
+            return self.fact_progress(s)['business_goal_status']=='VERIFIED'
         contract = contract_for(s.task)
         if contract and predicate['kind'] in ('goal_evidence','search_results','document_changed'):
             if predicate['kind'] == 'document_changed':
@@ -1398,14 +1516,14 @@ class Controller:
         from .plan_evidence import READING_COMPLETION_POLICY, remaining_plan_coverage
         from .wiki_reading import enabled as wiki
         ordinary_wiki=wiki(s.task)
-        completion={}
-        if not ordinary_wiki and s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY:
+        completion=({'result_completion':deepcopy(s.result_completion)} if getattr(s,'result_completion',None) else {})
+        if not ordinary_wiki and not getattr(s,'result_completion',None) and s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY:
             completion={'reading_plan_completion':{'protocol':READING_COMPLETION_POLICY,
                 'original_plan':self.original_plan_event,'current_plan':self.plan_event,
                 'original_plan_sha256':object_sha256(self.frozen_plan),'current_plan_sha256':object_sha256(self.plan),
                 'position':self.position,
                 'coverage':remaining_plan_coverage(s,self.plan,self.position,self.fact_progress(s))}}
-        return {**completion,'source':('host_wiki_reading_completion' if ordinary_wiki else 'host_goal_evidence' if self.plan['finish_when']['kind']=='goal_evidence' else
+        return {**completion,'source':('host_wiki_reading_completion' if ordinary_wiki else 'host_result_completion' if getattr(s,'result_completion',None) else 'host_goal_evidence' if self.plan['finish_when']['kind']=='goal_evidence' else
                           'model_visual' if key in self.visual_confirmations else 'host_rendered_state'),
                 'predicate':self.plan['finish_when'],'image':s.current['evidence']['image'],
                 'visual_confirmation':self.visual_confirmations.get(key),
@@ -1415,7 +1533,7 @@ class Controller:
                     'executed_effective_steps':len(s.trajectory),
                     'remaining_planned_steps':max(0,len(self.plan['steps'])-self.position),
                     'finish_when_established_on_first_frame':bool(getattr(self,'endpoint_established_at_first_frame',False)),
-                    'completion_origin':('agent_finish_reading' if ordinary_wiki else 'agent_finish_early' if getattr(self,'early_finish',None)
+                    'completion_origin':('agent_finish_reading' if ordinary_wiki else 'agent_finish_result' if getattr(s,'result_completion',None) else 'agent_finish_early' if getattr(self,'early_finish',None)
                                          else 'host_plan_endpoint')}}
 
     def visual_option(self,predicate):
@@ -1435,6 +1553,7 @@ class Controller:
         return [{'choice':name,'meaning':meaning}]
 
     def remaining_coverage(self,s):
+        if getattr(s,'result_completion',None):return None  # Explicit original-check result coverage replaces route redundancy.
         from .wiki_reading import enabled as wiki
         if wiki(s.task):return None  # Original check coverage is validated by explicit completion.
         from .plan_evidence import READING_COMPLETION_POLICY, remaining_plan_coverage
@@ -1506,6 +1625,11 @@ class Controller:
             options=deepcopy(options)
             if not any(o['choice']=='finish_reading' for o in options):
                 options.insert(0,{'choice':'finish_reading','meaning':'原问题及每项原checks已有累计正文/实际动作支持时提交完整reading_answer申请完成；缺项则继续或如实stop'})
+        from .closing_policy import completed_goal_only
+        if completed_goal_only(s.task) and not wiki(s.task) and options is not None and s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1':
+            from .result_completion import catalog
+            if catalog(s) and not any(o['choice']=='finish_result' for o in options):
+                options=[{'choice':'finish_result','meaning':'原目标全部事项已有本次提交后的实际输出；逐项提交result_answer引用申请完成'},*options]
         from .react_session import ReactStop, DecisionRequestError, BudgetStop, OutcomeUnknown
         if wiki(s.task) and s.unknown:
             raise ReactStop('blocked','WIKI_READING_UNRESOLVED_UNKNOWN: 原请求未结算，不重发','interrupted',unknown=True)
@@ -1537,6 +1661,8 @@ class Controller:
         grounded = bool(contract)
         from .direct_completion import enabled as explicit
         direct_completion=explicit(s.task)
+        from .closing_policy import completed_goal_only
+        complete_goal=completed_goal_only(s.task)
         if not self.submitted:
             limit=attempt_limit(s.task,planning_band(s.task,s.context))
             content_plan=(response.get('response_kind')=='strict_plan_content'
@@ -1561,7 +1687,7 @@ class Controller:
                     issues=initial_plan_issues(arguments,s.current,contract,max_steps=limit)
                 if issues:raise ValueError('INITIAL_PLAN_HAS_DETERMINISTIC_ERRORS')
                 plan=validate_plan(arguments,s.attempt_id,s.current['observation_id'],s.task['fragment']['allowed_actions'],recovery=error_page,grounded=grounded,
-                    pending_checks=s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS,direct_completion=direct_completion,max_steps=limit,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),extended_actions=s.task['fragment'].get('plan_protocol')==V13_VERSION)
+                    pending_checks=s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS,direct_completion=direct_completion,max_steps=limit,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),ordinary_maximum=None if complete_goal else limit or 10,extended_actions=s.task['fragment'].get('plan_protocol')==V13_VERSION)
                 if error_page and (len(plan['steps'])!=1 or plan['steps'][0]['action']!='open_url'
                                    or plan['steps'][0].get('page_id') not in ['p'+str(i) for i in range(len(s.page_urls))]):
                     raise ValueError('ERROR_PAGE_ONLY_REGISTERED_RECOVERY_ALLOWED')
@@ -1729,6 +1855,21 @@ class Controller:
         if direct_completion and response.get('citations'):
             s.answer_citation=s._last_decision
             self.citation_offered_at=s.current['observation_id'];self.completion_offered_at=s.current['observation_id']
+        if response['choice']=='finish_result':
+            from .result_completion import answer_rows
+            s.result_completion=s._last_decision
+            try:
+                answer_rows(s,self.frozen_plan,page_binding=self.frozen_page_binding)
+                if self.fact_progress(s).get('business_goal_status')!='VERIFIED':
+                    raise ValueError('RESULT_COMPLETION_ORIGINAL_ITEMS_NOT_ESTABLISHED')
+            except ValueError as error:
+                s.result_completion=None;self.selection=None
+                self.completion_feedback={'error':str(error),'instruction':'仅引用result_evidence_catalog实际输出并逐项覆盖原checks；缺项继续原目标，不改写已见结果。'}
+                s.event('completion-validation-feedback',feedback=self.completion_feedback,rejected_decision=s._last_decision)
+                return
+            self.pending_effect=None;self.selection=None;self.completion_feedback=None
+            await self.finish(s,'Agent申请完成，原目标全部事项已由本次提交后的实际结果与原观察引用核验')
+            return
         if grounded and response['choice'].startswith('cite:'):
             s.answer_citation = s._last_decision
             self.selection = None
@@ -1819,6 +1960,10 @@ class Controller:
                 'goal_completion':'UNCONFIGURED_pending_independent_QC'}
             await self.finish(s,'Agent申请提前完成：剩余计划确属冗余，当前同步末帧已证实终点；目标完成状态待独立QC',endpoint=True)
         elif response['choice']=='continue':
+            if self.selection.get('observe_after_pending') and self.pending_effect is not None:
+                s.event('plan-pending-followup',position=self.position,expected=self.pending_effect['predicate'],
+                        reason='Continue a planned observation without replaying the dispatched action',effective_step_delta=0)
+                self.position+=1;self.pending_effect=None
             if getattr(self,'_early_finish_asked',False):
                 self._early_finish_asked=False
                 self.early_finish_declined=True
@@ -1841,7 +1986,7 @@ class Controller:
                 proposed={**{k:deepcopy(v) for k,v in self.plan.items() if k not in ('steps','attempt_id','observation_id')},**proposed}
             try:
                 plan=validate_plan(proposed,s.attempt_id,s.current['observation_id'],s.task['fragment']['allowed_actions'],remaining=remaining,grounded=grounded,
-                    inherited_band=self.frozen_band if modern else None,pending_checks=modern,direct_completion=direct_completion,max_steps=limit,replanning=True,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),extended_actions=s.task['fragment'].get('plan_protocol')==V13_VERSION)
+                    inherited_band=self.frozen_band if modern else None,pending_checks=modern,direct_completion=direct_completion,max_steps=limit,replanning=True,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),ordinary_maximum=None if complete_goal else limit or 10,extended_actions=s.task['fragment'].get('plan_protocol')==V13_VERSION)
             except ValueError as error:
                 context_key=(s.current['observation_id'],object_sha256(options))
                 if (str(error)!='PLAN_EXCEEDS_FROZEN_REMAINING_STEPS'
@@ -1942,21 +2087,30 @@ class Controller:
                 self.remaining_plan_feedback=coverage
                 self.early_finish_declined=True
                 if remaining_step_allowance(s) is None or remaining_step_allowance(s)>0:
+                    from .closing_policy import completed_goal_only
+                    stop_meaning=('原目标未完成，只保留内部原始记录，不形成有效样本' if completed_goal_only(s.task)
+                                  else '如实保留短流程或未完成片段，不声称原目标全部完成')
                     await self.request(s,[{'choice':'continue','meaning':'剩余目的尚未被正文证据覆盖，继续原计划中有用步骤'},
                         {'choice':'replan','meaning':'保持原问题，按实际已见事实修订剩余有用路径'},
-                        {'choice':'stop','meaning':'如实保留短流程或未完成片段，不声称原目标全部完成'}])
+                        {'choice':'stop','meaning':stop_meaning}])
                     return
                 endpoint=False
-                reason='有效动作额度已用完，剩余阅读目的未全部核验；如实保留片段'
+                reason='有效动作额度已用完，剩余阅读目的未全部核验；原目标未完成'
         from .plan_evidence import unverified_required_checks
         unverified=unverified_required_checks(s.goal_evidence)
+        from .closing_policy import completed_goal_only
+        if completed_goal_only(s.task):
+            unverified += [{'field':c.get('field'),'status':c.get('status'),'missing_binding_fields':c.get('missing_binding_fields')}
+                           for c in s.goal_evidence.get('checks',[]) if c.get('status')=='PENDING']
         from .wiki_reading import enabled as wiki
-        if endpoint and not wiki(s.task) and attempt_limit(s.task,getattr(self,'frozen_band',None))==10 and unverified:
-            if remaining_step_allowance(s)>0:
+        from .closing_policy import effective_limit, completed_goal_only
+        if endpoint and not wiki(s.task) and (effective_limit(s.task) is not None or completed_goal_only(s.task)) and unverified:
+            remaining=remaining_step_allowance(s)
+            if remaining is None or remaining>0:
                 await self.offer_weak_endpoint(s,unverified)
                 return
             endpoint=False
-            reason='累计10个有效动作已用完，必要结果检查尚未核验；如实保留片段'
+            reason='有效动作额度已用完，必要结果检查尚未核验；原目标未完成，只保留内部原始记录'
         s.event('goal-evidence', **s.goal_evidence)
         result=await s._native_finish({'observation_id':s.current['observation_id'],'stop_reason':'ready' if endpoint else 'no_path',
                                      'summary':reason,'evidence_refs':[s.current['observation_id']]})
@@ -1986,6 +2140,9 @@ class Controller:
             from .react_session import ReactStop
             raise ReactStop('blocked','PRE_DISPATCH_NO_PROGRESS: 同一状态和前提连续反馈后仍未修正；零派发，不计有效动作','collector')
         s._consume('max_replans')
+        from .closing_policy import completed_goal_only
+        range_instruction=('执行不设累计有效动作上限，完成即结束' if completed_goal_only(s.task)
+                           else '所有聚焦、输入及提交累计最多10个有效动作')
         feedback={'reason_code':code,'reason':reason,'stage':'compile_before_dispatch',
             'action_dispatched':False,'effective_step_delta':0,'position':self.position,
             'observation_id':s.current['observation_id'],'target':cid,
@@ -1994,7 +2151,7 @@ class Controller:
             'options':deepcopy(control.get('binding',{}).get('options',[])),
             'completed_effective_steps':len(s.trajectory),'actual_dispatches':s.actual_dispatches,
             'remaining_effective_limit':remaining_step_allowance(s),
-            'instruction':'保留原目标和checks，仅修订剩余必要动作。缺聚焦先安排真实click；已满足选项只核对、不重复select；选项按实际value与label对应，不猜。所有聚焦、输入及提交累计最多10个有效动作，不凑步。'}
+            'instruction':'保留原目标和checks，仅修订剩余必要动作。缺聚焦先安排真实click；已满足选项只核对、不重复select；选项按实际value与label对应，不猜。'+range_instruction+'，不凑步。'}
         s.event('plan-compile-mismatch',**feedback)
         await self.request(s,[{'choice':'replan','meaning':'依据当前前提、值和选项重规划未派发的剩余必要步骤','compile_feedback':feedback},
                              {'choice':'stop','meaning':'无法有据继续，如实保留当前片段'}])
@@ -2050,13 +2207,21 @@ class Controller:
                 await self.request(s, options)
                 return
         if self.pending_effect is not None:
+            from .wiki_reading import enabled as wiki
+            # A wrong per-step prediction does not negate independently bound
+            # original results. Wiki still requires its explicit cited answer.
+            if (not wiki(s.task) and self.fact_progress(s).get('business_goal_status')=='VERIFIED'
+                    and self.proved(self.plan['finish_when'],s) and not self.continue_reading(s)):
+                self.pending_effect=None
+                await self.finish(s,'步骤预测未证实，但原目标所有事项已由本次输入提交后的实际结果核验')
+                return
             predicate=self.pending_effect['predicate']
             if self.proved(predicate,s):
                 self.record_late_effect(s,predicate)
                 self.position+=1;self.pending_effect=None
             else:
                 await self.request(s,self.visual_option(predicate)+self.image_option(s,object_sha256(predicate),'同帧原图/ROI')+
-                    [{'choice':'replan','meaning':'按实际结果修订剩余路径'}, {'choice':'stop','meaning':'如实结束'}]);return
+                    self.pending_followup_options()+[{'choice':'replan','meaning':'按实际结果修订剩余路径'}, {'choice':'stop','meaning':'如实结束'}]);return
         if self.last_document != s.current['document_identity']:
             from .plan_evidence import expected_navigation
             expected = expected_navigation(s,self) if s.task['fragment']['plan_protocol'] in (V2_VERSION,V3_VERSION,V4_VERSION,V5_VERSION,V6_VERSION,V7_VERSION,V8_VERSION,V9_VERSION,V10_VERSION,VERSION) else None
@@ -2075,10 +2240,10 @@ class Controller:
         if limit is not None and consumed>=limit:
             from .wiki_reading import enabled as wiki
             if wiki(s.task):
-                await self.request(s,[{'choice':'stop','meaning':'已到累计10有效步；缺任何原阅读事项时如实停止，不补步'}])
+                await self.request(s,[{'choice':'stop','meaning':f'已到累计{limit}有效步；缺任何原阅读事项时如实停止，不补步'}])
                 return
             unit='个有效业务动作' if effective_ceiling is not None else '次原子尝试'
-            s._range_close(limit_kind(limit),f'达到{limit}{unit}，结束已证连续片段');return
+            s._range_close(limit_kind(limit,effective=effective_ceiling is not None),f'达到{limit}{unit}，原目标未完成时只保留内部原始记录');return
         if self.position>=len(self.plan['steps']):
             if self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False):
                 unverified=self.weak_endpoint_unverified(s)
@@ -2091,6 +2256,8 @@ class Controller:
                      *self.image_option(s,object_sha256(self.plan['finish_when']),'当前同帧原分辨率图'), {'choice':'stop','meaning':'如实结束'}]
             await self.request(s,options);return
         step=self.plan['steps'][self.position]; action=step['action']
+        if action=='hotkey' and isinstance(step.get('expected'),dict) and step['expected'].get('kind')=='selected':
+            self._normalize_select_all_predicate(s,step)
         # A future scroll is a hypothesis. Newly revealed submission controls
         # can invalidate it; only the model chooses the actual remaining action.
         if (contract and contract['kind']=='calculation' and action=='scroll'
@@ -2247,9 +2414,9 @@ class Controller:
             await self.recover_precondition(s,step,cid,error.code,str(error))
             return
         except ValueError as error:
-            from .closing_policy import effective_limit
-            unchanged_selection=(effective_limit(s.task) is not None and action=='select'
-                                 and str(error)=='Unchanged selection is not effective')
+            from .closing_policy import effective_limit, completed_goal_only
+            unchanged_selection=((effective_limit(s.task) is not None or completed_goal_only(s.task))
+                                 and action=='select' and str(error)=='Unchanged selection is not effective')
             if (not isinstance(error,SelectionValueMismatch) and not unchanged_selection):
                 raise
             if s.task['fragment'].get('plan_protocol') not in IMAGE_CHOICE_PROTOCOLS:
@@ -2283,9 +2450,11 @@ class Controller:
                 'completed_effective_steps':len(s.trajectory),
                 'actual_dispatches':s.actual_dispatches}
             if unchanged_selection:
+                range_instruction=('只提交原目标剩余必要动作，不设累计执行步数上限' if completed_goal_only(s.task)
+                                   else '聚焦click、type及计算提交均须在累计10步内')
                 feedback.update(reason_code='UNCHANGED_SELECTION',effective_step_delta=0,
                     remaining_effective_limit=remaining_step_allowance(s),
-                    instruction='当前选项值已是请求值，重复select没有有效业务效果。保留原目标和checks，依据已见当前值核对单位，重新提交剩余必要动作；不要重放已完成动作，不为5步或long档加入重复选择。聚焦click、type及计算提交均须在累计10步内。')
+                    instruction='当前选项值已是请求值，重复select没有有效业务效果。保留原目标和checks，依据已见当前值核对单位，重新提交剩余必要动作；不要重放已完成动作，不为5步或long档加入重复选择。'+range_instruction+'。')
             elif s.task['fragment'].get('plan_protocol')!=V11_VERSION:
                 feedback['remaining_effective_limit']=remaining_step_allowance(s)
             s.event('plan-compile-mismatch',**feedback)
@@ -2294,9 +2463,42 @@ class Controller:
                                  {'choice':'stop','meaning':'当前目标无法有据继续'}])
             return
         if len(compiled)!=1:raise ValueError('PLAN_NON_ATOMIC_ACTION')
+        from .closing_policy import completed_goal_only
+        complete_goal=completed_goal_only(s.task)
+        action_key=object_sha256({'state':s.current['evidence']['state']['sha256'],'target':cid,
+            'action':action,'value':actual.get('value'),'keys':actual.get('keys'),
+            'direction':actual.get('direction'),'page_id':actual.get('page_id')}) if complete_goal else None
+        if action_key in getattr(self,'known_no_effect_dispatch_keys',set()):
+            # A changed state produces a different key and permits a legitimate
+            # retry. Only the exact already-proven no-effect dispatch is fenced.
+            if self.qualification_no_progress_key==action_key:
+                self.qualification_no_progress_streak+=1
+                s._consume('max_no_progress')
+            else:
+                self.qualification_no_progress_key=action_key;self.qualification_no_progress_streak=1
+            if self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
+                from .react_session import ReactStop
+                raise ReactStop('blocked','REPEATED_KNOWN_NO_EFFECT: 同状态、同目标和同输入已明确无效果，连续反馈后仍原样重放；本次零派发','collector')
+            s._consume('max_replans')
+            feedback={'reason_code':'REPEATED_KNOWN_NO_EFFECT','stage':'compile_before_dispatch',
+                'action_dispatched':False,'effective_step_delta':0,'position':self.position,
+                'observation_id':s.current['observation_id'],'target':cid,'requested_value':actual.get('value'),
+                'completed_effective_steps':len(s.trajectory),'actual_dispatches':s.actual_dispatches,
+                'instruction':'该状态、目标和输入下的相同动作已经明确无效果，本次未派发。保持原目标和checks，选择有不同前置条件或不同修正依据的剩余必要动作；没有就如实stop。不要原样重放，不设累计执行步数上限。'}
+            s.event('plan-compile-mismatch',**feedback)
+            await self.request(s,[{'choice':'replan','meaning':'根据已知无效果事实修订剩余必要步骤，不原样重放','compile_feedback':feedback},
+                                 {'choice':'stop','meaning':'没有不同且有据的剩余路径，如实结束'}])
+            return
         s._last_decision=s.event('host-plan-step',position=self.position,step=step,
                                 bound_observation_id=s.current['observation_id'],bound_target=cid)
         result=await s._tool_act({'observation_id':s.current['observation_id'],'step':actual})
+        if complete_goal:
+            refs=getattr(s,'business_attempt_refs',[])
+            latest=load_json(refs[-1]['path']) if refs else {}
+            if (latest.get('outcome')=='KNOWN_NO_EFFECT' and latest.get('actual_dispatches_delta',0)>0
+                    and latest.get('effective_steps_delta')==0):
+                if not hasattr(self,'known_no_effect_dispatch_keys'):self.known_no_effect_dispatch_keys=set()
+                self.known_no_effect_dispatch_keys.add(action_key)
         s.last_tool_result=result
         self.last={'position':self.position,'tool_result':result,'actual_effective_delta':len(s.trajectory)-n,
                    'observation_id':s.current['observation_id']}
@@ -2339,7 +2541,7 @@ class Controller:
             if (contract and contract['kind']=='reading' and step['expected']['kind']=='goal_evidence'
                     and self.fact_progress(s)['session_objective']['status']=='PASSAGE_AVAILABLE'):
                 return  # Offer the observed passage before asking for a different plan.
-            await self.request(s,self.visual_option(step['expected'])+[
+            await self.request(s,self.visual_option(step['expected'])+self.pending_followup_options()+[
                                   {'choice':'replan','meaning':'预期未证实，根据实测重规划'},
                                   *self.image_option(s,object_sha256(step['expected']),'当前同帧原清晰图'),
                                   {'choice':'stop','meaning':'如实结束'}]);return

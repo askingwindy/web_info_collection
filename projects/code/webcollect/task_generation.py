@@ -846,17 +846,19 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         task = build_capability_task(supplied, identities['pages'].get(url), task_version,
                                      registration=react_task_version)
     else:
-        from .closing_policy import EFFECTIVE_VERSION as CLOSE_POLICY
-        from .banded_plan import VERSION as PLAN_PROTOCOL
+        from .closing_policy import COMPLETE_VERSION as CLOSE_POLICY
+        from .banded_plan import V13_VERSION as PLAN_PROTOCOL
         from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
-        from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
+        from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
+        banded_candidate = react_candidate is not None and \
+            (react_candidate or {}).get('collection_strategy') != STRATEGY_SCREENSHOT_PLAN
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
                               **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL,
-                                  'action_stability_protocol':FOCUS_PROTOCOL,
-                                  'trusted_prefix_protocol':PREFIX_PROTOCOL} if react_candidate is not None else {}),
+                                  'action_stability_protocol':FOCUS_PROTOCOL} if banded_candidate
+                                 else {'ending_policy': CLOSE_POLICY} if react_candidate is not None else {}),
                               app_name=app_name, registration=react_task_version,
                               skip_wechat_articles=(react_candidate or {}).get('skip_wechat_articles',False),
-                              effort_profile=(react_candidate or {}).get('effort_profile'),
+                              effort_profile=(react_candidate or {}).get('effort_profile') if banded_candidate else None,
                               pilot_identity=identities['pages'].get(url))
         if supplied is not None:
             task['capability_id'] = supplied['capability_id']
@@ -893,10 +895,15 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             else 'candidate-entry-1')
         from .react_session import configure_candidate_protocols
         from .banded_plan import V12_VERSION, V13_VERSION
-        for part in (task['fragment'],task['workflow_proposal']['spec']):
-            part['plan_protocol']=V13_VERSION
-            part['result_execution_policy']='webcollect-result-execution-1'
-        configure_candidate_protocols(task)
+        from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, freeze as freeze_strategy
+        if (react_candidate or {}).get('collection_strategy') == STRATEGY_SCREENSHOT_PLAN:
+            # 显式选择策略2：冻结策略ID，不挂条件计划协议，策略2会话自带循环。
+            freeze_strategy(task, STRATEGY_SCREENSHOT_PLAN)
+        else:
+            for part in (task['fragment'],task['workflow_proposal']['spec']):
+                part['plan_protocol']=V13_VERSION
+                part['result_execution_policy']='webcollect-result-execution-1'
+            configure_candidate_protocols(task)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
         from .react_session import validate_task as validate_react
@@ -1372,8 +1379,11 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     validate_plan(plan)
     from .banded_plan import V12_VERSION, V13_VERSION
     from .closing_policy import COMPLETED_GOAL_DELIVERY
+    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
     delivery_policy=(COMPLETED_GOAL_DELIVERY if any(
-        task.get('fragment',{}).get('plan_protocol') in (V12_VERSION,V13_VERSION) for task in plan['tasks']) else None)
+        task.get('fragment',{}).get('plan_protocol') in (V12_VERSION,V13_VERSION)
+        or (task.get('fragment',{}).get('collection_strategy') or {}).get('id') == STRATEGY_SCREENSHOT_PLAN
+        for task in plan['tasks']) else None)
     from .site_pool_sync import pool_for_catalog, guard_plan
     bound_pool = pool_for_catalog(catalog_path)
     if site_pool is not None and bound_pool is not None and str(Path(site_pool).resolve()) != bound_pool:

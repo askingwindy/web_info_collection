@@ -631,12 +631,22 @@ async def consume(pool, claim, ledger, **kwargs):
     stop = threading.Event()
     lost = []
     def renew_claim():
+        current = claim
         while not stop.wait(2):
             try:
                 current = pool.get_claim(claim['claim_id'])
                 if current['state'] != 'consuming':
                     return
                 pool.heartbeat(claim)
+            except sqlite3.OperationalError as error:
+                # A busy short writer does not prove a lost lease. Retry only
+                # within the last confirmed lease; heartbeat still fences it.
+                if (getattr(error, 'sqlite_errorcode', 0) & 255) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    if current and current.get('expires', 0) > time.time():
+                        continue
+                lost.append(error)
+                loop.call_soon_threadsafe(owner.cancel)
+                return
             except Exception as error:
                 lost.append(error)
                 loop.call_soon_threadsafe(owner.cancel)
@@ -659,7 +669,7 @@ async def consume(pool, claim, ledger, **kwargs):
 
 
 async def _consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
-                  session_soft_seconds=None, session_hard_seconds=None):
+                  session_soft_seconds=None, session_hard_seconds=None, collection_strategy=None):
     """Exactly one original claim, one goal and at most one saved result."""
     # Historical duration arguments are accepted but no longer stop consumption.
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
@@ -754,7 +764,8 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
                 react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
                 react_site_category=hints['category'], react_app_name=hints['name'],
                 react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles,'session_objective':objective_binding,
-                    **({'effort_profile':effort_profile} if effort_profile else {})})
+                    **({'effort_profile':effort_profile} if effort_profile else {}),
+                    **({'collection_strategy':collection_strategy} if collection_strategy else {})})
             catalog = root/'planning/catalog.json'
         else:
             anchor=await first_observation(ledger,claim,root)
@@ -860,7 +871,7 @@ def _cohort_rows(path, pool, registry, batch):
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              protocols=None, poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, **kwargs):
+              protocols=None, poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, **kwargs):
     if effort_profile is not None:
         from .react_session import validate_effort_profile
         effort_profile = validate_effort_profile(effort_profile)
@@ -940,6 +951,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 continue
             try:
                 result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+                    collection_strategy=collection_strategy,
                     **({'effort_profile':effort_profile} if effort_profile else {}),
                     **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
             except asyncio.CancelledError:
@@ -1114,6 +1126,8 @@ def main(argv=None):
     runp.add_argument('--branch-effort',choices=('low','high','max'))
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
     runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default waits continuously (2 seconds between empty claims)')
+    runp.add_argument('--collection-strategy',choices=('banded-react','screenshot-plan'),default='banded-react',
+        help='Freeze the collection strategy for new tasks: banded-react (default, strategy 1) or screenshot-plan (strategy 2)')
     runp.add_argument('--producer-batch',help='Consume only newly published V2 rows from this producer batch; wait when inventory is empty')
     runp.add_argument('--protocol',choices=['legacy','entry'],help='legacy=webcollect-data-candidate-1 only (default); entry declares webcollect-data-candidate-2')
     import sys
@@ -1164,6 +1178,7 @@ def main(argv=None):
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+            collection_strategy={'banded-react':'webcollect-collection-banded-react-1','screenshot-plan':'webcollect-collection-screenshot-plan-2'}[a.collection_strategy],
             protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None))
     print(json.dumps(result,ensure_ascii=False))
 

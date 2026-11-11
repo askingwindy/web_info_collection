@@ -496,7 +496,8 @@ class ModelGateway:
     def call_tool(self, job, purpose, text, tools, *, system, history=(), images=(),
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
                   max_requests=None, synthetic_response=None, inference=False, content_plan_protocol=None,
-                  timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None):
+                  timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None,
+                  plan_normalizer=None, plan_normalizer_version=None):
         """Versioned native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
         Returned assistant/user messages are copied verbatim into attempt history;
@@ -539,6 +540,10 @@ class ModelGateway:
             raise ValueError('Request timeout must leave more than five seconds inside the original job lease')
         if content_plan_protocol and (set(declared)!={'submit_plan'} or history):
             raise ValueError('Content plan only supports a first sole submit_plan request')
+        if plan_normalizer is not None and (not callable(plan_normalizer)
+                or not isinstance(plan_normalizer_version, str) or not plan_normalizer_version
+                or 'submit_plan' not in declared):
+            raise ValueError('A plan normalizer requires its version and the submit_plan tool')
         history = deepcopy(list(history))
         seen, pending = set(), None
         for message in history:
@@ -574,7 +579,9 @@ class ModelGateway:
                    'attempt_id': attempt_id, 'max_requests': max_requests, 'declared': declared,
                    'inference_images': inference,'content_plan_protocol':content_plan_protocol,
                    'timeout_seconds':timeout_seconds, 'dispatch_deadline':dispatch_deadline,
-                   'dispatch_policy':'patient-first-plan-1' if patient_first_plan else None}
+                   'dispatch_policy':'patient-first-plan-1' if patient_first_plan else None,
+                   'plan_normalizer':plan_normalizer,
+                   'plan_normalizer_version':plan_normalizer_version}
         return self._call(job, purpose + ':native-tool-1', text, {'type': 'object'},
                           images=images, attempts=attempts, output_limit=output_limit,
                           tools=deepcopy(list(tools)), tool_choice='auto',
@@ -678,6 +685,8 @@ class ModelGateway:
                 identity['request_timeout_seconds']=native_context['timeout_seconds']
             if native_context.get('dispatch_policy'):
                 identity['dispatch_policy'] = native_context['dispatch_policy']
+            if native_context.get('plan_normalizer_version'):
+                identity['plan_normalizer_version'] = native_context['plan_normalizer_version']
         purpose = purpose + ':' + object_sha256(identity)
         native_tools = tools and (model['provider'] == 'glm' or native_context)
         user_message = {'role': 'user', 'content': parts}
@@ -817,6 +826,7 @@ class ModelGateway:
                 continue  # Previously charged invalid response is retained, never resent under the same identity.
             rid = request['id']
             usage, parsed, raw = None, None, None
+            normalization_record = None
             transport_receipt = {}
             settling_locally = False
             try:
@@ -940,10 +950,17 @@ class ModelGateway:
                         declared=native_context['declared'][name]
                         if name=='submit_plan' and 'evidence_kind' in declared.get('properties',{}).get('checks',{}).get('items',{}).get('properties',{}):
                             arguments=executable_plan(arguments)
+                        if native_context.get('plan_normalizer') and name=='submit_plan':
+                            # 策略 2: deterministic equivalence整理 runs before the
+                            # strict schema; the raw reply and this transform record
+                            # are both retained, and missing fields stay precise.
+                            arguments, normalization_record = native_context['plan_normalizer'](arguments)
                         Draft202012Validator(declared).validate(arguments)
                         parsed = {'name':name, 'arguments':arguments, 'tool_call_id':cid,
                                   'assistant_message':{**deepcopy(choice['message']), 'role':'assistant'},
-                                  'user_message':deepcopy(user_message), 'request_id':rid}
+                                  'user_message':deepcopy(user_message), 'request_id':rid,
+                                  **({'plan_normalization': normalization_record}
+                                     if normalization_record is not None else {})}
                         normalized = arguments != original_arguments
                 elif native_context and native_context.get('plain_json'):
                     if tool_calls:
@@ -1042,6 +1059,8 @@ class ModelGateway:
                 self._settle_failure(job,rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
                                            response={'result': parsed, 'provider_response': raw, **transport_receipt,
+                                               **({'plan_normalization': normalization_record}
+                                                  if normalization_record is not None else {}),
                                                'failure_diagnostic': {
                                                    'source': 'no_provider_response' if raw is None else 'response_validation',
                                                    'error_type': type(error).__name__,
@@ -1067,8 +1086,18 @@ class ModelGateway:
                     break
                 if native_context:
                     path = list(getattr(error, 'absolute_path', ()))
+                    errors = schema_error_feedback(error)
+                    # The strategy-2 normalizer lists every missing required field
+                    # across all steps; merge so one correction carries the full
+                    # precise path set instead of only the deepest failure.
+                    normalizer_missing = (normalization_record or {}).get('missing') or []
+                    known = {tuple(row.get('field_path', [])) for row in errors}
+                    errors = errors + [{'field_path': row['path'].split('.'),
+                                         'detail': "missing required field '" + row['field'] + "'"}
+                                        for row in normalizer_missing
+                                        if tuple(row['path'].split('.')) not in known][:12]
                     correction = json.dumps({'protocol_error':type(error).__name__,
-                        'errors':schema_error_feedback(error),
+                        'errors':errors,
                         'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
             else:
                 # Local settlement is outside response parsing/format correction.

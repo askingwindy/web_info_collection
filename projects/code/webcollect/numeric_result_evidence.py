@@ -61,6 +61,11 @@ def match_result(expected, observed, *, field, result_bound, input_node=False):
     if not result_bound or input_node or weak_result_text(expected):
         return None
     target, actual = _parse(expected, field), _parse(observed, field)
+    # A displayed variable assignment is an explicit result, not a field-label
+    # alias. Preserve the variable identity and compare only its stated number.
+    assignments=[re.fullmatch(r'([A-Za-z])=([-+]?\d+(?:\.\d+)?)',normalized(v)) for v in (expected,observed)]
+    if all(assignments) and assignments[0].group(1)==assignments[1].group(1):
+        target,actual=(_parse(m.group(2),'') for m in assignments)
     if target is None or actual is None:
         return None
     wanted, unit, precision, approximate = target
@@ -81,3 +86,28 @@ def match_result(expected, observed, *, field, result_bound, input_node=False):
     return {'protocol': VERSION, 'observed_visible_text': str(observed),
             'expected_visible_text': str(expected),
             'comparison': 'rounded_to_explicit_approximate_precision' if got != wanted else 'normalized_exact'}
+
+
+def substantive_result_text(value, *, field=""):
+    """A label is not an answer, even inside a genuine submitted result area."""
+    text=normalized(value)
+    label=normalized(field).rstrip(":：")
+    if not text or weak_result_text(text) or text.rstrip(":：") == label:
+        return False
+    # Result labels commonly end in a colon while their value is a sibling.
+    if text.endswith((":", "：")) or not re.search(r"[0-9]",text):
+        return False
+    return True
+
+
+def process_field(field):
+    return bool(re.search(r"(?:逐步|分步|求解|计算|計算).*(?:过程|過程|步骤|步驟)",str(field)))
+
+
+def process_result_text(value, field):
+    """Recognize explicit algebra steps, without deriving any answer."""
+    if not process_field(field):
+        return False
+    text=unicodedata.normalize('NFKC',str(value))
+    return (len(re.findall(r"=\s*[-+]?\d",text)) >= 2
+            and len(re.findall(r"Subtract|Divide|Multiply|Add|减去|減去|除以|乘以|加上",text,re.I)) >= 2)

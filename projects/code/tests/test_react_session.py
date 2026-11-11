@@ -227,7 +227,10 @@ class ReactHarness(SemanticFixture):
                        sort_keys=True, default=str).encode()).hexdigest()}
 
     async def _fake_before(self, page, evidence, selector=None, index=0, **kw):
-        return await self.surface.capture(page, selector, index)
+        observation = await self.surface.capture(page, selector, index)
+        if kw.get('include_html'):
+            observation['html'] = await page.content()
+        return observation
 
     def session(self, script, name='session', **kw):
         return ReactSession(self.task, self.root / name, script, self.page, **kw)

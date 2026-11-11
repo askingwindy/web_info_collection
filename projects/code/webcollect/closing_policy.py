@@ -12,7 +12,8 @@ V3_VERSION = 'webcollect-banded-attempt-ending-3'
 VERSION = 'webcollect-continuous-attempt-ending-4'
 EFFECTIVE_VERSION = 'webcollect-five-ten-effective-ending-5'
 EFFECTIVE_MAXIMUM = 10
-VERSIONS = (V2_VERSION, V3_VERSION, VERSION, EFFECTIVE_VERSION)
+COMPLETE_VERSION = 'webcollect-five-eight-complete-ending-6'
+VERSIONS = (V2_VERSION, V3_VERSION, VERSION, EFFECTIVE_VERSION, COMPLETE_VERSION)
 MINIMUM = 5
 MAXIMUM = 8
 LONG_MAXIMUM = 12
@@ -23,12 +24,22 @@ def enabled(task):
     return task.get('fragment',{}).get('ending_policy') in VERSIONS
 
 
+def completed_goal_only(task):
+    """V6 plans 5–8 steps, then saves only a complete actual path of ≥5 steps."""
+    return task.get('fragment', {}).get('ending_policy') == COMPLETE_VERSION
+
+
+def initial_plan_maximum(task):
+    """V6 prefers 5–8 initial actions but imposes no hard path maximum."""
+    return None if completed_goal_only(task) else attempt_limit(task)
+
+
 def attempt_limit(task, band=None):
-    """One ceiling shared by planning, dispatch, closure and saved evidence."""
+    """Execution ceiling for historical policies; V6 deliberately has none."""
     fragment=task.get('fragment',{})
     if fragment.get('ending_policy') == EFFECTIVE_VERSION:
         return EFFECTIVE_MAXIMUM
-    if fragment.get('ending_policy') == VERSION:
+    if fragment.get('ending_policy') in (VERSION, COMPLETE_VERSION):
         return None
     band=band or fragment.get('session_objective',{}).get('objective',{}).get('preferred_band')
     limit=(LONG_MAXIMUM if fragment.get('ending_policy')==V3_VERSION
@@ -39,11 +50,12 @@ def attempt_limit(task, band=None):
 
 
 def effective_limit(task):
-    return EFFECTIVE_MAXIMUM if task.get('fragment',{}).get('ending_policy') == EFFECTIVE_VERSION else None
+    policy = task.get('fragment', {}).get('ending_policy')
+    return EFFECTIVE_MAXIMUM if policy == EFFECTIVE_VERSION else None
 
 
-def limit_kind(limit):
-    if limit == EFFECTIVE_MAXIMUM:return 'TEN_EFFECTIVE_STEP_LIMIT'
+def limit_kind(limit, *, effective=False):
+    if effective and limit == EFFECTIVE_MAXIMUM:return 'TEN_EFFECTIVE_STEP_LIMIT'
     return 'TWELVE_ATTEMPT_LIMIT' if limit==LONG_MAXIMUM else 'EIGHT_ATTEMPT_LIMIT'
 
 
@@ -57,7 +69,15 @@ def system_prompt(base, task=None):
                 'observe/inspect/wait/finish不算有效业务动作。1–4步由宿主标记short_flow，零步不成样本。'
                 '同站仅复用页面和动作知识，禁止复用完整动作链。滚动、跳转、返回后依当前观察重绑，必要时重规划。'
                 '外部效果未知时保留原件，不重发、不拼接、不声称成功。')
-    if task is not None and effective_limit(task) is not None:
+    if task is not None and completed_goal_only(task):
+        prompt=('首轮优先把自由目标设计为可用5–8个必要有效动作的完整自然路径，再冻结目标和checks；自然必要路径可以超过8步。'
+                '自由目标必须依据首帧可见功能选择单一、具体、结果可核验的完整目标；提交前逐步确认路径可达、终态可证。'
+                '固定requested_goal不得缩小或替换，按原目标规划全部必要动作；只有少于5步或无法完成才如实stop。'
+                '目标冻结后只重规划剩余必要动作，不设首轮或累计最大步数。全部必要结果有证据且实际至少5步才能形成候选；'
+                '完成即结束，实际超过8步不因长度截断或拒绝，也不为凑步添加动作。'
+                '阶段完成、可信片段、short_flow或controlled_exception都不是合格结果。无法完成只保留内部原始失败记录。'
+                'observe/inspect/wait/finish不算有效业务动作；UNKNOWN保留原件，不重发、不拼接、不声称成功。')
+    elif task is not None and effective_limit(task) is not None:
         prompt=('先按原目标形成最短完整自然路径，通常控制在5–10个有效业务动作，累计最多10步。'
                 '自然路径不足5步时，只在原目标内补充仍有独立用途且能产生新证据的动作；没有就如实结束，'
                 '由宿主标记short_flow，零步不成样本。不得为数量另选繁琐目标、增加第二组输入或跨词条任务，'
@@ -250,7 +270,8 @@ def validate_reading_completion(record, basis):
                 late_session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],
                     observation_records=late_observations,current=late_observations[oid],
                     business_attempt_refs=(record['terminal'].get('collection_ending') or {}).get('attempt_refs',[]),
-                    requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
+                    requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'),
+        attempt_id=record['boundary'].get('attempt_id'),result_completion=sealed_result_completion(record))
                 from .banded_plan import Controller
                 controller=Controller();controller.plan=plan;controller.frozen_plan=original['plan']
                 visual_ref=late.get('visual_confirmation')
@@ -290,7 +311,8 @@ def validate_reading_completion(record, basis):
                     extended_actions=record['task'].get('fragment',{}).get('plan_protocol')=='webcollect-banded-conditional-plan-13')
     session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],observation_records=observations,
         business_attempt_refs=(record['terminal'].get('collection_ending') or {}).get('attempt_refs',[]),
-        requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'))
+        requested_goal=struct_goal(record['task']),working_goal=record['terminal'].get('working_goal'),
+        attempt_id=record['boundary'].get('attempt_id'),result_completion=sealed_result_completion(record))
     evidence=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}),
                    page_binding=original.get('page_binding') if execution_policy else None)
     expected=remaining_plan_coverage(session,plan,position,evidence)
@@ -299,10 +321,32 @@ def validate_reading_completion(record, basis):
     return receipt
 
 
+def sealed_result_completion(record):
+    """Return only an original finish-result decision inside this raw seal."""
+    from pathlib import Path
+    reference = (record['terminal'].get('goal_evidence') or {}).get('result_completion')
+    if not reference:
+        return None
+    root = Path(record['receipt']['boundary']['path']).parent
+    path = Path(reference.get('path', ''))
+    if (path.parent != root
+            or record['receipt']['files_sha256'].get(path.name) != reference.get('sha256')):
+        raise ValueError('Result completion decision is outside the sealed attempt')
+    verify_evidence([reference])
+    event = load_json(path)
+    if (event.get('boundary') != record['receipt']['boundary']
+            or event.get('response', {}).get('attempt_id') != record['boundary']['attempt_id']):
+        raise ValueError('Result completion decision belongs to a different original attempt')
+    return reference
+
+
 def validate_result_completion(record):
     """Recompute the new result gate from the sealed original plan and raws."""
     from .result_execution import VERSION as RESULT_VERSION
-    if record['task'].get('fragment',{}).get('result_execution_policy')!=RESULT_VERSION:return
+    from .result_completion import enabled as explicit_result_completion
+    if (record['task'].get('fragment',{}).get('result_execution_policy') != RESULT_VERSION
+            and not explicit_result_completion(record['task'])):
+        return
     from pathlib import Path
     from types import SimpleNamespace
     from .agent_observation import project
@@ -326,7 +370,8 @@ def validate_result_completion(record):
         for raw in load_json(ref['path']).get('raw_steps',[]):verify_evidence([raw])
     session=SimpleNamespace(task=record['task'],trajectory=record['trajectory'],observation_records=observations,
         business_attempt_refs=marker.get('attempt_refs',[]),requested_goal=struct_goal(record['task']),
-        working_goal=record['terminal'].get('working_goal'))
+        working_goal=record['terminal'].get('working_goal'),
+        attempt_id=record['boundary'].get('attempt_id'),result_completion=sealed_result_completion(record))
     stored=record['terminal'].get('goal_evidence') or {}
     actual=facts(session,original['plan'],page_urls=original.get('check_page_urls',{}),
         objective_evidence=stored.get('session_objective'),page_binding=original.get('page_binding'))
@@ -342,12 +387,20 @@ def validate_record(record):
     policy=(record['task'].get('fragment',{}) or {}).get('ending_policy')
     if not enabled(record['task']) or not marker or marker.get('protocol')!=policy:
         raise ValueError('Missing versioned closure binding')
+    if ((record['task'].get('fragment',{}) or {}).get('collection_strategy') or {}).get('id')=='webcollect-collection-screenshot-plan-2' \
+            or marker.get('kind')=='AGENT_COMPLETE_VERIFIED':
+        # 策略 2 owns its ending semantics: no plan pages/result-completion
+        # policies apply; the verified completion receipt is replayed instead.
+        from .screenshot_plan import validate_ending_marker
+        validate_ending_marker(record)
     validate_plan_page_bindings(record)
     validate_result_completion(record)
     band=marker.get('attempt_band')
-    limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) else MAXIMUM
-    if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
-        raise ValueError('V3 closure attempt ceiling differs from its frozen task/band')
+    limit=attempt_limit(record['task'],band) if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION, COMPLETE_VERSION) else MAXIMUM
+    if policy in (V3_VERSION, VERSION, EFFECTIVE_VERSION, COMPLETE_VERSION) and (marker.get('attempt_limit')!=limit or marker.get('attempt_band')!=band):
+        raise ValueError('Versioned closure attempt ceiling differs from its frozen task/band')
+    if policy==COMPLETE_VERSION and marker.get('flagged'):
+        raise ValueError('V6 exceptional closure is raw-only and cannot become a formal sample')
     attempts=[];raws=[];raw_refs=[]
     for ref in marker['attempt_refs']:
         verify_evidence([ref]);attempt=load_json(ref['path'])
@@ -390,8 +443,17 @@ def validate_record(record):
               and (state(record,final).get('visible_text') or '').strip())
     if safe and len(dispatched)>len(verified):
         tail=[r for r in dispatched if r not in verified]
-        if policy==EFFECTIVE_VERSION:
-            safe=all(no_effect_proven(raw,record['observations']) for raw in tail)
+        if policy in (EFFECTIVE_VERSION, COMPLETE_VERSION):
+            screenshot_tail=((record['task'].get('fragment',{}) or {}).get('collection_strategy') or {}).get('id')=='webcollect-collection-screenshot-plan-2'
+            if screenshot_tail:
+                from .screenshot_plan import tail_effect_observed as _observed
+                from types import SimpleNamespace
+                session=SimpleNamespace(observation_records=record['observations'],
+                                        trajectory=record['trajectory'],
+                                        current={'observation_id':marker.get('final_observation_id')} if marker.get('final_observation_id') in record['observations'] else None)
+                safe=all(no_effect_proven(raw,record['observations']) or _observed(raw,session) for raw in tail)
+            else:
+                safe=all(no_effect_proven(raw,record['observations']) for raw in tail)
         else:
             safe=(len(tail)==1 and tail[0]['operation']['action_type']=='scroll'
                   and tail[0].get('action_executed') is True
@@ -434,7 +496,8 @@ def validate_record(record):
                 or marker.get('plan_protocol') not in PLAN_VERSIONS):
             raise ValueError('Host endpoint is not bound to the original plan task')
         basis=marker.get('endpoint_evidence') or {}
-        validate_reading_completion(record,basis)
+        if basis.get('source') != 'host_result_completion':
+            validate_reading_completion(record,basis)
         final_evidence=record['observations'][final]['evidence']
         if basis.get('image')!=final_evidence['image']:
             raise ValueError('Endpoint image differs from sealed final observation')
@@ -442,7 +505,7 @@ def validate_record(record):
         ordinary_wiki=wiki(record['task'])
         if ordinary_wiki:
             actual=replay_wiki(record,basis.get('session_objective_evidence'),basis=basis)
-        if not ordinary_wiki and record['task']['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13'):
+        if not ordinary_wiki and basis.get('source') != 'host_result_completion' and record['task']['fragment'].get('plan_protocol') in ('webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13'):
             from types import SimpleNamespace
             from pathlib import Path
             from .agent_observation import project
@@ -491,6 +554,17 @@ def validate_record(record):
             # tasks without this protocol or without an original decision never enter here.
             if basis.get('source') not in ('host_wiki_reading_completion','host_rendered_state'):
                 raise ValueError('Unknown Wiki explicit completion evidence source')
+        elif basis.get('source')=='host_result_completion':
+            from .result_completion import enabled as result_completion_enabled
+            from .plan_evidence import unverified_required_checks
+            reference = sealed_result_completion(record)
+            goal = record['terminal'].get('goal_evidence') or {}
+            if (not result_completion_enabled(record['task']) or not reference
+                    or basis.get('result_completion') != reference
+                    or (basis.get('finish_route') or {}).get('completion_origin') != 'agent_finish_result'
+                    or goal.get('business_goal_status') != 'VERIFIED'
+                    or unverified_required_checks(goal)):
+                raise ValueError('Result endpoint lacks sealed original-check completion evidence')
         elif basis.get('source')=='host_rendered_state':
             from .agent_observation import project
             from .banded_plan import proves
@@ -522,14 +596,14 @@ def annotation_errors(annotation):
     marker=annotation.get('steps',[{}])[-1].get('tool_result',{}).get('return_value',{}).get('collection_ending')
     if not marker:return []
     policy=marker.get('protocol')
-    limit=EFFECTIVE_MAXIMUM if policy==EFFECTIVE_VERSION else None if policy==VERSION else marker.get('attempt_limit',MAXIMUM) if policy==V3_VERSION else MAXIMUM
+    limit=EFFECTIVE_MAXIMUM if policy==EFFECTIVE_VERSION else None if policy in (VERSION,COMPLETE_VERSION) else marker.get('attempt_limit',MAXIMUM) if policy==V3_VERSION else MAXIMUM
     effective=sum(s.get('action',{}).get('action_type') not in ('wait','complete') for s in annotation['steps'])
     errors=[]
     if (policy not in VERSIONS or marker.get('verified_effective_steps')!=effective
             or type(marker.get('business_attempts')) is not int or marker['business_attempts']<0
             or (limit is not None and policy!=EFFECTIVE_VERSION and marker['business_attempts']>limit)
             or (policy==EFFECTIVE_VERSION and (marker.get('attempt_limit')!=EFFECTIVE_MAXIMUM or effective>EFFECTIVE_MAXIMUM))
-            or (policy==VERSION and marker.get('attempt_limit') is not None)
+            or (policy in (VERSION,COMPLETE_VERSION) and marker.get('attempt_limit') is not None)
             or (policy==V3_VERSION and (marker.get('attempt_limit') not in (MAXIMUM,LONG_MAXIMUM)
                                     or marker.get('attempt_band') not in ('five','long','short',None)))
             or marker.get('actual_atomic_dispatches',-1)!=effective+marker.get('unverified_tail_dispatches',-1)
@@ -537,21 +611,27 @@ def annotation_errors(annotation):
             or not marker.get('final_observation_id') or not marker.get('final_evidence')
             or marker.get('finish_count',0)!=1):
         errors.append('Versioned ending counts, finish, final evidence or safe-state binding is invalid')
-    if marker.get('flagged') and (annotation.get('completion_status')!='controlled_exception'
-            or not annotation['steps'][-1].get('exception_evidence')):
-        errors.append('Flagged ending must be an explicit controlled_exception with evidence')
+    if marker.get('flagged'):
+        if policy==COMPLETE_VERSION:
+            errors.append('V6 exceptional ending cannot be a formal annotation')
+        elif annotation.get('completion_status')!='controlled_exception' or not annotation['steps'][-1].get('exception_evidence'):
+            errors.append('Flagged ending must be an explicit controlled_exception with evidence')
     if marker.get('goal_completion') not in ('NOT_CLAIMED','AGENT_REPORTED_VISIBLE_GOAL'):
         errors.append('Closure cannot invent business success')
     kind=marker.get('kind');attempts=marker.get('business_attempts',-1)
-    if (marker.get('flagged') is not (kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN'))
+    ready=('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
+    if ((annotation.get('task') or {}).get('fragment',{}).get('collection_strategy') or {}).get('id')=='webcollect-collection-screenshot-plan-2' \
+            or marker.get('collection_strategy',{}).get('id')=='webcollect-collection-screenshot-plan-2':
+        ready = ready + ('AGENT_COMPLETE_VERIFIED',)
+    if (marker.get('flagged') is not (kind not in ready)
             or marker.get('finish_origin') not in ('host','agent')
             or marker.get('finish_is_business_action') is not False or marker.get('wait_is_business_action') is not False
             or len(marker.get('attempt_refs',[]))!=attempts
             or (marker.get('flagged') and (kind not in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT','MODEL_BUDGET_LIMIT','KNOWN_NO_EFFECT','NOT_DISPATCHED','AGENT_STOP','HOST_INTERRUPTED')
-                or attempts < (1 if policy in (VERSION,EFFECTIVE_VERSION) else 5) or (limit is not None and policy!=EFFECTIVE_VERSION and attempts>limit)))
+                or attempts < (1 if policy in (VERSION,EFFECTIVE_VERSION,COMPLETE_VERSION) else 5) or (limit is not None and policy!=EFFECTIVE_VERSION and attempts>limit)))
             or (kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT') and (attempts!=limit or kind!=limit_kind(limit)))
             or (kind=='TEN_EFFECTIVE_STEP_LIMIT' and (policy!=EFFECTIVE_VERSION or effective!=EFFECTIVE_MAXIMUM))
-            or (policy!=EFFECTIVE_VERSION and marker.get('unverified_tail_dispatches',0)>0 and kind!='KNOWN_NO_EFFECT')):
+            or (policy not in (EFFECTIVE_VERSION,COMPLETE_VERSION) and marker.get('unverified_tail_dispatches',0)>0 and kind!='KNOWN_NO_EFFECT')):
         errors.append('Versioned exceptional closure kind/range/attempt references are inconsistent')
     if kind=='HOST_BOUNDARY_RETURN':
         from .consumer_page_policy import VERSION as PAGE_POLICY, PLAN_PROTOCOL
@@ -563,14 +643,18 @@ def annotation_errors(annotation):
     if kind=='HOST_PLAN_ENDPOINT' and (marker.get('plan_protocol') not in ('webcollect-banded-conditional-plan-1','webcollect-banded-conditional-plan-2','webcollect-banded-conditional-plan-3','webcollect-banded-conditional-plan-4','webcollect-banded-conditional-plan-5','webcollect-banded-conditional-plan-6','webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13')
             or marker.get('finish_origin')!='host' or marker.get('goal_completion')!='NOT_CLAIMED'):
         errors.append('Host endpoint requires frozen conditional-plan binding and no business-success claim')
+    if policy==COMPLETE_VERSION and (annotation.get('completion_status')!='success'
+            or annotation.get('short_flow') or effective<MINIMUM):
+        errors.append('V6 formal annotation requires original-goal success and at least five effective steps')
     return errors
 
 
 COMPLETED_GOAL_DELIVERY = 'completed-goal-five-ten-delivery-1'
+COMPLETE_GOAL_V6_DELIVERY = 'completed-goal-five-eight-delivery-1'
 
 
 def completion_delivery_decision(annotation, raw_execution):
-    """New delivery eligibility from sealed collection facts, never a QC grant."""
+    """Delivery eligibility from sealed collection facts, never a QC grant."""
     effective = sum(s.get('action', {}).get('action_type') not in
                     ('wait', 'finish', 'complete') for s in annotation.get('steps', []))
     ending = raw_execution.get('collection_ending') or {}
@@ -578,9 +662,6 @@ def completion_delivery_decision(annotation, raw_execution):
     objective = basis.get('session_objective_evidence') or {}
     goal = raw_execution.get('goal_evidence') or {}
     checks = goal.get('checks') or []
-    # Provenance and a visible keyword/URL are insufficient by themselves.
-    # Ordinary checks must all be established. The cumulative Wiki protocol
-    # instead binds every original question to its sealed completion answer.
     completion = objective.get('completion') or {}
     original_checks = completion.get('original_checks') or []
     answers = (completion.get('answer') or {}).get('check_answers') or []
@@ -593,16 +674,29 @@ def completion_delivery_decision(annotation, raw_execution):
         and completion.get('original_plan_sha256') and original_checks
         and [a.get('check_index') for a in answers] == list(range(len(original_checks))))
     complete_checks = bool(checks) and all(c.get('status') == 'VERIFIED' for c in checks)
+    # 策略 2 completions carry their own verified receipt (replayed by
+    # validate_record); they never forge a HOST_PLAN_ENDPOINT marker.
+    screenshot_complete = bool(ending.get('kind') == 'AGENT_COMPLETE_VERIFIED'
+                               and ending.get('safe_for_pending_sample') is True
+                               and (basis or {}).get('source') == 'host_screenshot_completion'
+                               and (basis or {}).get('completion')
+                               and (basis or {}).get('image')
+                               and complete_checks)
     proof = bool(ending.get('kind') == 'HOST_PLAN_ENDPOINT'
                  and ending.get('safe_for_pending_sample') is True
-                 and basis.get('image') and (wiki_complete or complete_checks))
+                 and basis.get('image') and (wiki_complete or complete_checks)) or screenshot_complete
     completed = bool(proof and annotation.get('completion_status') == 'success'
                      and not raw_execution.get('trusted_prefix')
                      and not ending.get('flagged')
                      and not ending.get('external_effect_unknown')
+                     and not raw_execution.get('unknown')
+                     and not raw_execution.get('external_effect_unknown')
+                     and not any(step.get('exception_evidence') for step in annotation.get('steps', []))
                      and raw_execution.get('stop_reason') == 'ready')
-    eligible = completed and 5 <= effective <= 10
-    return {'delivery_policy': COMPLETED_GOAL_DELIVERY,
+    complete_v6 = ending.get('protocol') == COMPLETE_VERSION
+    policy = COMPLETE_GOAL_V6_DELIVERY if complete_v6 else COMPLETED_GOAL_DELIVERY
+    eligible = completed and effective >= MINIMUM and not annotation.get('short_flow')
+    return {'delivery_policy': policy,
             'effective_steps': effective, 'completion_status': annotation.get('completion_status'),
             'original_goal_completed': completed, 'ordinary_target_eligible': eligible,
             'delivery_eligible': eligible, 'QC_approval': False}

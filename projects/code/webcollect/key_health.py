@@ -3,6 +3,7 @@
 Only the coordinator probes. UNKNOWN never authorizes replay or account rotation.
 Secrets exist only in the transport call, never in persisted health or probe rows.
 """
+from contextlib import closing
 import hashlib
 import http.client
 import json
@@ -52,11 +53,14 @@ def record_result(ledger, account, *, success=False, code=None, retry_after=60, 
     return status
 
 
-def unavailable_accounts(ledger, con, *, historical=()):
-    ensure_schema(con)
+def unavailable_accounts(ledger, con, *, historical=(), readonly=False):
+    if not readonly:
+        ensure_schema(con)
     from .model_credentials import configured_credentials
     # New sessions require a successful probe for this exact model/endpoint.
     unavailable = {account for account, _ in configured_credentials(ledger.config['model'])} | set(historical)
+    if readonly and not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='consumer_key_health'").fetchone():
+        return unavailable
     for row in con.execute('SELECT account_id,status,checked,retry_at,probe_id,last_success FROM consumer_key_health WHERE model_id=?',
                            (model_identity(ledger),)):
         account, status, checked, retry_at, probe, last_success = row
@@ -74,8 +78,13 @@ def pool_available(ledger):
     if not ledger.real_glm:
         return True
     from .model_credentials import configured_credentials
-    with ledger.transaction() as con:
-        excluded = unavailable_accounts(ledger, con, historical=ledger._unavailable_model_accounts(con))
+    import sqlite3
+    # Availability is a read-only query: do not take a SQLite write lock while
+    # other fixed workers are claiming candidates or renewing their leases.
+    with closing(sqlite3.connect(ledger.path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
+        con.row_factory = sqlite3.Row
+        con.execute('PRAGMA busy_timeout=90000')
+        excluded = unavailable_accounts(ledger, con, historical=ledger._unavailable_model_accounts(con), readonly=True)
     return any(account not in excluded for account, _ in configured_credentials(ledger.config['model']))
 
 

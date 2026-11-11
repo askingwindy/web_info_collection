@@ -117,8 +117,10 @@ class _VerifiedSession:
         if actual != self._verification['files']:
             raise ValueError('封存原件缺失或字节改变，不能复用已核验记录')
         # Raw steps may live beside raw/, so retain their independent binding.
-        verify_evidence([ref for row in self._source['trajectory']
-                         for ref in (row['dispatch'], row.get('raw_step')) if ref])
+        refs = [ref for row in self._source['trajectory']
+                for ref in (row['dispatch'], row.get('raw_step')) if ref]
+        if refs:
+            verify_evidence(refs)
 
     def record(self, raw_root):
         self.check(raw_root)
@@ -592,8 +594,6 @@ def planned_terminal_narrative(record, final_state, final_id):
     evidence = record['terminal'].get('goal_evidence') or {}
     from .result_execution import completion_result_summary
     numeric = completion_result_summary(evidence, final_observation_id=final_id)
-    if numeric:
-        return numeric
     checks = evidence.get('checks') or []
     if evidence.get('business_goal_status') == 'VERIFIED' and checks:
         basis = []
@@ -625,10 +625,10 @@ def planned_terminal_narrative(record, final_state, final_id):
             operation_basis = ('，已实际操作' + '、'.join('「' + label + '」' for label in labels)) if labels else ''
             basis.append(field + operation_basis + '，绑定页面证据' +
                          '、'.join('「' + quote + '」' for quote in dict.fromkeys(quotes)))
-        title = str(final_state.get('title') or '任务页面')
-        final_result = '最终页面「' + title + '」' + (
-            '可见' + '、'.join('「' + quote + '」' for quote in dict.fromkeys(final_quotes)) + '。'
-            if final_quotes else '；各项原目标依据保留在已观察页面中。')
+        final_result = (numeric['final_result'] if numeric else '；'.join(
+            str(check.get('field') or '原目标条件') + '：' + '、'.join(dict.fromkeys(
+                item['quote'] for item in check.get('evidence') or [] if item.get('quote')))
+            for check in checks))
         return {'final_result': final_result,
                 'completion_judgement': '原目标各项核验依据：' + '；'.join(basis) + '。',
                 'basis': checks, 'is_ai_review': False}
@@ -649,20 +649,18 @@ def planned_terminal_narrative(record, final_state, final_id):
         final_quotes.extend(p['quote'] for p in passages if p.get('observation_id') == final_id
                             and p.get('quote') and p['quote'] in final_state.get('visible_text', ''))
         field = str(checks[index].get('field') or f'第{index + 1}项')
+        actual_answer = str(answer.get('answer') or '').strip()
+        if not actual_answer:
+            return None
         if quotes:
-            basis.append(field + '，已观察的正文或操作目标包括' + '、'.join('「' + q + '」' for q in quotes[:2]))
+            basis.append(field + '：' + actual_answer + '；已观察的正文依据包括' + '、'.join('「' + q + '」' for q in quotes[:2]))
         elif answer.get('operation_ids'):
-            basis.append(field + '，已有对应实际操作记录')
+            basis.append(field + '：' + actual_answer + '；对应实际操作' + '、'.join(answer['operation_ids']))
         else:
             return None
-    title = str(final_state.get('title') or '任务页面')
-    last = record['trajectory'][-1]
-    if last['action'] == 'back':
-        final_result = '完成任务内查阅并返回后，当前页面为「' + title + '」。'
-    elif final_quotes:
-        final_result = '最终页面「' + title + '」可见' + '、'.join('「' + q + '」' for q in list(dict.fromkeys(final_quotes))[:2]) + '。'
-    else:
-        final_result = '阅读结束时停留在「' + title + '」；原问题的正文依据保留在先前已观察页面中。'
+    final_result = str((completion.get('answer') or {}).get('answer') or '').strip()
+    if not final_result:
+        return None
     return {'final_result': final_result, 'completion_judgement': '原任务各项依据：' + '；'.join(basis) + '。',
             'basis': answers, 'is_ai_review': False}
 
@@ -715,7 +713,8 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     effective = len(trajectory)
     validate_effective_limit(task,effective)
     short, reason = flow_classification(effective)
-    length_qualified = effective > 0
+    complete_only = True
+    length_qualified = effective >= 5 if complete_only else effective > 0
     result = {'status': 'length_unqualified' if not length_qualified else 'deriving',
               'effective_steps': effective, 'short_flow': short,
               'short_flow_reason': reason if short else None,
@@ -727,7 +726,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     completion_status, final_result = terminal_outcome(task, record, final_state) if native else ('success', None)
     # New capture narration reuses deterministic, pre-action facts. The
     # separately callable correction API never re-runs this status derivation.
-    new_narration = task['fragment'].get('plan_protocol') == 'webcollect-banded-conditional-plan-13'
+    new_narration = native
     terminal_narrative = None
     if new_narration and completion_status == 'success':
         terminal_narrative = planned_terminal_narrative(record, final_state, final_id)
@@ -736,6 +735,23 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     if completion_status == 'failed':
         return {**result, 'status': 'terminal_failed', 'completion_status': 'failed',
                 'final_result': final_result}
+    raw_execution = {'stop_reason': record['terminal'].get('stop_reason'),
+        'goal_evidence': record['terminal'].get('goal_evidence') or {},
+        'collection_ending': record['terminal'].get('collection_ending') or {},
+        'unknown': record['terminal'].get('unknown', False),
+        **({'trusted_prefix': record['trusted_prefix']} if record.get('trusted_prefix') else {})}
+    if complete_only:
+        from .closing_policy import completion_delivery_decision
+        # Eligibility precedes all formal projection files, including images.
+        preflight = completion_delivery_decision(
+            {'completion_status': completion_status, 'short_flow': short,
+             'steps': [{'action': {'action_type': row['action']}} for row in trajectory]},
+            raw_execution)
+    if complete_only and (not preflight['delivery_eligible'] or terminal_narrative is None):
+        # A safe fragment, controlled exception or missing result narrative is
+        # internal raw evidence only; do not create formal annotation files.
+        return {**result, 'status': 'completion_unqualified',
+                'completion_status': completion_status, 'final_result': final_result}
     # Require a fresh destination on the first derivation. A recorded failed
     # derivation may continue in place: every write below refuses differing
     # bytes, so the same sealed raw can only reproduce identical delivery.
@@ -894,6 +910,13 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     if short:
         annotation['short_flow'] = True
         annotation['short_flow_reason'] = reason
+    if complete_only:
+        from .closing_policy import completion_delivery_decision
+        decision = completion_delivery_decision(annotation, raw_execution)
+        if not decision['delivery_eligible']:
+            return {**result, 'status': 'completion_unqualified',
+                    'completion_status': completion_status, 'completion_delivery': decision}
+        result['completion_delivery'] = decision
     write_json_file(delivery / 'annotation.json', annotation)
     report = validate_sample(delivery, 'delivery', manifest)
     if not report['structural_pass']:
@@ -1119,6 +1142,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                                    **({'stop_details':record['terminal']['stop_details']} if 'stop_details' in record['terminal'] else {}),
                                    'receipt': record['receipt']['terminal'],
                                    'stop_reason': record['terminal'].get('stop_reason'),
+                                   'unknown': record['terminal'].get('unknown', False),
                                    'effective_steps': derived['effective_steps'],
                                    'not_a_delivery_sample_by_itself': True},
                  'derivation': {'version': version, 'record': derived_ref,

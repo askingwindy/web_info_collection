@@ -23,7 +23,8 @@ from .storage import allocate_in_transaction, ensure_registry_schema
 
 def continuous_task(task):
     return task.get('fragment', {}).get('ending_policy') in (
-        'webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5')
+        'webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5',
+        'webcollect-five-eight-complete-ending-6')
 
 
 DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_workers': 1,
@@ -184,8 +185,11 @@ class RuntimeStore:
 
     def _connect(self, readonly=False):
         # mode=rw/ro never silently creates a replacement for a missing ledger.
-        con = sqlite3.connect(self.registry.as_uri() + ('?mode=ro' if readonly else '?mode=rw'), uri=True, timeout=30)
+        # A busy ledger is not a lost attempt. Wait inside the existing lease;
+        # _owned still rejects stale worker/token/expiry after lock acquisition.
+        con = sqlite3.connect(self.registry.as_uri() + ('?mode=ro' if readonly else '?mode=rw'), uri=True, timeout=90)
         con.row_factory = sqlite3.Row
+        con.execute('PRAGMA busy_timeout=90000')
         return con
 
     @contextmanager
@@ -801,6 +805,24 @@ class RuntimeStore:
         if outcome == 'collected_pending_review' and (failure_class or root_cause or not evidence):
             raise ValueError('保存成功需要证据且不能带失败原因')
         history_proof = self._customer_history_proof() if outcome == 'collected_pending_review' else None
+        completion_facts = None
+        with closing(self._connect(readonly=True)) as precheck:
+            prior_status = self._attempt(precheck, attempt_id)['status']
+        if outcome == 'collected_pending_review' and (prior_status in ACTIVE or derivation_recovery is not None):
+            # Load and hash files before taking the single-writer transaction.
+            # Already terminal idempotent receipts retain historical meaning.
+            from .batch_core import load_json, file_sha
+            receipts = [Path(item['path']) for item in evidence
+                        if Path(item['path']).name == 'saved_sample.json']
+            if len(receipts) != 1:
+                raise ValueError('Pending sample requires one original saved-sample receipt')
+            receipt = receipts[0]
+            saved = load_json(receipt)
+            annotation_path = receipt.parent.parent.parent / 'samples' / receipt.parent.name / 'annotation.json'
+            expected = saved.get('sample_files_sha256', {}).get('annotation.json')
+            if not expected or file_sha(annotation_path) != expected:
+                raise ValueError('Pending sample annotation differs from its original receipt')
+            completion_facts = saved, load_json(annotation_path), receipt
         with self._transaction() as con:
             current = timestamp(now)
             row = self._owned(con, attempt_id, worker_id, lease_token, current, terminal_ok=True)
@@ -817,6 +839,13 @@ class RuntimeStore:
                 return self._view(row)
             if row['started_at'] is None:
                 raise ValueError('未开始的预留不能记为真实执行结果')
+            if outcome == 'collected_pending_review':
+                saved, annotation, receipt = completion_facts
+                if saved.get('sample_id') != row['sample_id'] or receipt.parent.name != row['sample_id']:
+                    raise ValueError('Pending sample receipt identity differs')
+                from .closing_policy import completion_delivery_decision
+                if not completion_delivery_decision(annotation, saved.get('raw_execution') or {})['ordinary_target_eligible']:
+                    raise ValueError('Formal save requires original-goal success and at least five effective actions')
             if outcome == 'collected_pending_review':
                 from .admission_cohort import guard_scope
                 guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)

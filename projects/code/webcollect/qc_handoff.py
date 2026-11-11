@@ -169,9 +169,8 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     attempts = _attempts(scope, dataset, sample_ids)
     completion_bindings = []
     def bind_delivery(root, rows):
-        if delivery_policy is None:return
-        from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
-        if delivery_policy != COMPLETED_GOAL_DELIVERY:raise ValueError('Unknown delivery policy')
+        from .closing_policy import COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY, completion_delivery_decision
+        if delivery_policy not in (None, COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY):raise ValueError('Unknown delivery policy')
         for row in rows:
             annotation = root/'samples'/row['sample_id']/'annotation.json'
             decision = completion_delivery_decision(json.loads(annotation.read_text()), row['collection_completion']['raw_execution'])

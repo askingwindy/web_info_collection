@@ -242,11 +242,27 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
     checks=plan.get('checks',[]); rows=[]
     bound_plan=bool(hasattr(s,'task') and s.task.get('fragment',{}).get('plan_execution_policy')==PLAN_EXECUTION_POLICY)
     if bound_plan:verify_page_binding(plan,page_binding)
-    modern=s.task.get('fragment',{}).get('ending_policy')=='webcollect-five-ten-effective-ending-5' if hasattr(s,'task') else True
+    modern=s.task.get('fragment',{}).get('ending_policy') in ('webcollect-five-ten-effective-ending-5','webcollect-five-eight-complete-ending-6') if hasattr(s,'task') else True
     basis=observed_basis(s,objective_evidence) if modern else None
     navigation=basis['navigation'] if basis else []
-    for check_index,check in enumerate(checks):
-        if not all(check.get(key) for key in ('page','region','visible_text')):
+    from .result_completion import answer_rows
+    mapped_rows=answer_rows(s,plan,page_binding=page_binding)
+    for check_index,original_check in enumerate(checks):
+        if mapped_rows is not None:
+            rows.append(mapped_rows[check_index]);continue
+        check=deepcopy(original_check)
+        # A process check can name its business item before the answer exists.
+        # Resolve only explicit submitted algebra steps on its frozen page.
+        from .numeric_result_evidence import process_field, process_result_text
+        process_check=bool(check.get('page') and process_field(check.get('field','')))
+        from .result_execution import VERSION as RESULT_VERSION
+        execution_policy=getattr(s,'task',{}).get('fragment',{}).get('result_execution_policy')==RESULT_VERSION
+        inferred_result_region=bool(execution_policy and check.get('page') and check.get('visible_text') and not check.get('region'))
+        if inferred_result_region:check['region']='结果区'
+        if process_check and check.get('page'):
+            check['region']=check.get('region') or '结果区'
+            check['visible_text']=check.get('visible_text') or ''
+        if not process_check and not all(check.get(key) for key in ('page','region','visible_text')):
             rows.append({**check,'status':'PENDING','evidence':[], 'seen_outside_allowed_source':[],
                          'missing_binding_fields':[key for key in ('page','region','visible_text') if not check.get(key)],
                          'available_basis':'host_observed_basis',
@@ -298,6 +314,10 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
                         if not bound_url or not page_ok:continue
                         execution_binding=result_execution_binding(s,oid,state,e)
                         if not execution_binding:continue
+                if execution_binding:
+                    from .numeric_result_evidence import substantive_result_text
+                    if not substantive_result_text(quote,field=check.get('field','')):continue
+                process_match=bool(process_check and execution_binding and process_result_text(quote,check.get('field','')))
                 numeric_match=None
                 numeric_policy=(getattr(s,'task',{}).get('fragment',{}).get('numeric_result_evidence_policy')
                                 =='webcollect-numeric-result-evidence-1')
@@ -312,7 +332,8 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
                                         or source=='host_synchronized_visible_input_value'))
                     if (check['region'] in ('结果区','结果区域','计算结果','计算结果/正文','计算结果/业务区域','IRS计算器结果区')
                             and numeric_target(check['visible_text'],check.get('field','')) and not numeric_match):continue
-                if e.get('visible') is not True or (check['visible_text'] not in quote and not numeric_match):continue
+                if e.get('visible') is not True or (not process_match and (not check['visible_text'] or check['visible_text'] not in quote) and not numeric_match):continue
+                if process_check and not process_match:continue
                 key=(state['url'],e['element_id'],quote)
                 if key in seen:continue
                 seen.add(key)
@@ -323,7 +344,7 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
                 if modern:
                     proof['action_refs']=[{'operation_id':r['operation_id'],'before_observation_id':r['before_observation_id'],'after_observation_id':r['after_observation_id']} for r in s.trajectory if oid in (r.get('before_observation_id'),r.get('after_observation_id'))]
                 (proofs if page_ok and region_matches(state,e['element_id'],check['region'],business_aliases=modern) else other).append(proof)
-        rows.append({**check,**({'resolved_page':bound_url} if bound_url is not None else {}),
+        rows.append({**original_check,**({'host_resolved_process_check':True} if process_check else {}),**({'host_resolved_region':'结果区'} if inferred_result_region else {}),**({'resolved_page':bound_url} if bound_url is not None else {}),
                      'status':'VERIFIED' if proofs else 'UNVERIFIED',
                      'evidence':proofs,'seen_outside_allowed_source':other,
                      **({'observed_visible_text':proofs[0]['quote']} if any(p.get('numeric_result_match') for p in proofs) else {})})
@@ -340,7 +361,8 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
             **({'host_observed_basis':observed_basis(s, objective_evidence)} if any(r['status']=='PENDING' for r in rows) else {}),
             'business_goal_status':('UNVERIFIED' if execution_status=='UNVERIFIED' else ('VERIFIED' if done==len(rows) else 'PARTIAL' if done else 'UNVERIFIED') if rows else 'NOT_SPECIFIED'),
             **({'result_execution_status':execution_status} if result_policy else {}),
-            'fragment_effective_steps':len(s.trajectory),'is_ai_review':False}
+            'fragment_effective_steps':len(s.trajectory),'is_ai_review':False,
+            **({'result_completion':deepcopy(s.result_completion)} if getattr(s,'result_completion',None) else {})}
 
 
 def expected_navigation(s,controller):

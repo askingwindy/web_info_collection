@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 
 CAMPAIGN_VERSION = 'consumer-site-campaign-3'
-from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
+from .closing_policy import COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY, completion_delivery_decision
 
 ORDINARY_COUNTING = 'ordinary-complete-five-ten-1'
 RANGE_CAMPAIGN_VERSION = 'consumer-site-campaign-4'
@@ -41,7 +41,7 @@ def write_state(path, state):
 def target_count(state, application_id=None):
     if state.get('schema_version') in COUNTED_VERSIONS:
         policy = state.get('counting_policy')
-        if policy in (ORDINARY_COUNTING, COMPLETED_GOAL_DELIVERY):
+        if policy in (ORDINARY_COUNTING, COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY):
             key = 'ordinary_target_eligible'
         elif policy == VALID_RANGE_COUNTING and state.get('schema_version') in (RANGE_CAMPAIGN_VERSION, SITE_CAMPAIGN_VERSION):
             key = 'valid_range_target_eligible'
@@ -71,20 +71,11 @@ def ordinary_completion(saved):
     if file_sha(annotation_path)!=receipt['sample_files_sha256']['annotation.json']:
         raise ValueError('Campaign annotation differs from the saved receipt')
     annotation=load_json(annotation_path)
-    effective=sum(step.get('action',{}).get('action_type') not in ('wait','finish','complete')
-                  for step in annotation.get('steps',[]))
-    raw=receipt.get('raw_execution',{})
-    complete=(annotation.get('completion_status')=='success'
-              and not raw.get('trusted_prefix')
-              and saved.get('original_goal_completed') is not False
-              and not raw.get('collection_ending',{}).get('flagged')
-              and not annotation.get('steps',[{}])[-1].get('exception_evidence'))
-    return {'counting_policy':ORDINARY_COUNTING,'effective_steps':effective,
-            'completion_status':annotation.get('completion_status'),
-            'original_goal_completed':bool(complete),
-            'ordinary_target_eligible':bool(complete and 5<=effective<=10),
-            'target_count_status':'ordinary_goal_completed_pending_review' if complete and 5<=effective<=10 else 'retained_outside_ordinary_target',
-            'target_count_is_QC_pass':False}
+    decision = completion_delivery_decision(annotation, receipt.get('raw_execution', {}))
+    return {**decision, 'counting_policy': ORDINARY_COUNTING,
+            'target_count_status': ('ordinary_goal_completed_pending_review'
+                if decision['delivery_eligible'] else 'retained_outside_ordinary_target'),
+            'target_count_is_QC_pass': False}
 
 
 
@@ -95,15 +86,14 @@ def completed_goal_completion(saved):
     if file_sha(annotation) != receipt['sample_files_sha256']['annotation.json']:
         raise ValueError('Campaign annotation differs from saved receipt')
     result = completion_delivery_decision(load_json(annotation), receipt.get('raw_execution', {}))
-    return {**result, 'counting_policy': COMPLETED_GOAL_DELIVERY,
+    return {**result, 'counting_policy': result['delivery_policy'],
             'target_count_is_QC_pass': False}
 
 
 def valid_range_completion(saved):
-    """A sealed, exported 5–10 action interval may honestly be incomplete."""
+    """Legacy policy name; new exports share complete-goal qualification."""
     result = ordinary_completion(saved)
-    eligible = (5 <= result['effective_steps'] <= 10
-                and result['completion_status'] in ('success', 'controlled_exception'))
+    eligible = result['delivery_eligible']
     return {**result, 'counting_policy': VALID_RANGE_COUNTING,
             'valid_range_target_eligible': eligible,
             'target_count_status': ('valid_range_exported_pending_review' if eligible
@@ -161,10 +151,10 @@ def publish_pending(path, pool):
             capture = Path(saved['result_location']).parent.parent
             source = capture.parent / 'candidate'
             receipt = capture.parent / 'candidate-receipt.json'
-            qualification = (completed_goal_completion(saved) if counting_policy == COMPLETED_GOAL_DELIVERY
+            qualification = (completed_goal_completion(saved) if counting_policy in (COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY)
                              else valid_range_completion(saved) if counting_policy == VALID_RANGE_COUNTING
                              else ordinary_completion(saved) if counting_policy == ORDINARY_COUNTING else {})
-            if counting_policy == COMPLETED_GOAL_DELIVERY and not qualification['delivery_eligible']:
+            if qualification.get('delivery_eligible') is not True:
                 with locked(path) as state:
                     state.setdefault('internal_retained', []).append({**saved, **pending, **qualification, 'sample_id':saved['sample_id']})
                     state['pending_deliveries'] = [r for r in state['pending_deliveries'] if r['claim_id'] != pending['claim_id']]
@@ -210,7 +200,7 @@ def main():
     p.add_argument('--workers-per-site', type=int, required=True)
     p.add_argument('--target-per-site', type=int, help='Independent target for each selected site; uses campaign v5')
     p.add_argument('--target', type=int, help='optional exported-sample target under --counting-policy; otherwise continuous')
-    p.add_argument('--counting-policy', choices=(ORDINARY_COUNTING, VALID_RANGE_COUNTING, COMPLETED_GOAL_DELIVERY),
+    p.add_argument('--counting-policy', choices=(ORDINARY_COUNTING, VALID_RANGE_COUNTING, COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY),
                    default=COMPLETED_GOAL_DELIVERY, help='New campaigns require original-goal-complete ordinary delivery; explicit historical policies remain available')
     p.add_argument('--target-stop-mode', choices=('drain', 'cancel'), default='drain',
                    help='drain finishes in-flight work; cancel signals only this launch workers after target export')
@@ -375,8 +365,7 @@ def main():
             counted=target_count(current)
             ordinary=sum(row.get('ordinary_target_eligible') is True for row in current['deliveries'])
             valid_ranges=sum(row.get('valid_range_target_eligible') is True or
-                (5 <= row.get('effective_steps', 0) <= 10 and
-                 row.get('completion_status') in ('success', 'controlled_exception'))
+                row.get('delivery_eligible') is True
                 for row in current['deliveries'])
             stop_reason=current.get('stop_reason')
             pending_count=len(current.get('pending_deliveries',[]))

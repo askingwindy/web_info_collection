@@ -249,8 +249,8 @@ class CandidatePool:
             raise ValueError('Explicit candidate-pool-2 install required for webcollect-data-candidate-2')
 
     @contextmanager
-    def transaction(self):
-        with self.pool.connect(write=True) as con:
+    def transaction(self, *, timeout=90):
+        with self.pool.connect(write=True, timeout=timeout) as con:
             con.execute('BEGIN IMMEDIATE')
             yield con
             con.commit()
@@ -816,7 +816,7 @@ class CandidatePool:
 
     def heartbeat(self, claim, seconds=300):
         if not 1 <= seconds <= 86400: raise ValueError('Bounded lease required')
-        with self.transaction() as con:
+        with self.transaction(timeout=2) as con:
             self._fence(con,claim)
             con.execute('UPDATE candidate_claims SET expires=?,updated=? WHERE claim_id=?', (time.time()+seconds,time.time(),claim['claim_id']))
 

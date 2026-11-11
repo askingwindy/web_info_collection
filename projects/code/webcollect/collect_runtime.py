@@ -80,7 +80,8 @@ def source_identity():
               'direct_completion.py', 'direct_article.py', 'session_objective.py',
               'wiki_reading.py', 'reading_sections.py', 'numeric_result_evidence.py',
               'key_health.py', 'model_gateway.py', 'model_credentials.py',
-              'candidate_consumer.py', 'consumer_campaign.py']
+              'candidate_consumer.py', 'consumer_campaign.py',
+              'collection_strategy.py', 'screenshot_plan.py', 'screenshot_session.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -372,6 +373,12 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     from .production_quality import require_public_task_state
     from .scaffold import program_version
     from .telemetry import phase as telemetry_phase
+    from .collection_strategy import enabled as screenshot_strategy
+    if screenshot_strategy(task):
+        # 策略 2 显式选择：截图会话与专属chooser，不挂策略1 band/finish_when门禁。
+        from .screenshot_session import ScreenshotPlanSession as Session
+    else:
+        Session = ReactSession
     ids = {**{key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')},
            'attempt_id': attempt['attempt_id']}
     phase_ledger = Path(output) / 'metering' / 'phases.jsonl'
@@ -402,7 +409,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
     feedback_context = await asyncio.to_thread(site_context, registry, task['site_uri'], model_ledger=ledger,
         candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
-    if task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5') and feedback_context['unresolved']:
+    if task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6') and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
     from .banded_plan import enabled as banded_plan_enabled
@@ -413,7 +420,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     if page is None:
         page = await context.new_page()
     page.set_default_timeout(15000)
-    session = ReactSession(task, evidence / 'raw', chooser, page, steps_directory=evidence,
+    session = Session(task, evidence / 'raw', chooser, page, steps_directory=evidence,
         navigation=navigation, url_check=url_check, preflight=preflight,
         frame_guard=frame_guard, site_context=feedback_context, attempt_id=attempt['attempt_id'],
         phase_ledger=phase_ledger, host_limits=host_limits,
@@ -439,7 +446,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
             evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
-        if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5'):
+        if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6'):
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         return {'status': 'rejected', 'failure_class': failure_class,
@@ -486,6 +493,15 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             prefix_end=None
             write_json(evidence/'prefix-ineligible.json',{'protocol':prefix_rule,
                 'error':str(prefix_error),'raw_receipt':raw_receipt,'normal_sample_saved':False})
+    from .screenshot_plan import RAW_ONLY_ENDINGS
+    if ending and ending.get('kind') in RAW_ONLY_ENDINGS and prefix_end is None:
+        # 策略 2 的 give_up/unsuitable/no_progress 只留原始记录，不进入正式派生。
+        receipt=evidence/'screenshot-raw-only.json'
+        write_json(receipt,{'schema_version':'webcollect-screenshot-raw-only-1',
+            'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
+            'saved_raw':True,'normal_sample_saved':False,'QC_status':'NOT_RUN'})
+        return await finish_failure('collector','react_screenshot_raw_only:'+str(ending.get('kind'))
+                                    +':'+str(ending.get('reason')),_evidence(receipt))
     if ending and not ending.get('safe_for_pending_sample') and prefix_end is None:
         pending=evidence/'raw-ending-pending.json'
         write_json(pending,{'schema_version':'webcollect-raw-ending-pending-2',
@@ -549,8 +565,14 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                                   str(derived.get('error') or derived.get('errors') or '')[:300])
         cause = summary['stop_details']['code'] if stop_data else 'react_' + derived['status']
         return await finish_failure('collector', cause)
+    saved = evidence / 'saved_sample.json'
+    from .closing_policy import completion_delivery_decision
+    if task['fragment'].get('decision_protocol') == NATIVE_REACT:
+        completion_decision = completion_delivery_decision(
+            read_json(sample/'annotation.json'), read_json(saved)['raw_execution'])
+        if not completion_decision['delivery_eligible']:
+            return await finish_failure('collector', 'react_completion_delivery_ineligible')
     with telemetry_phase(phase_ledger, 'react_commit', scope=meter_identity):
-        saved = evidence / 'saved_sample.json'
         with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
             feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
                                                    'collected_pending_review')

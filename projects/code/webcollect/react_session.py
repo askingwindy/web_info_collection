@@ -212,8 +212,10 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
     the same entry is a new transparent version, never a silent duplicate.
     """
     if plan_protocol is not None and ending_policy is None:
-        from .closing_policy import EFFECTIVE_VERSION as CURRENT_ENDING,V2_VERSION as LEGACY_ENDING
-        ending_policy=CURRENT_ENDING if plan_protocol in ('webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13') else LEGACY_ENDING
+        from .closing_policy import EFFECTIVE_VERSION, COMPLETE_VERSION, V2_VERSION as LEGACY_ENDING
+        ending_policy=(COMPLETE_VERSION if plan_protocol=='webcollect-banded-conditional-plan-13'
+                       else EFFECTIVE_VERSION if plan_protocol in ('webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12')
+                       else LEGACY_ENDING)
     if site_category is None:
         site_category = 'UNKNOWN' if decision_protocol == NATIVE_VERSION else '综合'
     from .collect import verify_public_url
@@ -284,7 +286,7 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
         if decision_protocol != NATIVE_VERSION or plan_protocol not in VERSIONS:
             raise ValueError('Unknown conditional plan protocol')
         for part in (spec, task['fragment']): part['plan_protocol'] = plan_protocol
-        if spec.get('ending_policy') == 'webcollect-five-ten-effective-ending-5':
+        if spec.get('ending_policy') in ('webcollect-five-ten-effective-ending-5','webcollect-five-eight-complete-ending-6'):
             for part in (spec, task['fragment']):
                 part['reading_completion_policy'] = 'webcollect-reading-plan-completion-1'
                 part['plan_execution_policy'] = 'webcollect-plan-execution-1'
@@ -326,7 +328,7 @@ def configure_candidate_protocols(task):
         part['numeric_result_evidence_policy']=NUMERIC_POLICY
 
 
-def build_candidate_task(capability, task_version, budgets=None):
+def build_candidate_task(capability, task_version, budgets=None, collection_strategy=None):
     """Load the claimed candidate goal as requested_goal; the loop keeps the claim."""
     from .candidate_contract import validate_observation
     binding = validate_observation(capability)
@@ -339,19 +341,35 @@ def build_candidate_task(capability, task_version, budgets=None):
     actions = sorted(set(capability.get('supported_actions') or []) & set(ALLOWED_TOOL_ACTIONS))
     if not actions:
         raise ValueError('Candidate capability supports none of the react actions')
-    from .closing_policy import EFFECTIVE_VERSION as CLOSE_POLICY
+    from .closing_policy import COMPLETE_VERSION as CLOSE_POLICY
     from .banded_plan import V13_VERSION as PLAN_PROTOCOL
     from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
-    from .trusted_prefix import V2_VERSION as PREFIX_PROTOCOL
-    task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
-        plan_protocol=PLAN_PROTOCOL, action_stability_protocol=FOCUS_PROTOCOL,
-        trusted_prefix_protocol=PREFIX_PROTOCOL,
-        site_category=capability['site_category'],
-        app_name=candidate_name,
-        task_family=(capability.get('task_families') or ['navigation-reading'])[0],
-        allowed_actions=actions, instruction=natural, budgets=budgets, pilot_identity=None)
-    for part in (task['fragment'],task['workflow_proposal']['spec']):part['result_execution_policy']='webcollect-result-execution-1'
-    configure_candidate_protocols(task)
+    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, STRATEGY_BANDED_REACT
+    strategy = collection_strategy or STRATEGY_BANDED_REACT
+    if strategy == STRATEGY_SCREENSHOT_PLAN:
+        # 策略 2 explicitly selected: no conditional-plan protocol, so no band /
+        # finish_when / predicate-enum gates apply; the screenshot session owns
+        # its own loop while the complete-goal save rules stay identical.
+        task = build_url_task(url=capability['site_uri'], task_version=task_version,
+            ending_policy=CLOSE_POLICY, site_category=capability['site_category'],
+            app_name=candidate_name,
+            task_family=(capability.get('task_families') or ['navigation-reading'])[0],
+            allowed_actions=actions, instruction=natural, budgets=budgets, pilot_identity=None)
+    else:
+        task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
+            plan_protocol=PLAN_PROTOCOL, action_stability_protocol=FOCUS_PROTOCOL,
+            site_category=capability['site_category'],
+            app_name=candidate_name,
+            task_family=(capability.get('task_families') or ['navigation-reading'])[0],
+            allowed_actions=actions, instruction=natural, budgets=budgets, pilot_identity=None)
+    if strategy == STRATEGY_SCREENSHOT_PLAN:
+        from .collection_strategy import freeze as freeze_strategy
+        freeze_strategy(task, strategy)
+    else:
+        for part in (task['fragment'],task['workflow_proposal']['spec']):
+            part['result_execution_policy']='webcollect-result-execution-1'
+            part['result_completion_protocol']='webcollect-result-completion-1'
+        configure_candidate_protocols(task)
     task['task_id']='react-'+object_sha256({'url':task['initial_url'],'spec':task['workflow_proposal']['spec']})[:24]
     task['capability_id'] = capability['capability_id']
     task['capability_version'] = capability['version']
@@ -429,13 +447,19 @@ def validate_task(task):
     if not isinstance(actions, list) or not actions or any(action not in ALLOWED_TOOL_ACTIONS for action in actions):
         raise ValueError('React task needs a nonempty supported action whitelist')
     spec = (task.get('workflow_proposal') or {}).get('spec') or {}
-    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol','reading_completion_policy','plan_execution_policy','wiki_reading_completion_protocol','numeric_result_evidence_policy','result_execution_policy'):
+    for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol','reading_completion_policy','plan_execution_policy','wiki_reading_completion_protocol','numeric_result_evidence_policy','result_execution_policy','result_completion_protocol','collection_strategy'):
         if spec.get(extension) != fragment.get(extension):
             raise ValueError('Mismatched frozen React extension: ' + extension)
+    from .collection_strategy import strategy_id as _frozen_strategy
+    _frozen_strategy(task)  # Unknown/absent markers keep their historical reading.
     if fragment.get('wiki_reading_completion_protocol') not in (None,'webcollect-wiki-reading-completion-1','webcollect-wiki-reading-completion-2'):
         raise ValueError('Unknown ordinary Wiki reading completion protocol')
     if fragment.get('wiki_reading_completion_protocol') == 'webcollect-wiki-reading-completion-2' and fragment.get('plan_protocol') not in ('webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13'):
         raise ValueError('Wiki completion-2 requires initial-path plan-12')
+    if fragment.get('result_completion_protocol') not in (None,'webcollect-result-completion-1'):
+        raise ValueError('Unknown ordinary result completion protocol')
+    if fragment.get('result_completion_protocol') and fragment.get('result_execution_policy')!='webcollect-result-execution-1':
+        raise ValueError('Result completion requires frozen result-execution evidence')
     if fragment.get('result_execution_policy') not in (None,'webcollect-result-execution-1'):
         raise ValueError('Unknown result execution policy')
     if fragment.get('result_execution_policy') and fragment.get('plan_protocol')!='webcollect-banded-conditional-plan-13':
@@ -457,12 +481,12 @@ def validate_task(task):
     if fragment.get('reading_completion_policy') is not None:
         if (fragment['reading_completion_policy'] != 'webcollect-reading-plan-completion-1'
                 or fragment.get('plan_protocol') not in ('webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13')
-                or fragment.get('ending_policy') != 'webcollect-five-ten-effective-ending-5'):
+                or fragment.get('ending_policy') not in ('webcollect-five-ten-effective-ending-5','webcollect-five-eight-complete-ending-6')):
             raise ValueError('Unknown frozen reading completion policy or incompatible task')
     if fragment.get('plan_execution_policy') is not None:
         if (fragment['plan_execution_policy'] != 'webcollect-plan-execution-1'
                 or fragment.get('plan_protocol') not in ('webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13')
-                or fragment.get('ending_policy') != 'webcollect-five-ten-effective-ending-5'
+                or fragment.get('ending_policy') not in ('webcollect-five-ten-effective-ending-5','webcollect-five-eight-complete-ending-6')
                 or fragment.get('reading_completion_policy') != 'webcollect-reading-plan-completion-1'):
             raise ValueError('Unknown frozen plan execution policy or incompatible task')
     from .action_stability import VERSIONS as focus_versions
@@ -470,14 +494,21 @@ def validate_task(task):
         raise ValueError('Unknown frozen action stability protocol')
     if fragment.get('trusted_prefix_protocol') not in (None, 'webcollect-trusted-prefix-1', 'webcollect-trusted-prefix-2'):
         raise ValueError('Unknown frozen trusted prefix protocol')
+    if fragment.get('ending_policy') == 'webcollect-five-eight-complete-ending-6':
+        if fragment.get('trusted_prefix_protocol') is not None or fragment.get('allow_controlled_exception'):
+            raise ValueError('Complete 5–8 step tasks cannot enable trusted-prefix or controlled-exception delivery')
     if fragment.get('reasoning_effort_profile') is not None:
         if not native or not fragment.get('plan_protocol'):
             raise ValueError('reasoning_effort_profile requires a native conditional-plan task')
         if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
             raise ValueError('Invalid frozen reasoning effort profile')
-    from .closing_policy import VERSION as CLOSE_POLICY, EFFECTIVE_VERSION, V3_VERSION as BANDED_CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
+    from .closing_policy import VERSION as CLOSE_POLICY, EFFECTIVE_VERSION, COMPLETE_VERSION, V3_VERSION as BANDED_CLOSE_POLICY, V2_VERSION as LEGACY_CLOSE_POLICY, VERSIONS as CLOSE_POLICIES
     if fragment.get('plan_protocol'):
-        expected_close=(CLOSE_POLICY, EFFECTIVE_VERSION, BANDED_CLOSE_POLICY) if fragment['plan_protocol'] in ('webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12','webcollect-banded-conditional-plan-13') else (LEGACY_CLOSE_POLICY,)
+        expected_close=((CLOSE_POLICY, EFFECTIVE_VERSION, COMPLETE_VERSION, BANDED_CLOSE_POLICY)
+                        if fragment['plan_protocol']=='webcollect-banded-conditional-plan-13'
+                        else (CLOSE_POLICY, EFFECTIVE_VERSION, BANDED_CLOSE_POLICY)
+                        if fragment['plan_protocol'] in ('webcollect-banded-conditional-plan-11','webcollect-banded-conditional-plan-12')
+                        else (LEGACY_CLOSE_POLICY,))
         if fragment.get('ending_policy') not in expected_close:
             raise ValueError('Conditional plan and atomic ending policy versions do not match')
     from .reading_progress import END_POLICY
@@ -617,7 +648,7 @@ class ReactSession:
         self.phase_ledger = Path(phase_ledger) if phase_ledger else None
         self.active_reference = None
         self.budgets = (dict.fromkeys(BUDGET_KEYS)
-            if self.task['fragment'].get('ending_policy') in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5')
+            if self.task['fragment'].get('ending_policy') in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6')
             else deepcopy(self.task['fragment']['budgets']))
         self.glm_session_id = getattr(choose, 'glm_session_id', None)
         self.glm_http_requests = None
@@ -648,20 +679,21 @@ class ReactSession:
         self.navigation_count = 0
         self.actual_dispatches = 0
         self.started = time.monotonic()
-        self.host_limits = None if self.task['fragment'].get('ending_policy') in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5') else deepcopy(host_limits)
+        self.host_limits = None if self.task['fragment'].get('ending_policy') in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6') else deepcopy(host_limits)
         self.page_urls = list(self.task['fragment']['page_urls'])
         self.dialogs = []
         self.excluded_links_seen = set()
         self.events = []
         self.page.on('dialog', lambda dialog: self.dialogs.append(
             {'type': dialog.type, 'message': dialog.message}))
+        from .closing_policy import completed_goal_only
         self.binding = exclusive(self.root / 'boundary.json',
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
              'language_exclusion_policy': __import__('webcollect.page_language',fromlist=['VERSION']).VERSION,
              **({'host_limits': self.host_limits} if self.host_limits else {}),
-             'system_prompt_sha256': object_sha256(system_with_attempt_limit(system_for(task),attempt_limit(task)) if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
+             'system_prompt_sha256': object_sha256(system_with_attempt_limit(system_for(task),attempt_limit(task),completed_goal_only(task)) if self.plan_controller else NATIVE_SYSTEM if self.native else LEGACY_SYSTEM_PROMPT),
              'decision_protocol': self.task['fragment']['decision_protocol'] if self.native else REACT_VERSION,
-             **({'attempt_id': self.attempt_id} if contracted else {}),
+             **({'attempt_id': self.attempt_id} if contracted or self.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1' else {}),
              **({'first_plan_reasoning_effort': getattr(choose,'first_plan_reasoning_effort',None),
                  'branch_reasoning_effort': getattr(choose,'branch_reasoning_effort',None)} if self.native else {}),
              **({'first_plan_timeout_seconds': choose.first_plan_timeout_seconds}
@@ -1034,14 +1066,17 @@ class ReactSession:
 
     def _validate_step(self, step):
         from jsonschema import Draft202012Validator
+        from .collection_strategy import enabled as _screenshot_task
+        screenshot_task = _screenshot_task(self.task)
+        extended = self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13' or screenshot_task
         action = step.get('action')
-        if action in ('drag','wait') and self.task['fragment'].get('plan_protocol')!='webcollect-banded-conditional-plan-13':
+        if action in ('drag','wait') and not extended:
             raise ValueError('EXTENDED_ACTION_REQUIRES_PLAN_13')
         if action not in self.task['fragment']['allowed_actions']:
             raise ValueError('动作不在本任务允许范围内：' + str(action))
         schema = obj({'action': {'enum': list(ALLOWED_TOOL_ACTIONS)}, 'goal': TEXT, 'expected': TEXT,
                       **{k: v for k, v in ACTION_ARGUMENTS.get(action, {}).items()}})
-        if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13':
+        if extended:
             schema['properties'].update(rationale=TEXT,expected_result=TEXT)
             schema['required'].extend(['rationale','expected_result'])
         try:
@@ -1050,7 +1085,7 @@ class ReactSession:
             raise ValueError('动作参数不合法：' + str(error).splitlines()[0]) from None
         if self.task['fragment'].get('decision_protocol') == NATIVE_VERSION:
             variants = native_tools(self.task['fragment']['allowed_actions'])[2]['function']['parameters']['properties']['step']
-            if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13':
+            if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13' or screenshot_task:
                 for variant in variants['oneOf']:
                     variant['properties'].update(rationale=TEXT,expected_result=TEXT)
                     variant['required'].extend(['rationale','expected_result'])
@@ -1072,7 +1107,7 @@ class ReactSession:
 
     def _range_close(self, kind, reason, *, unknown=False, force_pending=False):
         """Host finish without another model request or browser action."""
-        from .closing_policy import attempt_limit, EFFECTIVE_VERSION, no_effect_proven
+        from .closing_policy import attempt_limit, EFFECTIVE_VERSION, COMPLETE_VERSION, no_effect_proven
         POLICY=self.task['fragment']['ending_policy']
         band=getattr(self.plan_controller,'frozen_band',None) if self.plan_controller else None
         limit=attempt_limit(self.task,band)
@@ -1107,17 +1142,24 @@ class ReactSession:
         tail_known = (bool(attempts) and accounted == self.actual_dispatches
                       and all(a['outcome'] != 'EFFECT_UNKNOWN' for a in attempts)
                       and not unknown and not self.unknown)
-        if POLICY==EFFECTIVE_VERSION:
+        if POLICY in (EFFECTIVE_VERSION, COMPLETE_VERSION):
             raws=[load_json(ref['path']) for attempt in attempts for ref in attempt.get('raw_steps',[])]
             dispatched=[raw for raw in raws if raw.get('dispatched') is True]
             omitted=[raw for raw in dispatched if not (raw.get('action_executed') is True
                 and raw.get('postconditions_checked') is True
                 and raw.get('react',{}).get('effect_evidence',{}).get('verified') is True)]
+            from .collection_strategy import enabled as _screenshot_strategy
+            screenshot_task=_screenshot_strategy(self.task)
+            def _tail_accounted(raw):
+                if no_effect_proven(raw,self.observation_records):return True
+                if not screenshot_task:return False
+                from .screenshot_plan import tail_effect_observed
+                return tail_effect_observed(raw,self)
             tail_known=(tail_known and len(dispatched)==self.actual_dispatches
                 and len(omitted)==tail_dispatches
-                and all(no_effect_proven(raw,self.observation_records) for raw in omitted))
+                and all(_tail_accounted(raw) for raw in omitted))
             if tail_dispatches and not tail_known:safe=False
-        if POLICY!=EFFECTIVE_VERSION and safe and tail_dispatches and not tail_known:
+        if POLICY not in (EFFECTIVE_VERSION, COMPLETE_VERSION) and safe and tail_dispatches and not tail_known:
             tail=attempts[-1].get('raw_steps',[]) if attempts else []
             raw=load_json(tail[-1]['path']) if tail else {}
             safe=(tail_dispatches==1 and raw.get('operation',{}).get('action_type')=='scroll'
@@ -1125,15 +1167,24 @@ class ReactSession:
                   and raw.get('react',{}).get('after_observation_id')==final_id
                   and same_view(raw['state'],final_state))
         unknown=bool(unknown or self.unknown or (tail_dispatches and not safe and not tail_known))
-        flagged=kind not in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN')
+        # 策略 2 adds its own verified-completion ending; every other strategy-2
+        # ending kind stays flagged/raw-only exactly like the historical kinds.
+        ready_kinds=('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN',
+                    *getattr(self,'extra_ready_endings',()))
+        flagged=kind not in ready_kinds
+        if kind=='AGENT_COMPLETE_VERIFIED' and getattr(self,'completion_endpoint_basis',None) is None:
+            raise ValueError('COMPLETE_ENDING_REQUIRES_VERIFIED_COMPLETION')
         self.collection_ending={'protocol':POLICY,'kind':kind,'flagged':flagged,'reason':reason,
-            **({'attempt_limit':limit,'attempt_band':band} if POLICY in ('webcollect-banded-attempt-ending-3','webcollect-continuous-attempt-ending-4','webcollect-five-ten-effective-ending-5') else {}),
+            **({'attempt_limit':limit,'attempt_band':band} if POLICY in ('webcollect-banded-attempt-ending-3','webcollect-continuous-attempt-ending-4','webcollect-five-ten-effective-ending-5','webcollect-five-eight-complete-ending-6') else {}),
             'business_attempts':len(refs),'actual_atomic_dispatches':self.actual_dispatches,
             'verified_effective_steps':len(self.trajectory),'unverified_tail_dispatches':tail_dispatches,
             'zero_dispatch_attempts':sum(a['actual_dispatches_delta']==0 for a in attempts),
             'finish_count':1,'finish_origin':'host' if kind!='VISIBLE_GOAL_REPORTED' else 'agent',
             **({'plan_protocol':self.task['fragment']['plan_protocol'],
                 'endpoint_evidence':self.plan_controller.endpoint_basis(self)} if kind=='HOST_PLAN_ENDPOINT' else {}),
+            **({'collection_strategy':deepcopy(self.task['fragment'].get('collection_strategy')),
+                'endpoint_evidence':deepcopy(self.completion_endpoint_basis)}
+               if kind=='AGENT_COMPLETE_VERIFIED' else {}),
             **({'plan_protocol':self.task['fragment']['plan_protocol'],
                 'boundary_return_evidence':__import__('webcollect.consumer_page_policy',fromlist=['ending_evidence']).ending_evidence(
                     self.task,self.trajectory,{oid:load_json(o['evidence']['state']['path']) for oid,o in self.observation_records.items()},final_id)
@@ -1148,7 +1199,7 @@ class ReactSession:
             'last_attempt':attempts[-1] if attempts else None,
             'raw_only_pending':not safe}
         self.event('range-finish',collection_ending=self.collection_ending)
-        self.stop_reason='budget' if kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT') else 'ready' if kind in ('VISIBLE_GOAL_REPORTED','HOST_PLAN_ENDPOINT','HOST_BOUNDARY_RETURN') else 'blocked'
+        self.stop_reason='budget' if kind in ('EIGHT_ATTEMPT_LIMIT','TWELVE_ATTEMPT_LIMIT','TEN_EFFECTIVE_STEP_LIMIT') else 'ready' if kind in ready_kinds else 'blocked'
         self.stop_summary=reason
         self.unknown=self.unknown or unknown
         self.state='finished' if safe else 'closed_pending_reconciliation'
@@ -1160,8 +1211,8 @@ class ReactSession:
         dispatch_delta=self.actual_dispatches-before_dispatch;effective_delta=len(self.trajectory)-before_effective
         harmless_no_effect=False
         if dispatch_delta>effective_delta and raw_refs and self.current:
-            from .closing_policy import EFFECTIVE_VERSION, no_effect_proven
-            if self.task['fragment']['ending_policy']==EFFECTIVE_VERSION:
+            from .closing_policy import EFFECTIVE_VERSION, COMPLETE_VERSION, no_effect_proven
+            if self.task['fragment']['ending_policy'] in (EFFECTIVE_VERSION, COMPLETE_VERSION):
                 raws=[load_json(ref['path']) for ref in raw_refs]
                 omitted=[raw for raw in raws if raw.get('dispatched') is True
                     and not (raw.get('action_executed') is True and raw.get('postconditions_checked') is True
@@ -1190,7 +1241,7 @@ class ReactSession:
         limit=attempt_limit(self.task,band)
         if effective_limit(self.task) is not None:
             if len(self.trajectory)>=limit and self.plan_controller is None:
-                self._range_close(limit_kind(limit),f'已达到{limit}个有效业务动作；保留真实末态，不追加动作')
+                self._range_close(limit_kind(limit,effective=True),f'已达到{limit}个有效业务动作；保留真实末态，不追加动作')
         elif limit is not None and 5<=number<=limit and outcome!='VERIFIED':
             self._range_close(outcome,reason,unknown=unknown)
         elif limit is not None and number==limit and self.plan_controller is None:
@@ -1650,7 +1701,8 @@ class ReactSession:
                          'before_observation_id': self.current['observation_id'],
                          'semantic_goal': step['goal'], 'semantic_expected': step['expected'],
                          **({'semantic_rationale':step['rationale'],'semantic_expected_result':step['expected_result']}
-                            if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13' else {}),
+                            if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13'
+                            or __import__('webcollect.collection_strategy',fromlist=['enabled']).enabled(self.task) else {}),
                          'primitive': row['action'], 'primitive_index': len(executed) + 1}}
         self.dialogs.clear()
         dispatch_started = False
@@ -1845,11 +1897,15 @@ class ReactSession:
         png_changed = _sha(Path(after['evidence']['image']['path'])) != before_image['sha256']
         changed = bool(changed_fields) or png_changed
         zero_scroll = operation['action_type'] == 'scroll' and before_state.get('scroll') == after_state.get('scroll')
-        if self.plan_controller is not None and (not effect['verified'] or zero_scroll or not changed):
+        if ((self.plan_controller is not None
+                or __import__('webcollect.collection_strategy',fromlist=['enabled']).enabled(self.task))
+                and (not effect['verified'] or zero_scroll or not changed)):
             # Bind the observed no-effect frame first; the classification stays
             # definite whether or not the session continues. A known zero-effect
             # action stays the model's decision: the pending-effect branch offers
             # replan/original/stop. Zero effective steps, dispatch retained.
+            # 策略 2 shares this: a submit whose result is not yet visible is a
+            # business checkpoint (observe/scroll), never a hard session stop.
             raw['react'].update(after_observation_id=after['observation_id'], effect_evidence=effect,
                                 zero_effect=True)
             self.event('action-zero-effect', operation=operation['operation_id'],
@@ -1912,7 +1968,8 @@ class ReactSession:
             'observed': observed,
             'semantic_goal': step['goal'], 'semantic_expected': step['expected'],
                          **({'semantic_rationale':step['rationale'],'semantic_expected_result':step['expected_result']}
-                            if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13' else {}),
+                            if self.task['fragment'].get('plan_protocol')=='webcollect-banded-conditional-plan-13'
+                            or __import__('webcollect.collection_strategy',fromlist=['enabled']).enabled(self.task) else {}),
             'primitive': row['action']}
         if raw.get('return_navigation'):
             row_record['return_navigation'] = deepcopy(raw['return_navigation'])
@@ -1999,6 +2056,7 @@ class ReactSession:
                         evidence_refs=[receipt['path']])
 
     async def _native_finish(self, arguments):
+        from .closing_policy import completed_goal_only
         current_id = self.current['observation_id']
         submitted = deepcopy(arguments)
         reference = self.active_reference
@@ -2022,8 +2080,11 @@ class ReactSession:
         if self._left('max_observations') >= 1:
             await self._observe()
         if self.plan_controller is not None and arguments['stop_reason']=='ready':
-            if not self.plan_controller.proved(self.plan_controller.plan['finish_when'],self):
+            result_complete=(getattr(self,'result_completion',None) and self.plan_controller.fact_progress(self).get('business_goal_status')=='VERIFIED')
+            if not result_complete and not self.plan_controller.proved(self.plan_controller.plan['finish_when'],self):
                 return self._rejected('finish','HOST_ENDPOINT_CHANGED: refreshed sealed final frame no longer proves finish_when')
+        if completed_goal_only(self.task) and arguments['stop_reason']=='ready' and len(self.trajectory)<5:
+            return self._rejected('finish','原目标即使已完成，实际1–4步也只保留内部记录，不能形成正式样本')
         if self.task['fragment'].get('ending_policy'):
             from .reading_progress import ending
             proof = ending(len(self.trajectory), load_json(self.current['evidence']['state']['path']))
@@ -2517,7 +2578,9 @@ class ReactSession:
             'final_observation_id': self.observations[-1] if self.observations else None,
             'trajectory': [row['operation_id'] for row in self.trajectory],
             'goal_updates': self.goal_updates, 'working_goal': self.working_goal,
-            **({'goal_evidence':self.plan_controller.fact_progress(self)} if self.plan_controller else {}),
+            **({'goal_evidence':(self.plan_controller.fact_progress(self) if self.plan_controller
+                                 else deepcopy(getattr(self,'goal_evidence',None)))}
+               if (self.plan_controller or getattr(self,'goal_evidence',None)) else {}),
             'delayed_navigations': getattr(self,'delayed_navigations',[]),
             'planning_intents': getattr(self,'planning_intents',[]),
             'used': {k: self.used[k] for k in BUDGET_KEYS},
@@ -2667,6 +2730,17 @@ def react_chooser(ledger, task, attempt_id, *, parent_job=None):
             raise OutcomeUnknown('Original attempt has an unresolved request; no new dispatch: ' + pending)
 
     if task['fragment'].get('decision_protocol') in NATIVE_VERSIONS:
+        from .collection_strategy import enabled as _screenshot_task
+        if _screenshot_task(task):
+            # 策略 2 owns its submit_plan/plan_decision wire protocol; it must
+            # not inherit the conditional-plan branch schema or band gates.
+            from .screenshot_plan import screenshot_chooser
+            choose = screenshot_chooser(ledger, task, attempt_id, parent_job=parent_job)
+            choose.session_usage = usage
+            choose.requests_used = lambda: usage()['used']
+            choose.guard_unresolved = guard_unresolved
+            choose.glm_session_id = attempt_id if ledger.real_glm else None
+            return choose
         choose = _native_chooser(ledger, task, attempt_id, guard_unresolved, parent_job=parent_job)
     else:
         choose = _legacy_chooser(ledger, task, attempt_id, parent_job=parent_job)

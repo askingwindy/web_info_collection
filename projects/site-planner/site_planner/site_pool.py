@@ -79,12 +79,15 @@ class SitePool:
             if con.execute('SELECT schema FROM pool_meta WHERE id=1').fetchone()[0] != SCHEMA:
                 raise ValueError('Pool schema mismatch')
 
-    def connect(self, *, write=False):
+    def connect(self, *, write=False, timeout=90):
         if write and self.readonly:
             raise ValueError('Read-only site pool')
+        # Twenty consumers share this single-writer ledger. Wait only for a
+        # transient SQLite lock; owner/token/expiry fencing remains unchanged.
         con = sqlite3.connect(self.path.as_uri() + ('?mode=rw' if write else '?mode=ro'),
-                              uri=True, timeout=30)
+                              uri=True, timeout=timeout)
         con.row_factory = sqlite3.Row
+        con.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
         con.execute('PRAGMA foreign_keys=ON')
         return closing(con)
 
