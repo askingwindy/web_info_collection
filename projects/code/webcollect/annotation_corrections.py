@@ -36,7 +36,7 @@ def write(path, value):
         stream.write('\n')
 
 
-def step_narratives(row, before, element=None):
+def step_narratives(row, before, element=None, *, current_facts=False):
     """Only pre-action facts and recorded purpose/expectation; no hindsight."""
     action = row['action']; args = row.get('arguments', {})
     expected = str(row.get('expected', '')); purpose = str(row.get('semantic_goal') or row.get('goal') or '')
@@ -70,8 +70,9 @@ def step_narratives(row, before, element=None):
         value = args['text']
         if expected == value and value:
             result['expected_result'] = f'预期「{label}」中的输入值为「{value}」。'
-        if current.get('focused') and value and (value in purpose or re.search('输入|輸入|填写|填寫|设置|設置', purpose)):
-            result['next_step_rationale'] = f'「{label}」已获得焦点，原计划要求填写该字段，因此输入「{value}」。'
+        if (current.get('focused') or current_facts) and value and (value in purpose or re.search('输入|輸入|填写|填寫|设置|設置', purpose)):
+            prefix = f'「{label}」已获得焦点' if current.get('focused') else f'当前页面可见「{label}」输入控件'
+            result['next_step_rationale'] = prefix + f'，原计划要求填写该字段，因此输入「{value}」。'
     elif action == 'hotkey' and visible and current.get('focused'):
         keys = [str(k).lower() for k in args.get('keys', [])]
         if keys in (['meta', 'a'], ['ctrl', 'a'], ['command', 'a']) and current.get('value') and re.search('全选|全選|覆盖|覆蓋', purpose):

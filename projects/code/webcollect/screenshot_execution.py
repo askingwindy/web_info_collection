@@ -187,3 +187,80 @@ def react_step(step, control_ids, endpoint_matches):
             raise ValueError('DRAG_DESTINATION_NOT_UNIQUELY_BOUND')
         actual['end_control_id'] = matches[0]
     return actual
+
+
+def compile_step(task, page_urls, step, observation, navigation_count=0):
+    """Compile exactly one declared atomic action; never synthesize focus/clear."""
+    action = step['action']
+    if action not in task['fragment']['allowed_actions'] or action == 'set_value':
+        raise ValueError('ACTION_NOT_PUBLISHED_FOR_SCREENSHOT_STRATEGY')
+    cid = step.get('control_id')
+    control = observation['controls'].get(cid)
+    if action in ('click', 'double_click', 'right_click', 'type', 'select', 'drag'):
+        if not control:
+            raise ValueError('TARGET_NOT_CURRENTLY_OBSERVED')
+        truth = control.get('actions', {}).get(action, {})
+        if truth.get('status') != 'PROVEN':
+            raise ValueError(truth.get('status', 'INSUFFICIENT') + ': ' + truth.get('reason', 'MISSING_TARGET_PROBE'))
+    if action == 'hotkey' and cid and not ((control or {}).get('probe') or {}).get('focused'):
+        raise ValueError('HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS')
+    if action == 'back' and navigation_count < 1:
+        raise ValueError('NO_SESSION_NAVIGATION_TO_RETURN_FROM')
+    if action == 'open_url':
+        page = step.get('page_id', '')
+        if not page.startswith('p') or not page[1:].isdigit() or int(page[1:]) >= len(page_urls):
+            raise ValueError('NAVIGATION_REQUIRES_OBSERVED_PAGE')
+    row = deepcopy(step)
+    if action == 'select':
+        options = control['binding'].get('options', [])
+        matches = [o for o in options if str(o.get('value')) == str(step.get('value')) and not o.get('disabled')]
+        if len(matches) != 1 or sum(o.get('label') == matches[0].get('label') for o in options) != 1:
+            raise ValueError('SELECT_OPTION_NOT_PROVEN: use one unique enabled option value from current options')
+        if str(step['value']) == str(control.get('value', {}).get('value')):
+            raise ValueError('UNCHANGED_SELECTION')
+        row['option'] = matches[0]['label']
+    if action == 'drag':
+        endpoint = observation['controls'].get(step.get('end_control_id')) or {}
+        if not endpoint.get('element', {}).get('visible') or step.get('end_control_id') == cid:
+            raise ValueError('DRAG_DESTINATION_NOT_UNIQUELY_BOUND')
+    return [row]
+
+
+def _source(observation, cid):
+    c = observation['controls'][cid]
+    return {'observation_id': observation['observation_id'], 'document_identity': observation['document_identity'],
+            'control_id': cid, 'binding': {k: c.get('binding', {}).get(k) for k in ('selector', 'index', 'tag', 'href')},
+            'labels': [r.get('text') for r in c.get('readable_labels', []) if r.get('kind') not in ('visible_native_value', 'visible_selected_option')],
+            'text': c.get('element', {}).get('text', ''), 'role': c.get('element', {}).get('native_role')}
+
+
+def bind_plan_targets(plan, observation, allowed_ids=None):
+    """Snapshot host provenance at plan acceptance, including drag endpoints."""
+    allowed = set(allowed_ids if allowed_ids is not None else observation.get('provided_control_ids', []))
+    for step in plan.get('steps', []):
+        for key in ('target', 'end_target'):
+            target = step.get(key) or {}
+            cid = target.get('control')
+            if cid:
+                if cid not in allowed or cid not in observation['controls']:
+                    raise ValueError('CONTROL_NOT_PROVIDED_TO_MODEL: ' + str(cid))
+                target['_source'] = _source(observation, cid)
+    return plan
+
+
+def resolve_control(observation, target):
+    """Old numeric ids cannot silently select a new node after rerender."""
+    source = target.get('_source')
+    if not source or source['document_identity'] != observation['document_identity']:
+        return []
+    def matches(cid):
+        current = _source(observation, cid)
+        return (observation['controls'][cid].get('element', {}).get('visible') is True
+                and all(current[k] == source[k] for k in ('binding', 'labels', 'text', 'role')))
+    cid = source['control_id']
+    if cid in observation['controls'] and matches(cid):
+        return [cid]
+    # A rerender may issue new ids. Exact selector, href, role and rendered
+    # labels must identify one current control; no fuzzy label matching.
+    candidates = [cid for cid in observation['controls'] if matches(cid)]
+    return candidates if len(candidates) == 1 else []

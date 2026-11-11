@@ -444,7 +444,9 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     def _event_now():
         return datetime.now(timezone.utc).isoformat()
     async def finish_failure(failure_class, root_cause, extra_evidence=(),
-                            strategy_save_status='not_saved', strategy_eligibility='unresolved'):
+                            strategy_save_status='not_saved', strategy_eligibility=None):
+        if strategy_eligibility is None:
+            strategy_eligibility = ('unresolved' if summary.get('unknown') or failure_class == 'interrupted' else 'ineligible')
         failure = evidence / 'failure.json'
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': now(),
@@ -456,9 +458,18 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
             feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
                                                    'rejected', root_cause)
-        await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
-            'rejected', failure_class=failure_class, root_cause=root_cause,
-            evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
+        settlement_error = None
+        try:
+            await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+                'rejected', failure_class=failure_class, root_cause=root_cause,
+                evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
+        except Exception as error:
+            if not screenshot_strategy(task):
+                raise
+            # Preserve the failed settlement separately; never claim the ledger
+            # is rejected when its transaction did not succeed.
+            settlement_error = {'error_type': type(error).__name__, 'error': str(error)}
+            write_json(evidence / 'settlement-failed.json', settlement_error)
         if failure_class == 'program' and not closing_enabled(task):
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
@@ -472,13 +483,17 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             final_result = _cs.finalize_strategy_result(
                 summary['strategy_result'], save_status=strategy_save_status,
                 eligibility=strategy_eligibility)
+        if final_result is not None:
+            write_json(evidence / 'strategy-result.json', {'strategy_result': final_result,
+                'runtime_settled': settlement_error is None, 'settlement_error': settlement_error})
         if runlog is not None:
             runlog.info('save_failed' if strategy_save_status == 'save_failed' else 'failed',
                 failureClass=failure_class, rootCause=str(root_cause)[:200],
                 saveStatus=strategy_save_status, stopReason=summary['stop_reason'],
                 unknown=bool(summary.get('unknown')),
                 effectiveSteps=summary.get('effective_steps'))
-        return {'status': 'rejected', 'failure_class': failure_class,
+        return {'status': 'settlement_failed' if settlement_error else 'rejected', 'failure_class': failure_class,
+                **({'settlement_error': settlement_error} if settlement_error else {}),
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt,
                 **({'strategy_result': final_result} if final_result else {}),
                 **stop_data}
@@ -595,7 +610,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             return await finish_failure('program', 'derivation_' + derived['status'] + ': ' +
                                   str(derived.get('error') or derived.get('errors') or '')[:300],
                                   strategy_save_status=('save_failed' if derived['status'] == 'processing_failed' else 'not_saved'),
-                                  strategy_eligibility='ineligible')
+                                  strategy_eligibility=derived.get('save_eligibility', 'unresolved') if derived['status'] == 'processing_failed' else 'ineligible')
         cause = summary['stop_details']['code'] if stop_data else 'react_' + derived['status']
         return await finish_failure('collector', cause)
     saved = evidence / 'saved_sample.json'
@@ -606,27 +621,55 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         if not completion_decision['delivery_eligible']:
             return await finish_failure('collector', 'react_completion_delivery_ineligible',
                                   strategy_eligibility='ineligible')
-    with telemetry_phase(phase_ledger, 'react_commit', scope=meter_identity):
-        with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
-            feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
-                                                   'collected_pending_review')
-        derived_ref = {'path': str((evidence / 'derived.json').resolve()),
-                       'sha256': sha(evidence / 'derived.json')}
-        from .runtime import ImageCommitConflict
+    try:
+        with telemetry_phase(phase_ledger, 'react_commit', scope=meter_identity):
+            with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
+                feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
+                                                       'collected_pending_review')
+            derived_ref = {'path': str((evidence / 'derived.json').resolve()),
+                           'sha256': sha(evidence / 'derived.json')}
+            from .runtime import ImageCommitConflict
+            try:
+                await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
+                    'collected_pending_review',
+                    evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
+                    exact_images=index.sample_images(sample))
+            except ImageCommitConflict as conflict:
+                if task['fragment'].get('decision_protocol') != NATIVE_REACT:
+                    raise
+                collision = evidence / 'concurrent_image_conflict.json'
+                write_json(collision, {'exact_conflicts': conflict.conflicts})
+                return await finish_failure('collector', 'react_exact_image_commit_conflict',
+                                      _evidence(collision) + [derived_ref],
+                                      strategy_save_status='save_failed', strategy_eligibility='ineligible')
+            index.add_sample(sample)
+    except Exception as error:
+        if not screenshot_strategy(task):
+            raise
+        # A secondary index may fail after SQLite committed. The actual ledger
+        # receipt owns save status; never turn that committed save into rejection.
         try:
-            await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
-                'collected_pending_review',
-                evidence=_evidence(saved) + [feedback_ref, raw_receipt, derived_ref],
-                exact_images=index.sample_images(sample))
-        except ImageCommitConflict as conflict:
-            if task['fragment'].get('decision_protocol') != NATIVE_REACT:
-                raise
-            collision = evidence / 'concurrent_image_conflict.json'
-            write_json(collision, {'exact_conflicts': conflict.conflicts})
-            return await finish_failure('collector', 'react_exact_image_commit_conflict',
-                                  _evidence(collision) + [derived_ref],
-                                  strategy_save_status='save_failed', strategy_eligibility='ineligible')
-        index.add_sample(sample)
+            runtime_row = next(row for row in store.snapshot()['attempts']
+                               if row['attempt_id'] == attempt['attempt_id'])
+        except Exception as lookup_error:
+            write_json(evidence / 'commit-outcome-unresolved.json', {
+                'error': str(error), 'lookup_error': str(lookup_error),
+                'requires_reconciliation': True})
+            if summary.get('strategy_result'):
+                from .collection_strategy import finalize_strategy_result
+                unresolved = finalize_strategy_result(summary['strategy_result'],
+                    save_status='save_failed', eligibility='eligible',
+                    details={'runtime_commit': 'unresolved', 'requires_reconciliation': True})
+                write_json(evidence / 'strategy-result.json', {'strategy_result': unresolved,
+                    'runtime_settled': False})
+                return {'status': 'settlement_failed', 'strategy_result': unresolved,
+                        'raw_receipt': raw_receipt, 'requires_reconciliation': True}
+            raise
+        if runtime_row['status'] != 'collected_pending_review':
+            return await finish_failure('program', 'runtime_commit_failed:' + str(error)[:300],
+                strategy_save_status='save_failed', strategy_eligibility='eligible')
+        write_json(evidence / 'secondary-index-failed.json', {'error': str(error),
+            'runtime_status': runtime_row['status'], 'requires_index_reconciliation': True})
     if runlog is not None:
         # success仅在正式保存提交（store.finish_attempt + 索引登记）完成后输出。
         runlog.info('success', saveStatus='collected_pending_review',
@@ -644,6 +687,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             details={'effective_steps': derived['effective_steps'],
                      'completion_status': completion_decision['completion_status'],
                      'delivery_policy': completion_decision['delivery_policy']})
+    if final_result is not None:
+        write_json(evidence / 'strategy-result.json', {'strategy_result': final_result, 'runtime_settled': True})
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             'completion_delivery':completion_decision,
             'original_goal_completed':completion_decision['original_goal_completed'],

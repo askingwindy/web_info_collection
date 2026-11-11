@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "webcollect"
 description = "WebCollect 样本骨架与结构校验"
 requires-python = ">=3.11"
-dependencies = ["jsonschema>=4.23,<5", "Pillow>=13,<14", "playwright>=1.64,<2", "PyYAML>=6.0,<7"]
+dependencies = ["jsonschema>=4.23,<5", "Pillow>=13,<14", "playwright>=1.64,<2", "PyYAML>=6.0,<7", "opencc-python-reimplemented>=0.1.7,<0.2"]
 
 [tool.setuptools.packages.find]
 include = ["webcollect*"]

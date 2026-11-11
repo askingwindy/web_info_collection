@@ -51,13 +51,11 @@ def _control_row(cid, control, allowed):
 
 
 def _control_tier(control, allowed):
-    """Interactive business controls first, so the cap is not nav-chrome-only."""
     element = control.get('element') or {}
-    if (element.get('inputable') is True or element.get('native_role') in ('input', 'select', 'textarea')
-            or any((control.get('actions') or {}).get(action, {}).get('status') == 'PROVEN'
-                   for action in allowed)):
+    tag = (control.get('binding') or {}).get('tag')
+    if element.get('inputable') or tag in ('input', 'select', 'textarea'):
         return 0
-    if element.get('clickable') is True:
+    if tag == 'button' or element.get('native_role') in ('button', 'checkbox', 'radio', 'slider'):
         return 1
     return 2
 
@@ -81,40 +79,151 @@ def controls_projection(observation, allowed_actions, limit=30):
             continue
         tiers[_control_tier(control, allowed)].append(_control_row(cid, control, allowed))
     rows = [row for tier in tiers for row in tier]
-    return rows[:limit]
+    rows = rows[:limit]
+    observation['provided_control_ids'] = [r['control'] for r in rows]
+    return rows
 
 
 _HEADING_ROLES = ('h1', 'h2', 'h3', 'h4', 'h5', 'h6')
 
 
 def _region_tier(element, quote):
-    """Body/result blocks and headings are quotable before incidental fragments."""
-    if len(quote) >= 80 or element.get('native_role') in _HEADING_ROLES:
+    role = element.get('native_role')
+    if role in ('status', 'alert', 'output', 'dialog') or element.get('result_region_selector'):
         return 0
-    return 1
+    if role in ('main', 'article', 'p', 'section', 'pre', 'table', 'td'):
+        return 1
+    if role in _HEADING_ROLES:
+        return 2
+    return 3
 
 
-def region_registry(state, limit=8):
-    """Host-issued short ids for currently visible substantive evidence areas.
-
-    Body and result blocks (long substantive text) and section headings come
-    before incidental short fragments, so the registry is not just the first
-    text nodes of the tree; within a tier document order is kept and ids are
-    assigned after ranking, deterministically.
-    """
+def region_registry(state, limit=12):
+    """Prefer specific result/body text; suppress duplicate ancestor wrappers."""
+    elements = state.get('elements', [])
+    tree = {e.get('element_id'): e for e in elements}
+    result_ids = {b['element_id'] for b in state.get('capture_controls', []) if b.get('result_region_selector')}
+    def incidental(e):
+        seen = set()
+        while e and e.get('element_id') not in seen:
+            seen.add(e.get('element_id'))
+            if e.get('native_role') in ('nav', 'navigation', 'header', 'banner', 'footer', 'contentinfo', 'aside', 'complementary'):
+                return True
+            e = tree.get(e.get('parent_id'))
+        return False
     candidates = []
-    for element in state.get('elements', []):
-        quote = (element.get('text') or '').strip()
-        if (element.get('visible') is not True or not element.get('bbox')
-                or element.get('native_role') in ('input', 'select', 'textarea', 'button')
+    for e in elements:
+        quote = (e.get('text') or '').strip()
+        if (e.get('visible') is not True or not e.get('bbox') or incidental(e)
+                or e.get('native_role') in ('input', 'select', 'textarea', 'button', 'a')
                 or not substantive_answer_text(quote)):
             continue
-        candidates.append((element, quote))
-    candidates.sort(key=lambda row: _region_tier(row[0], row[1]))
-    rows = []
-    for element, quote in candidates:
-        rows.append({'region_id': 'region_' + str(len(rows) + 1), 'bbox': element['bbox'],
-                     'quote': quote[:80]})
+        # Leaf/specific readable blocks prevent body/main wrappers consuming slots.
+        if any(child.get('parent_id') == e.get('element_id') and child.get('visible') is True
+               and (child.get('text') or '').strip() and (child.get('text') or '').strip() in quote
+               for child in elements):
+            continue
+        ranked = dict(e)
+        if e.get('element_id') in result_ids:
+            ranked['result_region_selector'] = True
+        candidates.append((ranked, quote))
+    candidates.sort(key=lambda row: (_region_tier(*row), -min(len(row[1]), 240)))
+    rows, seen = [], set()
+    for e, quote in candidates:
+        if quote in seen:
+            continue
+        seen.add(quote)
+        rows.append({'region_id': 'region_' + str(len(rows) + 1), 'bbox': e['bbox'], 'quote': quote[:240]})
         if len(rows) >= limit:
             break
     return rows
+
+
+async def prepare_visuals(observation, directory, page=None, *, first=False):
+    """Create marked viewport and optional real full-page overview, preserving originals.
+
+    Only the viewport's controls/regions are executable evidence. The overview
+    is contextual and explicitly carries its own capture interval and scale.
+    """
+    from pathlib import Path
+    from io import BytesIO
+    from copy import deepcopy
+    from PIL import Image, ImageDraw
+    from .batch_core import load_json, file_sha
+    from .planning import object_sha256
+    root = Path(directory)
+    oid = observation['observation_id']
+    if observation.get('visual_evidence'):
+        return observation['visual_evidence']
+    source = observation['evidence']['image']
+    image = Image.open(source['path']).convert('RGB')
+    canvas = image.copy()
+    draw = ImageDraw.Draw(canvas)
+    mapping = []
+    for number, cid in enumerate(observation.get('provided_control_ids', []), 1):
+        box = observation['controls'][cid].get('element', {}).get('bbox')
+        if not box:
+            continue
+        x, y = max(0, int(box[0])), max(0, int(box[1]) - 13)
+        label = str(number)
+        draw.rectangle((x, y, x + len(label)*7+5, y+13), fill='yellow', outline='black')
+        draw.text((x+2, y), label, fill='black')
+        mapping.append({'number': number, 'control': cid, 'bbox': deepcopy(box)})
+    marked = root / ('visual-' + oid[:16] + '-viewport.png')
+    with marked.open('xb') as stream:
+        canvas.save(stream, format='PNG')
+    viewport = {'ref': oid + '-viewport', 'observation_id': oid, 'scope': 'viewport',
+                'path': str(marked.resolve()), 'sha256': file_sha(marked), 'source': deepcopy(source),
+                'source_rect': [0, 0, image.width, image.height], 'scale': 1,
+                'control_mapping': mapping, 'completion_evidence': True}
+    visuals = [viewport]
+    if first and page is not None:
+        from .browser import observe
+        state = load_json(observation['evidence']['state']['path'])
+        before = await observe(page)
+        dimensions = await page.evaluate('() => [Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)]')
+        keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text')
+        if dimensions[1] > image.height * 1.15 and all(before.get(k) == state.get(k) for k in keys):
+            png = await page.screenshot(full_page=True, scale='css', timeout=15000)
+            after = await observe(page)
+            if all(before.get(k) == after.get(k) for k in keys):
+                full = root / ('visual-' + oid[:16] + '-full-original.png')
+                with full.open('xb') as stream:
+                    stream.write(png)
+                full_image = Image.open(BytesIO(png)).convert('RGB')
+                # Long pages remain an overview; the viewport remains pixel-clear.
+                ratio = min(1, 2400 / max(full_image.size))
+                overview = full_image.resize((max(1, round(full_image.width*ratio)), max(1, round(full_image.height*ratio))))
+                path = root / ('visual-' + oid[:16] + '-overview.png')
+                with path.open('xb') as stream:
+                    overview.save(stream, format='PNG')
+                visuals.insert(0, {'ref': oid + '-overview', 'observation_id': oid,
+                    'scope': 'full_page_overview', 'path': str(path.resolve()), 'sha256': file_sha(path),
+                    'source': {'path': str(full.resolve()), 'sha256': file_sha(full)},
+                    'source_rect': [0, 0, full_image.width, full_image.height], 'scale': ratio,
+                    'document_identity': before.get('document_identity'),
+                    'before_state_sha256': object_sha256(before), 'after_state_sha256': object_sha256(after),
+                    'completion_evidence': False, 'note': '整体定位图；细节和完成引用使用当前清晰图或有来源的清晰裁图'})
+    observation['visual_evidence'] = visuals
+    return visuals
+
+
+def crop_visual(observation, directory, rect):
+    """Read-only detail from the retained same-capture full page, never a scroll."""
+    from pathlib import Path
+    from PIL import Image
+    from .batch_core import file_sha
+    visuals = observation.get('visual_evidence') or []
+    full = next((v for v in visuals if v['scope'] == 'full_page_overview'), None)
+    if not full:
+        raise ValueError('NO_SAME_CAPTURE_FULL_PAGE')
+    image = Image.open(full['source']['path'])
+    if len(rect) != 4 or not (0 <= rect[0] < rect[2] <= image.width and 0 <= rect[1] < rect[3] <= image.height):
+        raise ValueError('CROP_OUTSIDE_SOURCE')
+    path = Path(directory) / ('visual-' + observation['observation_id'][:16] + '-crop-' + '-'.join(map(str,rect)) + '.png')
+    with path.open('xb') as stream:
+        image.crop(rect).save(stream, format='PNG')
+    return {'ref': path.stem, 'observation_id': observation['observation_id'], 'scope': 'full_page_crop',
+            'path': str(path.resolve()), 'sha256': file_sha(path), 'source': full['source'],
+            'source_rect': list(rect), 'scale': 1, 'completion_evidence': False,
+            'note': '同次原图清晰补图，不代表新观察或业务动作；须新观察建立可执行编号和完成区域'}

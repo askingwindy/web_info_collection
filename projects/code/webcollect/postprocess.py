@@ -73,7 +73,11 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False, _verification=No
                     'capture': {'path': str(capture.resolve()), 'sha256': file_sha(capture)},
                     'state': {'path': str(path.resolve()), 'sha256': file_sha(path)},
                     'html': {'path': str(html.resolve()), 'sha256': file_sha(html)}}
-        from .agent_observation import project
+        from .collection_strategy import enabled as screenshot_strategy
+        if screenshot_strategy(task):
+            from .screenshot_native_observation import project
+        else:
+            from .agent_observation import project
         # observation_id hashes the canonical three-key evidence; html stays a
         # separate reference exactly as at capture time.
         canonical = {k: evidence[k] for k in ('image', 'state', 'capture')}
@@ -318,7 +322,11 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
             raise ValueError('原子动作缺少成功派发或同步前后证据：' + row['operation_id'])
         if row['action'] in ('wait', 'complete', 'observe', 'inspect'):
             raise ValueError('非有效操作不能进入连续动作轨迹')
-        effect = atomic_effect(before, after, row['action'], row['arguments'],
+        from .collection_strategy import enabled as screenshot_strategy
+        effect_validator = atomic_effect
+        if screenshot_strategy(record['task']):
+            from .screenshot_effect import atomic_effect as effect_validator
+        effect = effect_validator(before, after, row['action'], row['arguments'],
                                operation.get('evidence', {}).get('anchor_element_id') or
                                operation.get('evidence', {}).get('focused_element_id'),
                                rule_version=record['task']['fragment'].get('effective_action_rule', EFFECTIVE_ACTION_RULE))
@@ -518,7 +526,7 @@ def terminal_judgement(completion_status, final_result):
 def planned_terminal_narrative(record, final_state, final_id):
     """Describe verified goal evidence separately from the final viewport.
 
-    Used only for first generation of V13 samples, never historical status
+    Used only for first generation of current samples, never historical status
     correction. Reading may have cumulative evidence outside the final frame.
     """
     evidence = record['terminal'].get('goal_evidence') or {}
@@ -681,6 +689,9 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
         # internal raw evidence only; do not create formal annotation files.
         return {**result, 'status': 'completion_unqualified',
                 'completion_status': completion_status, 'final_result': final_result}
+    result['save_eligibility'] = 'eligible'
+    if isinstance(record.get('_derivation_facts'), dict):
+        record['_derivation_facts']['save_eligibility'] = 'eligible'
     # Require a fresh destination on the first derivation. A recorded failed
     # derivation may continue in place: every write below refuses differing
     # bytes, so the same sealed raw can only reproduce identical delivery.
@@ -748,11 +759,14 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
         step = normalize_delivery_step(step, platform.system())
         if new_narration:
             from .annotation_corrections import step_narratives
-            wording = step_narratives(row, before, element)
+            from .collection_strategy import enabled as screenshot_strategy
+            wording = step_narratives(row, before, element, current_facts=screenshot_strategy(task))
             # These strings were emitted by the existing visual planning call
             # before execution; expected is still the separate machine predicate.
             expected_prose = row.get('semantic_expected_result') or wording.get('expected_result')
-            rationale = row.get('semantic_rationale') or wording.get('next_step_rationale')
+            rationale = (wording.get('next_step_rationale') or row.get('semantic_rationale')
+                         if screenshot_strategy(task) else
+                         row.get('semantic_rationale') or wording.get('next_step_rationale'))
             if expected_prose:
                 step['action']['expected_result'] = expected_prose
             if rationale:
@@ -846,6 +860,10 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
             return {**result, 'status': 'completion_unqualified',
                     'completion_status': completion_status, 'completion_delivery': decision}
         result['completion_delivery'] = decision
+    from .collection_strategy import enabled as screenshot_strategy
+    if screenshot_strategy(task):
+        from .narration_normalization import normalize_annotation
+        normalize_annotation(annotation, record)
     write_json_file(delivery / 'annotation.json', annotation)
     report = validate_sample(delivery, 'delivery', manifest)
     if not report['structural_pass']:
@@ -944,10 +962,13 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
             trajectory = record['trajectory']
         else:
             trajectory = effective_trajectory(record, _verified=verified)
-        record = {**record, 'trajectory': trajectory}
+        derivation_facts = {'save_eligibility': 'unresolved'}
+        record = {**record, 'trajectory': trajectory, '_derivation_facts': derivation_facts}
         derived = _derive_verified(task, record, trajectory, delivery_root, ids, manifest, resume=bool(prior))
+        record.pop('_derivation_facts', None)
     except Exception as error:  # noqa: BLE001 - recorded verbatim, raw stays intact
         failure = {'status': 'processing_failed', 'derivation': version,
+                   'save_eligibility': locals().get('derivation_facts', {}).get('save_eligibility', 'unresolved'),
                    'error_type': type(error).__name__, 'error': str(error),
                    'browser_calls': browser_calls, 'model_calls': model_calls}
         exclusive(evidence_root / f'derived-failed-{version:02}.json', failure)
@@ -958,7 +979,8 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     if derived['status'] != 'derived':
         row = {'status': derived['status'], 'derivation': version,
                'effective_steps': derived.get('effective_steps'),
-               'short_flow': derived.get('short_flow'), 'browser_calls': 0, 'model_calls': 0}
+               'short_flow': derived.get('short_flow'),
+               'save_eligibility': derived.get('save_eligibility', 'ineligible'), 'browser_calls': 0, 'model_calls': 0}
         if derived['status'] == 'processing_failed':
             exclusive(evidence_root / f'derived-failed-{version:02}.json', derived)
             row['record_ref'] = {'path': str((evidence_root / f'derived-failed-{version:02}.json').resolve()),
@@ -1095,6 +1117,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         # sealed raw keeps every original byte.
         failure = {'status': 'processing_failed',
                    'error_type': type(error).__name__, 'error': str(error), 'stage': 'seal',
+                   'save_eligibility': derived.get('save_eligibility', 'unresolved'),
                    'effective_steps': derived['effective_steps'],
                    'browser_calls': 0, 'model_calls': 0}
         exclusive(evidence_root / f'derived-failed-{version:02}.json', failure)

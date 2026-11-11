@@ -23,11 +23,24 @@ from .screenshot_plan import (SYSTEM_PROMPT,
     first_plan_admission, business_actions, verify_completion)
 from .screenshot_observation import controls_projection, region_registry
 from .session_core import RawSessionCore, ReactStop
-from .screenshot_execution import bind_target, react_step
+from .screenshot_execution import bind_target, react_step, bind_plan_targets, resolve_control
 
 
 class ScreenshotPlanSession(RawSessionCore):
     """策略 2 execution: screenshot checkpoints and remaining-plan revision."""
+
+    def _observation_policy(self):
+        from . import screenshot_native_observation
+        return screenshot_native_observation
+
+    def _compile_action(self, step):
+        from .screenshot_execution import compile_step
+        return compile_step(self.task, self.page_urls, step, self.current,
+                            navigation_count=self.navigation_count)
+
+    def _atomic_effect(self, *args, **kwargs):
+        from .screenshot_effect import atomic_effect
+        return atomic_effect(*args, **kwargs)
 
     def _boundary_system_prompt_sha256(self):
         # 策略 2 records its own frozen submit-plan boundary, not the native
@@ -65,6 +78,9 @@ class ScreenshotPlanSession(RawSessionCore):
         self.extra_ready_endings = (READY_ENDING,)
         self._stall_marker = None
         self._stall_count = 0
+        self.verified_answers = {}
+        self.verified_checks = {}
+        self.verified_requirement_ids = []
 
     # ------------------------------------------------------------------ run
 
@@ -241,6 +257,13 @@ class ScreenshotPlanSession(RawSessionCore):
                 ok = False
                 feedback = {'kind': 'MISSING_GOAL', 'field_paths': ['goal'], 'dispatched': False,
                             'message': '自由目标首轮必须依据首屏给出具体自然目标'}
+        if ok and feedback['kind'] == 'accepted':
+            try:
+                bind_plan_targets(plan, self.current, self.current.get('provided_control_ids', []))
+            except ValueError as error:
+                ok = False
+                feedback = {'kind': 'TARGET_BINDING_INVALID', 'field_paths': ['steps'],
+                            'message': str(error), 'dispatched': False}
         if not ok:
             if self.initial_feedback is None:
                 # 同一观察下的有界纠正：给精确反馈再请求一次，不派发任何动作。
@@ -299,29 +322,18 @@ class ScreenshotPlanSession(RawSessionCore):
             return None
         cited = target.get('control')
         if cited:
-            # Host-issued current-frame id from the controls list: the identity
-            # is unique by construction; visibility still binds against the
-            # same observation as a semantic target would.
-            control = (self.current.get('controls') or {}).get(cited) or {}
-            if (control.get('element') or {}).get('visible') is True:
-                return [cited]
-            return []
+            return resolve_control(self.current, target)
         return bind_target(self.current, target, self.observation_records)
 
     def _action_identity(self, step, control_ids, state):
-        binding = {}
-        if control_ids:
-            control = self.current['controls'].get(control_ids[0]) or {}
-            binding = control.get('binding') or {}
-        return object_sha256({
-            'action': step.get('action'),
-            'target': (step.get('target') or {}).get('text') or (step.get('target') or {}).get('control'),
-            'form': binding.get('form_selector'),
+        control = ((self.current.get('controls') or {}).get(control_ids[0]) or {}) if control_ids else {}
+        binding = control.get('binding') or {}
+        target_identity = {key: binding.get(key) for key in ('selector', 'index', 'tag', 'href', 'form_selector')}
+        return object_sha256({'action': step.get('action'),
+            'target': target_identity if control_ids else step.get('target'),
             'document': state.get('document_identity'),
             'value': step.get('value'), 'keys': step.get('keys'),
-            'direction': step.get('direction'),
-            'target_state': (state.get('document_identity'),
-                             (step.get('target') or {}).get('text') or (step.get('target') or {}).get('control'))})
+            'direction': step.get('direction')})
 
     def _repeat_guard(self, step, control_ids, state, new_basis):
         """Only real submissions need a new basis; observation actions may repeat."""
@@ -334,7 +346,7 @@ class ScreenshotPlanSession(RawSessionCore):
         previous = self.dispatch_identities.get(identity)
         if previous is None:
             return None, identity
-        changed_state = previous.get('state_sha256') != object_sha256(state)
+        changed_state = previous.get('state_sha256') != object_sha256(self._business_state(state))
         not_dispatched = previous.get('dispatched') is False
         if not_dispatched or (new_basis and changed_state):
             return None, identity
@@ -393,7 +405,7 @@ class ScreenshotPlanSession(RawSessionCore):
                              if len(self.trajectory) > before_effective else None),
             'dispatched': self.actual_dispatches > before_dispatches,
             'outcome': None, 'at': time.time(),
-            'state_sha256': object_sha256(load_json(self.current['evidence']['state']['path']))}
+            'state_sha256': object_sha256(self._business_state(load_json(self.current['evidence']['state']['path'])))}
         self._refresh_attempt_facts()
         if self.state != 'recording':
             return
@@ -468,7 +480,36 @@ class ScreenshotPlanSession(RawSessionCore):
 
     # ------------------------------------------------------------------ checkpoint
 
+    @staticmethod
+    def _business_state(state):
+        # Exclude capture ids, timestamps, bounding boxes and focus: they are
+        # observation mechanics, not a changed input or business result.
+        return {'document': state.get('document_identity'), 'url': state.get('url'),
+                'elements': [{key: row.get(key) for key in
+                    ('text', 'value', 'checked', 'selected', 'disabled', 'visible')}
+                    for row in state.get('elements', [])]}
+
+    def _progress_marker(self):
+        state = load_json(self.current['evidence']['state']['path'])
+        return object_sha256({'effective_steps': len(self.trajectory),
+            'business_state': self._business_state(state),
+            'verified_evidence': {rid: [(proof.get('quote'), proof.get('url'))
+                for proof in check.get('evidence', [])]
+                for rid, check in self.verified_checks.items()}})
+
+    def _revalidate_progress(self):
+        if not self.verified_answers:
+            return
+        requirements = [row for row in self.requirements if row['id'] in self.verified_answers]
+        checks, _ = verify_completion(self, {'answers': list(self.verified_answers.values())}, requirements)
+        valid = {row['requirement_id'] for row in checks if row.get('status') == 'VERIFIED'}
+        self.verified_answers = {rid: answer for rid, answer in self.verified_answers.items() if rid in valid}
+        self.verified_requirement_ids = sorted(valid)
+        self.verified_checks = {row['requirement_id']: row for row in checks
+                                if row.get('status') == 'VERIFIED'}
+
     def _branch_prompt(self, reason, feedback=None):
+        self._revalidate_progress()
         state = load_json(self.current['evidence']['state']['path'])
         oid = self.current['observation_id']
         if oid not in self.region_registries:
@@ -495,7 +536,8 @@ class ScreenshotPlanSession(RawSessionCore):
                    'latest_attempt': _public_attempt(self.latest_attempt),
                    'last_effective_action': _public_effective(self.last_effective),
                    'current_actions': [_public_effective(row) for row in self.trajectory[-8:]],
-                   'confirmed_progress': [row.get('goal') for row in self.trajectory[-6:]],
+                   'action_facts': [_public_effective(row) for row in self.trajectory[-6:]],
+                   'confirmed_progress': deepcopy(list(self.verified_answers.values())),
                    'missing_requirements': [row['id'] for row in self.requirements
                                             if row['id'] not in (getattr(self, 'verified_requirement_ids', None) or [])],
                    'remaining_plan': [{'action': row.get('action'), 'purpose': row.get('purpose'),
@@ -527,34 +569,56 @@ class ScreenshotPlanSession(RawSessionCore):
             self._runlog('checkpoint', observationId=self.current['observation_id'],
                 decision=decision.get('decision'), reason=reason, position=self.position,
                 effectiveSteps=len(self.trajectory))
-        # A different answer, citation, new_basis or revised tail is new work,
-        # not a repeated no-progress decision. Only the whole identical decision
-        # on the same observation and feedback is bounded.
-        key = object_sha256({'observation': self.current['observation_id'], 'reason': reason,
-                             'decision': decision, 'remaining': self.plan['steps'][self.position:],
-                             'checkpoint_feedback': feedback,
-                             'completion_feedback': self.completion_feedback})
-        self.no_progress_keys[key] = self.no_progress_keys.get(key, 0) + 1
-        if self.no_progress_keys[key] >= 2 and self.actual_dispatches == self.no_progress_dispatches.get(key, self.actual_dispatches):
-            self._range_close('NO_PROGRESS_END', '同一事实与反馈下重复相同完整决策且无新证据，无进展结束')
-            return
-        self.no_progress_dispatches[key] = self.actual_dispatches
-        # Independent bound: reworded revises or repeated completion attempts with
-        # neither a new dispatch nor plan-cursor progress are a stall, even when
-        # each decision's content differs.
-        stall_marker = (self.actual_dispatches, self.position)
+        choice = decision.get('decision')
+        # Completion supplements are checked before any loop guard. Keep the
+        # actual answers and anchors, and recheck them against all later facts.
+        if choice == 'complete':
+            supplied = decision.get('answers') or []
+            merged = deepcopy(self.verified_answers)
+            merged.update({row['requirement_id']: deepcopy(row) for row in supplied})
+            supplied_ids = [row['requirement_id'] for row in supplied]
+            # Preserve duplicate wire entries so coverage validation rejects them.
+            duplicates = [deepcopy(row) for index, row in enumerate(supplied)
+                          if row['requirement_id'] in supplied_ids[:index]]
+            application = {**decision, 'answers': list(merged.values()) + duplicates}
+            checks, gaps = verify_completion(self, application, self.requirements)
+            verified = {row['requirement_id'] for row in checks if row.get('status') == 'VERIFIED'}
+            self.verified_answers = {rid: merged[rid] for rid in verified}
+            self.verified_requirement_ids = sorted(verified)
+            self.verified_checks = {row['requirement_id']: row for row in checks
+                                    if row.get('status') == 'VERIFIED'}
+            if not gaps:
+                self.completion_feedback = None
+                self._complete(application, checks, reason)
+                return
+            self.completion_feedback = {'kind': 'COMPLETION_EVIDENCE_GAPS', 'gaps': gaps,
+                'verified_requirement_ids': self.verified_requirement_ids,
+                'verified_answers': deepcopy(list(self.verified_answers.values())),
+                'message': '已核验答案与原引用已保留；只补缺项。后续相关输入或提交会使旧计算证明失效。'}
+            self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False,
+                       verified_requirement_ids=self.verified_requirement_ids)
+            self._runlog('completion_gaps', observationId=self.current['observation_id'],
+                gaps=[gap.get('kind') for gap in gaps],
+                verifiedRequirementIds=self.verified_requirement_ids)
+        # Neither dispatch counts, cursor changes nor reworded plans establish
+        # progress. Only effective actions, business state and verified evidence do.
+        stall_marker = self._progress_marker()
         if stall_marker == self._stall_marker:
             self._stall_count += 1
         else:
             self._stall_marker = stall_marker
             self._stall_count = 0
-        if self._stall_count >= NO_PROGRESS_STALL_LIMIT:
+        key = object_sha256({'facts': stall_marker, 'decision': decision,
+                             'checkpoint_feedback': feedback,
+                             'completion_feedback': self.completion_feedback})
+        self.no_progress_keys[key] = self.no_progress_keys.get(key, 0) + 1
+        if self.no_progress_keys[key] >= 2 or self._stall_count >= NO_PROGRESS_STALL_LIMIT:
             self.event('screenshot-no-progress-stall', dispatches=self.actual_dispatches,
                        position=self.position, stall_count=self._stall_count)
-            self._range_close('NO_PROGRESS_END',
-                              '连续检查点无新派发且计划游标无进展，无进展结束')
+            self._range_close('NO_PROGRESS_END', '连续检查点无有效动作、业务状态变化或新增有效证据，无进展结束')
             return
-        choice = decision.get('decision')
+        if choice == 'complete':
+            return await self._checkpoint(reason, self.completion_feedback)
         if choice == 'continue':
             if not self.plan['steps'][self.position:]:
                 self.event('screenshot-decision-rejected', reason='continue_without_remaining_steps')
@@ -578,37 +642,17 @@ class ScreenshotPlanSession(RawSessionCore):
                 self.event('screenshot-decision-rejected', reason='empty_revision')
                 return await self._checkpoint(reason, {'kind': 'EMPTY_REVISION',
                     'message': 'revise必须给出未执行尾部；直接结束用complete或give_up'})
+            try:
+                bind_plan_targets({'steps': steps}, self.current, self.current.get('provided_control_ids', []))
+            except ValueError as error:
+                return await self._checkpoint(reason, {'kind': 'TARGET_BINDING_INVALID',
+                    'message': str(error), 'dispatched': False})
+            self._granted_new_basis = str(decision.get('new_basis') or '').strip() or None
             self.plan['steps'] = self.plan['steps'][:self.position] + steps
             self.completion_feedback = None
             self.event('screenshot-plan-revision',
                        position=self.position, steps=deepcopy(steps),
                        executed_preserved=self.position)
-            return
-        if choice == 'complete':
-            checks, gaps = verify_completion(self, decision, self.requirements)
-            if gaps:
-                verified_now = [row['requirement_id'] for row in checks if row.get('status') == 'VERIFIED']
-                if verified_now:
-                    # 已核验的部分证据保留：补证只需针对剩余缺项，不重放已完成事项。
-                    self.verified_requirement_ids = sorted(set(
-                        getattr(self, 'verified_requirement_ids', None) or []) | set(verified_now))
-                self.completion_feedback = {'kind': 'COMPLETION_EVIDENCE_GAPS', 'gaps': gaps,
-                    'verified_requirement_ids': list(getattr(self, 'verified_requirement_ids', None) or []),
-                    'verified': [{'requirement_id': row['requirement_id'],
-                                  'observed': str(row.get('observed_visible_text') or '')[:120]}
-                                 for row in checks if row.get('status') == 'VERIFIED'],
-                    'message': '完成申请缺证；已证实事项无需重复举证，只需为缺项在同一或历史观察中补引用，不重放已完成的输入与提交'}
-                self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False,
-                           verified_requirement_ids=list(getattr(self, 'verified_requirement_ids', None) or []))
-                if getattr(self, 'runlog', None) is not None:
-                    self._runlog('completion_gaps', observationId=self.current['observation_id'],
-                        gaps=[gap.get('kind') for gap in gaps],
-                        verifiedRequirementIds=list(getattr(self, 'verified_requirement_ids', None) or []))
-                # Stay at this checkpoint. Returning to the main loop could
-                # execute an obsolete remaining action before the supplement.
-                return await self._checkpoint(reason, self.completion_feedback)
-            self.completion_feedback = None
-            self._complete(decision, checks, reason)
             return
         if choice == 'give_up':
             self._range_close('AGENT_GIVE_UP', 'give_up：' + str(decision.get('reason') or '当前无可行路径'))

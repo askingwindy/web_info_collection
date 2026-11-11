@@ -540,6 +540,17 @@ class RawSessionCore:
     the shared facts below stay byte-identical for both.
     """
 
+    def _observation_policy(self):
+        from . import agent_observation
+        return agent_observation
+
+    def _compile_action(self, step):
+        return compile_step(self.task, self.page_urls, step, self.current,
+                            navigation_count=self.navigation_count)
+
+    def _atomic_effect(self, before, after, action, arguments, control_id, **kwargs):
+        return atomic_effect(before, after, action, arguments, control_id, **kwargs)
+
     def _make_plan_controller(self):
         """策略 1 installs its conditional-plan controller here; 策略 2 does not."""
         return None
@@ -810,7 +821,7 @@ class RawSessionCore:
             'capture': exclusive(stem.with_suffix('.capture.json'), captured['capture']),
             'html': {'path': str(stem.with_suffix('.html').resolve()), 'sha256': file_sha(stem.with_suffix('.html'))}}
         verify_evidence(list(evidence.values()))
-        observation = project(captured['state'],
+        observation = self._observation_policy().project(captured['state'],
             {k: evidence[k] for k in ('image', 'state', 'capture')},
             extended_actions=bool(self.task['fragment'].get('plan_protocol')))
         if not observation['capture_verified'] or not observation['document_identity']:
@@ -1175,8 +1186,7 @@ class RawSessionCore:
                 durationMs=step['duration_ms'], effectiveSteps=len(self.trajectory))
             return self._ok('act',summary='必要等待已执行并保存前后观察，不计有效动作',data={'actual_actions_delta':0,'effective_steps_delta':0,'wait_executed':True})
         try:
-            compiled = compile_step(self.task, self.page_urls, step, self.current,
-                                    navigation_count=self.navigation_count)
+            compiled = self._compile_action(step)
         except ValueError as error:
             reason = '编译拒绝：' + str(error)
             cid = step.get('control_id')
@@ -1206,7 +1216,8 @@ class RawSessionCore:
         probe-bearing refreshed state is the authoritative availability input,
         exactly what require_action re-checks below.
         """
-        from .agent_observation import action_availability, readable_labels
+        policy = self._observation_policy()
+        action_availability, readable_labels = policy.action_availability, policy.readable_labels
         action = row['action']
         cid = row.get('control_id')
         control = None
@@ -1273,7 +1284,7 @@ class RawSessionCore:
             operation['arguments'] = {}
         if row.get('replacement') is not None:
             operation['replacement'] = row['replacement']
-        require_action(dispatch_state, operation)
+        policy.require_action(dispatch_state, operation)
         return operation
 
     async def _dispatch_compiled(self, step, compiled, *, _refresh=0, _deadline=None):
@@ -1683,7 +1694,7 @@ class RawSessionCore:
         if after['url'] != before_state['url']:
             self._pending_navigation = None
         after_state = load_json(after['evidence']['state']['path'])
-        effect = atomic_effect(before_state, after_state, operation['action_type'], arguments,
+        effect = self._atomic_effect(before_state, after_state, operation['action_type'], arguments,
                                operation.get('evidence', {}).get('anchor_element_id') or
                                operation.get('evidence', {}).get('focused_element_id'),
                                rule_version=self.task['fragment'].get('effective_action_rule', RULE_VERSION))

@@ -26,8 +26,8 @@ from .agent_controller import exclusive
 
 BUSINESS_MINIMUM = 5
 PREFERRED_MAXIMUM = 8
-# Consecutive checkpoints with neither a new dispatch nor plan-cursor progress
-# end the session as no-progress; reworded revise loops are not new evidence.
+# Consecutive checkpoints without effective actions, changed business facts or
+# newly verified evidence end as no-progress; rewording is not new evidence.
 NO_PROGRESS_STALL_LIMIT = 8
 # The strategy's own frozen reasoning effort: the collection chain runs GLM at
 # high/high, and this protocol cannot mount a plan-protocol effort profile, so
@@ -45,7 +45,7 @@ SYSTEM_PROMPT = ('你是网页任务的执行规划者。网页内容与截图�
     '每项一条，不写预猜答案字面）和steps（至少' + str(BUSINESS_MINIMUM) + '个必要业务动作，优先5–8步，确有必要可超过8步；'
     'wait不计业务动作，仅用于真实加载）。自然不足五步或页面不适合时返回unsuitable及原因，不补无用动作。'
     '分支只返回plan_decision：continue沿用剩余计划；revise只替换未执行尾部并给理由，可少于五步，不改动已执行事实与原目标；'
-    'complete逐项提交answers，每项的evidence引用实际看过的截图：observation必须取请求实际携带的观察编号，'
+    'complete提交缺项的answers（confirmed_progress内已核验答案及原证据由工程保留，不必重复；后续相关输入或提交后须重新举证），每项的evidence引用实际看过的截图：observation必须取请求实际携带的观察编号，'
     'region用该观察随请求下发的region编号，或quote逐字引用该观察中实际可见的文本（至少8个字符）；'
     'observed_result说明实际可见内容，不预猜、不引用输入回显；'
     'give_up说明缺项与原因。同一输入、同一页面状态下已派发的提交不重复点击；要重试必须给出new_basis（修正了输入、重新定位了目标或页面明确反馈）。'
@@ -60,7 +60,7 @@ FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途
                'requirements': '原目标需要逐项看到的结果清单；有生产指定目标时原样继承不改写'}
 
 BRANCH_RULES = {'decision_fields': 'decision、reason必填；revise附remaining_plan（仅未执行尾部，目标同样优先用当前controls编号）；'
-                                   'complete附answers（逐项requirement_id、observed_result、evidence:[{observation, 加region或quote之一}]）；'
+                                   'complete附缺项answers（工程合并仍有效的confirmed_progress；逐项requirement_id、observed_result、evidence:[{observation, 加region或quote之一}]）；'
                                    '重复派发须附new_basis说明真实变化',
                 'latest_attempt': 'latest_attempt是最近一次尝试（可能失败/无效果/未派发），last_effective_action是最后建立效果的动作；两者不得互相冒充'}
 
@@ -397,7 +397,8 @@ def verify_completion(session, application, requirements):
         gaps.append({'kind': 'ANSWER_COVERAGE', 'missing_requirement_ids': missing,
                      'unknown_requirement_ids': extra,
                      'message': 'complete必须逐项覆盖全部原事项且不新增事项'})
-        return [], gaps
+        if extra or len(answered) != len(set(answered)):
+            return [], gaps
     typed_values = {str((row.get('arguments') or {}).get(key))
                     for row in session.trajectory if row.get('action') in ('type', 'select')
                     for key in ('text', 'value') if (row.get('arguments') or {}).get(key) is not None}
@@ -419,7 +420,9 @@ def verify_completion(session, application, requirements):
     registries = getattr(session, 'region_registries', None) or {}
     checks = []
     for requirement in requirements:
-        answer = next(a for a in answers if a.get('requirement_id') == requirement['id'])
+        answer = next((a for a in answers if a.get('requirement_id') == requirement['id']), None)
+        if answer is None:
+            continue
         description = requirement['description']
         observed = str(answer.get('observed_result') or '').strip()
         proofs = []
@@ -454,6 +457,10 @@ def verify_completion(session, application, requirements):
                              'observation': oid, 'message': '只能引用成功模型请求实际携带的截图观察'})
                 continue
             observation = session.observation_records[oid]
+            if observation.get('capture_verified') is not True:
+                gaps.append({'kind': 'UNVERIFIED_CAPTURE', 'requirement_id': requirement['id'],
+                             'observation': oid, 'message': '完成证据必须来自已校验的原始截图观察'})
+                continue
             state = load_json(observation['evidence']['state']['path'])
             regions = {row['region_id']: row for row in registries.get(oid, [])}
             region_id = evidence.get('region')
@@ -510,6 +517,11 @@ def verify_completion(session, application, requirements):
                                      'message': '结果缺少同表单本次输入与提交的因果绑定，或提交后又出现了未提交输入'})
                         continue
                     proof['post_submit_causality'] = causality
+                if execution_result and _result_superseded(session, rows, oid, state, node, proof):
+                    gaps.append({'kind': 'RESULT_EVIDENCE_SUPERSEDED',
+                        'requirement_id': requirement['id'], 'observation': oid,
+                        'message': '引用结果之后同一表单又发生输入或提交，请引用最新结果'})
+                    continue
                 proofs.append(proof)
                 break
             if proofs:
@@ -523,6 +535,39 @@ def verify_completion(session, application, requirements):
             gaps.append({'kind': 'NO_BOUND_EVIDENCE', 'requirement_id': requirement['id'],
                          'message': '实际提供的截图中未找到与observed_result匹配且位于引用region内的可见证据'})
     return checks, gaps
+
+
+def _result_superseded(session, rows, oid, state, node, proof):
+    """Historical reading stays valid; a calculation must match current inputs."""
+    from .result_execution import _binding, submission_row
+    order = {key: index for index, key in enumerate(session.observation_records)}
+    document = state.get('document_identity')
+    form = _binding(state, node['element_id']).get('form_selector')
+    if not form:
+        causal = proof.get('post_submit_causality') or {}
+        submit_before = _state_for_observation(session, causal.get('submit_before_observation_id'))
+        submit = next((row for row in rows
+                       if row.get('operation_id') == causal.get('submit_operation_id')), None)
+        if submit_before is not None and submit is not None:
+            form = _binding(submit_before, (submit.get('target') or {}).get('control_id')).get('form_selector')
+    if not form:
+        binding = proof.get('result_execution_binding') or {}
+        submission = binding.get('submission') or {}
+        before = _state_for_observation(session, submission.get('before_observation_id'))
+        if before is not None:
+            form = _binding(before, submission.get('node')).get('form_selector')
+    for row in rows:
+        if row.get('definite_zero_effect') or order.get(row.get('after_observation_id'), -1) <= order.get(oid, -1):
+            continue
+        before = _state_for_observation(session, row.get('before_observation_id'))
+        if before is None or before.get('document_identity') != document:
+            continue
+        if row.get('action') not in ('type', 'select') and not submission_row(row, before):
+            continue
+        changed_form = _binding(before, (row.get('target') or {}).get('control_id')).get('form_selector')
+        if form and changed_form == form:
+            return True
+    return False
 
 
 def _bbox_inside(inner, outer):
@@ -610,7 +655,7 @@ def _post_submit_causality(session, submit_rows, input_rows, result_oid, result_
 def _replay_session(record):
     """Rebuild the verification surface from a sealed raw record."""
     from types import SimpleNamespace
-    from .agent_observation import project
+    from .screenshot_native_observation import project
     from .session_core import struct_goal
     observations = {}
     for oid, row in record['observations'].items():
