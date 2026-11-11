@@ -6,7 +6,7 @@ AI or human approval by the existing independent inspector.
 """
 from collections import Counter
 from copy import deepcopy
-from contextlib import nullcontext, closing
+from contextlib import closing
 from difflib import SequenceMatcher
 import json
 from pathlib import Path
@@ -28,8 +28,8 @@ from . import semantic_runtime
 DIFFERENCE_PROTOCOL = 'image-difference-bound-pairs'
 MAX_DOCUMENT_INPUT_BYTES = 4 * 1024 * 1024
 DYNAMIC_REGION_REVIEW = ' Announcements, advertising and changing image frames are permitted to vary inside their evidenced regions, including main content. Original images/trees are retained. These areas remain clickable/readable; verify the selected target location, occlusion, label/href, real input values and claimed business results. Motion or rotating text alone proves neither action effectiveness, new reading nor substantive sample difference. Do not reject continuity solely for allowed background variation; do not excuse changed business evidence as background.'
-TRUSTED_PREFIX_RULE = 'When a bound trusted_prefix protocol webcollect-trusted-prefix-1 or webcollect-trusted-prefix-2 is present, review only its saved consecutive verified source operations and historical boundary image/tree. The prefix does not prove the original goal completed and is delivered as controlled_exception, never as ordinary success. The excluded tail remains in the original attempt, including any unknown effect and cost. Never count an excluded copy/submit or infer its result; visible parameters prove filling only, a visible calculation proves its result. Missing credible historical boundary remains REVIEW_REQUIRED.'
-EXCEPTIONAL_CLOSURE_RULE = 'Internal collection_ending evidence has protocol webcollect-five-eight-attempt-ending-2, webcollect-banded-attempt-ending-3, webcollect-continuous-attempt-ending-4 or webcollect-five-ten-effective-ending-5 and remains outside the customer annotation return_value; review it only when supplied by a bound external collection context. Distinguish actual atomic dispatches, business attempts, verified effective steps and separately preserved unverified/zero-dispatch tail. V5 first plans the shortest complete natural path, normally 5–10 effective actions, with a cumulative maximum of ten. If that path has fewer than five actions, only useful nonduplicate actions inside the original goal may be added; otherwise keep short_flow. It does not cap attempts or count wait/finish/no-effect dispatches as effective steps. A ready declaration with missing result evidence does not establish goal completion. V4 has no attempt ceiling. Historical V3 attempt_limit is 8 for five/short and at most 12 for long. controlled_exception is explicitly unfinished goal closure, never ordinary goal success and is excluded from new customer delivery. Bound completion evidence must support the original goal and answers; legal provenance alone does not prove semantic correctness. complete only confirms the saved final state. Check short_flow against verified effective steps; missing original tail/terminal evidence stays REVIEW_REQUIRED, never infer success.'
+TRUSTED_PREFIX_RULE = 'When a bound trusted-prefix context (stable name trusted-prefix) is present, review only its saved consecutive verified source operations and historical boundary image/tree. The prefix does not prove the original goal completed and is delivered as controlled_exception, never as ordinary success. The excluded tail remains in the original attempt, including any unknown effect and cost. Never count an excluded copy/submit or infer its result; visible parameters prove filling only, a visible calculation proves its result. Missing credible historical boundary remains REVIEW_REQUIRED.'
+EXCEPTIONAL_CLOSURE_RULE = 'Internal collection_ending evidence uses the single current ending protocol goal-completion-ending and remains outside the customer annotation return_value; review it only when supplied by a bound external collection context. Distinguish actual atomic dispatches, business attempts, verified effective steps and separately preserved unverified/zero-dispatch tail. The initial plan prefers a complete natural path of roughly five to eight necessary effective actions; there is no cumulative step ceiling and a natural necessary path may exceed eight. Fewer than five effective actions stays short_flow and is never padded with extra actions. wait/complete/finish and zero-effect dispatches never count as effective steps. A ready declaration with missing result evidence does not establish goal completion. Evidence locality follows action-scoped evidence (stable name action-scoped-evidence): judge each claimed result against the frames of its own action. controlled_exception is explicitly unfinished goal closure, never ordinary goal success, and is excluded from new customer delivery. Bound completion evidence must support the original goal and answers; legal provenance alone does not prove semantic correctness. complete only confirms the saved final state. Check short_flow against verified effective steps; missing original tail/terminal evidence stays REVIEW_REQUIRED, never infer success.'
 
 
 def obj(properties):
@@ -802,6 +802,8 @@ def _semantic_dispatch(ledger,gateway,job,*,controlled=None):
         for other in job['payload'].get('neighbors',[]):verify_snapshot(other)
     if job['kind']=='ai-visual':
         return do_visual(ledger,gateway,job,controlled=controlled)
+    if job['kind']=='ai-documents':
+        return do_documents(ledger,gateway,job)
     return do_difference(ledger,gateway,job)
 
 def run(ledger, *, max_jobs=None, controlled=None):
@@ -822,6 +824,10 @@ def run(ledger, *, max_jobs=None, controlled=None):
                     ledger.finish(job,'review_required',result=result,error='Original pair requests remain unresolved')
                     outcomes.append({'job_id':job['id'],'state':'review_required','reason':'Original pair requests remain unresolved'})
                     continue
+                # Semantic-result binding applies to documentary jobs and to any
+                # payload that still carries semantic_rule_ids; equivalent to the
+                # pre-refactor gate now that prompts/policies are unversioned.
+                modern = job['kind']=='ai-documents' or bool(job['payload'].get('semantic_rule_ids'))
                 if modern:semantic_runtime.bind_result(ledger,job,result)
                 ledger.finish(job,result=result);outcomes.append({'job_id':job['id'],'state':'done'})
         except BudgetStop as error:

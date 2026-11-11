@@ -148,30 +148,12 @@ def demo_business_link(link):
                           r'可视化|组件|用户管理|权限管理|订单管理|流程管理|Demo|Example|Dashboard',anchor+' '+route,re.I))
 
 
-def public_demo_proof(ledger, run, link, root, *, strict=True):
+def public_demo_proof(ledger, run, link, root):
     """Bind a demo page to an anonymous 2xx HTML document before publication."""
     from .application_discovery import homepage_document
+    from .page_purpose_v5 import observed_material,demo_proof
     doc,ref=homepage_document(ledger,run+'/public-demo',link['uri'],root)
-    if strict=='v5':
-        from .page_purpose_v5 import observed_material,demo_proof
-        return demo_proof({**doc,'reference':ref},evidence=observed_material(ledger,link,doc,ref))
-    if strict:
-        if strict=='v4':from .page_purpose_v4 import demo_proof
-        else:from .page_purpose import demo_proof
-        return demo_proof({**doc,'reference':ref})
-    verify_evidence([ref,doc['raw_html']])
-    html=Path(doc['raw_html']['path']).read_bytes().decode(doc['encoding'],errors='replace')
-    lines=[line.strip() for line in doc['content'].splitlines() if line.strip()]
-    signals=[line for line in lines if re.search(r'示例|演示|组件|表格|表单|布局|图表|可视化|仪表盘|'
-             r'工作台|工作流|看板|权限管理|订单管理|数据管理|画布|编辑器|Dashboard|Examples?',line,re.I)]
-    login=re.search(r'<input\b[^>]*\btype\s*=\s*["\']?password',html,re.I) and any('登录' in line for line in lines)
-    controls=re.findall(r'<(button|select|textarea|table|canvas|iframe|form|input|svg)\b',html,re.I)
-    catalog=sum(demo_business_link(h) for h in extract_links({**doc,'reference':ref},
-                (ledger.config.get('site_failure_guard') or {}).get('application_registry')))
-    if not doc['chinese'] or login or not signals or (not controls and catalog<2):
-        raise ValueError('No verified anonymous Chinese demo controls or example directory at destination')
-    return {'document':ref,'raw_html':doc['raw_html'],'uri':doc['uri'],'visible_quotes':signals[:4],
-            'html_elements':dict(Counter(controls)),'same_site_demo_links':catalog}
+    return demo_proof({**doc,'reference':ref},evidence=observed_material(ledger,link,doc,ref))
 
 
 def demo_destinations(documents, search_hits, aliases):
@@ -482,7 +464,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     allowed_hosts=sorted(set(h.lower() for h in allowed_hosts))
     def host_allowed(uri):
         if not allowed_hosts or urlsplit(uri).hostname in allowed_hosts:return True
-        if model_protocol!='entry-tools-14':return False
+        # Sealed historical batches carry their own frozen model_protocol;
+        # entry-tools-14 is the only old generation whose alias exemption ran.
+        if model_protocol not in ('entry-tools', 'entry-tools-14'):return False
         from webcollect.candidate_contract import application_matches
         registry=(config.get('site_failure_guard') or {}).get('application_registry')
         return any(application_matches('https://'+host+'/',uri,registry) for host in allowed_hosts)
@@ -511,6 +495,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     with pool.pool.connect() as con:
         prior=con.execute('SELECT config FROM runs WHERE id=?',(run,)).fetchone()
     previous=json.loads(prior[0]) if prior else {}
+    # A frozen batch resumes under its own sealed pipeline identity so the
+    # recomputed run config and row_id salt stay byte-identical with the runs
+    # table; a new batch freezes the single stable name.
+    VERSION = previous.get('version') or VERSION
     if previous:
         if application_pending_cap is None:
             application_pending_cap=previous.get('application_pending_cap')
@@ -763,7 +751,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         proof_error=None
                         if public_business and site['category']=='企业后台与开源演示站':
                             try:
-                                proof=public_demo_proof(ledger,run,hit,root,strict='v5')
+                                proof=public_demo_proof(ledger,run,hit,root)
                             except (ValueError,OSError) as error:
                                 proof_error=str(error) or type(error).__name__
                             else:

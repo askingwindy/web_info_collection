@@ -17,7 +17,9 @@ def schema():
             'required':['screen','qualification'],'additionalProperties':False}
 
 def payload(pages,capabilities,*,version=VERSION):
-    return {'version':VERSION,'instruction':
+    # The body must carry the receipt's own version so recomputation matches
+    # both new receipts and sealed historical ones byte-for-byte.
+    return {'version':version,'instruction':
         '逐张检查全部page_id及image_id；一次同时给出screen与正式qualification。可见中文至少70%，中文导航控件，公开无账号，'
         '无登录/遮挡；动态广告不确定则REVIEW_REQUIRED。依据实际功能选择给定父类，检查合规、访问、语言及分类。'
         '禁止真实交易。每项必须有原图可见依据。未知不通过，候选PROMISING不代表资格。任务容量、采集与QC不在本审核范围。',

@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "webcollect-quality-inspector"
 requires-python = ">=3.11"
-dependencies = ["jsonschema>=4.26,<5", "Pillow>=13,<14"][tool.setuptools.packages.find]
+dependencies = ["jsonschema>=4.26,<5", "Pillow>=13,<14"]
+
+[tool.setuptools.packages.find]
 include = ["quality_inspector*"]
 
 [tool.setuptools.package-data]

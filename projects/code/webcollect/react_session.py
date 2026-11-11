@@ -412,7 +412,8 @@ def validate_task(task):
         if spec.get(extension) != fragment.get(extension):
             raise ValueError('Mismatched frozen React extension: ' + extension)
     from .collection_strategy import strategy_id as _frozen_strategy
-    _frozen_strategy(task)  # Unknown/absent markers keep their historical reading.
+    _frozen_strategy(task)  # Absent markers keep the react-chain reading; sealed
+    # pre-rename strategy ids map to the same current strategies; unknown ids fail.
     if fragment.get('wiki_reading_completion_protocol') not in (None, WIKI_READING_COMPLETION):
         raise ValueError('Unknown ordinary Wiki reading completion protocol')
     if fragment.get('wiki_reading_completion_protocol') and fragment.get('plan_protocol') != PLAN_PROTOCOL:

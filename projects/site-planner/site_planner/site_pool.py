@@ -319,7 +319,7 @@ class SitePool:
     def export_candidates(self, output, *, run_id=None):
         source_path = Path(output).with_suffix('.sources.json')
         rows = [row for row in self.rows(run_id=run_id) if row['collection']['dispatch_allowed']]
-        save_json(source_path, {'schema_version': 'webcollect-site-sources-1', 'sources': [
+        save_json(source_path, {'schema_version': 'site-sources', 'sources': [
             {'kind': 'seed', 'category': row['category'], 'uris': [row['uri']],
              'discovery_provenance': row['discoveries']} for row in rows]})
         records = []
@@ -330,7 +330,7 @@ class SitePool:
                 'source': [{'kind': 'seed', 'source_sha256': file_sha(source_path),
                             'evidence': refs}], 'discovery_assessments': row['assessments'],
                 'status': 'review_required', 'execution_verified': 'NOT_RUN'})
-        result = {'schema_version': 'webcollect-site-candidates-1', 'mode': 'real', 'records': records,
+        result = {'schema_version': 'site-candidates', 'mode': 'real', 'records': records,
                   'fixed_candidate_count': len(records), 'real_supply_verified': False,
                   'sample_ids_allocated': 0, 'pool': str(self.path), 'source_manifest': str(source_path.resolve())}
         save_json(output, result)

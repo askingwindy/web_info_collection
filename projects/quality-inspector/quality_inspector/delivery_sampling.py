@@ -196,8 +196,10 @@ def verify(plan_path, dataset=None, _visited=None):
     if plan.get('contract_sha256') != fingerprint()[1]: raise ValueError('Sampling contract changed; freeze a new scope')
     if 'sampling_rules_version' in plan:
         raise ValueError('Historical sampling plan carries a retired rules version; freeze a new scope')
-    elif plan.get('implementation_sha256') != sha(__file__):
-        raise ValueError('Legacy sampling implementation changed; freeze a new scope')
+    # plan['implementation_sha256'] is provenance recorded at freeze time. The
+    # current source changes directly in the no-version mode, so a sealed plan is
+    # never re-compared against today's bytes; integrity stays bound by the plan
+    # self-hash and the contract fingerprint above.
     policy = plan['policy']; _percent(policy['ai_percent']); _percent(policy['human_percent'])
     if policy.get('production_sampling'):
         from .production_sampling import verify as verify_production

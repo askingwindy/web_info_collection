@@ -44,15 +44,6 @@ def names(kind):
     return VISUAL_CHECKS if kind == 'ai-visual' else ('substantive_difference',) if kind == 'ai-difference' else ('documents',)
 
 
-def rules(kind, payload):
-    if kind == 'ai-documents':
-        return {'documents': payload['prompt_version']}
-    current=dict(payload.get('semantic_rule_ids', {}))
-    if kind=='ai-visual' and payload.get('trusted_prefix') and 'terminal_semantics' in current:
-        current['terminal_semantics']+=':'+digest(payload['trusted_prefix'])
-    return current
-
-
 @contextmanager
 def guard(ledger, job):
     key = digest({'kind': job['kind'], 'subject': subject(job['kind'], job['payload'])})

@@ -175,7 +175,7 @@ def import_review(packet_path, review_path, output, *, now=None):
             'page_observations': [p['observations'] for p in row['pages']],
             'review_source': review['reviewer']['kind'], 'reviewer': review['reviewer'],
             'reviewed_at': review['reviewed_at']}
-        record['review_provenance'] = {'schema_version': 'capability-review-provenance-1',
+        record['review_provenance'] = {'schema_version': 'capability-review-provenance',
             'parent_version': original_version, 'catalog': packet['catalog'],
             'packet': packet_ref, 'review': review_ref}
         record['version'] = planning.object_sha256({'parent_version': original_version,

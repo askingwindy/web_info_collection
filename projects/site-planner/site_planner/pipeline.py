@@ -138,7 +138,8 @@ async def reserve_visit_async(ledger, job, uri, purpose):
 
 def discover(ledger, sources_path, output):
     sources = load_json(sources_path)
-    if sources.get('schema_version') != 'site-sources' or not sources.get('sources'):
+    # Sealed historical exports carry the old generational schema names; both read.
+    if sources.get('schema_version') not in ('site-sources', 'webcollect-site-sources-1') or not sources.get('sources'):
         raise ValueError('Nonempty versioned discovery sources required')
     for source in sources['sources']:
         if 'max_candidates' in source and (type(source['max_candidates']) is not int or source['max_candidates'] < 1):
@@ -509,7 +510,8 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
     from webcollect.preflight import inspect_page
     from webcollect.browser import observe, capture
     candidates = load_json(candidates_path)
-    if candidates.get('schema_version') != 'site-candidates' or candidates.get('mode') != ledger.config['mode']:
+    # Sealed historical selections carry the old generational schema name; both read.
+    if candidates.get('schema_version') not in ('site-candidates', 'webcollect-site-candidates-1') or candidates.get('mode') != ledger.config['mode']:
         raise ValueError('Candidates/mode mismatch')
     if ledger.config['mode']=='synthetic' and fixture_pages is None:
         raise ValueError('Synthetic probe requires the dedicated controlled integration fixture runner')

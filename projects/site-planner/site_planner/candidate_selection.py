@@ -167,7 +167,9 @@ def select_candidates(supply_paths, output, rules=None):
     for supply_index, base in enumerate(paths):
         candidate_path, sources_path = base / 'candidates.json', base / 'sources-frozen.json'
         candidates, sources = _load(candidate_path), _load(sources_path)
-        if candidates.get('schema_version') != 'webcollect-site-candidates-1' or sources.get('schema_version') != 'webcollect-site-sources-1':
+        # Sealed historical exports carry the old generational schema names; both read.
+        if (candidates.get('schema_version') not in ('site-candidates', 'webcollect-site-candidates-1')
+                or sources.get('schema_version') not in ('site-sources', 'webcollect-site-sources-1')):
             raise ValueError('frozen discovery candidates and sources required')
         modes.add(candidates.get('mode'))
         for path in (candidate_path, sources_path):
@@ -255,7 +257,7 @@ def select_candidates(supply_paths, output, rules=None):
     implementation_sha = _sha(__file__)
     fingerprint = _object_sha({'inputs': inputs, 'rules': rules, 'version': VERSION,
                                'implementation_sha256': implementation_sha})
-    candidates = {'schema_version': 'webcollect-site-candidates-1', 'version': VERSION,
+    candidates = {'schema_version': 'site-candidates', 'version': VERSION,
         'mode': next(iter(modes)), 'input_source_sha256': fingerprint,
         'records': list(records.values()), 'fixed_candidate_count': len(records),
         'discovery_link_occurrences': len(rows), 'link_denominator_complete': all(not r['unavailable'] for r in source_rows),

@@ -432,7 +432,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     stop_data = {'stop_details': summary['stop_details']} if 'stop_details' in summary else {}
     def _event_now():
         return datetime.now(timezone.utc).isoformat()
-    async def finish_failure(failure_class, root_cause, extra_evidence=()):
+    async def finish_failure(failure_class, root_cause, extra_evidence=(),
+                            strategy_save_status='not_saved', strategy_eligibility='unresolved'):
         failure = evidence / 'failure.json'
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': now(),
@@ -450,9 +451,19 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         if failure_class == 'program' and not closing_enabled(task):
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
+        final_result = None
+        if summary.get('strategy_result'):
+            # The session-stage end facts were transient (unresolved / not_saved).
+            # This closure is a decision not to save, so the actual outcome facts
+            # are finalized here; explicit rejections are ineligible, a failed save
+            # action is save_failed, and unknown/pending outcomes stay unresolved.
+            from . import collection_strategy as _cs
+            final_result = _cs.finalize_strategy_result(
+                summary['strategy_result'], save_status=strategy_save_status,
+                eligibility=strategy_eligibility)
         return {'status': 'rejected', 'failure_class': failure_class,
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt,
-                **({'strategy_result': summary['strategy_result']} if summary.get('strategy_result') else {}),
+                **({'strategy_result': final_result} if final_result else {}),
                 **stop_data}
     ending=summary.get('collection_ending')
     prefix_end=None
@@ -555,10 +566,16 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         if (task['fragment'].get('decision_protocol') == NATIVE_REACT and derived['status'] == 'delivery_rejected'
                 and errors and all(error.startswith('producer_exact_dedup:') for error in errors)):
             return await finish_failure('collector', 'react_exact_image_conflict',
-                                  _evidence(evidence / 'producer_dedup.json') + [derived['record_ref']])
+                                  _evidence(evidence / 'producer_dedup.json') + [derived['record_ref']],
+                                  strategy_eligibility='ineligible')
         if derived['status'] in ('processing_failed', 'delivery_rejected'):
+            # A program failure of the derivation/save action is an actual
+            # save failure; an explicit delivery rejection is not saved and
+            # ineligible.
             return await finish_failure('program', 'derivation_' + derived['status'] + ': ' +
-                                  str(derived.get('error') or derived.get('errors') or '')[:300])
+                                  str(derived.get('error') or derived.get('errors') or '')[:300],
+                                  strategy_save_status=('save_failed' if derived['status'] == 'processing_failed' else 'not_saved'),
+                                  strategy_eligibility='ineligible')
         cause = summary['stop_details']['code'] if stop_data else 'react_' + derived['status']
         return await finish_failure('collector', cause)
     saved = evidence / 'saved_sample.json'
@@ -567,7 +584,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         completion_decision = completion_delivery_decision(
             read_json(sample/'annotation.json'), read_json(saved)['raw_execution'])
         if not completion_decision['delivery_eligible']:
-            return await finish_failure('collector', 'react_completion_delivery_ineligible')
+            return await finish_failure('collector', 'react_completion_delivery_ineligible',
+                                  strategy_eligibility='ineligible')
     with telemetry_phase(phase_ledger, 'react_commit', scope=meter_identity):
         with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
             feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
@@ -586,7 +604,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             collision = evidence / 'concurrent_image_conflict.json'
             write_json(collision, {'exact_conflicts': conflict.conflicts})
             return await finish_failure('collector', 'react_exact_image_commit_conflict',
-                                  _evidence(collision) + [derived_ref])
+                                  _evidence(collision) + [derived_ref],
+                                  strategy_save_status='save_failed', strategy_eligibility='ineligible')
         index.add_sample(sample)
     from .closing_policy import completion_delivery_decision
     from . import collection_strategy as _cs
