@@ -153,7 +153,7 @@ def validate_identity(task, *, observed_states=None):
         _require(page_url(task['initial_url']) in aliases | shared_urls, 'starting page has no reviewed role')
     if observed_states is not None:
         from .candidate_contract import same_application
-        from .react_session import is_react_task
+        from .session_core import is_react_task
         # A react session earns its page scope by real same-host navigation;
         # the frozen task cannot list those pages, so the earned set is the
         # observed workflow itself restricted to the evidence-backed
@@ -210,7 +210,7 @@ def validate_identity(task, *, observed_states=None):
 def require_actions(task, count, *, final=False, required=False):
     if task.get('pilot_identity') is None and not required:
         return
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     if is_react_task(task):
         # This count describes actual dispatches. V5's effective-action cap
         # is checked by its ending/derivation protocol; no-effect dispatches
@@ -277,7 +277,7 @@ def validate_plan(plan, *, required=False):
         for task in pilot:
             binding = validate_identity(task)
             from .agent_controller import is_controlled
-            from .react_session import is_react_task
+            from .session_core import is_react_task
             if not is_controlled(task) and not is_react_task(task):
                 require_actions(task, sum(op.get('action_type') not in ('wait', 'complete') for op in task['operations']), final=True)
             if per_task:
@@ -322,7 +322,7 @@ def _keys(task_key, task, binding, project):
     if project:
         return ['task:' + task_key]
     from .fragment_workflow import is_fragment, logical_key
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     if is_react_task(task):
         return ['fragment:' + react_key(task)]
     if is_fragment(task):

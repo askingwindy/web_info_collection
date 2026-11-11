@@ -86,7 +86,7 @@ SPEC_SCHEMA = strict_object({'tasks':{'type':'array','items':strict_object({
 def task_signature(task):
     """Conservative: argument/keyword substitutions have the same identity."""
     from .fragment_workflow import is_fragment, logical_key
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     if is_react_task(task):
         # A react task is a frozen dynamic-execution boundary, not a static
         # control list: two empty-operation tasks on one page (react vs an old
@@ -618,7 +618,7 @@ def check_live_m4_history(plan, registry, output):
                 if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
                     continue
                 from .fragment_workflow import is_fragment
-                from .react_session import is_react_task
+                from .session_core import is_react_task
                 same_structure = (task_signature(old) == signature and (is_fragment(task) or is_react_task(task) or
                                   not _different_verified_business(task, old) and not _different_supported_path(task, old)))
                 if same_structure or (semantic and semantic_signature(old) == semantic
@@ -789,6 +789,23 @@ def compile_form(capability, spec, *, _observer_sha256=None):
     return task
 
 
+def _planning_prompt_of(task):
+    """The planning prompt actually owned by the task's collection strategy.
+
+    Strategy modules load lazily: generating a 策略 2 candidate must not load the
+    策略 1 conditional-plan controller (banded_plan) and vice versa.
+    """
+    if task['fragment'].get('plan_protocol'):
+        from .banded_plan import SYSTEM as PLAN_SYSTEM
+        return PLAN_SYSTEM
+    from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
+    if strategy_id(task) == STRATEGY_SCREENSHOT_PLAN:
+        from .screenshot_plan import SYSTEM_PROMPT
+        return SYSTEM_PROMPT
+    from .session_core import SYSTEM_PROMPT
+    return SYSTEM_PROMPT
+
+
 def _generate_react_url(ledger, output, *, history_registry=None, history_set=None, url=None,
                         goal=None, site_category='UNKNOWN', app_name=None, catalog_path=None,
                         site_filter=None, page_identities=None, react_task_version='1',
@@ -802,8 +819,8 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     claim snapshot becomes the read-only requested_goal identity.
     """
     from datetime import datetime, timedelta, timezone
-    from .react_session import build_url_task, build_capability_task, REACT_VERSION, SYSTEM_PROMPT, GOAL_BUDGETS
-    from .banded_plan import SYSTEM as PLAN_SYSTEM
+    from .session_core import build_url_task, build_capability_task, REACT_VERSION, SYSTEM_PROMPT, GOAL_BUDGETS
+    from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
     from .planning import validate_capability
     if not isinstance(url, str) or not url.strip():
         raise ValueError('react-url generator requires the entry URL')
@@ -868,7 +885,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         spec = task['workflow_proposal']['spec']
         spec['goal']['structured'] = deepcopy(goal)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
-        from .react_session import validate_task as validate_react
+        from .session_core import validate_task as validate_react
         validate_react(task)
     if react_candidate is not None:
         from .candidate_contract import VERSION as CANDIDATE_CONSUMPTION_VERSION
@@ -891,7 +908,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         # same entry under a new claim is a new transparent task version.
         task['workflow_proposal']['spec']['candidate_claim'] = bound_claim['claim_id']
         task['workflow_proposal']['spec']['consumer_projection'] = 'table2-entry'
-        from .react_session import configure_candidate_protocols
+        from .session_core import configure_candidate_protocols
         from .plan_protocol import (PLAN_PROTOCOL, RESULT_EXECUTION_POLICY,
                                     RESULT_COMPLETION_PROTOCOL)
         from .collection_strategy import (STRATEGY_SCREENSHOT_PLAN, STRATEGY_BANDED_REACT,
@@ -910,7 +927,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             freeze_strategy(task, STRATEGY_BANDED_REACT)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
-        from .react_session import validate_task as validate_react
+        from .session_core import validate_task as validate_react
         validate_react(task)
         validate_task_binding(task)
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -951,7 +968,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             'narrative_mode': 'mixed', 'prompt_stages': {
                 'planning': {'mode': 'model',
                     'description': '单一 ReAct 循环按真实工具返回逐步决策（observe/inspect/act/finish）。',
-                    'prompt': PLAN_SYSTEM if task['fragment'].get('plan_protocol') else SYSTEM_PROMPT},
+                    'prompt': _planning_prompt_of(task)},
                 'narrative': {'mode': 'template', 'template_version': 'actual-state-describe_change',
                               'description': '沿用采集器实际可见状态及相邻截图对应的叙述生成。'}}}}
     from .task_contract import validate_m4_plan
@@ -1362,7 +1379,7 @@ def _prepare_qc_handoff(candidate, history_set, output, sampling, checks, *, del
     return {'qc_status': 'QC_NOT_RUN', 'qc_inputs': receipt}
 
 
-async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False, qc_policy=None, site_pool=None, entry_session=None):
+async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, resume=False, qc_policy=None, site_pool=None, entry_session=None, runlog=None, log_level='INFO'):
     """Collect once into pending evidence; freeze explicit QC inputs without reviewing.
 
     Pilot and delivery use this same entry. Optional legacy admission receipts
@@ -1505,7 +1522,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         with preparation_phase(timing, "publication_prepare"):
             if has_legacy_admissions:
                 verify_task_admissions(plan, catalog, registry, output)
-            from .react_session import is_react_task
+            from .session_core import is_react_task
             react_only = bool(plan['tasks']) and all(is_react_task(task) for task in plan['tasks'])
             pf=output/'preflight'; publication=output/'publication.json'
             if react_only:
@@ -1527,6 +1544,8 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
             navigation=navigation, controller_ledger=ledger, controller_parent_job=job,
             **({'entry_session': entry_session} if entry_session is not None else {}),
+            **({'runlog': runlog} if runlog is not None else {}),
+            log_level=log_level,
             **({'site_pool': site_pool} if site_pool is not None else {}))
         if result['collection_status']=='paused_pending_resume':
             return {'collection':result,'candidate':None,'stopped':'existing runtime paused; budget and queued work retained'}

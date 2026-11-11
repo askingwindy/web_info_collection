@@ -298,7 +298,7 @@ def validate_task_binding(task, record=None):
         raise ValueError('Frozen candidate sources changed')
     if task['fragment'].get('candidate_attempt')!=binding['claim_id']:
         raise ValueError('Candidate attempt boundary differs')
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     if is_react_task(task):
         candidate = binding['candidate']
         expected = candidate['requested_goal'] if candidate.get('candidate_kind') == 'target' else None

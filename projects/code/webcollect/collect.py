@@ -905,9 +905,9 @@ def _validate_plan(plan):
     required=['task_id','site_uri','site_category','app_name','instruction','task_type','initial_url','operations','final_result','completion_judgement','final_assertions']
     task_type_schema=json.loads(SCHEMAS.joinpath('annotation.schema.json').read_text(encoding='utf-8'))['properties']['task_type']
     for task in plan['tasks']:
-        from .react_session import is_react_task
+        from .session_core import is_react_task
         if is_react_task(task):
-            from .react_session import validate_task as validate_react
+            from .session_core import validate_task as validate_react
             validate_react(task)
             validate_task_instruction(task['instruction'])
             type_errors=list(StrictValidator(task_type_schema).iter_errors(task['task_type']))
@@ -1429,7 +1429,7 @@ def dynamic_controller_ledger(plan_path, config_path):
 
 async def collect_plan(plan_path, output, registry, channel='chrome', headless=True,
                        *, publication_path=None, policy_path=None, resume=False,
-                       controller_ledger=None):
+                       controller_ledger=None, log_level='INFO', log_dir=None):
     from playwright.async_api import async_playwright
     plan=read_json(Path(plan_path));validate_plan(plan)
     if plan.get('schema_version') == PLAN_SCHEMA:
@@ -1437,7 +1437,8 @@ async def collect_plan(plan_path, output, registry, channel='chrome', headless=T
         return await collect_m4(plan_path, output, registry, publication_path=publication_path,
                                 policy_path=policy_path, resume=resume, channel=channel,
                                 headless=headless,
-                                **({'controller_ledger': controller_ledger} if controller_ledger is not None else {}))
+                                **({'controller_ledger': controller_ledger} if controller_ledger is not None else {}),
+                                log_level=log_level, log_dir=log_dir)
     if publication_path or policy_path or resume:
         raise ValueError('发布收据、预算和恢复入口仅适用于严格M4计划；旧计划保留原采集行为')
     if 'media_preflight' in plan:
