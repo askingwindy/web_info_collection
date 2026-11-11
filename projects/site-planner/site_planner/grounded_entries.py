@@ -606,7 +606,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 raise ValueError('Restore original frozen purpose protocol; no replacement of prior batch')
     if True:
         from .page_consumption import VERSION as consumption_policy
-        frozen['page_consumption_policy']=consumption_policy
+        # Sealed batches resume with their frozen consumption policy verbatim;
+        # a new batch freezes the current stable name.
+        frozen['page_consumption_policy']=previous.get('page_consumption_policy') or consumption_policy
         frozen['page_consumption_scope']='entry_and_target'
         if True:frozen['page_observation_policy']='producer-shared-observation-1'
     if independent:
