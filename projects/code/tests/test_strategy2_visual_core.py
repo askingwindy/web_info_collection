@@ -61,6 +61,19 @@ class Strategy2VisualCore(unittest.TestCase):
     def test_plan_target_provenance_rebind_and_wrong_object_refusal(self):
         original = observation()
         original['provided_control_ids'] = ['input1']
+        rows = controls_projection(original, ['click', 'type'])
+        numeric = {'steps': [{'action': 'click', 'target': {'control': str(rows[0]['number'])}}]}
+        bind_plan_targets(numeric, original)
+        self.assertEqual(numeric['steps'][0]['target']['control'], rows[0]['control'])
+        self.assertEqual(numeric['steps'][0]['target']['_source']['mark_number'], 1)
+        conflict = deepcopy(original)
+        conflict['controls']['1'] = control('1')
+        conflict['provided_control_ids'].append('1')
+        with self.assertRaisesRegex(ValueError, 'CONTROL_NUMBER_CONFLICT'):
+            bind_plan_targets({'steps': [{'target': {'control': '1'}}]}, conflict)
+        with self.assertRaisesRegex(ValueError, 'CONTROL_TARGET_CONFLICT'):
+            bind_plan_targets({'steps': [{'target': {'control': '1', 'text': '错误金额'}}]}, original)
+        original['provided_control_ids'] = ['input1']
         plan = {'steps': [{'action': 'click', 'target': {'control': 'input1'}}]}
         bind_plan_targets(plan, original)
         target = plan['steps'][0]['target']
@@ -125,7 +138,7 @@ class Strategy2VisualCore(unittest.TestCase):
         c['probe'] = probe
         c['actions']['type'] = action_availability(state, c['element'], c['binding'], c['value'], probe, 'type')
         obs = {'controls': {'input1': c}}
-        task = {'fragment': {'allowed_actions': ['type', 'select']}}
+        task = {'fragment': {'allowed_actions': ['type', 'select', 'hotkey']}}
         step = {'action': 'type', 'control_id': 'input1', 'value': '42', 'goal': '输入金额', 'expected': '金额为42'}
         with self.assertRaisesRegex(ValueError, 'TYPE_REQUIRES_CURRENT_FOCUS'):
             compile_step(task, [], step, obs)
@@ -133,6 +146,25 @@ class Strategy2VisualCore(unittest.TestCase):
         c['actions']['type'] = action_availability(state, c['element'], c['binding'], c['value'], probe, 'type')
         rows = compile_step(task, [], step, obs)
         self.assertEqual([row['action'] for row in rows], ['type'])
+        # A real click's ordinary observation proves focus without retaining
+        # a targeted probe; keys still get a fresh probe before dispatch.
+        focused = deepcopy(c)
+        focused['probe'] = None
+        focused['value'].update(focused=True, input_type='number', value='17')
+        focused['element']['state'] = 'focused'
+        focused_obs = {'controls': {'input1': focused}}
+        select_all = {'action': 'hotkey', 'control_id': 'input1', 'keys': ['ctrl', 'a'],
+                      'goal': '全选原数值', 'expected': '原数值已全选'}
+        self.assertEqual(compile_step(task, [], select_all, focused_obs)[0]['keys'], ['ctrl', 'a'])
+        focused['value']['focused'] = False
+        focused['element']['state'] = ''
+        with self.assertRaisesRegex(ValueError, 'HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS'):
+            compile_step(task, [], select_all, focused_obs)
+        # The later real targeted observation confirms numeric full selection.
+        c['value'].update(input_type='number', value='17', focused=True, all_text_selected=True)
+        numeric_rows = compile_step(task, [], step, obs)
+        self.assertEqual([row['action'] for row in numeric_rows], ['type'])
+        self.assertEqual(numeric_rows[0]['replace_selected_number'], '17')
         after = deepcopy(state)
         after['values'][0]['value'] = rows[0]['value']
         self.assertTrue(atomic_effect(state, after, 'type', {'text': rows[0]['value']}, 'input1')['verified'])

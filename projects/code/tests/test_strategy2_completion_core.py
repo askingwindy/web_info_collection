@@ -1,10 +1,11 @@
-"""Four offline completion/progress contracts; no external browser or provider IO."""
+"""Seven offline completion, progress and plan-narrative contracts; no browser or provider IO."""
 from copy import deepcopy
 
 import test_strategy2_runlog_20261111 as substrate
 from webcollect.batch_core import load_json
 from webcollect.screenshot_plan import (
-    NO_PROGRESS_STALL_LIMIT, READY_ENDING, _replay_session, verify_completion,
+    NO_PROGRESS_STALL_LIMIT, READY_ENDING, _replay_session, narrative_grounding_gaps,
+    verify_completion, normalize_decision,
 )
 from webcollect.screenshot_session import ScreenshotPlanSession
 
@@ -59,6 +60,18 @@ class CompletionCoreTests(substrate.SessionHarness):
                 'answers': [self._answer(prompt['current_observation'], index)]}}
 
         session = await self._session(choose)
+        session.plan['steps'][0]['target'] = {'control': 'control-0', '_source': {'host': 'private'}}
+        self.assertNotIn('_source', session._branch_prompt('plan_end')['remaining_plan'][0]['target'])
+        wire = {'decision': 'revise', 'reason': '沿用剩余目标', 'remaining_plan': [{
+            'action': 'drag', 'target': {'control': 'control-0', '_source': {'forged': True}},
+            'end_target': {'control': 'control-1', '_source': {'forged': True}},
+            'purpose': '移动项目', 'rationale': '当前目标可见', 'expected_result': '项目位置改变'}]}
+        normalized, normalization = normalize_decision(wire, ['revise'])
+        self.assertNotIn('_source', normalized['remaining_plan'][0]['target'])
+        self.assertNotIn('_source', normalized['remaining_plan'][0]['end_target'])
+        self.assertIn('_source', wire['remaining_plan'][0]['target'])
+        self.assertEqual(sum(t['transform'] == 'host_binding_field_removed'
+                             for t in normalization['transforms']), 2)
         await session._checkpoint('plan_end')
         self.assertEqual(session.collection_ending['kind'], READY_ENDING)
         self.assertEqual(prompts[1]['missing_requirements'], ['r2'])
@@ -164,3 +177,56 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(session.collection_ending['kind'], 'NO_PROGRESS_END')
         self.assertEqual(session.trajectory, [])
         self.assertEqual(calls, 1)
+
+    def test_rationale_quotes_must_exist_in_the_current_frame(self):
+        frame = '搜索结果\n金额 100 元\n下一页'
+        steps = [{'action': 'type', 'value': '陈树人', 'target': {'text': '搜索'},
+                  'rationale': '当前帧可见「金额 100 元」，先输入「陈树人」'},
+                 {'action': 'click', 'target': {'text': '下一页'},
+                  'rationale': '点击后进入「人物生平」页面'}]
+        gaps = narrative_grounding_gaps(steps, frame)
+        self.assertEqual([gap['kind'] for gap in gaps], ['RATIONALE_QUOTE_NOT_IN_FRAME'])
+        self.assertEqual((gaps[0]['step_index'], gaps[0]['quote']), (1, '人物生平'))
+        # The inherited goal and this step's own declared input are plan content,
+        # not a claim about the page, and rendered line breaks are not a
+        # difference in the quoted text.
+        self.assertEqual(narrative_grounding_gaps(steps, frame, '查证「人物生平」'), [])
+        self.assertEqual(narrative_grounding_gaps([{'rationale': '当前帧可见「金额100元」'}], frame), [])
+
+    async def test_paraphrased_observed_result_reports_a_verbatim_gap(self):
+        async def choose(prompt):
+            return {'arguments': {'decision': 'continue', 'reason': '记录当前观察'}}
+
+        requirement = [{'id': 'r1', 'description': '阅读文章并回答人物原名'}]
+        session = await self._session(choose, requirement)
+        await session._decide(session._branch_prompt('result'))
+        oid = session.current['observation_id']
+
+        def answers(observed):
+            return {'answers': [{'requirement_id': 'r1', 'observed_result': observed,
+                                 'evidence': [{'observation': oid, 'quote': self.texts[0]}]}]}
+
+        checks, gaps = verify_completion(session, answers('人物的原名是陈树人'), requirement)
+        self.assertEqual(checks, [])
+        self.assertEqual([gap['kind'] for gap in gaps], ['OBSERVED_RESULT_NOT_VERBATIM'])
+        self.assertEqual(gaps[0]['quote'], self.texts[0])
+        checks, gaps = verify_completion(session, answers(self.texts[0]), requirement)
+        self.assertEqual(gaps, [])
+        self.assertEqual(len(checks), 1)
+
+    async def test_cited_control_from_an_earlier_frame_removes_continue(self):
+        async def choose(prompt):
+            return {'arguments': {'decision': 'revise', 'reason': '按当前帧重新绑定尾部'}}
+
+        session = await self._session(choose)
+        step = {'action': 'click', 'target': {'control': 'control-0',
+                                              '_source': {'document_identity': 'doc-before'}}}
+        session.plan['steps'] = [step]
+        session.position = 0
+        prompt = session._branch_prompt('navigation_checkpoint')
+        self.assertNotIn('continue', prompt['choices'])
+        self.assertIn('已变化的页面', prompt['next_checkpoint']['continue_unavailable'])
+        decision_enum = prompt['tools'][0]['function']['parameters']['properties']['decision']['enum']
+        self.assertNotIn('continue', decision_enum)
+        step['target']['_source']['document_identity'] = session.current['document_identity']
+        self.assertIn('continue', session._branch_prompt('navigation_checkpoint')['choices'])

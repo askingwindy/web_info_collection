@@ -854,6 +854,18 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         with events.open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'at':time.time(), 'event':event, **value}, ensure_ascii=False) + '\n')
 
+    # Campaigns probe centrally before launching workers. A standalone run owns
+    # the same startup responsibility, with a stable launch identity so an
+    # interrupted/UNKNOWN probe is never replayed on restart.
+    kwargs.update(startup_check(ledger, pool=pool, **kwargs))
+    from .key_health import probe_accounts, pool_available
+    if not campaign and not await asyncio.to_thread(pool_available, ledger):
+        probes = await asyncio.to_thread(probe_accounts, ledger, 'candidate-run:' + request_prefix)
+        record('key_health_startup', probes=probes)
+    if not await asyncio.to_thread(pool_available, ledger):
+        record('key_pool_unavailable', reason='no_available_model_account', application_id=application_id)
+        return {'processed': 0, 'results': [], 'stop_reason': 'key_pool_unavailable', 'events': str(events)}
+
     while limit is None or processed < limit:
         if campaign:
             from .consumer_campaign import stopped
@@ -862,9 +874,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 break
         from .key_health import pool_available
         if not await asyncio.to_thread(pool_available, ledger):
-            record('key_pool_paused', reason='no_available_model_account', application_id=application_id)
-            await asyncio.sleep(delay)
-            continue
+            record('key_pool_unavailable', reason='no_available_model_account', application_id=application_id)
+            return {'processed': processed, 'results': results, 'stop_reason': 'key_pool_unavailable', 'events': str(events)}
         if rows is not None and poll >= len(rows):
             stop_reason = 'cohort_exhausted'
             break

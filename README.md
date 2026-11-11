@@ -1,5 +1,9 @@
 # WebCollect
 
+2026-11-11 交付口径追加修复（策略2）：提交类点击不再被叙述成“所在控件获得焦点”，改为描述该点击实际渲染出的结果内容；图上黄色角标数字可直接作为 `target.control`；`observed_result` 的逐字连续片段口径同时写进 prompt/规则与宿主校验，并新增 `OBSERVED_RESULT_NOT_VERBATIM` 精确缺项（不再退化为无定位信息的 `NO_BOUND_EVIDENCE`）；`rationale` 的「」引文在首轮计划与 revise 尾部接受前机械核对当前帧，文档已变化时不再向模型提供 `continue`；`completion_judgement` 分列“末帧仍可见”与“末帧前已观察到”的引用依据。维护核心测试由 43 条增至 50 条（全量 `50 passed`，pytest 7.73 秒，仍在约定的 50 条上限内）。**真实验证仍未运行**：无真实 GLM、真实采集、独立 QC 或人工验收结论。详见[走查与验证报告](docs/策略2走查修复与数据库持久化-20261111.md#交付口径追加修复同日后续轮)。
+
+2026-11-11 走查及持久存储修复：新工程默认放在 `database/sqllite/<project_id>/`，五库、scope、配置、manifest 和生产者来源证据一同持久保留；采集输出单独放在 `results/<project_id>/collections/`。用户已确认原 results 工程被清理，未恢复旧库。本轮策略2补齐控件来源绑定、独立观察/执行效果校验、增量补证、无进展判断、标号/概览/补图、叙述简繁及最终保存事实。43条核心测试已有通过结果（首轮40通过/3失败，修复后仅受影响10条复验通过）；默认 pytest 只运行当前核心目录。真实GLM、采集及QC未运行。详见[走查与验证报告](docs/策略2走查修复与数据库持久化-20261111.md)、[存储说明](database/README.md)、[新生产者每站100页执行Prompt](docs/生产者Muxtly-Wiki各100页执行Prompt-20261111.md)。
+
 2026-11-11 策略2独立运行与日志体系已按[改造方案](docs/策略2独立运行与交付达标方案设计-20261111.md)实施并合并入 main（原独立 worktree `codex/strategy2-with-logs-20261111`）：策略2会话去 ReactSession 继承，组合新增 `session_core.py`/`screenshot_observation.py`/`screenshot_execution.py` 独立接线，chooser、任务接入与公共收尾链贯通；策略1业务行为不变。日志体系按需落地：stderr 实时运行行（stdout 机器 JSON 不变），`<output>/logs/<workerId>/` 下 `runtime.jsonl`、每物理请求一条含 usage 的 `model-calls.jsonl`（缺失记 null 不补零、缓存命中与超时重试留痕）、DEBUG 级脱敏 `model-debug.jsonl`（凭据与 base64 图片不落盘），统一展示 sessionId（claim 路径即 claim_id、直跑一次 uuid4），不进入业务身份或模型 prompt；`candidate_consumer run` 与 `collect` 新增 `--log-level/--log-dir`。合并前测试：新 runlog 套件 19、完成回归、策略1抽查 21 通过（`test_timeout_retry` 一项环境相关既有凭据失败如实保留）。**真实验证未运行**：无真实 GLM、采集、批次或独立审核；实施细节、测试命令与示例日志见[方案实施结果](docs/策略2独立运行与交付达标方案设计-20261111.md#10-2026-11-11-实施结果worktree-codexstrategy2-with-logs-20261111)。
 
 2026-11-11 无版本改造已按[执行 Prompt](docs/无版本改造执行Prompt-20261111.md)集中实施，方案见[34 项改造清单](docs/无版本运行改造清单与方案-20261111.md)：稳定业务名收敛到 `projects/code/webcollect/plan_protocol.py`，删除 V1–V13/ending-2..6 代际分派、legacy_v5 步数上限、生产者多协议路径与 `--model-protocol`（仅剩单一 grounded 业务内容路径）、候选协议筛选、QC supersedes 链与内部包版本/控制台脚本；启动统一为 `PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector` 加 `projects/code/.venv/bin/python -m <模块>`。数据库五库全量备份于 `verify_results/noversion-switch-20261111-r01/`，切换脚本已在工作副本验证，正式库未修改。2026-11-11 收尾轮已完成：源码收口（六套关键回归覆盖过的缺陷全部修复）、残留清理（candidate_discovery 死子命令删除、--collection-strategy 取值 react/screenshot_plan、claim_research 单值、manifest schema 版本分叉删除）、离线集成 4/4 通过（verify_results/noversion-offline-integration-20261111-r02/）、DB 对照报告证明正式库无需结构变更。按用户指示原 260 个测试文件已全部删除，重写核心契约测试 test_core_contract.py（13 条全绿），后续按需增量补充。真实 GLM 采集、生产者固定页、消费者候选与 AI QC 均未运行（NOT_RUN），不据此启动采集；实施细节见[改造清单实施结果](docs/无版本运行改造清单与方案-20261111.md)。下文旧版本号、协议组合与控制台脚本描述保留历史含义。
@@ -174,7 +178,7 @@ Agent 下一阶段改造见[Agent 优化与 39 条问题统一实施计划](docs
 
 生产者可在同一工程按授权隔离有原输入证据的未决请求。长批支持 macOS 单次后台启动。每条候选的数据视图包含发现调用实测用量、分摊份额和关联的消费结果。[运行与 token 对账](docs/工程说明.md#后台生产和逐候选用量)
 
-新工程从[本机工程范围](results/candidate-project-20261101-r01/scope.json)启动。本代同页可以执行多个不同目标，同站三次确定失败后仍可派发。生产者和消费者重启或换批时复用这份工程的候选池、注册库和角色原账。R02/R03 的失败、页面占用和旧 worker 工时保存在原现场。[历史门禁审查与切换记录](docs/历史门禁审查与新工程切换-20261101.md) · [初始化与启动](docs/工程说明.md#新候选工程)
+新工程通过 `webcollect.candidate_project init --project-id <工程名> ...` 初始化，从 `database/sqllite/<工程名>/scope.json` 启动。同页可以执行多个不同目标，同站三次确定失败后仍可派发；重启或换批复用该工程候选池、注册库和角色原账。原 results 工程的历史记录不作为现存可用库或恢复授权。[持久存储](database/README.md) · [初始化与启动](docs/工程说明.md#新候选工程)
 
 生产者新 GLM 会话默认使用 `entry-tools-4`（站点双表与编号证据策略），旧冻结会话保留原协议。站点阶段复用核定主类或单独引用首页原文判类，页面阶段默认用保守规则选取第一方链接，`--entry-selection model` 可选择有界链接工具。`entry-tools-2` 及更早冻结会话继续走原协议。`--feedback-scope` 读取显式旧批次的只读首访反馈并冻结下一批排序，本机 scope 也支持 `discovery_mode`、`feedback_scope`。旧冻结批次和 `entry-tools-1` 保留原绑定。[协议与只读回算](docs/工程说明.md#生产者发现与首访反馈2026-11-01)
 
@@ -568,3 +572,7 @@ Agent 只复用同站页面结构、控件语义、动作能力及绑定/重规�
 并发用途UNKNOWN在初始页级快照之后落账时，classify现只在OutcomeUnknown且原账存在pending页交集时刷新隔离并收缩pending；这些页绑定原request/job为HELD，剩余独立页继续，不重发旧请求。若本次实际产生UNKNOWN，calls保留真实unknown引用，usage/cost未知保持未知；无交集仍原样抛出。三项局部窗口验证通过；在跑进程未强停，新代码随后续原批自然恢复加载，真实效果以恢复后的收据为准。
 
 2026-11-10 生产者新增显式 `entry-tools-14`，修复分类缺项、选页证据及跳转失败留证；旧协议保持。九站累计20页有界重启、集成边界与后台进度见[本轮记录](verify_results/producer-repair-nine20-20261110-r01/report.md)，不启动消费者或QC。
+
+### 单独消费者启动与策略2编号
+
+`candidate_consumer run` 在工程绑定检查后，仅当模型账户池不可用时执行已有启动探测；同一 `request-prefix` 视为同一次 launch，已有 UNKNOWN 探测不重发。campaign 的 worker 复用协调器健康记录。池仍不可用时返回 `key_pool_unavailable`，不无限轮询。策略2可引用当前观察 controls 中的 control ID 或对应 number。

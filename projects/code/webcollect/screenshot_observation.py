@@ -86,6 +86,7 @@ def controls_projection(observation, allowed_actions, limit=30):
     for number, row in enumerate(rows, 1):
         row['number'] = number
     observation['provided_control_ids'] = [r['control'] for r in rows]
+    observation['provided_control_numbers'] = {str(r['number']): r['control'] for r in rows}
     return rows
 
 

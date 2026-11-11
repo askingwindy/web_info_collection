@@ -4,6 +4,7 @@ from pathlib import Path
 from .planning import object_sha256, verify_evidence
 
 VERSION = 'trusted-observation'
+STRATEGY = 'screenshot_plan'
 PROVEN, UNAVAILABLE, INSUFFICIENT = 'PROVEN', 'UNAVAILABLE', 'INSUFFICIENT'
 CONTROL_ACTIONS = {'click', 'double_click', 'right_click', 'type', 'select', 'set_value', 'drag'}
 ACTIONS = CONTROL_ACTIONS | {'scroll', 'open_url', 'back', 'hotkey', 'wait'}

@@ -535,8 +535,8 @@ def planned_terminal_narrative(record, final_state, final_id):
     checks = evidence.get('checks') or []
     if evidence.get('business_goal_status') == 'VERIFIED' and checks:
         basis = []
-        final_quotes = []
         verified_results = []
+        final_visible = final_state.get('visible_text', '')
         operations = {row['operation_id']: row for row in record['trajectory']}
         for check in checks:
             if check.get('status') != 'VERIFIED':
@@ -552,8 +552,6 @@ def planned_terminal_narrative(record, final_state, final_id):
                 if quote not in state.get('visible_text', ''):
                     continue
                 quotes.append(quote)
-                if observation_id == final_id:
-                    final_quotes.append(quote)
                 action_ids.extend(ref['operation_id'] for ref in item.get('action_refs') or []
                                   if ref.get('operation_id') in operations)
             if not quotes:
@@ -563,8 +561,16 @@ def planned_terminal_narrative(record, final_state, final_id):
             labels = list(dict.fromkeys((operations[action_id].get('target') or {}).get('label')
                                         or operations[action_id]['goal'] for action_id in action_ids))
             operation_basis = ('，已实际操作' + '、'.join('「' + label + '」' for label in labels)) if labels else ''
-            basis.append(field + operation_basis + '，绑定页面证据' +
-                         '、'.join('「' + quote + '」' for quote in dict.fromkeys(quotes)))
+            cited = list(dict.fromkeys(quotes))
+            # Cumulative evidence is legitimate, but the customer reads the final
+            # screenshot, so the frame each quote came from is stated explicitly.
+            in_final = [quote for quote in cited if quote in final_visible]
+            earlier = [quote for quote in cited if quote not in final_visible]
+            basis.append(field + operation_basis
+                         + ('，末帧仍可见页面证据' + '、'.join('「' + quote + '」' for quote in in_final)
+                            if in_final else '')
+                         + ('，末帧前已观察到的页面证据' + '、'.join('「' + quote + '」' for quote in earlier)
+                            if earlier else ''))
         final_result = numeric['final_result'] if numeric else '；'.join(verified_results)
         return {'final_result': final_result,
                 'completion_judgement': '原目标各项核验依据：' + '；'.join(basis) + '。',
@@ -576,21 +582,25 @@ def planned_terminal_narrative(record, final_state, final_id):
     if objective.get('status') != 'VERIFIED' or not checks or len(answers) != len(checks):
         return None
     basis = []
-    final_quotes = []
+    final_visible = final_state.get('visible_text', '')
     for answer in answers:
         index = answer.get('check_index')
         if type(index) is not int or not 0 <= index < len(checks):
             return None
         passages = answer.get('passages') or []
         quotes = list(dict.fromkeys(p['quote'] for p in passages if p.get('quote')))
-        final_quotes.extend(p['quote'] for p in passages if p.get('observation_id') == final_id
-                            and p.get('quote') and p['quote'] in final_state.get('visible_text', ''))
         field = str(checks[index].get('field') or f'第{index + 1}项')
         actual_answer = str(answer.get('answer') or '').strip()
         if not actual_answer:
             return None
         if quotes:
-            basis.append(field + '：' + actual_answer + '；已观察的正文依据包括' + '、'.join('「' + q + '」' for q in quotes[:2]))
+            in_final = [quote for quote in quotes if quote in final_visible]
+            earlier = [quote for quote in quotes if quote not in final_visible]
+            basis.append(field + '：' + actual_answer
+                         + ('；末帧仍可见的正文依据包括' + '、'.join('「' + quote + '」' for quote in in_final[:2])
+                            if in_final else '')
+                         + ('；末帧前已观察到的正文依据包括' + '、'.join('「' + quote + '」' for quote in earlier[:2])
+                            if earlier else ''))
         elif answer.get('operation_ids'):
             basis.append(field + '：' + actual_answer + '；对应实际操作' + '、'.join(answer['operation_ids']))
         else:

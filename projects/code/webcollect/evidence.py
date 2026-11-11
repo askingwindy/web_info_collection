@@ -45,6 +45,10 @@ def audit_capture(batch, sample_id):
                 if tree['elements']!=state['elements'] or tree['screen_resolution']!=state['screen_resolution']:fail(number,'交付树与原始浏览器证据不一致')
                 if hashlib.sha256((sample/step['image_path']).read_bytes()).hexdigest()!=capture['screenshot_sha256']:fail(number,'图片校验值与采集记录不一致')
                 validate_capture_receipt(state,capture,(sample/step['image_path']).read_bytes())
+                operation = raw.get('operation') or {}
+                if (operation.get('evidence') or {}).get('collection_strategy') == 'screenshot_plan':
+                    from .browser import validate_action_observation
+                    validate_action_observation(state, operation)
                 started=datetime.fromisoformat(raw['started_at']).timestamp()
                 ended=datetime.fromisoformat(raw['ended_at']).timestamp()
                 if not attempt['started_ns']<=attempt['ended_ns'] or attempt['ended_ns']/1e9>started+0.001 or started>ended:fail(number,'截图与动作的先后时间不一致')

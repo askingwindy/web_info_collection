@@ -204,8 +204,15 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         truth = control.get('actions', {}).get(action, {})
         if truth.get('status') != 'PROVEN':
             raise ValueError(truth.get('status', 'INSUFFICIENT') + ': ' + truth.get('reason', 'MISSING_TARGET_PROBE'))
-    if action == 'hotkey' and cid and not ((control or {}).get('probe') or {}).get('focused'):
-        raise ValueError('HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS')
+    if action == 'hotkey' and cid:
+        # Ordinary post-click captures carry actual focus in values/elements;
+        # a target probe is obtained again by the dispatch guard before keys.
+        focused = (((control or {}).get('probe') or {}).get('focused') is True
+                   or ((control or {}).get('value') or {}).get('focused') is True
+                   or ((control or {}).get('element') or {}).get('focused') is True
+                   or ((control or {}).get('element') or {}).get('state') == 'focused')
+        if not focused:
+            raise ValueError('HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS')
     if action == 'back' and navigation_count < 1:
         raise ValueError('NO_SESSION_NAVIGATION_TO_RETURN_FROM')
     if action == 'open_url':
@@ -213,6 +220,13 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         if not page.startswith('p') or not page[1:].isdigit() or int(page[1:]) >= len(page_urls):
             raise ValueError('NAVIGATION_REQUIRES_OBSERVED_PAGE')
     row = deepcopy(step)
+    if action == 'type':
+        value = control.get('value') or {}
+        if (value.get('input_type') == 'number' and value.get('value')
+                and value.get('focused') is True and value.get('all_text_selected') is True
+                and (control.get('probe') or {}).get('focused') is True):
+            # This is already observed selection, not a synthesized clear/focus.
+            row['replace_selected_number'] = value['value']
     if action == 'select':
         options = control['binding'].get('options', [])
         matches = [o for o in options if str(o.get('value')) == str(step.get('value')) and not o.get('disabled')]
@@ -228,12 +242,34 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
     return [row]
 
 
-def _source(observation, cid):
+def _source(observation, cid, mark_number=None):
     c = observation['controls'][cid]
     return {'observation_id': observation['observation_id'], 'document_identity': observation['document_identity'],
             'control_id': cid, 'binding': {k: c.get('binding', {}).get(k) for k in ('selector', 'index', 'tag', 'href')},
             'labels': [r.get('text') for r in c.get('readable_labels', []) if r.get('kind') not in ('visible_native_value', 'visible_selected_option')],
-            'text': c.get('element', {}).get('text', ''), 'role': c.get('element', {}).get('native_role')}
+            'text': c.get('element', {}).get('text', ''), 'role': c.get('element', {}).get('native_role'),
+            **({'mark_number': mark_number} if mark_number is not None else {})}
+
+
+def cited_control(observation, cited, allowed):
+    """Resolve one cited mark to a control of the current frame.
+
+    The marked viewport labels each provided control with its 1-based position
+    in provided_control_ids, so the number the model sees on the image names
+    exactly one control; the projected id is accepted as the same citation.
+    Anything else stays a refusal rather than a fuzzy guess.
+    """
+    direct = cited if cited in allowed and cited in observation['controls'] else None
+    # Use only the number map projected from this exact observation. Never
+    # infer an ordinal from a later frame or from dictionary ordering.
+    numbered = (observation.get('provided_control_numbers') or {}).get(cited)
+    if numbered not in allowed or numbered not in observation['controls']:
+        numbered = None
+    if direct and numbered and direct != numbered:
+        raise ValueError('CONTROL_NUMBER_CONFLICT: ' + str(cited))
+    if direct or numbered:
+        return direct or numbered, int(cited) if numbered else None
+    return None, None
 
 
 def bind_plan_targets(plan, observation, allowed_ids=None):
@@ -242,15 +278,27 @@ def bind_plan_targets(plan, observation, allowed_ids=None):
     for step in plan.get('steps', []):
         for key in ('target', 'end_target'):
             target = step.get(key) or {}
-            cid = target.get('control')
-            if not cid and target.get('text'):
+            cited = target.get('control')
+            mark = None
+            if cited:
+                cid, mark = cited_control(observation, cited, allowed)
+                if cid is None:
+                    raise ValueError('CONTROL_NOT_PROVIDED_TO_MODEL: ' + str(cited))
+                control = observation['controls'][cid]
+                element = control.get('element') or {}
+                labels = [r['text'] for r in control.get('readable_labels', [])]
+                if (target.get('role') and not roles_equivalent(target['role'], element.get('native_role'))
+                        or target.get('text') and target['text'] not in labels + [element.get('text', '')]
+                        or target.get('href') and target['href'] != control.get('binding', {}).get('href')):
+                    raise ValueError('CONTROL_TARGET_CONFLICT: ' + str(cited))
+                target['control'] = cid
+            elif target.get('text'):
                 matches = bind_target(observation, target)
-                if len(matches) == 1 and matches[0] in allowed:
-                    cid = matches[0]
+                cid = matches[0] if len(matches) == 1 and matches[0] in allowed else None
+            else:
+                cid = None
             if cid:
-                if cid not in allowed or cid not in observation['controls']:
-                    raise ValueError('CONTROL_NOT_PROVIDED_TO_MODEL: ' + str(cid))
-                target['_source'] = _source(observation, cid)
+                target['_source'] = _source(observation, cid, mark)
     return plan
 
 

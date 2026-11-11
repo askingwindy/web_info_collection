@@ -46,3 +46,7 @@
 
 # Local regression projections from real captures are evidence, not pure fixtures.
 /projects/code/tests/fixtures/
+
+# Persistent local SQLite projects, configuration and source evidence.
+/database/**
+!/database/README.md

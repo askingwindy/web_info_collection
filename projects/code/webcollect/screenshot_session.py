@@ -20,7 +20,7 @@ from .screenshot_plan import (SYSTEM_PROMPT,
     FIRST_RULES, BRANCH_RULES, BUSINESS_MINIMUM, PREFERRED_MAXIMUM, NON_BUSINESS_ACTIONS,
     DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, NO_PROGRESS_STALL_LIMIT, submit_plan_tools,
     decision_tools, normalize_submit_plan, normalize_decision,
-    first_plan_admission, business_actions, verify_completion)
+    first_plan_admission, business_actions, verify_completion, narrative_grounding_gaps)
 from .screenshot_observation import controls_projection, region_registry, prepare_visuals, verify_visuals, crop_visual
 from .session_core import RawSessionCore, ReactStop
 from .screenshot_execution import bind_target, react_step, bind_plan_targets, resolve_control
@@ -260,6 +260,10 @@ class ScreenshotPlanSession(RawSessionCore):
         payload['_images'] = [self.current['evidence']['image']['path']]
         return payload
 
+    def _frame_text(self):
+        """当前观察的可见文本，用于机械校验计划叙述是否落在本帧。"""
+        return load_json(self.current['evidence']['state']['path']).get('visible_text') or ''
+
     async def _first_plan_round(self):
         prompt = self._first_prompt()
         response = await self._decide(prompt)
@@ -286,6 +290,13 @@ class ScreenshotPlanSession(RawSessionCore):
                 ok = False
                 feedback = {'kind': 'TARGET_BINDING_INVALID', 'field_paths': ['steps'],
                             'message': str(error), 'dispatched': False}
+        if ok and feedback['kind'] == 'accepted':
+            grounding = narrative_grounding_gaps(plan.get('steps'), self._frame_text(),
+                                                 fixed_goal or str(plan.get('goal') or ''))
+            if grounding:
+                ok = False
+                feedback = {'kind': 'RATIONALE_NOT_GROUNDED', 'field_paths': ['steps'],
+                            'gaps': grounding, 'message': grounding[0]['message'], 'dispatched': False}
         if not ok:
             if self.initial_feedback is None:
                 # 同一观察下的有界纠正：给精确反馈再请求一次，不派发任何动作。
@@ -346,6 +357,15 @@ class ScreenshotPlanSession(RawSessionCore):
         if cited:
             return resolve_control(self.current, target)
         return bind_target(self.current, target, self.observation_records)
+
+    def _stale_citation(self, step):
+        """A control cited from an earlier frame cannot be re-resolved here."""
+        for key in ('target', 'end_target'):
+            target = step.get(key)
+            source = target.get('_source') if isinstance(target, dict) else None
+            if source and source.get('document_identity') != self.current['document_identity']:
+                return True
+        return False
 
     def _action_identity(self, step, control_ids, state):
         control = ((self.current.get('controls') or {}).get(control_ids[0]) or {}) if control_ids else {}
@@ -541,8 +561,14 @@ class ScreenshotPlanSession(RawSessionCore):
         self._dialog_checkpointed = list(self.dialogs)
         remaining = self.plan['steps'][self.position:]
         choices = list(DECISIONS)
-        if not remaining:
+        stale_tail = bool(remaining) and self._stale_citation(remaining[0])
+        if not remaining or stale_tail:
             choices.remove('continue')
+        next_checkpoint = {'reason': reason, 'remaining_steps': len(remaining),
+                           'allowed_decisions': list(choices)}
+        if stale_tail:
+            next_checkpoint['continue_unavailable'] = ('下一步引用的控件来自已变化的页面，无法沿用；'
+                                                       '请revise按当前controls重新绑定尾部，或complete/give_up')
         payload = {'phase': 'branch', 'attempt_id': self.attempt_id,
                    'system': SYSTEM_PROMPT,
                    'goal': self.frozen_goal, 'requirements': deepcopy(self.requirements),
@@ -563,9 +589,8 @@ class ScreenshotPlanSession(RawSessionCore):
                    'missing_requirements': [row['id'] for row in self.requirements
                                             if row['id'] not in (getattr(self, 'verified_requirement_ids', None) or [])],
                    'remaining_plan': [{'action': row.get('action'), 'purpose': row.get('purpose'),
-                                       'target': deepcopy(row.get('target'))} for row in remaining],
-                   'next_checkpoint': {'reason': reason, 'remaining_steps': len(remaining),
-                                       'allowed_decisions': list(choices)},
+                                       'target': _public_target(row.get('target'))} for row in remaining],
+                   'next_checkpoint': next_checkpoint,
                    'reason': reason, 'choices': choices, 'rules': BRANCH_RULES,
                    'tools': decision_tools(choices, self.task['fragment']['allowed_actions'],
                                            sorted(self.provided_observations | {oid})),
@@ -684,6 +709,10 @@ class ScreenshotPlanSession(RawSessionCore):
             except ValueError as error:
                 return await self._checkpoint(reason, {'kind': 'TARGET_BINDING_INVALID',
                     'message': str(error), 'dispatched': False})
+            grounding = narrative_grounding_gaps(steps, self._frame_text(), self.frozen_goal)
+            if grounding:
+                return await self._checkpoint(reason, {'kind': 'RATIONALE_NOT_GROUNDED',
+                    'gaps': grounding, 'message': grounding[0]['message'], 'dispatched': False})
             self._granted_new_basis = str(decision.get('new_basis') or '').strip() or None
             self.plan['steps'] = self.plan['steps'][:self.position] + steps
             self.completion_feedback = None
@@ -741,6 +770,12 @@ def file_sha_of(path):
 
 def _stripped(prompt):
     return {key: value for key, value in prompt.items() if key not in ('system', 'tools', '_images', '_history')}
+
+
+def _public_target(target):
+    if not isinstance(target, dict):
+        return deepcopy(target)
+    return {key: deepcopy(value) for key, value in target.items() if key != '_source'}
 
 
 def _public_attempt(attempt):

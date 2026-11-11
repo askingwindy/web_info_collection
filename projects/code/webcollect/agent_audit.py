@@ -1,7 +1,7 @@
 """Independent checks of the new append-only decision-to-execution bindings."""
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
-from .agent_observation import require_action
+from .browser import validate_action_observation
 
 
 def terminal_proof(task, records, final_binding):
@@ -30,7 +30,7 @@ def terminal_proof(task, records, final_binding):
         obs = intent['observation']; verify_evidence(list(obs['evidence'].values()))
         if obs['state_sha256'] != object_sha256(raw['state']):
             raise ValueError('Dispatch state changed')
-        require_action(raw['state'], raw['operation'])
+        validate_action_observation(raw['state'], raw['operation'])
         seen.add(raw['operation']['operation_id'])
     return {'schema_version':'controlled-fragment-evidence','machine_status':'PASS',
         'business_completion':'NOT_CLAIMED','effective_steps':len(actions),'ending_frame':final_binding,

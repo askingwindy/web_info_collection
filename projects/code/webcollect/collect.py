@@ -857,13 +857,19 @@ def describe_change(before, after, op, element):
         prose=[text for text in visible_added if text not in controls and text not in values and not text.endswith((':','：'))]
         suffix=('；页面可见'+ '和'.join(visible_reference(text) for text in prose[:2])) if prose and action=='click' and element and element['element_type']=='button' else ''
         return '，'.join(dict.fromkeys(changed))+suffix
+    focus_only_transition=None
     if action in ('click', 'double_click') and element:
         from .react_protocol import control_state_transition
         transition = control_state_transition(before, after, element['element_id'])
         if transition:
-            state_text = {'selected':'已选中','checked':'已勾选','unchecked':'已取消勾选',
-                          'expanded':'已展开','collapsed':'已收起','focused':'获得焦点'}[transition['state']]
-            return '「' + transition['target_text'] + '」所在控件' + state_text
+            if transition['state']=='focused':
+                # Gaining focus is not what a submit-like click produced; the
+                # content it rendered is described below and takes precedence.
+                focus_only_transition=transition
+            else:
+                state_text = {'selected':'已选中','checked':'已勾选','unchecked':'已取消勾选',
+                              'expanded':'已展开','collapsed':'已收起'}[transition['state']]
+                return '「' + transition['target_text'] + '」所在控件' + state_text
     if action=='hotkey':
         if focused and focused.get('value') and focused.get('selection_start')==0 and focused.get('selection_end')==len(focused['value']):
             return '输入框中的原有内容已全部选中'
@@ -885,6 +891,8 @@ def describe_change(before, after, op, element):
     numeric=visible_numeric_context(after)
     if action=='click' and numeric and numeric!=visible_numeric_context(before):return '页面显示'+numeric
     if visible_added:return '页面出现的文字包括'+'和'.join(visible_reference(text) for text in visible_added[:3])
+    if focus_only_transition:
+        return '「' + focus_only_transition['target_text'] + '」所在控件获得焦点'
     if op.get('observation'):return op['observation']
     if element and element['text'] and element['text'] in after.get('visible_text',''):
         return '页面仍显示「'+element['text']+'」控件'

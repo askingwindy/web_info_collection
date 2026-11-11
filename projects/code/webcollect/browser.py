@@ -806,9 +806,20 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
     return {'matched':True,'state_fingerprint':fingerprint(live),'target':live.get('target')}
 
 
-def prepare_action(state, operation):
-    from .agent_observation import require_action
+def validate_action_observation(state, operation):
+    """Use the operation's frozen strategy for both dispatch and offline audit."""
+    strategy = (operation.get('evidence') or {}).get('collection_strategy')
+    if strategy == 'screenshot_plan':
+        from .screenshot_native_observation import require_action
+    elif strategy in (None, 'react'):
+        from .agent_observation import require_action
+    else:
+        raise ValueError('UNKNOWN_ACTION_COLLECTION_STRATEGY')
     require_action(state, operation)
+
+
+def prepare_action(state, operation):
+    validate_action_observation(state, operation)
     action=operation['action_type']
     target=state['target']
     parameters=dict(operation.get('arguments',{}))

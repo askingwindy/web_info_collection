@@ -1247,7 +1247,8 @@ class RawSessionCore:
         operation = {'operation_id': f'react-{self.used["max_actions"] + 1}',
             'subgoal_id': 'react', 'action_type': action,
             'goal': row['goal'], 'rationale': row.get('rationale') or row['goal'], 'expected': row['expected'],
-            'evidence': {'observation_protocol': OBS_VERSION,
+            'evidence': {'observation_protocol': policy.VERSION,
+                **({'collection_strategy': policy.STRATEGY} if getattr(policy, 'STRATEGY', None) else {}),
                 'state_sha256': object_sha256(dispatch_state),
                 'observation_id': self.current['observation_id']}}
         if cid:

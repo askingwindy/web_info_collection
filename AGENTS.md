@@ -1,5 +1,9 @@
 # Agent 接手说明
 
+2026-11-11 交付口径追加修复（同日后续轮，用户讨论“策略2作为模式能否达标”后直接授权改代码）已完成，详见[报告追加节](docs/策略2走查修复与数据库持久化-20261111.md#交付口径追加修复同日后续轮)。六项修复均只改当前实现，无新增版本或兼容分支：`describe_change` 焦点态转移改为兜底（提交类点击按实际渲染的结果区/数值/新可见文字叙述）；controls 角标数字经 `provided_control_numbers` 绑定为 `target.control` 并在 `_source` 留 mark_number；`observed_result` 逐字口径写进 prompt/规则并新增 `OBSERVED_RESULT_NOT_VERBATIM` 缺项；`narrative_grounding_gaps` 在首轮与 revise 接受前机械核对 `rationale` 的「」引文是否落在当前帧（复用既有有界纠正，不新增模型调用）；下一步 `_source` 属于已变化文档时 choices 与工具 enum 同步去掉 `continue`；`planned_terminal_narrative` 两分支按“末帧仍可见/末帧前已观察到”分列依据。维护核心测试由 43 条增至 **50 条（当前总量 50，仍在 ≤50 上限内）**，全量 `50 passed`、pytest 7.73 秒；叙述文本另用一次性离线夹具核对，未新增常驻用例。真实 GLM、采集、QC、人工验收仍全部 NOT_RUN，不据此启动采集或宣称达标。
+
+2026-11-11 本轮走查、策略2补缺及持久存储修改已完成，详见[报告](docs/策略2走查修复与数据库持久化-20261111.md)。用户确认原 `results/` 工程被删除；新工程默认使用 `database/sqllite/<project_id>/`，五库、scope、配置、manifest 和生产者来源证据均持久保留，采集输出单独绑定，数据库不提交Git。`candidate_project init --root` 可省略，支持 `--output-root`，禁止把 results/verify_results 当持久根。不自动重建旧库或重发UNKNOWN。本轮43条维护核心均有相关通过结果（首轮40过3失败，修复后受影响10条全过）；默认pytest只发现当前核心目录，历史QC套件保留但未默认维护/运行。真实GLM、采集、QC均NOT_RUN。用户已将后续改为准备[新生产者Prompt](docs/生产者Muxtly-Wiki各100页执行Prompt-20261111.md)：Muxtly/Wiki每站100页、每站10进程；此Prompt本轮尚未执行，原消费者20页计划未启动。
+
 2026-11-11 无版本改造收尾轮已按用户三阶段指令完成：阶段一源码收口（六套关键回归全部通过的修复链：chooser NameError、分支回包 attempt/observation 宿主绑定、result-completion 稳定名两处旧字面、substantive_result_text 非数值模式、content_effect 结果区绑定、manifest schema 版本分叉删除、candidate_discovery produce/reconcile-response 死子命令删除、band_budget/candidate_binding 常量统一）+ 残留收敛 + 三包 201 模块 import 0 失败 + 14 入口 --help 全通过 + DB 对照报告（五库备份↔正式库一致，正式库未改、无需结构变更，见 verify_results/noversion-switch-20261111-r01/switch-report.md）。阶段二按用户新指示：**原 260 个测试文件（3225 条）连同 fixtures/helper 全部删除**，重写 projects/code/tests/test_core_contract.py（13 条核心契约全绿），后续按需增量补充；离线集成 4/4 通过（verify_results/noversion-offline-integration-20261111-r02/report.json）。阶段三文档同步完成。真实 GLM 采集、生产者固定页、消费者候选、AI QC 全部 NOT_RUN，不据此启动采集；本轮无真实验证结论。
 
 ## 后续开发统一约定（2026-11-11 用户确认）

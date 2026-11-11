@@ -1,6 +1,6 @@
 """Shared GLM credential health; probe accounting is separate from collection requests.
 
-Only the coordinator probes. UNKNOWN never authorizes replay or account rotation.
+The coordinator or standalone run owner probes. UNKNOWN never authorizes replay or account rotation.
 Secrets exist only in the transport call, never in persisted health or probe rows.
 """
 from contextlib import closing
@@ -117,7 +117,7 @@ def probe_transport(model, secret, request_id):
 
 
 def probe_accounts(ledger, launch_id, transport=probe_transport):
-    """Coordinator-only, at most once per account/launch; never replay reserved probes."""
+    """Launch-owner startup, at most once per account/launch; never replay reserved probes."""
     if not ledger.real_glm:
         return []
     from .model_credentials import configured_credentials

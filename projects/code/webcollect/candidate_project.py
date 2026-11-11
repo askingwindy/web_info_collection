@@ -29,20 +29,30 @@ def numbering_floors(registries):
     return floors
 
 
-def initialize(root, project_id, policy_template, producer_template, consumer_template, *, numbering_from=(), qc_policy=None):
+def initialize(root, project_id, policy_template, producer_template, consumer_template, *, numbering_from=(), qc_policy=None, output_root=None):
     from site_planner.site_pool import SitePool
     from site_planner.candidate_pool import CandidatePool
     if not re.fullmatch(r'[\w.-]+',project_id) or project_id in ('.','..'):
         raise ValueError('A project requires a distinct local project ID')
-    root = Path(root).absolute()
+    repository = Path(__file__).resolve().parents[3]
+    root = (Path(root) if root is not None else
+            repository / 'database' / 'sqllite' / project_id).absolute()
     if any(p.is_symlink() for p in (root,*root.parents)):
         raise ValueError('Project root cannot be a symbolic link')
     root = root.resolve()
-    state = root/'state'
+    if {'results', 'verify_results'} & set(root.parts):
+        raise ValueError('Persistent project root cannot be inside results or verify_results')
+    state = root
     registry = state/'production-registry.sqlite3'
     pool_path = state/'candidate-pool.sqlite3'
     manifest = root/'chain'/'manifest.json'
-    results = root/'collections'
+    results = (Path(output_root) if output_root is not None else
+               repository / 'results' / project_id / 'collections').absolute()
+    if any(p.is_symlink() for p in (results, *results.parents)):
+        raise ValueError('Output root cannot be a symbolic link')
+    results = results.resolve()
+    if results == root or root.is_relative_to(results):
+        raise ValueError('Output root cannot contain the persistent project root')
     since = time.time()
     guard = {'ledger':str(state/'site-facts.sqlite3'),'campaign_id':project_id,
              'formal_since':since,'dispatch_rules':PROJECT_RULES}
@@ -58,7 +68,7 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
     floors = numbering_floors(numbering_from)
     root.mkdir(parents=True,exist_ok=False)
     # An incomplete initialization keeps its files for diagnosis. The scope is published last.
-    results.mkdir()
+    results.mkdir(parents=True, exist_ok=True)
     owner = initialize_chain(manifest,registry,chain_id=project_id,current_result_roots=[results],
                              now=since,candidate_project=project)
     with closing(sqlite3.connect(registry)) as con:
@@ -91,14 +101,19 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=['init'])
-    for name in ('root','project-id','policy-template','producer-config','consumer-config'):
+    parser.add_argument('--root', type=Path,
+                        help='Persistent project root (default: database/sqllite/<project-id>)')
+    parser.add_argument('--output-root', type=Path,
+                        help='Collection output root (default: results/<project-id>/collections)')
+    for name in ('project-id','policy-template','producer-config','consumer-config'):
         parser.add_argument('--'+name,required=True)
     parser.add_argument('--numbering-from',action='append',default=[],help='Read numeric high-water marks from an earlier registry')
     parser.add_argument('--qc-policy',type=Path)
     args=parser.parse_args(argv)
     scope=initialize(args.root,args.project_id,load_json(args.policy_template),load_json(args.producer_config),
                      load_json(args.consumer_config),numbering_from=args.numbering_from,
-                     qc_policy=load_json(args.qc_policy) if args.qc_policy else None)
+                     qc_policy=load_json(args.qc_policy) if args.qc_policy else None,
+                     output_root=args.output_root)
     print(json.dumps({'scope':str(scope),'rules':PROJECT_RULES,'roles_started':0}))
 
 
