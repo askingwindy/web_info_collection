@@ -261,8 +261,10 @@ def verify(receipt_path,ledger=None):
     unsigned={key:value for key,value in receipt.items() if key!='receipt_sha256'}
     if receipt.get('schema_version')!=VERSION or receipt.get('receipt_sha256')!=_digest(unsigned):
         raise ValueError('Pipeline receipt was changed')
-    elif receipt['implementation_sha256']!=_implementation():
-        raise ValueError('Legacy pipeline implementation changed; prepare a new version')
+    # receipt['implementation_sha256'] stays recorded provenance of the run that
+    # produced it. In the no-version mode the current source changes directly, so
+    # it is never re-compared against today's files; integrity stays bound by the
+    # receipt self-hash and every referenced file hash below.
     for ref in [receipt['plan'],receipt['queue'],receipt['effective_set'],receipt['profile'],*receipt['supporting_files']]:_check_ref(ref)
     if receipt.get('cross_package_report'):
         _check_ref(receipt['cross_package_report'])
@@ -371,8 +373,8 @@ def _human_materials(ledger,receipt,new_paths,output):
     template=receipt['document_template']
     for source in sources:
         raw=_read(source['path'])
-        if raw.get('schema_version')!='qc-review-2' or not isinstance(raw.get('records'),list):
-            raise ValueError('Human import requires actual qc-review-2 records')
+        if raw.get('schema_version') not in ('qc-review', 'qc-review-1', 'qc-review-2') or not isinstance(raw.get('records'), list):
+            raise ValueError('Human import requires actual qc-review records')
         imported=[]
         for record in raw['records']:
             if not isinstance(record,dict):raise ValueError('Malformed human record')

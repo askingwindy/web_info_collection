@@ -59,7 +59,13 @@ def population_binding(samples):
 
 def _scope(population):
     return {'schema_version': SCOPE_VERSION, 'population_sha256': population['population_sha256'],
-            'only_check_consumed': CHECK}
+            'only_check_consumed': CHECK, 'rule_id': CHECK}
+
+
+def _scope_matches(header, expected):
+    """Current scope carries rule_id; sealed legacy scopes without it stay valid."""
+    legacy = {key: expected[key] for key in ('schema_version', 'population_sha256', 'only_check_consumed')}
+    return header == expected or header == legacy
 
 
 def _selection(rows, population, sampling_plan, source_reports):
@@ -159,14 +165,14 @@ def resolve(samples, global_reviews=(), *, sampling_plan=None, source_reports=()
         if source in sources:
             continue
         raw_bytes = Path(source['path']).read_bytes(); raw = json.loads(raw_bytes)
-        if raw.get('schema_version') != 'qc-review-2' or not isinstance(raw.get('records'), list):
-            raise ValueError('Global comparison requires original qc-review-2 records')
+        if raw.get('schema_version') not in ('qc-review', 'qc-review-1', 'qc-review-2') or not isinstance(raw.get('records'), list):
+            raise ValueError('Global comparison requires original qc-review records')
         header = raw.get('global_difference_scope')
-        if header is not None and header != expected:
+        if header is not None and not _scope_matches(header, expected):
             raise ValueError('Global comparison population or difference rule scope changed')
         for record in raw['records']:
             local = record.get('global_difference_scope') if isinstance(record, dict) else None
-            if (header is None and local is None) or (local is not None and local != expected):
+            if (header is None and local is None) or (local is not None and not _scope_matches(local, expected)):
                 raise ValueError('Every global decision must bind the full effective population and current difference rule')
             if record.get('reviewer', {}).get('kind') != 'human':
                 raise ValueError('Global comparison import requires an actual human record; AI needs a validated request trace')

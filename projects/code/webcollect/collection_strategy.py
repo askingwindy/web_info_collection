@@ -24,6 +24,13 @@ RESULT_VERSION = RESULT_CONTRACT
 
 FIELD = 'collection_strategy'
 
+# Sealed historical fragments froze the pre-rename strategy ids. Their bytes
+# stay unchanged and read as the same current strategies.
+LEGACY_STRATEGY_IDS = {
+    'webcollect-collection-banded-react-1': STRATEGY_BANDED_REACT,
+    'webcollect-collection-screenshot-plan-2': STRATEGY_SCREENSHOT_PLAN,
+}
+
 
 def freeze(task, strategy=DEFAULT_STRATEGY):
     """Stamp a new task with its frozen strategy identity before first dispatch.
@@ -42,14 +49,20 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
 
 
 def strategy_id(task):
-    """Frozen strategy of this attempt; default keeps the react chain."""
+    """Frozen strategy of this attempt; default keeps the react chain.
+
+    Absent markers default to the react chain and sealed pre-rename ids keep
+    their historical strategy reading; anything else is unknown.
+    """
     record = (task.get('fragment') or {}).get(FIELD) or {}
     value = record.get('id') if isinstance(record, dict) else record
     if value is None:
         return DEFAULT_STRATEGY
-    if value not in STRATEGIES:
-        raise ValueError('Unknown frozen collection strategy: ' + str(value))
-    return value
+    if value in STRATEGIES:
+        return value
+    if value in LEGACY_STRATEGY_IDS:
+        return LEGACY_STRATEGY_IDS[value]
+    raise ValueError('Unknown frozen collection strategy: ' + str(value))
 
 
 def enabled(task):

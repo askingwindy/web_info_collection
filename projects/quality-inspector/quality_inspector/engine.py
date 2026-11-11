@@ -85,7 +85,7 @@ def review_intake(path,samples,baseline_hash):
     if not path:return records,errors
     data=read(path)
     if not isinstance(data,dict):return {},[{'reason':'review document must be an object'}]
-    if data.get('schema_version')!='qc-review-1':return {},[{'reason':'unsupported review format'}]
+    if data.get('schema_version') not in ('qc-review', 'qc-review-1', 'qc-review-2'):return {},[{'reason':'unsupported review format'}]
     byid={s['sample_id']:s for s in samples if s.get('sample_id')}
     if not isinstance(data.get('records'),list):return {},[{'reason':'records must be an array'}]
     for record in data.get('records',[]):

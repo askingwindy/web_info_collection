@@ -30,6 +30,11 @@ from . import entry_selection as selection
 from .producer_authority import isolation_host
 from . import application_discovery as site_tables
 
+# Stable query-policy identity. The literal is historical: frozen batches'
+# checkpoints and decision reasons carry exactly this value, so it must stay
+# byte-identical for old batches to resume.
+QUERY_POLICY = 'producer-query-policy-1'
+
 SCHEMA = {'type':'object','additionalProperties':False,'required':['candidates'], 'properties':{'candidates':{
     'type':'array','maxItems':100,'items':{'type':'object','additionalProperties':False,
     'required':['source_index','name','parent_category','business_kind','description','target'], 'properties':{
@@ -170,7 +175,7 @@ class QueryPolicy:
         self.cap = per_direction_cap
 
     def initial_state(self):
-        return {'version': QUERY_POLICY_VERSION, 'stall_threshold': self.stall_threshold,
+        return {'version': QUERY_POLICY, 'stall_threshold': self.stall_threshold,
                 'per_direction_cap': self.cap, 'queries': {}, 'order': [], 'blocked': {}}
 
     def _entries(self, state):
@@ -193,7 +198,7 @@ class QueryPolicy:
         return zero >= threshold
 
     def next_query(self, state):
-        if state.get('version') != QUERY_POLICY_VERSION:
+        if state.get('version') != QUERY_POLICY:
             raise ValueError('Original query policy version required')
         threshold = state.get('stall_threshold', 2)
         per = self._entries(state)
@@ -214,7 +219,7 @@ class QueryPolicy:
         _, index, direction, entries = eligible[0]
         last = entries[-1] if entries else None
         article_heavy = bool(last and last.get('article_hits', 0) * 2 >= max(1, last.get('raw_hits', 0)))
-        reason = {'rule': QUERY_POLICY_VERSION, 'selected_direction': direction['direction'],
+        reason = {'rule': QUERY_POLICY, 'selected_direction': direction['direction'],
                   'selected_category': direction['category'], 'completed_in_direction': len(entries),
                   'seed_order': index,
                   'switched_from_stalled': sorted(d['direction'] for _, _, d, _ in stalled),
@@ -243,7 +248,7 @@ def fold_query_state(pool_pool, run_id, policy):
     state = policy.initial_state()
     if row:
         saved = json.loads(row['value'])
-        if saved.get('version') != QUERY_POLICY_VERSION:
+        if saved.get('version') != QUERY_POLICY:
             raise ValueError('Original query policy state version required')
         state.update(saved)
     state['stall_threshold'] = policy.stall_threshold

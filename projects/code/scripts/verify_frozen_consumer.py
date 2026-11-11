@@ -58,7 +58,7 @@ def main():
                     'references':[reference(f.chain.parent.parent/'explicit-source.json')]}
         metadata['old_candidate_id']=f.pool.put(f.v2,old_source)
         if args.mode=='leased':
-            metadata['inflight_claim']=f.pool.claim_next('original-worker','frozen/0',protocols=(candidate_pool.VERSION2,))
+            metadata['inflight_claim']=f.pool.claim_next('original-worker','frozen/0')
     save_json(out/'ready.json',metadata)
     for _ in range(1200):
         if (out/'go.json').exists():break
@@ -74,7 +74,7 @@ def main():
         # exercise selection options not exposed by the claim CLI.
         results['v1']=f.invoke(consumer.main,['--pool',str(f.pool.path),'claim','--worker-id','legacy','--request-id','v1'])
         for item in go['selections']:
-            results[item['name']]=f.pool.claim_next('matrix',item['name'],protocols=(candidate_pool.VERSION2,),**item['kwargs'])
+            results[item['name']]=f.pool.claim_next('matrix',item['name'],**item['kwargs'])
         for item in go.get('read_categories',[]):
             with f.pool.pool.connect() as con:
                 row=con.execute('SELECT * FROM data_candidates WHERE candidate_id=?',(item,)).fetchone()
@@ -98,7 +98,7 @@ def main():
                 empty_observer=patch.object(candidate_pool.CandidatePool,'claim_next',observe_empty)
                 empty_observer.start()
             if args.mode=='leased':
-                original=f.pool.claim_next('original-worker','frozen/0',protocols=(candidate_pool.VERSION2,))
+                original=f.pool.claim_next('original-worker','frozen/0')
                 f.pool.heartbeat(original)
                 results['lease_before']=original
             if args.mode=='race':
@@ -125,7 +125,7 @@ def main():
                     except OSError as error:
                         first={'expected_crash':str(error)}
                 results['before_reconcile']=first
-                cid=f.pool.rows(protocols=(candidate_pool.VERSION2,))[0]['candidate_id']
+                cid=f.pool.rows()[0]['candidate_id']
                 with f.pool.pool.connect() as con: claim_id=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=?',(cid,)).fetchone()[0]
                 results['result']=f.invoke(consumer.main,['--pool',str(f.pool.path),'reconcile','--claim-id',claim_id])
             else:
@@ -146,7 +146,7 @@ def main():
                 assert claim['snapshot']==metadata['inflight_claim']['snapshot']
                 assert claim['sources']==metadata['inflight_claim']['sources']
                 assert claim['token']==metadata['inflight_claim']['token']
-            results['replay_claim']=f.pool.claim_next(claim['worker_id'],claim['request_id'],protocols=(candidate_pool.VERSION2,))
+            results['replay_claim']=f.pool.claim_next(claim['worker_id'],claim['request_id'])
             assert results['replay_claim']['claim_id']==claim['claim_id']
             if args.mode=='target':
                 assert claim['snapshot']['requested_goal']==go['requested_goal']

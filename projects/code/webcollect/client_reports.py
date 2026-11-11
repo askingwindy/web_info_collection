@@ -38,19 +38,31 @@ def _protect_scope_output(output, scope):
 
 
 class StaleSemanticRules(ValueError):
-    """A cached report predates the current semantic rule versions."""
+    """A cached report predates the current semantic check set."""
 
 
 def validate_report_semantic_rules(report):
-    """Reject stale cached PASS without rerunning or inventing a review."""
-    from quality_inspector.semantic import rule_ids
-    current = rule_ids(); saved = report.get('semantic_rule_ids')
-    affected = sorted(set(current) | (set(saved) if isinstance(saved, dict) else set()))
+    """Reject stale cached PASS without rerunning or inventing a review.
+
+    Semantic checks are stable names with no per-rule version registry, so a
+    cached report is bound by the exact current check-name set. Historical
+    reports may carry a name->version mapping from the removed version
+    registry; their keys keep their historical reading (same check names),
+    while newly written reports bind the stable names only.
+    """
+    from quality_inspector.semantic import CHECKS
+    current = list(CHECKS)
+    saved = report.get('semantic_rule_ids')
     if isinstance(saved, dict):
-        affected = [name for name in affected if name not in saved or name not in current or saved[name] != current[name]]
+        covered = set(saved)
+    elif isinstance(saved, (list, tuple, set)):
+        covered = {name for name in saved if isinstance(name, str)}
+    else:
+        covered = None
+    affected = set(current) if covered is None else (set(current) ^ covered)
     if affected:
         raise StaleSemanticRules('Cached QC report has missing/changed semantic rules; affected checks: '
-                         + ', '.join(affected) + '; run independent deterministic QC again before packaging')
+                         + ', '.join(sorted(affected)) + '; run independent deterministic QC again before packaging')
     return current
 
 

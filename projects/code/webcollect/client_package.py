@@ -801,12 +801,12 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
     # Every newly generated customer package uses the current save criteria.
     # Existing packages and their historical receipts remain untouched.
     if delivery_policy is None:
-        from .closing_policy import COMPLETE_GOAL_V6_DELIVERY
-        delivery_policy = COMPLETE_GOAL_V6_DELIVERY
+        from .closing_policy import COMPLETED_GOAL_DELIVERY
+        delivery_policy = COMPLETED_GOAL_DELIVERY
     delivery_decisions = {}
     if delivery_policy is not None:
-        from .closing_policy import COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY, completion_delivery_decision
-        if delivery_policy not in (COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY):
+        from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
+        if delivery_policy != COMPLETED_GOAL_DELIVERY:
             raise ValueError('Unknown explicit customer delivery policy')
         eligible = []
         for record in records:

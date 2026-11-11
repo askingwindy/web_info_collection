@@ -308,11 +308,16 @@ def _build_publication(plan, capabilities, *, now=None, require_preflight=True):
         key = (task.get('capability_id'), task.get('capability_version'))
         if not all(isinstance(value, str) and value for value in key) or key not in catalog:
             raise ValueError('任务缺少精确版本的站点能力记录')
+        # Current consumer tasks carry the stable complete-goal ending; sealed
+        # historical tasks keep their own ending literal bytes unchanged.
         if 'candidate_binding' in task:
             from .candidate_contract import validate_task_binding, guard_claim
             validate_task_binding(task, catalog[key]); guard_claim(task)
             capability = validate_capability(catalog[key], now=current, require_ready=False)
-            if (task.get('fragment',{}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6')
+            from .plan_protocol import ENDING_POLICY
+            if (task.get('fragment',{}).get('ending_policy') not in (ENDING_POLICY,
+                    'webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5',
+                    'webcollect-five-eight-complete-ending-6')
                     and timestamp(capability['expires_at']) <= current):
                 raise ValueError('Consumer observation expired')
         elif is_react_task(task):

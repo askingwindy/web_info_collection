@@ -829,7 +829,9 @@ class ReactSession:
         observation['coverage'] = {'visible_text_chars': len(captured['state'].get('visible_text') or ''),
             'html_chars': len(html), 'hidden_dom_is_not_visible_evidence': True,
             'focus_control_id': focus_control_id, 'supplemental': focus_control_id is not None}
-        if self.task['fragment'].get('navigation_protocol') == 'observed-navigation-2':
+        # Sealed historical tasks keep their original navigation literal; new
+        # tasks freeze the stable protocol name only.
+        if self.task['fragment'].get('navigation_protocol') in (NAVIGATION_PROTOCOL, 'observed-navigation-2'):
             from .candidate_navigation import extend, excluded_article, NAV_ACTIONS
             trigger = getattr(self, '_navigation_trigger', None)
             pending = getattr(self, '_pending_navigation', None)

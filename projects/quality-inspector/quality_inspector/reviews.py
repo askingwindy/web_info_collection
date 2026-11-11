@@ -110,39 +110,13 @@ def coverage_errors(record, annotation, strict=True):
     return errors
 
 
-def migration_template(source_reviews, samples, target_contract):
-    """Produce pending assessments only; unchanged hashes are eligibility facts."""
-    source = Path(source_reviews).resolve(); raw = read(source)
-    if not isinstance(raw, dict) or not isinstance(raw.get('records'), list):
-        raise ValueError('Source review must contain records')
-    byid = {}
-    for row in raw['records']:
-        if (not isinstance(row, dict) or not isinstance(row.get('sample_id'), str)
-                or not row['sample_id'] or row['sample_id'] in byid):
-            raise ValueError('Source review has malformed or duplicate sample IDs')
-        byid[row['sample_id']] = row
-    rows = []
-    for sample in samples:
-        sid = sample['sample_id']; record = byid.get(sid)
-        if not record:
-            continue
-        root = Path(sample['sample_path'])
-        rows.append({'sample_id': sid, 'source_record_sha256': record_hash(record),
-                     'source_contract_sha256': record.get('baseline_sha256'),
-                     'decision': 'REVIEW_REQUIRED', 'reason': '',
-                     'authority_and_semantic_rule_assessment': '',
-                     'assessor': {'kind': '', 'name': ''},
-                     'eligibility': {'annotation_unchanged': record.get('annotation_sha256') == sha(root / 'annotation.json'),
-                                     'evidence_unchanged': record.get('evidence_sha256') == evidence_files(root)},
-                     'not_a_new_visual_review': True})
-    return {'schema_version': 'qc-review-migration-1',
-            'target_contract_sha256': target_contract,
-            'source_review': {'path': str(source), 'sha256': sha(source)},
-            'decisions': rows, 'identity_authenticated': False,
-            'note': 'Pending impact assessments. Never replace old review hashes or claim new visual approval.'}
+def intake(path, samples, contract_hash):
+    """Import actual review records; no migration path in the no-version mode.
 
-
-def intake(path, samples, contract_hash, migration=None):
+    Sealed historical records keep their original qc-review / qc-review-1 /
+    qc-review-2 schema names and import directly; their bytes are never
+    rewritten and no assessment is manufactured here.
+    """
     records = {}; errors = []; migrations = []
     if not path:
         return records, errors, migrations
@@ -151,33 +125,7 @@ def intake(path, samples, contract_hash, migration=None):
     except (OSError, ValueError, UnicodeError) as error:
         return {}, [{'reason': 'Cannot read review: ' + str(error)}], []
     if not isinstance(data, dict) or data.get('schema_version') not in ('qc-review', 'qc-review-1', 'qc-review-2') or not isinstance(data.get('records'), list):
-        return {}, [{'reason': 'Expected qc-review-2 records or explicitly migrated qc-review-1'}], []
-    assessments = {}
-    if migration:
-        try:
-            value = read(migration)
-            if not isinstance(value, dict) or value.get('schema_version') != 'qc-review-migration-1':
-                raise ValueError('Unsupported review migration')
-            if value.get('target_contract_sha256') != contract_hash:
-                raise ValueError('Migration targets a different contract')
-            source = value.get('source_review', {})
-            if not isinstance(source, dict) or not isinstance(source.get('path'), str):
-                raise ValueError('Migration source review must bind a path and hash')
-            source_path = Path(source.get('path', ''))
-            if not source_path.is_absolute():
-                source_path = Path(migration).resolve().parent / source_path
-            if source_path.resolve() != Path(path).resolve() or source.get('sha256') != sha(path):
-                raise ValueError('Migration does not bind the supplied immutable source review')
-            decisions = value.get('decisions')
-            if not isinstance(decisions, list):
-                raise ValueError('Migration decisions must be an array')
-            for item in decisions:
-                if (not isinstance(item, dict) or not isinstance(item.get('sample_id'), str)
-                        or not item['sample_id'] or item['sample_id'] in assessments):
-                    raise ValueError('Duplicate or malformed migration decision')
-                assessments[item['sample_id']] = item
-        except (OSError, ValueError, TypeError, KeyError) as error:
-            return {}, [{'reason': str(error)}], []
+        return {}, [{'reason': 'Expected qc-review records (historical qc-review-1/-2 accepted unchanged)'}], []
     byid = {row['sample_id']: row for row in samples if row.get('sample_id')}
     seen = set()
     for record in data['records']:

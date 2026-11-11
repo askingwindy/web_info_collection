@@ -1,5 +1,7 @@
 # Agent 接手说明
 
+2026-11-11 无版本改造收尾轮已按用户三阶段指令完成：阶段一源码收口（六套关键回归全部通过的修复链：chooser NameError、分支回包 attempt/observation 宿主绑定、result-completion 稳定名两处旧字面、substantive_result_text 非数值模式、content_effect 结果区绑定、manifest schema 版本分叉删除、candidate_discovery produce/reconcile-response 死子命令删除、band_budget/candidate_binding 常量统一）+ 残留收敛 + 三包 201 模块 import 0 失败 + 14 入口 --help 全通过 + DB 对照报告（五库备份↔正式库一致，正式库未改、无需结构变更，见 verify_results/noversion-switch-20261111-r01/switch-report.md）。阶段二按用户新指示：**原 260 个测试文件（3225 条）连同 fixtures/helper 全部删除**，重写 projects/code/tests/test_core_contract.py（13 条核心契约全绿），后续按需增量补充；离线集成 4/4 通过（verify_results/noversion-offline-integration-20261111-r02/report.json）。阶段三文档同步完成。真实 GLM 采集、生产者固定页、消费者候选、AI QC 全部 NOT_RUN，不据此启动采集；本轮无真实验证结论。
+
 ## 后续开发统一约定（2026-11-11 用户确认）
 
 - **核心测试简单、只覆盖核心代码，全工程维护总量不超过50条**：只新增和维护能直接验证关键业务行为、关键数据与状态一致性及少量重要失败路径的用例；短小、清楚、快速，不扩展非核心、重复或仅映射实现细节的测试，不为覆盖率堆积用例。50条是全工程核心测试总量上限，不是每个模块的额度；参数化展开按实际独立执行项计数，不把大量场景塞进一个大用例规避上限。每次变更只更新并运行受影响的核心用例，报告实际用例数与耗时；不默认维护或运行历史全量测试。本次记录约定，不自动批量删除既有测试。

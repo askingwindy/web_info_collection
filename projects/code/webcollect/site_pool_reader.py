@@ -3,7 +3,7 @@ import argparse
 import json
 
 
-def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False, fragment_planning=False, protocols=None):
+def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False, fragment_planning=False):
     from site_planner.site_pool import SitePool, page_uri
     from .planning import validate_capability, verify_evidence
     from .batch_core import load_json
@@ -11,10 +11,8 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
     if purpose == 'data-candidates':
         from site_planner.candidate_pool import CandidatePool
         candidates = CandidatePool(path, readonly=True)
-        # Callers that do not declare the entry protocol keep seeing only
-        # webcollect-data-candidate-1 rows.
         return {'schema_version':'data-candidate-list',
-                'records':candidates.rows(categories=categories, protocols=protocols),
+                'records':candidates.rows(categories=categories),
                 'statistics':candidates.stats(),'collection_dispatched':False,'sample_ids_allocated':0}
     if purpose not in ('candidates', 'capabilities'):
         raise ValueError('Select candidates or validated capabilities')

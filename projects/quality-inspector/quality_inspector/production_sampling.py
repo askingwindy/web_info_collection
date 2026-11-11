@@ -1,8 +1,9 @@
-"""Versioned 10/30/100 sampling and quality-unit admission, separate from reviews."""
+"""10/30/100 sampled production admission, separate from reviews."""
 from copy import deepcopy
 import math
 
-VERSION = 'qc-sampling-v1-20261030'
+VERSION = 'qc-sampling'
+LEGACY_VERSION = 'qc-sampling-v1-20261030'
 
 
 def selected(slots, policy, *, random_only=False):
@@ -38,7 +39,7 @@ def verify(plan):
     context = plan['policy']['production_sampling']
     verify_context({k: context[k] for k in ('version', 'source', 'groups', 'positions', 'task_sha256', 'predecessors')})
     groups = set(context['groups'].values())
-    if (context['version'] != VERSION or plan['policy']['ai_percent'] != 10
+    if (context['version'] not in (VERSION, LEGACY_VERSION) or plan['policy']['ai_percent'] != 10
             or plan['policy']['human_percent'] != 0 or set(context['stages']) != groups
             or any(p not in (10, 30, 100) for p in context['stages'].values())):
         raise ValueError('Invalid versioned 10/30/100 production policy')
@@ -174,7 +175,7 @@ def quality_report(report, effective_set, cross_package_report, production_hando
     from .duplicates import analyze
     from .delivery_scope import verify_delivery_scope
     sampling = report['semantic_sampling']
-    if sampling.get('production_policy') != VERSION or report.get('pipeline_execution_mode') == 'controlled':
+    if sampling.get('production_policy') not in (VERSION, LEGACY_VERSION) or report.get('pipeline_execution_mode') == 'controlled':
         raise ValueError('Only actual versioned production QC can register quality admission')
     if production_handoff is None:
         raise ValueError('Original production capture handoff is required for batch admission')

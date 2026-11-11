@@ -40,8 +40,6 @@ def build_set_manifest(package_paths, *, quality_batch_ids=None, application_reg
         if application_capacity_policy != 'flexible-total-200000-v1':
             raise ValueError('Unknown application capacity policy')
         result['application_capacity_policy'] = application_capacity_policy
-    if supersedes:
-        result['version_policy'] = {'schema_version': POLICY, 'supersedes': list(supersedes)}
     if quality_batch_ids is not None:
         result['quality_batch_ids'] = _quality_batch_ids(quality_batch_ids)
     if application_registry is not None:
@@ -95,7 +93,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
     else:
         raw = manifest; base = Path.cwd()
     if not isinstance(raw, dict) or raw.get('schema_version') not in ('qc-cumulative-set','qc-cumulative-set-1') or not isinstance(raw.get('packages'), list) or not raw['packages']:
-        raise ValueError('Expected a nonempty qc-cumulative-set-1 manifest')
+        raise ValueError('Expected a nonempty qc-cumulative-set manifest')
     versions = compare_versions(raw, base=base)
     effective_paths = {Path(row['sample_path']) for row in versions['effective_samples']}
     selected = load_profile(profile or DEFAULT_DELIVERY_PROFILE)

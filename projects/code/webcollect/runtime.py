@@ -443,8 +443,13 @@ class RuntimeStore:
             for ordinal, task in enumerate(plan['tasks']):
                 key = object_sha256([policy['campaign_id'], task['task_id']])
                 old = con.execute('SELECT scope_id,status FROM m4_tasks WHERE task_key=?', (key,)).fetchone()
-                if old:
-                    raise ValueError('同task/version已登记；跨scope不重跑，失败请在原scope恢复')
+                # Historical rows were registered under version-salted task keys;
+                # dedup the logical (campaign, task) itself so an already-run task
+                # cannot be registered again under the unsalted key.
+                prior = (old is None) and con.execute('SELECT 1 FROM m4_tasks WHERE campaign_id=? AND task_id=?',
+                    (policy['campaign_id'], task['task_id'])).fetchone()
+                if old or prior:
+                    raise ValueError('同逻辑任务已登记；跨scope不重跑，失败请在原scope恢复')
                 active = con.execute('SELECT 1 FROM m4_tasks WHERE campaign_id=? AND task_id=? AND quota_reserved=1', (policy['campaign_id'], task['task_id'])).fetchone()
                 if active:
                     raise ValueError('同逻辑任务已有在途或已接纳版本')
