@@ -19,9 +19,10 @@ from . import collection_strategy as _cs
 from .screenshot_plan import (SYSTEM_PROMPT,
     FIRST_RULES, BRANCH_RULES, BUSINESS_MINIMUM, PREFERRED_MAXIMUM, NON_BUSINESS_ACTIONS,
     DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, NO_PROGRESS_STALL_LIMIT, submit_plan_tools,
-    decision_tools, normalize_submit_plan, normalize_decision,
+    decision_tools, decision_schema, normalize_submit_plan, normalize_decision,
     first_plan_admission, business_actions, verify_completion, narrative_grounding_gaps)
-from .screenshot_observation import controls_projection, region_registry, prepare_visuals, verify_visuals, crop_visual
+from .screenshot_observation import (controls_projection, interaction_affordances, body_element_ids,
+    region_registry, prepare_visuals, verify_visuals, crop_visual)
 from .session_core import RawSessionCore, ReactStop
 from .screenshot_execution import bind_target, react_step, bind_plan_targets, resolve_control
 
@@ -67,6 +68,8 @@ class ScreenshotPlanSession(RawSessionCore):
         self.no_progress_keys = {}
         self.no_progress_dispatches = {}
         self.region_registries = {}
+        self.body_element_ids = {}
+        self.provided_control_observations = set()
         # Only observations whose image was carried by a successful request can
         # support completion. The same set is rebuilt from sealed model intents.
         self.provided_observations = set()
@@ -165,9 +168,35 @@ class ScreenshotPlanSession(RawSessionCore):
 
     # ------------------------------------------------------------------ decide
 
+    def _body_ids(self):
+        """Content-vs-chrome classification of the current observation's tree."""
+        oid = self.current['observation_id']
+        if oid not in self.body_element_ids:
+            self.body_element_ids[oid] = body_element_ids(
+                load_json(self.current['evidence']['state']['path']))
+        return self.body_element_ids[oid]
+
+    def _controls(self):
+        """The one projection behind both the prompt list and the marked image.
+
+        Both must agree: the yellow badge numbers drawn on the viewport are the
+        `number` values the model cites, so a second, differently ordered
+        projection would bind a cited number to another control.
+        """
+        rows = controls_projection(self.current, self.task['fragment']['allowed_actions'],
+                                   body_ids=self._body_ids())
+        oid = self.current['observation_id']
+        if oid not in self.provided_control_observations:
+            self.provided_control_observations.add(oid)
+            self.event('screenshot-controls', observation_id=oid,
+                       provided_control_ids=deepcopy(self.current['provided_control_ids']),
+                       provided_control_numbers=deepcopy(self.current['provided_control_numbers']),
+                       interaction_affordances=interaction_affordances(rows, self._body_ids()))
+        return rows
+
     async def _decide(self, prompt):
         """One model call at a checkpoint; UNKNOWN and stop semantics shared."""
-        controls_projection(self.current, self.task['fragment']['allowed_actions'])
+        self._controls()
         visuals = await prepare_visuals(self.current, self.root, self.page,
                                         first=prompt.get('phase') == 'first')
         available = list(visuals)
@@ -235,6 +264,7 @@ class ScreenshotPlanSession(RawSessionCore):
             self.region_registries[oid] = region_registry(state)
             self.event('screenshot-regions', observation_id=oid,
                        regions=deepcopy(self.region_registries[oid]))
+        controls = self._controls()
         payload = {'phase': 'first', 'attempt_id': self.attempt_id,
                    'system': SYSTEM_PROMPT,
                    'goal': self._fixed_goal() or self.requested_goal,
@@ -245,7 +275,8 @@ class ScreenshotPlanSession(RawSessionCore):
                             'title': (state.get('title') or '')[:120],
                             'visible_excerpt': (state.get('visible_text') or '')[:600]},
                    'regions': self.region_registries[oid],
-                   'controls': controls_projection(self.current, self.task['fragment']['allowed_actions']),
+                   'controls': controls,
+                   'interaction_affordances': interaction_affordances(controls, self._body_ids()),
                    'allowed_actions': [action for action in self.task['fragment']['allowed_actions']],
                    'rules': FIRST_RULES,
                    'planning_range': {'minimum': BUSINESS_MINIMUM,
@@ -332,7 +363,7 @@ class ScreenshotPlanSession(RawSessionCore):
         self.frozen_goal = fixed_goal or plan['goal']
         if self.working_goal is None:
             self.working_goal = self.frozen_goal
-        self.requirements = [{'id': row['id'], 'description': row['description']} for row in requirements]
+        self.requirements = deepcopy(requirements)
         self.plan = {'steps': plan['steps']}
         self.position = 0
         self.initial_feedback = None
@@ -342,7 +373,8 @@ class ScreenshotPlanSession(RawSessionCore):
             requirements=deepcopy(self.requirements), steps=deepcopy(self.plan['steps']), admission=feedback)
         if getattr(self, 'runlog', None) is not None:
             self._runlog('plan_accepted', observationId=self.current['observation_id'],
-                plannedSteps=len(self.plan['steps']), requirements=len(self.requirements))
+                plannedSteps=len(self.plan['steps']), requirements=len(self.requirements),
+                actionKinds=feedback.get('action_kinds'), actionHistogram=feedback.get('action_histogram'))
 
     # ------------------------------------------------------------------ execution
 
@@ -388,15 +420,26 @@ class ScreenshotPlanSession(RawSessionCore):
         previous = self.dispatch_identities.get(identity)
         if previous is None:
             return None, identity
-        changed_state = previous.get('state_sha256') != object_sha256(self._business_state(state))
+        basis, sources = self._submission_basis(state, control_ids)
+        old_basis = previous.get('basis') or {}
+        same_scope = bool(basis['scope']) and basis['scope'] == old_basis.get('scope') and basis['document'] == old_basis.get('document')
+        old_feedback = old_basis.get('feedback') or {}
+        feedback_changed = any(value != old_feedback[key] if key in old_feedback else any(value.values())
+                               for key, value in basis['feedback'].items())
+        changed_state = same_scope and (basis['input_edits'] != old_basis.get('input_edits') or feedback_changed)
+        self.event('screenshot-submit-basis', basis=basis, sources=sources, changed=changed_state)
+        self._runlog('submission_basis', observationId=self.current['observation_id'], controlIds=control_ids,
+            allowed=previous.get('dispatched') is False or changed_state,
+            relatedEditOperations=basis['input_edits'], feedbackControls=list(basis['feedback']),
+            sourceObservations=sorted(set(sources.values())))
         not_dispatched = previous.get('dispatched') is False
-        if not_dispatched or (new_basis and changed_state):
+        if not_dispatched or changed_state:
             return None, identity
         return {'kind': 'REPEAT_SUBMISSION_WITHOUT_NEW_BASIS',
                 'message': ('同一输入、同一页面状态下该提交已派发过；结果未进视口请先观察（滚动/等待），'
-                            '重试必须在new_basis说明修正了输入、重新定位了目标或页面明确反馈'),
+                            '重试须有可核验相关输入编辑或明确反馈；new_basis只是解释，不替代事实'),
                 'previous': {key: previous.get(key) for key in ('operation_id', 'outcome', 'at')},
-                'new_basis_required': True}, identity
+                'new_basis_required': False}, identity
 
     def _react_step(self, step, control_ids):
         return react_step(step, control_ids,
@@ -408,7 +451,14 @@ class ScreenshotPlanSession(RawSessionCore):
             return
         step = self.plan['steps'][self.position]
         action = step.get('action')
-        matches = self._bind_target(step)
+        try:
+            matches = self._bind_target(step)
+        except (KeyError, ValueError, TypeError, IndexError) as error:
+            await self._checkpoint('binding', feedback={
+                'kind': 'STEP_NOT_EXECUTABLE',
+                'message': f'目标绑定失败：{type(error).__name__}: {error}',
+                'step_position': self.position})
+            return
         requires_target = action in self.TARGET_REQUIRED_ACTIONS
         if requires_target and (not matches or len(matches) != 1):
             await self._checkpoint('binding', feedback={
@@ -429,6 +479,7 @@ class ScreenshotPlanSession(RawSessionCore):
             await self._checkpoint('binding', feedback={'kind': 'STEP_NOT_EXECUTABLE',
                                                         'message': str(error), 'step_position': self.position})
             return
+        dispatch_basis, basis_sources = self._submission_basis(state, matches or [])
         before_dispatches = self.actual_dispatches
         before_effective = len(self.trajectory)
         attempts_before = len(getattr(self, 'business_attempt_refs', []))
@@ -447,7 +498,7 @@ class ScreenshotPlanSession(RawSessionCore):
                              if len(self.trajectory) > before_effective else None),
             'dispatched': self.actual_dispatches > before_dispatches,
             'outcome': None, 'at': time.time(),
-            'state_sha256': object_sha256(self._business_state(load_json(self.current['evidence']['state']['path'])))}
+            'basis_sha256': object_sha256(dispatch_basis), 'basis': dispatch_basis, 'basis_sources': basis_sources}
         self._refresh_attempt_facts()
         if self.state != 'recording':
             return
@@ -455,6 +506,21 @@ class ScreenshotPlanSession(RawSessionCore):
         attempt = self.latest_attempt or {}
         advanced = (result or {}).get('status') == 'ok' and (
             not new_attempt or attempt.get('outcome') == 'VERIFIED')
+        from .screenshot_effect import step_expectation
+        expectation = step_expectation(step, load_json(self.current['evidence']['state']['path']),
+                                       (matches or [None])[0])
+        if expectation is not None:
+            expectation['observation_id'] = self.current['observation_id']
+            self.event('screenshot-step-expectation', **expectation)
+            self._runlog('step_expectation', observationId=expectation['observation_id'],
+                controlId=expectation['control'], expectedValue=expectation['expected_value'],
+                actualValue=expectation['actual_value'], matched=expectation['matched'])
+            self.latest_attempt = {**(self.latest_attempt or {}), 'step_expectation': expectation}
+            if not expectation['matched']:
+                await self._checkpoint('step_expectation_mismatch', feedback={
+                    'kind': 'STEP_EXPECTATION_MISMATCH', **expectation,
+                    'message': '实际编辑已保留，但最终值未达本步预期；请revise尾部或核验完成，不能沿用错误参数'})
+                return
         if advanced:
             self.position += 1
         if self._checkpoint_needed(step, matches or [], result, attempt):
@@ -524,17 +590,69 @@ class ScreenshotPlanSession(RawSessionCore):
 
     @staticmethod
     def _business_state(state):
-        # Exclude capture ids, timestamps, bounding boxes and focus: they are
-        # observation mechanics, not a changed input or business result.
+        from .screenshot_effect import input_facts
         return {'document': state.get('document_identity'), 'url': state.get('url'),
-                'elements': [{key: row.get(key) for key in
-                    ('text', 'value', 'checked', 'selected', 'disabled', 'visible')}
-                    for row in state.get('elements', [])]}
+                'inputs': {cid: {k: v for k, v in fact.items() if k in ('identity', 'value', 'checked', 'enabled')}
+                           for cid, fact in input_facts(state).items()}}
+
+    def _submission_basis(self, state, control_ids):
+        from .screenshot_effect import business_scope, input_facts
+        cid = control_ids[0] if control_ids else None
+        scope = business_scope(state, cid)
+        facts = {}
+        sources = {}
+        # Same-document trusted observations retain inputs outside this viewport.
+        for oid, observation in self.observation_records.items():
+            if observation.get('document_identity') != state.get('document_identity') or not observation.get('capture_verified'):
+                continue
+            original = load_json(observation['evidence']['state']['path'])
+            for key, fact in input_facts(original).items():
+                if scope and business_scope(original, key) == scope:
+                    facts[key] = {k: v for k, v in fact.items() if k in ('identity', 'value', 'checked')}
+                    sources[key] = oid
+        # Explicit same-target validation feedback is a causal retry basis.
+        feedback = {}
+        for observation in self.observation_records.values():
+            if observation.get('document_identity') != state.get('document_identity') or not observation.get('capture_verified'):
+                continue
+            original = load_json(observation['evidence']['state']['path'])
+            for binding in original.get('capture_controls', []):
+                key = binding['element_id']
+                if scope and business_scope(original, key) == scope:
+                    feedback[key] = {'validation_message': binding.get('validation_message') or None,
+                                     'aria_invalid': binding.get('aria_invalid') == 'true'}
+        from .screenshot_effect import input_edit_row
+        edits = []
+        for row in self.trajectory:
+            observation = self.observation_records.get(row.get('before_observation_id'))
+            if observation and observation.get('document_identity') == state.get('document_identity'):
+                original = load_json(observation['evidence']['state']['path'])
+                if scope and business_scope(original, (row.get('target') or {}).get('control_id')) == scope and input_edit_row(self, row):
+                    edits.append(row.get('operation_id'))
+        return {'document': state.get('document_identity'), 'scope': scope, 'inputs': facts,
+                'input_edits': edits, 'feedback': feedback}, sources
+
+    def _known_business_inputs(self, state):
+        known = {}
+        for observation in self.observation_records.values():
+            if observation.get('document_identity') == state.get('document_identity') and observation.get('capture_verified'):
+                original = load_json(observation['evidence']['state']['path'])
+                known.update(self._business_state(original)['inputs'])
+        results = {}
+        for observation in self.observation_records.values():
+            if observation.get('document_identity') != state.get('document_identity') or not observation.get('capture_verified'):
+                continue
+            original = load_json(observation['evidence']['state']['path'])
+            bindings = {b['element_id']: b for b in original.get('capture_controls', [])}
+            results.update({e['element_id']: e.get('text') for e in original.get('elements', [])
+                           if e.get('visible') and (bindings.get(e['element_id'], {}).get('result_region_selector')
+                               or e.get('native_role') in ('status', 'alert', 'output'))})
+        return {'document': state.get('document_identity'), 'url': state.get('url'), 'inputs': known, 'results': results}
 
     def _progress_marker(self):
         state = load_json(self.current['evidence']['state']['path'])
         return object_sha256({'effective_steps': len(self.trajectory),
-            'business_state': self._business_state(state),
+            'business_state': self._known_business_inputs(state),
             'verified_evidence': {rid: [(proof.get('quote'), proof.get('url'))
                 for proof in check.get('evidence', [])]
                 for rid, check in self.verified_checks.items()}})
@@ -562,7 +680,7 @@ class ScreenshotPlanSession(RawSessionCore):
         remaining = self.plan['steps'][self.position:]
         choices = list(DECISIONS)
         stale_tail = bool(remaining) and self._stale_citation(remaining[0])
-        if not remaining or stale_tail:
+        if not remaining or stale_tail or (feedback or {}).get('kind') == 'STEP_EXPECTATION_MISMATCH':
             choices.remove('continue')
         next_checkpoint = {'reason': reason, 'remaining_steps': len(remaining),
                            'allowed_decisions': list(choices)}
@@ -579,7 +697,7 @@ class ScreenshotPlanSession(RawSessionCore):
                                        'image_sha256': self.current['evidence']['image']['sha256'],
                                        'regions': deepcopy(self.region_registries[oid])},
                    'regions': self.region_registries[oid],
-                   'controls': controls_projection(self.current, self.task['fragment']['allowed_actions']),
+                   'controls': self._controls(),
                    'allowed_actions': list(self.task['fragment']['allowed_actions']),
                    'latest_attempt': _public_attempt(self.latest_attempt),
                    'last_effective_action': _public_effective(self.last_effective),
@@ -616,6 +734,13 @@ class ScreenshotPlanSession(RawSessionCore):
             self._runlog('checkpoint', observationId=self.current['observation_id'],
                 decision=decision.get('decision'), reason=reason, position=self.position,
                 effectiveSteps=len(self.trajectory))
+        from jsonschema import Draft202012Validator
+        errors = list(Draft202012Validator(decision_schema(prompt['choices'], allowed_actions,
+                           sorted(self.provided_observations))).iter_errors(decision))
+        if errors:
+            self.event('screenshot-decision-rejected', reason='invalid_fields', message=errors[0].message)
+            self.completion_feedback = {'kind': 'DECISION_FIELDS_INVALID', 'message': errors[0].message}
+            return
         choice = decision.get('decision')
         # Completion supplements are checked before any loop guard. Keep the
         # actual answers and anchors, and recheck them against all later facts.
@@ -681,18 +806,14 @@ class ScreenshotPlanSession(RawSessionCore):
             self.event('screenshot-inspection', visual=deepcopy(self._inspection_visual), dispatched=False)
             return await self._checkpoint(reason, {'kind': 'INSPECT_IMAGE_PROVIDED',
                 'image_ref': self._inspection_visual['ref'], 'dispatched': False})
+        if choice == 'continue' and feedback and feedback.get('kind') == 'STEP_EXPECTATION_MISMATCH':
+            self.event('screenshot-decision-rejected', reason='expected_value_mismatch')
+            return
         if choice == 'continue':
             if not self.plan['steps'][self.position:]:
                 self.event('screenshot-decision-rejected', reason='continue_without_remaining_steps')
                 return await self._checkpoint(reason, {'kind': 'CONTINUE_WITHOUT_STEPS',
                     'message': '剩余计划为空，不能continue；请complete、revise或give_up'})
-            if feedback and feedback.get('kind') == 'REPEAT_SUBMISSION_WITHOUT_NEW_BASIS':
-                basis = str(decision.get('new_basis') or '').strip()
-                if not basis:
-                    self.event('screenshot-decision-rejected', reason='repeat_without_new_basis')
-                    return
-                self._granted_new_basis = basis
-                return
             if executed and self.position < len(self.plan['steps']):
                 # continue确认剩余路径仍适用：越过已派发的当前步（含未证实效果），
                 # 继续下一步；重试当前动作必须revise并给新依据。

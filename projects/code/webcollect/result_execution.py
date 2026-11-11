@@ -94,6 +94,9 @@ def result_execution_binding(s, oid, state, node):
             or page_feedback(state)['validation_feedback'] or page_feedback(state)['unreadable_critical_ui']):return None
     order={key:i for i,key in enumerate(s.observation_records)}
     inputs=[];submit=None
+    from .collection_strategy import enabled
+    screenshot = enabled(s.task)
+    from .screenshot_effect import business_scope, input_edit_row
     for row in _rows(s):
         if order.get(row.get('after_observation_id'),10**9)>order.get(oid,-1):continue
         before=_state(s,row.get('before_observation_id'));after=_state(s,row.get('after_observation_id'))
@@ -101,13 +104,14 @@ def result_execution_binding(s, oid, state, node):
         if row.get('effective') is not True and not row.get('effect_evidence',{}).get('verified') and not row.get('definite_zero_effect'):continue
         cid=(row.get('target') or {}).get('control_id');b=_binding(before,cid)
         e=next((e for e in before.get('elements',[]) if e['element_id']==cid),{})
-        action=row.get('action');form=b.get('form_selector')
-        if action in ('type','select') and not row.get('definite_zero_effect'):
+        action=row.get('action');form=business_scope(before, cid) if screenshot else b.get('form_selector')
+        if (input_edit_row(s, row) if screenshot else action in ('type','select') and not row.get('definite_zero_effect')):
             inputs.append({'operation_id':row['operation_id'],'node':cid,'form_selector':form,
                            'after_observation_id':row['after_observation_id'],'arguments':row.get('arguments')})
-            submit=None
+            if not screenshot or submit is None or submit.get('scope') == form:
+                submit=None
         is_submit = is_submission(action, row.get('arguments'), b, e)
-        matching=[i for i in inputs if not form or i['form_selector']==form]
+        matching=[i for i in inputs if form and i['form_selector']==form] if screenshot else [i for i in inputs if not form or i['form_selector']==form]
         if is_submit and matching and not page_feedback(after)['validation_feedback']:
             # The result must already be captured after submission. Scrolling
             # to a previously unseen static tax table cannot establish causality.
@@ -123,11 +127,12 @@ def result_execution_binding(s, oid, state, node):
                 old=[e.get('text') for e in before.get('elements',[])
                     if before_bindings.get(e['element_id'],{}).get('result_region_selector')==result_selector]
                 if (node.get('text') or '') in old:continue
-            result_form=binding.get('form_selector')
+            result_form=business_scope(state, node['element_id']) if screenshot else binding.get('form_selector')
             if result_form and form!=result_form:continue
             submit={'operation_id':row['operation_id'],'before_observation_id':row['before_observation_id'],
                     'after_observation_id':row['after_observation_id'],'node':cid,
-                    'definite_zero_effect':row.get('definite_zero_effect',False),'input_refs':matching}
+                    'definite_zero_effect':row.get('definite_zero_effect',False),'input_refs':matching,
+                    **({'scope': form} if screenshot else {})}
     if not submit:return None
     return {'policy':RESULT_EXECUTION_POLICY,'result_region_selector':binding['result_region_selector'],
             'result_node':node['element_id'],'result_observation_id':oid,'submission':submit,

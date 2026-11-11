@@ -94,10 +94,14 @@ def bind_target(observation, target, observations=None, *, carriers=True, adviso
             if reference is not None and cid!=semantic.get('node',target.get('node')):continue
             e=c['element']; labels=[r['text'] for r in c.get('readable_labels',[])]
             if e.get('visible') is not True:continue
-            if identity_bound:
-                # A visible label that disagrees with the declaration is a conflict.
-                if (labels or e.get('text')) and semantic['text'] not in labels+[e.get('text','')]:continue
-            elif semantic['text'] not in labels+[e.get('text','')]:continue
+            # A target may legally declare no text (a region-only scroll target),
+            # so absence means no text constraint, mirroring role/href/region below.
+            declared=semantic.get('text')
+            if declared is not None:
+                if identity_bound:
+                    # A visible label that disagrees with the declaration is a conflict.
+                    if (labels or e.get('text')) and declared not in labels+[e.get('text','')]:continue
+                elif declared not in labels+[e.get('text','')]:continue
             if semantic.get('role') and not roles_equivalent(semantic['role'],e.get('native_role')):continue
             if semantic.get('href') and c.get('binding',{}).get('href')!=semantic['href']:continue
             if semantic.get('region') and not region_matches(state,cid,semantic['region']):continue
@@ -174,7 +178,7 @@ def react_step(step, control_ids, endpoint_matches):
     actual = {'action': action, 'goal': step.get('purpose') or action,
               'expected': step.get('expected_result'),
               'rationale': step.get('rationale'), 'expected_result': step.get('expected_result')}
-    for key in ('value', 'keys', 'direction', 'page_id', 'duration_ms'):
+    for key in ('value', 'expected_value', 'keys', 'direction', 'page_id', 'duration_ms'):
         if key in step:
             actual[key] = step[key]
     if action == 'hotkey' and isinstance(actual.get('keys'), list):
@@ -196,6 +200,8 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
     action = step['action']
     if action not in task['fragment']['allowed_actions'] or action == 'set_value':
         raise ValueError('ACTION_NOT_PUBLISHED_FOR_SCREENSHOT_STRATEGY')
+    if action in ('type', 'select') and ('expected_value' not in step or not isinstance(step['expected_value'], str)):
+        raise ValueError('EXPECTED_VALUE_REQUIRED: declare the final input value')
     cid = step.get('control_id')
     control = observation['controls'].get(cid)
     if action in ('click', 'double_click', 'right_click', 'type', 'select', 'drag'):
@@ -275,7 +281,7 @@ def cited_control(observation, cited, allowed):
 def bind_plan_targets(plan, observation, allowed_ids=None):
     """Snapshot host provenance at plan acceptance, including drag endpoints."""
     allowed = set(allowed_ids if allowed_ids is not None else observation.get('provided_control_ids', []))
-    for step in plan.get('steps', []):
+    for step in [*plan.get('steps', []), *[r for r in plan.get('requirements', []) if r.get('kind') == 'input']]:
         for key in ('target', 'end_target'):
             target = step.get(key) or {}
             cited = target.get('control')

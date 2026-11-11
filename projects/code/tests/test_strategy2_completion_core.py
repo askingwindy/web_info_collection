@@ -38,8 +38,8 @@ class CompletionCoreTests(substrate.SessionHarness):
         await session._open_entry()
         session.frozen_goal = session._fixed_goal() or '阅读文章并回答原名及出生地'
         session.requirements = requirements or [
-            {'id': 'r1', 'description': '阅读文章并回答人物原名'},
-            {'id': 'r2', 'description': '阅读文章并回答人物出生地'}]
+            {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'},
+            {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地'}]
         session.plan = {'steps': [{'action': 'wait', 'duration_ms': 1}]}
         session.plan_event = session.event('screenshot-plan', phase='first',
             goal=session.frozen_goal, requirements=deepcopy(session.requirements),
@@ -91,7 +91,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         async def choose(prompt):
             return {'arguments': {'decision': 'continue', 'reason': '记录当前观察'}}
 
-        requirement = [{'id': 'r1', 'description': '查看本次输入对应的利润率计算结果'}]
+        requirement = [{'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果'}]
         session = await self._session(choose, requirement)
         for binding in self.surface.state['capture_controls']:
             binding['form_selector'] = '#calculator'
@@ -132,8 +132,18 @@ class CompletionCoreTests(substrate.SessionHarness):
         checks, gaps = verify_completion(session, application, requirement)
         self.assertEqual(gaps, [])
         self.assertEqual(len(checks), 1)
-        for action, cid, arguments in [('type', 'control-0', {'text': '30'}), ('click', 'submit', {})]:
-            self.surface.state['values'][0]['value'] = '30'
+        from webcollect.screenshot_execution import bind_plan_targets
+        input_requirement = {'id': 'i1', 'kind': 'input', 'description': '数量为20',
+                             'target': {'control': 'control-0'}, 'expected_value': '20'}
+        bind_plan_targets({'requirements': [input_requirement]}, session.observation_records[result])
+        input_application = {'answers': [{'requirement_id': 'i1', 'observed_result': '20',
+                             'evidence': [{'observation': result, 'control': 'control-0'}]}]}
+        input_checks, input_gaps = verify_completion(session, input_application, [input_requirement])
+        self.assertEqual(input_gaps, [])
+        self.assertEqual(input_checks[0]['evidence'][0]['actual'], '20')
+        # Removing a value after calculation is an edit, even though its action is hotkey.
+        for action, cid, arguments in [('hotkey', 'control-0', {'keys': ['backspace']}), ('click', 'submit', {})]:
+            self.surface.state['values'][0]['value'] = ''
             await session._observe()
             later = session.current['observation_id']
             row = {'operation_id': 'later-' + action, 'action': action, 'arguments': arguments,
@@ -150,7 +160,7 @@ class CompletionCoreTests(substrate.SessionHarness):
             return {'arguments': {'decision': 'complete', 'reason': '可见事实已完整',
                 'answers': [self._answer(prompt['current_observation'], 0)]}}
 
-        session = await self._session(choose, [{'id': 'r1', 'description': '阅读文章并回答人物原名'}])
+        session = await self._session(choose, [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'}])
         session._stall_marker = session._progress_marker()
         session._stall_count = NO_PROGRESS_STALL_LIMIT
         await session._checkpoint('plan_end')
@@ -177,6 +187,31 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(session.collection_ending['kind'], 'NO_PROGRESS_END')
         self.assertEqual(session.trajectory, [])
         self.assertEqual(calls, 1)
+        # Same business wrapper, no native form: focus and newly observed fields
+        # cannot substitute for a real related edit after the preceding submit.
+        from webcollect.screenshot_effect import business_scope
+        state = deepcopy(self.surface.state)
+        for binding in state['capture_controls']:
+            binding['selector'] = 'html > body > main > div:nth-of-type(1) > ' + binding['selector']
+        self.assertIsNotNone(business_scope(state, 'control-0'))
+        self.surface.state = state
+        await session._observe()
+        state = load_json(session.current['evidence']['state']['path'])
+        step = {'action': 'hotkey', 'keys': ['enter']}
+        identity = session._action_identity(step, ['control-0'], state)
+        basis, _ = session._submission_basis(state, ['control-0'])
+        session.dispatch_identities[identity] = {'dispatched': True, 'basis': basis}
+        conflict, _ = session._repeat_guard(step, ['control-0'], state, '换一种说法')
+        self.assertIsNotNone(conflict)
+        before = session.current['observation_id']
+        self.surface.state['values'][0]['value'] = '6'
+        await session._observe()
+        session.trajectory.append({'operation_id': 'correction', 'action': 'type', 'effective': True,
+            'target': {'control_id': 'control-0'}, 'before_observation_id': before,
+            'after_observation_id': session.current['observation_id']})
+        corrected = load_json(session.current['evidence']['state']['path'])
+        conflict, _ = session._repeat_guard(step, ['control-0'], corrected, None)
+        self.assertIsNone(conflict)
 
     def test_rationale_quotes_must_exist_in_the_current_frame(self):
         frame = '搜索结果\n金额 100 元\n下一页'
@@ -197,7 +232,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         async def choose(prompt):
             return {'arguments': {'decision': 'continue', 'reason': '记录当前观察'}}
 
-        requirement = [{'id': 'r1', 'description': '阅读文章并回答人物原名'}]
+        requirement = [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'}]
         session = await self._session(choose, requirement)
         await session._decide(session._branch_prompt('result'))
         oid = session.current['observation_id']

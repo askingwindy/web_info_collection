@@ -182,7 +182,8 @@ class OfflineSurface:
                 value.update(value='', selection_start=0, selection_end=0)
         elif action_type == 'type':
             value = next(v for v in values if v['focused'])
-            value['value'] = arguments['text']
+            start, end = value.get('selection_start', 0), value.get('selection_end', 0)
+            value['value'] = value['value'][:start] + arguments['text'] + value['value'][end:]
             value.update(selection_start=len(arguments['text']), selection_end=len(arguments['text']))
         elif action_type == 'scroll':
             self.state['scroll'][1] += 480
@@ -567,7 +568,7 @@ class ChooserRunlogTests(unittest.IsolatedAsyncioTestCase):
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                             level='DEBUG', claim_id='claim-1')
         plan = {'goal': '阅读正文并回答原名',
-                'requirements': [{'id': 'r1', 'description': '阅读正文并回答原名'}],
+                'requirements': [{'id': 'r1', 'kind': 'content', 'description': '阅读正文并回答原名'}],
                 'steps': [{'action': 'scroll', 'direction': 'down', 'purpose': f'阅读第{i}段',
                            'rationale': '逐段滚动阅读正文以找到答案',
                            'expected_result': '看到下一段正文'} for i in range(5)]}
@@ -644,9 +645,11 @@ class ScreenshotSessionRunlogTests(SessionHarness):
              'expected_result': '数量显示为20', 'expected_value': '20'},
             {'action': 'click', 'target': {'text': '成本'}, 'purpose': '聚焦成本输入框',
              'rationale': '成本同样需要输入本次值', 'expected_result': '成本输入框获得焦点'},
+            {'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'text': '成本'},
+             'purpose': '全选原成本', 'rationale': '替换已有成本', 'expected_result': '成本原值全选'},
             {'action': 'type', 'target': {'text': '成本'}, 'value': '60',
              'purpose': '输入成本60', 'rationale': '本次计算使用成本60',
-             'expected_result': '成本显示为60'},
+             'expected_result': '成本显示为60', 'expected_value': '60'},
             {'action': 'click', 'target': {'text': '计算'}, 'purpose': '提交计算',
              'rationale': '提交后页面才会计算本次利润率',
              'expected_result': '结果区显示本次利润率'},
@@ -655,7 +658,7 @@ class ScreenshotSessionRunlogTests(SessionHarness):
     def _plan(self):
         return {'goal': '修改数量为20并查看本次利润率结果',
                 'requirements': [
-                    {'id': 'r1', 'description': '查看本次输入对应的利润率计算结果'}],
+                    {'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果'}],
                 'steps': self._steps()}
 
     def _session(self, name, choose, runlog=None):
@@ -702,7 +705,16 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         self.assertEqual({row['sessionId'] for row in rows}, {'claim-1'})
         self.assertEqual(summary['stop_reason'], 'ready')
         self.assertEqual(summary['strategy_end_reason'], 'goal_completed')
+        self.assertEqual(summary['collection_ending']['goal_completion'], 'VERIFIED')
         self.assertTrue(summary['effective_steps'] >= 5)
+        accepted = next(row for row in rows if row['event'] == 'plan_accepted')
+        self.assertEqual(accepted['actionHistogram'], {'click': 3, 'hotkey': 2, 'type': 2})
+        self.assertEqual(accepted['actionKinds'], 3)
+        first = next(prompt for prompt in prompts if prompt.get('phase') == 'first')
+        affordances = first['interaction_affordances']
+        self.assertEqual(affordances['projected_controls'], len(first['controls']))
+        self.assertIn('input', affordances['kinds'])
+        self.assertTrue(all(row['number'] == index for index, row in enumerate(first['controls'], 1)))
 
     async def test_runlog_does_not_change_the_business_result(self):
         # Both runs must start from the same page surface: the first session's

@@ -10,11 +10,13 @@ import unittest
 from PIL import Image
 
 from webcollect.batch_core import file_sha
-from webcollect.screenshot_effect import atomic_effect
-from webcollect.screenshot_execution import bind_plan_targets, compile_step, resolve_control
+from webcollect.screenshot_effect import atomic_effect, step_expectation, input_changes
+from webcollect.screenshot_execution import (bind_plan_targets, bind_target, compile_step,
+                                             resolve_control, react_step)
 from webcollect.screenshot_native_observation import action_availability
-from webcollect.screenshot_observation import (controls_projection, crop_visual,
-                                               prepare_visuals, verify_visuals)
+from webcollect.screenshot_observation import (body_element_ids, controls_projection, crop_visual,
+                                               interaction_affordances, prepare_visuals,
+                                               verify_visuals)
 
 
 def control(cid='input1', selector='#amount'):
@@ -23,7 +25,7 @@ def control(cid='input1', selector='#amount'):
                         'clickable': True, 'bbox': [20, 30, 120, 55]},
             'binding': {'element_id': cid, 'selector': selector, 'index': 0, 'tag': 'input'},
             'readable_labels': [{'kind': 'rendered_associated_label', 'text': '金额'}],
-            'value': {'element_id': cid, 'value': '', 'readonly': False, 'input_type': 'text'},
+            'value': {'element_id': cid, 'value': '', 'value_visible': True, 'readonly': False, 'input_type': 'text'},
             'actions': {}}
 
 
@@ -31,6 +33,37 @@ def observation():
     return {'observation_id': 'observation-current', 'document_identity': 'doc-current',
             'viewport': [200, 100], 'controls': {'input1': control(),
                                                'hidden': control('hidden', '#hidden')}}
+
+
+def node(element_id, role, text, parent, *, clickable=True, top=0):
+    return {'element_id': element_id, 'native_role': role, 'element_type': 'link', 'text': text,
+            'parent_id': parent, 'visible': True, 'enabled': True, 'clickable': clickable,
+            'inputable': False, 'scrollable': False, 'state': 'default',
+            'bbox': [10, top, 120, top + 20]}
+
+
+def reading_observation(root):
+    """One long-reading frame: article links, navigation links, passive wrappers.
+
+    The navigation sits inside `main`, so only the nearest role can decide it.
+    """
+    tree = [node('root', 'body', '', None, clickable=False),
+            node('main-1', 'main', '', 'root', clickable=False),
+            node('nav-1', 'nav', '', 'main-1', clickable=False, top=20),
+            node('link-body', 'a', '月球', 'main-1', top=40),
+            node('wrapper-1', 'div', '容器', 'main-1', clickable=False, top=60),
+            node('link-chrome', 'a', '登录', 'nav-1', top=80)]
+    state = {'url': 'https://example.test/article', 'elements': tree,
+             'visible_text': '月球 容器 登录', 'screen_resolution': [200, 100]}
+    path = root / 'state.json'
+    path.write_text(json.dumps(state), encoding='utf-8')
+    controls = {row['element_id']: {'element': row, 'readable_labels': [], 'value': {}, 'actions': {},
+                                    'binding': {'element_id': row['element_id'], 'tag': row['native_role'],
+                                                'selector': f'#{row["element_id"]}'}}
+                for row in tree if row['native_role'] in ('a', 'div')}
+    return state, {'observation_id': 'observation-reading', 'document_identity': 'doc-reading',
+                   'viewport': [200, 100], 'controls': controls,
+                   'evidence': {'state': {'path': str(path), 'sha256': file_sha(path)}}}
 
 
 def png(width, height):
@@ -91,6 +124,24 @@ class Strategy2VisualCore(unittest.TestCase):
         rerendered['document_identity'] = 'new-document'
         self.assertEqual(resolve_control(rerendered, target), [])
 
+        with tempfile.TemporaryDirectory() as temporary:
+            state, reading = reading_observation(Path(temporary))
+            body_ids = body_element_ids(state)
+            self.assertEqual({'link-body', 'wrapper-1'}, body_ids & {'link-body', 'wrapper-1', 'link-chrome'})
+            rows = controls_projection(reading, ['click', 'scroll'], body_ids=body_ids)
+            # The passive wrapper is never dispatchable and the article link must
+            # outrank the navigation link, or a long page projects only chrome.
+            self.assertEqual([row['control'] for row in rows], ['link-body', 'link-chrome'])
+            self.assertEqual([row['number'] for row in rows], [1, 2])
+            affordances = interaction_affordances(rows, body_ids)
+            self.assertEqual(affordances['kinds'], ['body_link', 'chrome_link'])
+            self.assertEqual(affordances['groups'][0]['examples'], ['月球'])
+            self.assertEqual(controls_projection(reading, ['click', 'scroll'], limit=1)[0]['control'],
+                             'link-body')
+            # A region-only scroll target legally declares no text; absence is no
+            # constraint, and used to raise KeyError instead of binding.
+            self.assertEqual(bind_target(reading, {'role': 'a'}), ['link-body', 'link-chrome'])
+
     def test_visual_overview_crop_preserves_original_and_bound_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -139,7 +190,7 @@ class Strategy2VisualCore(unittest.TestCase):
         c['actions']['type'] = action_availability(state, c['element'], c['binding'], c['value'], probe, 'type')
         obs = {'controls': {'input1': c}}
         task = {'fragment': {'allowed_actions': ['type', 'select', 'hotkey']}}
-        step = {'action': 'type', 'control_id': 'input1', 'value': '42', 'goal': '输入金额', 'expected': '金额为42'}
+        step = {'action': 'type', 'control_id': 'input1', 'value': '42', 'expected_value': '42', 'goal': '输入金额', 'expected': '金额为42'}
         with self.assertRaisesRegex(ValueError, 'TYPE_REQUIRES_CURRENT_FOCUS'):
             compile_step(task, [], step, obs)
         probe['focused'] = True
@@ -169,13 +220,32 @@ class Strategy2VisualCore(unittest.TestCase):
         after['values'][0]['value'] = rows[0]['value']
         self.assertTrue(atomic_effect(state, after, 'type', {'text': rows[0]['value']}, 'input1')['verified'])
         self.assertFalse(atomic_effect(after, after, 'type', {'text': '42'}, 'input1')['verified'])
+        compiled = react_step({**step, 'purpose': '输入金额', 'expected_result': '金额为42',
+                               'rationale': '输入框可见'}, ['input1'], lambda _: [])
+        self.assertEqual(compiled['expected_value'], '42')
+        wrong = deepcopy(after); wrong['values'][0]['value'] = '1742'
+        self.assertTrue(atomic_effect(state, wrong, 'type', {'text': '42'}, 'input1')['verified'])
+        self.assertFalse(step_expectation(compiled, wrong, 'input1')['matched'])
+        cleared = deepcopy(state); cleared['values'][0].update(value='', selection_start=0, selection_end=0)
+        self.assertTrue(atomic_effect(state, cleared, 'hotkey', {'keys': ['backspace']}, 'input1')['verified'])
+        self.assertEqual(input_changes(state, cleared, 'input1')[0]['after'], '')
+        self.assertFalse(atomic_effect(cleared, cleared, 'hotkey', {'keys': ['backspace']}, 'input1')['verified'])
+        projection_control = deepcopy(c); projection_control['value'] = cleared['values'][0]
+        projection_control['value'].update(focused=True, value_visible=True)
+        projected = controls_projection({'controls': {'input1': projection_control}, 'viewport': [200, 100]}, ['type'])[0]
+        self.assertEqual(projected['value'], '')
+        self.assertTrue(projected['focused'])
+        projection_control['value'].update(value='hidden', value_visible=False)
+        projected = controls_projection({'controls': {'input1': projection_control}, 'viewport': [200, 100]}, ['type'])[0]
+        self.assertNotIn('value', projected)
+
         choice = control('choice', '#unit')
         choice['binding'].update(tag='select', options=[{'value': 'cm', 'label': '厘米'},
                                                      {'value': 'm', 'label': '米'}])
         choice['value']['value'] = 'cm'
         choice['actions']['select'] = {'status': 'PROVEN'}
         obs['controls']['choice'] = choice
-        select = {'action': 'select', 'control_id': 'choice', 'value': 'm', 'goal': '切换单位', 'expected': '米'}
+        select = {'action': 'select', 'control_id': 'choice', 'value': 'm', 'expected_value': 'm', 'goal': '切换单位', 'expected': '米'}
         self.assertEqual(compile_step(task, [], select, obs)[0]['option'], '米')
         with self.assertRaisesRegex(ValueError, 'SELECT_OPTION_NOT_PROVEN'):
             compile_step(task, [], {**select, 'value': '米'}, obs)

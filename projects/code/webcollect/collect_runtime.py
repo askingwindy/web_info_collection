@@ -547,7 +547,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         write_json(pending,{'schema_version':'raw-ending-pending',
             'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
             'saved_raw':True,'normal_sample_saved':False,'requires_reconciliation':True,'QC_status':'NOT_RUN'})
-        result=await finish_failure('interrupted' if summary['unknown'] else 'collector',
+        result=await finish_failure(summary.get('failure_class')
+                                    or ('interrupted' if summary['unknown'] else 'collector'),
             'react_raw_ending_pending:'+ending['reason'],_evidence(pending),
             strategy_eligibility='unresolved')
         return {**result,'raw_preservation_status':'saved_pending_reconciliation','collection_ending':ending,

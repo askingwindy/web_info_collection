@@ -948,6 +948,11 @@ class RawSessionCore:
         if extended:
             schema['properties'].update(rationale=TEXT,expected_result=TEXT)
             schema['required'].extend(['rationale','expected_result'])
+        if screenshot_task and action in ('type', 'select'):
+            schema['properties']['expected_value'] = {'type': 'string', 'maxLength': 500}
+            schema['required'].append('expected_value')
+            if action == 'select':
+                schema['properties']['value'] = {'type': 'string', 'maxLength': 500}
         try:
             Draft202012Validator(schema).validate(step)
         except Exception as error:
@@ -958,6 +963,13 @@ class RawSessionCore:
                 for variant in variants['oneOf']:
                     variant['properties'].update(rationale=TEXT,expected_result=TEXT)
                     variant['required'].extend(['rationale','expected_result'])
+            if screenshot_task:
+                for variant in variants['oneOf']:
+                    if variant['properties']['action'].get('const') in ('type', 'select') or variant['properties']['action'].get('enum') in (['type'], ['select']):
+                        variant['properties']['expected_value'] = {'type': 'string', 'maxLength': 500}
+                        variant['required'].append('expected_value')
+                        if action == 'select':
+                            variant['properties']['value'] = {'type': 'string', 'maxLength': 500}
             try:
                 Draft202012Validator(variants).validate(step)
             except Exception as error:
@@ -1052,7 +1064,8 @@ class RawSessionCore:
                     self.task,self.trajectory,{oid:load_json(o['evidence']['state']['path']) for oid,o in self.observation_records.items()},final_id)
                } if kind=='HOST_BOUNDARY_RETURN' else {}),
             'finish_is_business_action':False,'wait_is_business_action':False,
-            'goal_completion':'AGENT_REPORTED_VISIBLE_GOAL' if kind=='VISIBLE_GOAL_REPORTED' else 'NOT_CLAIMED',
+            'goal_completion':('VERIFIED' if kind=='AGENT_COMPLETE_VERIFIED' else
+                               'AGENT_REPORTED_VISIBLE_GOAL' if kind=='VISIBLE_GOAL_REPORTED' else 'NOT_CLAIMED'),
             'external_effect_unknown':unknown,
             'last_model_intent':getattr(self,'_last_model_intent',None),'last_decision':getattr(self,'_last_decision',None),
             'safe_for_pending_sample':bool(safe),'attempt_refs':refs,
@@ -1695,6 +1708,12 @@ class RawSessionCore:
         if after['url'] != before_state['url']:
             self._pending_navigation = None
         after_state = load_json(after['evidence']['state']['path'])
+        if 'expected_value' in step:
+            from .screenshot_effect import step_expectation
+            expectation = step_expectation(step, after_state,
+                operation.get('evidence', {}).get('anchor_element_id') or operation.get('evidence', {}).get('focused_element_id'))
+            raw['react']['step_expectation'] = expectation
+            raw['react']['expected_value'] = step['expected_value']
         effect = self._atomic_effect(before_state, after_state, operation['action_type'], arguments,
                                operation.get('evidence', {}).get('anchor_element_id') or
                                operation.get('evidence', {}).get('focused_element_id'),
@@ -1787,7 +1806,9 @@ class RawSessionCore:
             'semantic_goal': step['goal'], 'semantic_expected': step['expected'],
                          **({'semantic_rationale':step['rationale'],'semantic_expected_result':step['expected_result']}
                             if 'rationale' in step else {}),
-            'primitive': row['action']}
+            'primitive': row['action'],
+            **({'expected_value': step['expected_value'], 'step_expectation': raw['react']['step_expectation']}
+               if 'expected_value' in step else {})}
         if raw.get('return_navigation'):
             row_record['return_navigation'] = deepcopy(raw['return_navigation'])
         if self.task['fragment'].get('reading_progress_protocol') and len(self.trajectory) >= 2:

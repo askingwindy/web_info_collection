@@ -401,7 +401,7 @@ def application_pending_remaining(pool, batch, application_id):
 
     Reuses the same frozen application_pending_cap source as the final
     publication check; it never writes a quota ledger of its own. The
-    publication-time _app_pending_over_limit() check stays authoritative."""
+    CandidatePool publication transaction rechecks both limits authoritatively."""
     if not application_id:
         return None
     cap = _application_pending_cap(pool, batch)

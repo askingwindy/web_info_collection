@@ -4,9 +4,12 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from site_planner.candidate_pool import CandidatePool
 from site_planner.discovery_tools import reference
+from site_planner.producer_authority import authorize_concurrency
+from webcollect import candidate_project
 from webcollect.batch_core import BatchLedger, load_json
 from webcollect.candidate_project import initialize
 from webcollect.current_chain import (check_project_guard, check_project_pool,
@@ -24,16 +27,25 @@ class CandidateStorageCore(unittest.TestCase):
     def test_deleting_collection_output_preserves_project_candidates_and_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory).resolve()
-            root = temporary / 'database' / 'sqllite' / 'offline-project'
+            root = temporary / 'database' / 'sqllite'
+            legacy = root / 'producer-muxtly-wiki-200-20261111-r01'
+            legacy.mkdir(parents=True)
+            sentinel = legacy / 'keep.txt'
+            sentinel.write_text('legacy project must remain untouched')
             output = temporary / 'results' / 'offline-project' / 'collections'
-            scope_path = initialize(root, 'offline-project', {}, offline_config(),
-                                    offline_config(), output_root=output)
+            module_file = temporary / 'projects' / 'code' / 'webcollect' / 'candidate_project.py'
+            with patch.object(candidate_project, '__file__', str(module_file)):
+                scope_path = initialize(None, 'offline-project', {}, offline_config(),
+                                        offline_config(), output_root=output)
             launch_scope = load_json(scope_path)
             # These are the actual two role ledgers, not substitute in-memory
             # stores. Their filenames must remain compatible with with_name.
             for role in ('producer', 'consumer'):
                 BatchLedger(launch_scope[role + '_db'],
                             load_json(launch_scope[role + '_config']), initialize=True)
+            authorize_concurrency(scope_path, 100, 'offline 100-producer integration')
+            self.assertEqual(BatchLedger(launch_scope['producer_db'],
+                load_json(launch_scope['producer_config'])).max_concurrent_jobs, 100)
             pool = CandidatePool(launch_scope['pool'])
             source = root / 'producer-evidence' / 'source.json'
             source.parent.mkdir()
@@ -45,6 +57,9 @@ class CandidateStorageCore(unittest.TestCase):
                                             'parameters': {'quantity': 1}}}
             candidate_id = pool.put(candidate, {'origin': 'codex_session',
                 'run_id': 'offline-project-producer', 'references': [source_ref]})
+            claim = pool.claim_next('offline-consumer', 'offline-consumer/0')
+            self.assertEqual(claim['candidate_id'], candidate_id)
+            self.assertEqual(claim['snapshot'], candidate)
             original_source = source.read_bytes()
             (output / 'temporary-run-log.txt').write_text('Disposable collection output')
             shutil.rmtree(output)
@@ -72,7 +87,13 @@ class CandidateStorageCore(unittest.TestCase):
             self.assertEqual(references, [source_ref])
             self.assertEqual(current_evidence_roots(chain)[0], root)
             self.assertEqual(source.read_bytes(), original_source)
+            self.assertEqual(sentinel.read_text(), 'legacy project must remain untouched')
+            self.assertFalse((root / 'offline-project').exists())
             self.assertFalse(output.exists())
+            with self.assertRaisesRegex(ValueError, 'already contains project files'):
+                initialize(root, 'offline-project', {}, offline_config(), offline_config(),
+                           output_root=temporary / 'must-not-be-created')
+            self.assertFalse((temporary / 'must-not-be-created').exists())
 
     def test_disposable_roots_are_rejected_before_scope_or_database_creation(self):
         with tempfile.TemporaryDirectory() as directory:

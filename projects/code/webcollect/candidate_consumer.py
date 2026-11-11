@@ -821,7 +821,7 @@ def _cohort_rows(path, pool, registry, batch):
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, log_level='INFO', log_dir=None, **kwargs):
+              poll_seconds=None, stop_when_empty=False, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, log_level='INFO', log_dir=None, **kwargs):
     if effort_profile is not None:
         from .session_core import validate_effort_profile
         effort_profile = validate_effort_profile(effort_profile)
@@ -907,6 +907,9 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 continue
             if claim['state']=='EMPTY':
                 record('inventory_empty', application_id=application_id)
+                if stop_when_empty:
+                    stop_reason = 'candidates_exhausted'
+                    break
                 await asyncio.sleep(delay)
                 continue
             # 一条claim对应一次消费：claim_id本身作为展示sessionId，从领取到收尾全程不变。
@@ -1095,6 +1098,7 @@ def main(argv=None):
     runp.add_argument('--branch-effort',choices=('low','high','max'))
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
     runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default waits continuously (2 seconds between empty claims)')
+    runp.add_argument('--stop-when-empty',action='store_true',help='Stop with candidates_exhausted instead of polling when the selected inventory is empty')
     from .collection_strategy import STRATEGIES, STRATEGY_BANDED_REACT, STRATEGY_SCREENSHOT_PLAN
     runp.add_argument('--collection-strategy',choices=STRATEGIES,default=STRATEGY_BANDED_REACT,
         help='Freeze the collection strategy for new tasks: react (default, strategy 1) or screenshot_plan (strategy 2)')
@@ -1147,7 +1151,7 @@ def main(argv=None):
             signal.signal(signal.SIGINT, signal.default_int_handler)
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
-            categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+            categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
             collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
     print(json.dumps(result,ensure_ascii=False))
 

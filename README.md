@@ -1,8 +1,43 @@
 # WebCollect
 
+## 按站点统计与多进程启动（2026-11-11）
+
+新增 `webcollect.site_inventory` 与 `webcollect.site_workers`，不拆每站 SQLite，不改 Table1／Table2 结构或消费者 claim/snapshot 契约。站点选择器接受稳定的 `applications.id`、主 host 或已登记 alias host；内部派发始终使用 `applications.id`，不是交付展示编号 `S000001`。
+
+```sh
+export PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector
+PY=projects/code/.venv/bin/python
+
+# 只读统计全部站点，也可重复加 --site 限定站点。
+$PY -B -m webcollect.site_inventory --scope database/sqllite/scope.json
+
+# 两个已确认站点各累计 1000 条 NEW，共 50 个生产者进程：每站 25 个。
+$PY -B -m webcollect.site_workers producer \
+  --scope database/sqllite/scope.json \
+  --site muxtly.com --site zh.wikipedia.org \
+  --pages-per-site 1000 --workers 50 --launch
+
+# 领取一个站点的全部当前 pending，共 100 个消费者进程。
+$PY -B -m webcollect.site_workers consumer \
+  --scope database/sqllite/scope.json --site muxtly.com \
+  --workers 100 --all-pending --launch
+
+# 两个站点共 30 个消费者进程：每站 15 个。
+$PY -B -m webcollect.site_workers consumer \
+  --scope database/sqllite/scope.json \
+  --site muxtly.com --site zh.wikipedia.org \
+  --workers 30 --all-pending --launch
+```
+
+不带 `--launch` 时只输出 JSON 命令计划，不创建运行目录或启动进程。生产模式要求站点已有 confirmed Table1 分类和可核验首页证据，`--pages-per-site` 是工程内跨批累计 DISTINCT NEW 上限；启动器按剩余量分配 worker，并同时设置该站 pending 上限，避免默认 100 条 pending 限制提前停止。消费模式不传 `--producer-batch`，每个 worker 固定一个 `application_id`，跨全部生产批次领取当前 pending；新增 `--stop-when-empty` 使空库存返回 `candidates_exhausted`，不再无限轮询。持续生产时仍使用原持续轮询入口。
+
+显式启动后，启动器保持前台并等待全部子进程，日志、计划和退出码写入 `results/site-workers/<plan_id>/`；Ctrl-C 会终止并等待已启动子进程，不建立独立后台服务。本轮全工程 50 条核心测试通过（7.785 秒），独立离线集成 4 项通过，见 `verify_results/site-workers-20261111-r01/`。真实 GLM、真实网页采集、真实消费者业务执行、真实多进程和 QC 均为 NOT_RUN。
+
+2026-11-11 输入规划与采集闭环统一修复已由 `gpt-6.1-sol / low` 子会话完成，见 [SSD 与实施记录](docs/策略2输入规划与采集闭环统一修复SSD-20261111.md)。策略2按需修改输入框，支持全选覆盖及全选删除后输入，贯通预期值检查、相关输入重提依据和 input/result/content 完成证据。检查覆盖35个不同核心用例，实际断点修复后受影响项均通过，维护总量仍为50；完整五步离线链在 integration 模式通过封存复核和机械保存。本轮未运行真实 GLM、真实网页或 QC，正式生产保存未验证；此前 Muxtly 十九步、零保存的失败原件保留。
+
 2026-11-11 交付口径追加修复（策略2）：提交类点击不再被叙述成“所在控件获得焦点”，改为描述该点击实际渲染出的结果内容；图上黄色角标数字可直接作为 `target.control`；`observed_result` 的逐字连续片段口径同时写进 prompt/规则与宿主校验，并新增 `OBSERVED_RESULT_NOT_VERBATIM` 精确缺项（不再退化为无定位信息的 `NO_BOUND_EVIDENCE`）；`rationale` 的「」引文在首轮计划与 revise 尾部接受前机械核对当前帧，文档已变化时不再向模型提供 `continue`；`completion_judgement` 分列“末帧仍可见”与“末帧前已观察到”的引用依据。维护核心测试由 43 条增至 50 条（全量 `50 passed`，pytest 7.73 秒，仍在约定的 50 条上限内）。**真实验证仍未运行**：无真实 GLM、真实采集、独立 QC 或人工验收结论。详见[走查与验证报告](docs/策略2走查修复与数据库持久化-20261111.md#交付口径追加修复同日后续轮)。
 
-2026-11-11 走查及持久存储修复：新工程默认放在 `database/sqllite/<project_id>/`，五库、scope、配置、manifest 和生产者来源证据一同持久保留；采集输出单独放在 `results/<project_id>/collections/`。用户已确认原 results 工程被清理，未恢复旧库。本轮策略2补齐控件来源绑定、独立观察/执行效果校验、增量补证、无进展判断、标号/概览/补图、叙述简繁及最终保存事实。43条核心测试已有通过结果（首轮40通过/3失败，修复后仅受影响10条复验通过）；默认 pytest 只运行当前核心目录。真实GLM、采集及QC未运行。详见[走查与验证报告](docs/策略2走查修复与数据库持久化-20261111.md)、[存储说明](database/README.md)、[新生产者每站100页执行Prompt](docs/生产者Muxtly-Wiki各100页执行Prompt-20261111.md)。
+2026-11-11 持久存储追加改造：新工程默认固定放在 `database/sqllite/`，不再按运行时间、版本或工程 ID 建数据库子目录；五库、scope、配置、manifest 和生产者来源证据一同持久保留，采集输出单独放在 `results/<project_id>/collections/`。Table1/Table2 仍是同一候选库中的逻辑表，消费者四字段与 claim/snapshot 契约不变；每站 NEW/pending 上限已在发布事务内复核，支持共享库的多进程生产。50 条核心测试全部通过（7.878 秒），独立生产发布→消费领取离线集成 5 项通过。真实 GLM、真实网页采集、真实消费者执行及 QC 均未运行。详见[存储说明](database/README.md)与[离线集成证据](verify_results/fixed-producer-storage-20261111-r01/report.json)。此前走查及策略2修复保留在[原报告](docs/策略2走查修复与数据库持久化-20261111.md)。
 
 2026-11-11 策略2独立运行与日志体系已按[改造方案](docs/策略2独立运行与交付达标方案设计-20261111.md)实施并合并入 main（原独立 worktree `codex/strategy2-with-logs-20261111`）：策略2会话去 ReactSession 继承，组合新增 `session_core.py`/`screenshot_observation.py`/`screenshot_execution.py` 独立接线，chooser、任务接入与公共收尾链贯通；策略1业务行为不变。日志体系按需落地：stderr 实时运行行（stdout 机器 JSON 不变），`<output>/logs/<workerId>/` 下 `runtime.jsonl`、每物理请求一条含 usage 的 `model-calls.jsonl`（缺失记 null 不补零、缓存命中与超时重试留痕）、DEBUG 级脱敏 `model-debug.jsonl`（凭据与 base64 图片不落盘），统一展示 sessionId（claim 路径即 claim_id、直跑一次 uuid4），不进入业务身份或模型 prompt；`candidate_consumer run` 与 `collect` 新增 `--log-level/--log-dir`。合并前测试：新 runlog 套件 19、完成回归、策略1抽查 21 通过（`test_timeout_retry` 一项环境相关既有凭据失败如实保留）。**真实验证未运行**：无真实 GLM、采集、批次或独立审核；实施细节、测试命令与示例日志见[方案实施结果](docs/策略2独立运行与交付达标方案设计-20261111.md#10-2026-11-11-实施结果worktree-codexstrategy2-with-logs-20261111)。
 
@@ -178,7 +213,7 @@ Agent 下一阶段改造见[Agent 优化与 39 条问题统一实施计划](docs
 
 生产者可在同一工程按授权隔离有原输入证据的未决请求。长批支持 macOS 单次后台启动。每条候选的数据视图包含发现调用实测用量、分摊份额和关联的消费结果。[运行与 token 对账](docs/工程说明.md#后台生产和逐候选用量)
 
-新工程通过 `webcollect.candidate_project init --project-id <工程名> ...` 初始化，从 `database/sqllite/<工程名>/scope.json` 启动。同页可以执行多个不同目标，同站三次确定失败后仍可派发；重启或换批复用该工程候选池、注册库和角色原账。原 results 工程的历史记录不作为现存可用库或恢复授权。[持久存储](database/README.md) · [初始化与启动](docs/工程说明.md#新候选工程)
+新工程通过 `webcollect.candidate_project init --project-id <工程名> ...` 初始化，从固定的 `database/sqllite/scope.json` 启动；`project_id` 不再成为数据库目录层级。同页可以执行多个不同目标，同站三次确定失败后仍可派发；重启或换批复用该工程候选池、注册库和角色原账。既有带工程名的旧目录不自动迁移，原 results 工程的历史记录不作为现存可用库或恢复授权。[持久存储](database/README.md) · [初始化与启动](docs/工程说明.md#新候选工程)
 
 生产者新 GLM 会话默认使用 `entry-tools-4`（站点双表与编号证据策略），旧冻结会话保留原协议。站点阶段复用核定主类或单独引用首页原文判类，页面阶段默认用保守规则选取第一方链接，`--entry-selection model` 可选择有界链接工具。`entry-tools-2` 及更早冻结会话继续走原协议。`--feedback-scope` 读取显式旧批次的只读首访反馈并冻结下一批排序，本机 scope 也支持 `discovery_mode`、`feedback_scope`。旧冻结批次和 `entry-tools-1` 保留原绑定。[协议与只读回算](docs/工程说明.md#生产者发现与首访反馈2026-11-01)
 

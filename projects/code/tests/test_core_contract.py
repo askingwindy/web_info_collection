@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from site_planner.candidate_pool import CandidatePool
@@ -147,6 +148,37 @@ class CandidatePoolContract(unittest.TestCase):
             claim = pool.claim_next('core-test-worker', 'core/0')
             self.assertEqual(claim['candidate_id'], cid)
             self.assertEqual(claim['snapshot']['schema_version'], 'webcollect-data-candidate-2')
+
+            # Two producers race for one remaining per-application NEW slot.
+            # The limit is rechecked in the same transaction as publication.
+            with pool.pool.connect() as connection:
+                application_id = connection.execute(
+                    'SELECT application_id FROM data_candidates WHERE candidate_id=?', (cid,)).fetchone()[0]
+            run_id = 'offline-core-tests/entry-batch/concurrent-limit'
+            pool.pool.freeze_run(run_id, {'application_new_target': 1,
+                                         'application_pending_cap': 100}, inventory=False)
+            source = {'origin': 'codex_session', 'run_id': 'offline-core-tests',
+                      'references': [reference(proof)]}
+
+            def publish(index):
+                candidate = {'schema_version': 'webcollect-data-candidate-2',
+                             'candidate_kind': 'entry',
+                             'entry_url': f'https://example.org/page-{index}',
+                             'requested_goal': None}
+                header = {'row_id': f'row-{index}', 'run_id': run_id, 'batch': 0,
+                          'request_id': f'request-{index}', 'response_sha256': f'digest-{index}',
+                          'raw_index': index}
+                return CandidatePool(Path(tmp) / 'pool.sqlite3').publish_row(
+                    header, candidate, source, application_id=application_id)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(publish, (1, 2)))
+            self.assertEqual(sorted(item['result'] for item in outcomes), ['NEW', 'OVER_LIMIT'])
+            with pool.pool.connect() as connection:
+                count = connection.execute(
+                    'SELECT COUNT(*) FROM data_candidates WHERE application_id=?',
+                    (application_id,)).fetchone()[0]
+            self.assertEqual(count, 2)  # The original roundtrip row plus exactly one raced NEW.
 
     def test_v1_body_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

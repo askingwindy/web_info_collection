@@ -330,6 +330,13 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
                                operation.get('evidence', {}).get('anchor_element_id') or
                                operation.get('evidence', {}).get('focused_element_id'),
                                rule_version=record['task']['fragment'].get('effective_action_rule', EFFECTIVE_ACTION_RULE))
+        if screenshot_strategy(record['task']) and row['action'] in ('type', 'select'):
+            from .screenshot_effect import step_expectation
+            expectation = step_expectation({'action': row['action'], 'expected_value': row.get('expected_value')},
+                                           after, (row.get('target') or {}).get('control_id'))
+            if ('expected_value' not in row or row.get('step_expectation') != expectation
+                    or raw.get('react', {}).get('step_expectation') != expectation):
+                raise ValueError('输入步骤预期与封存实际值不一致：' + row['operation_id'])
         if not effect['verified']:
             raise ValueError('动作对应效果不可核验：' + row['operation_id'])
         if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before) and not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],row['before_observation_id']) and not _scoped_continuity(record,rows[-1],row,raw):
@@ -541,6 +548,18 @@ def planned_terminal_narrative(record, final_state, final_id):
         for check in checks:
             if check.get('status') != 'VERIFIED':
                 return None
+            if check.get('completion_mapping') == 'bound_input_state':
+                from .screenshot_effect import input_facts
+                proof = check['evidence'][0]
+                field = str(check.get('field') or '输入条件')
+                actual = proof['actual']
+                description = ('已勾选' if actual else '未勾选') if proof['input_field'] == 'checked' else ('已清空' if actual == '' else '值为「' + str(actual) + '」')
+                current = input_facts(final_state).get(proof['node'], {})
+                still_visible = (current.get('identity') == proof['source'] and current.get(proof['input_field']) == actual
+                    and (proof['input_field'] == 'checked' or current.get('value_visible') is True))
+                verified_results.append(field + '：' + description)
+                basis.append(field + ('，末帧仍可见输入状态：' if still_visible else '，末帧前已观察到的输入状态：') + description)
+                continue
             quotes = []
             action_ids = []
             for item in check.get('evidence') or []:

@@ -14,7 +14,7 @@ from jsonschema import validate, ValidationError
 
 class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
     def test_empty_requirement_metadata_is_losslessly_normalized(self):
-        raw = {'goal': '计算', 'requirements': [{'id': 'r1', 'description': '观察计算结果', 'id2': ''}],
+        raw = {'goal': '计算', 'requirements': [{'id': 'r1', 'kind': 'result', 'description': '观察计算结果', 'id2': ''}],
                'steps': [{'action': 'back', 'purpose': '返回', 'rationale': '查看前页', 'expected_result': '前页出现'}]}
         before = deepcopy(raw)
         normalized, record = normalize_submit_plan(raw)

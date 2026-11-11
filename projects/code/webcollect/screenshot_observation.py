@@ -34,10 +34,14 @@ def _control_row(cid, control, allowed):
     text = (element.get('text') or '').strip()
     if text:
         row['text'] = text[:60]
-    if value.get('value') not in (None, ''):
-        row['value'] = str(value.get('value'))[:60]
-    if element.get('focused') is True or (control.get('probe') or {}).get('focused') is True:
+    for key in ('value', 'focused', 'selection_start', 'selection_end', 'all_text_selected', 'checked', 'value_visible'):
+        if key in value and value[key] is not None and (key != 'value' or value.get('value_visible') is True):
+            row[key] = str(value[key])[:60] if key == 'value' else value[key]
+    if element.get('state') == 'focused' or element.get('focused') is True or (control.get('probe') or {}).get('focused') is True:
         row['focused'] = True
+    for key in ('enabled', 'state'):
+        if key in element:
+            row[key] = element[key]
     if (control.get('binding') or {}).get('tag') == 'select':
         options = [option for option in (control.get('binding') or {}).get('options') or []
                    if isinstance(option, dict)]
@@ -50,29 +54,65 @@ def _control_row(cid, control, allowed):
     return row
 
 
-def _control_tier(control, allowed):
+_CHROME_ROLES = ('nav', 'navigation', 'header', 'banner', 'footer',
+                 'contentinfo', 'aside', 'complementary')
+_CONTENT_ROLES = ('main', 'article')
+
+
+def body_element_ids(state):
+    """Ids outside site chrome, so article links outrank navigation links.
+
+    The sealed tree carries only roles and parent links, so this walks ancestors
+    and lets the nearest chrome/content role decide. A search field inside a
+    header stays a business control because form tiers are ranked first anyway.
+    """
+    tree = {e.get('element_id'): e for e in (state or {}).get('elements', [])}
+    verdict = {}
+
+    def chrome(element_id):
+        chain, node = [], element_id
+        while node in tree and node not in verdict:
+            chain.append(node)
+            node = tree[node].get('parent_id')
+        inside = verdict.get(node, False)
+        for eid in reversed(chain):
+            role = tree[eid].get('native_role')
+            if role in _CHROME_ROLES:
+                inside = True
+            elif role in _CONTENT_ROLES:
+                inside = False
+            verdict[eid] = inside
+        return verdict.get(element_id, False)
+
+    return {eid for eid in tree if not chrome(eid)}
+
+
+def _control_tier(control, allowed, body_ids=None):
     element = control.get('element') or {}
     tag = (control.get('binding') or {}).get('tag')
     if element.get('inputable') or tag in ('input', 'select', 'textarea'):
         return 0
     if tag == 'button' or element.get('native_role') in ('button', 'checkbox', 'radio', 'slider'):
         return 1
-    return 2
+    if body_ids is None or element.get('element_id') in body_ids:
+        return 2
+    return 3
 
 
-def controls_projection(observation, allowed_actions, limit=30):
+def controls_projection(observation, allowed_actions, limit=60, body_ids=None):
     """Prompt-facing bindable controls of the current frame, with their real ids.
 
     The model cites `target.control` from this list; the host binds the id
     directly against the same observation, so a cited id is unique by
-    construction. Business-interactive controls (inputs, selects, controls with
-    proven actions) are projected before passive ones so a fixed cap is not
-    filled by navigation chrome; inside a tier the document's own order is
-    kept. Labels/values/options stay hints; the id is the identity, and no
-    control that was not provided to the model is claimed as provided.
+    construction. Only dispatchable rows are projected: inputs and selects, then
+    buttons, then clickable controls inside the page body, then clickable chrome
+    last, so a long-reading page's article links are not crowded out by its
+    navigation. Inside a tier the document's own order is kept. Labels/values/
+    options stay hints; the id is the identity, and no control that was not
+    provided to the model is claimed as provided.
     """
     allowed = set(allowed_actions or ())
-    tiers = ([], [], [])
+    tiers = ([], [], [], [])
     for cid, control in (observation.get('controls') or {}).items():
         element = control.get('element') or {}
         box = element.get('bbox') or []
@@ -80,7 +120,12 @@ def controls_projection(observation, allowed_actions, limit=30):
         if (element.get('visible') is not True or len(box) != 4 or len(viewport) != 2
                 or not (0 <= box[0] < box[2] <= viewport[0] and 0 <= box[1] < box[3] <= viewport[1])):
             continue
-        tiers[_control_tier(control, allowed)].append(_control_row(cid, control, allowed))
+        tier = _control_tier(control, allowed, body_ids)
+        # Passive wrappers (nav/form/div/p/heading) can never be dispatched; only
+        # the form and button tiers keep rows the page did not mark clickable.
+        if tier > 1 and element.get('clickable') is not True:
+            continue
+        tiers[tier].append(_control_row(cid, control, allowed))
     rows = [row for tier in tiers for row in tier]
     rows = rows[:limit]
     for number, row in enumerate(rows, 1):
@@ -91,6 +136,42 @@ def controls_projection(observation, allowed_actions, limit=30):
 
 
 _HEADING_ROLES = ('h1', 'h2', 'h3', 'h4', 'h5', 'h6')
+
+
+_AFFORDANCE_ORDER = ('input', 'select', 'button', 'body_link', 'chrome_link', 'other')
+
+
+def _affordance_kind(row, body_ids):
+    tag = row.get('tag')
+    if tag in ('input', 'textarea'):
+        return 'input'
+    if tag == 'select':
+        return 'select'
+    if tag == 'button' or row.get('role') in ('button', 'checkbox', 'radio', 'slider'):
+        return 'button'
+    if tag == 'a':
+        return 'chrome_link' if (body_ids is not None and row['control'] not in body_ids) else 'body_link'
+    return 'other'
+
+
+def interaction_affordances(rows, body_ids=None, limit=4):
+    """The interaction forms this frame really offers, summarised from its rows.
+
+    A long-reading page without this summary is what produced a six-scroll plan:
+    the article body's clickable links were crowded out of the control list, so
+    the only remaining shape was a linear read. Counts and examples come solely
+    from rows actually projected to the model, never from page text.
+    """
+    groups = {}
+    for row in rows:
+        group = groups.setdefault(_affordance_kind(row, body_ids), {'count': 0, 'examples': []})
+        group['count'] += 1
+        label = (row.get('text') or ' '.join(row.get('labels') or [])).strip()
+        if label and len(group['examples']) < limit:
+            group['examples'].append(label[:30])
+    ranked = [{'kind': kind, **groups[kind]} for kind in _AFFORDANCE_ORDER if kind in groups]
+    return {'projected_controls': len(rows), 'kinds': [row['kind'] for row in ranked],
+            'groups': ranked}
 
 
 def _region_tier(element, quote):
@@ -113,7 +194,7 @@ def region_registry(state, limit=12):
         seen = set()
         while e and e.get('element_id') not in seen:
             seen.add(e.get('element_id'))
-            if e.get('native_role') in ('nav', 'navigation', 'header', 'banner', 'footer', 'contentinfo', 'aside', 'complementary'):
+            if e.get('native_role') in _CHROME_ROLES:
                 return True
             e = tree.get(e.get('parent_id'))
         return False

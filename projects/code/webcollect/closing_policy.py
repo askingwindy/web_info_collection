@@ -562,7 +562,10 @@ def annotation_errors(annotation):
         errors.append('Ending counts, finish, final evidence or safe-state binding is invalid')
     if marker.get('flagged'):
         errors.append('Exceptional ending cannot be a formal annotation')
-    if marker.get('goal_completion') not in ('NOT_CLAIMED', 'AGENT_REPORTED_VISIBLE_GOAL'):
+    screenshot_verified = (marker.get('kind') == 'AGENT_COMPLETE_VERIFIED'
+        and marker.get('collection_strategy', {}).get('id') == 'screenshot_plan'
+        and (marker.get('endpoint_evidence') or {}).get('source') == 'host_screenshot_completion')
+    if marker.get('goal_completion') not in ('NOT_CLAIMED', 'AGENT_REPORTED_VISIBLE_GOAL') and not (screenshot_verified and marker.get('goal_completion') == 'VERIFIED'):
         errors.append('Closure cannot invent business success')
     kind = marker.get('kind'); attempts = marker.get('business_attempts', -1)
     ready = ('VISIBLE_GOAL_REPORTED', 'HOST_PLAN_ENDPOINT', 'HOST_BOUNDARY_RETURN')

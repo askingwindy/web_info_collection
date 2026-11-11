@@ -144,3 +144,84 @@ def atomic_effect(before, after, action, arguments, control_id=None, *, rule_ver
             fields.append('visible_content')
     return {'verified': bool(fields), 'fields': fields, 'control_id': cid}
 
+
+
+def input_facts(state):
+    """Known input facts, keyed by source identity; absence is never an empty value."""
+    elements = {e['element_id']: e for e in state.get('elements', [])}
+    bindings = {b['element_id']: b for b in state.get('capture_controls', [])}
+    facts = {}
+    for value in state.get('values', []):
+        cid = value['element_id']; element = elements.get(cid, {}); binding = bindings.get(cid, {})
+        if not (element.get('inputable') or binding.get('tag') in ('input', 'select', 'textarea')
+                or element.get('native_role') in ('input', 'select', 'textarea', 'checkbox', 'radio', 'combobox')):
+            continue
+        row = {key: value[key] for key in ('value', 'checked', 'focused', 'selection_start',
+               'selection_end', 'all_text_selected', 'input_type', 'value_visible') if key in value and value[key] is not None}
+        row.update({key: element[key] for key in ('enabled', 'state') if key in element})
+        row['identity'] = [state.get('document_identity'), cid, binding.get('selector'), binding.get('tag')]
+        facts[cid] = row
+    return facts
+
+
+def input_changes(before, after, cid=None):
+    old, new = input_facts(before), input_facts(after)
+    if before.get('document_identity') != after.get('document_identity'):
+        return []
+    changes = []
+    for key in ([cid] if cid else old):
+        if key not in old or key not in new or old[key]['identity'] != new[key]['identity']:
+            continue
+        for field in ('value', 'checked'):
+            if field in old[key] and field in new[key] and old[key][field] != new[key][field]:
+                changes.append({'control': key, 'field': field, 'before': old[key][field], 'after': new[key][field]})
+    return changes
+
+
+def business_scope(state, cid):
+    """Use a real form, otherwise the nearest captured business container."""
+    bindings = {b['element_id']: b for b in state.get('capture_controls', [])}
+    elements = {e['element_id']: e for e in state.get('elements', [])}
+    binding = bindings.get(cid, {})
+    if binding.get('form_selector'):
+        return ['form', binding['form_selector']]
+    # Snapshot selectors preserve a concrete business wrapper even when only
+    # interactive nodes and main were captured (the Muxtly calculator).
+    parts = (binding.get('selector') or '').split(' > ')
+    for index, part in enumerate(parts[:-2]):
+        if part.split(':')[0] in ('main', 'article', 'section', 'form'):
+            child = parts[index + 1].split(':')[0]
+            if child in ('div', 'section', 'form', 'article'):
+                return ['container', ' > '.join(parts[:index + 2])]
+    cursor = elements.get(cid, {}).get('parent_id'); seen = set()
+    while cursor in elements and cursor not in seen:
+        seen.add(cursor); element = elements[cursor]; b = bindings.get(cursor, {})
+        if (element.get('native_role') in ('form', 'section', 'region', 'article', 'dialog')
+                and b.get('selector')):
+            return ['container', b['selector']]
+        cursor = element.get('parent_id')
+    return None
+
+
+def input_edit_row(session, row):
+    """Strategy 2 edits are captured state transitions, including deletion keys."""
+    from .batch_core import load_json
+    if row.get('definite_zero_effect'):
+        return False
+    states = []
+    for key in ('before_observation_id', 'after_observation_id'):
+        observation = session.observation_records.get(row.get(key))
+        if not observation or not observation.get('capture_verified'):
+            return False
+        states.append(load_json(observation['evidence']['state']['path']))
+    return bool(input_changes(*states, (row.get('target') or {}).get('control_id')))
+
+
+def step_expectation(step, state, cid):
+    if step.get('action') not in ('type', 'select'):
+        return None
+    fact = input_facts(state).get(cid, {})
+    actual = fact.get('value')
+    return {'expected_value': step.get('expected_value'), 'actual_value': actual,
+            'matched': 'expected_value' in step and actual is not None
+                       and str(actual) == str(step['expected_value']), 'control': cid}

@@ -36,7 +36,7 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
         raise ValueError('A project requires a distinct local project ID')
     repository = Path(__file__).resolve().parents[3]
     root = (Path(root) if root is not None else
-            repository / 'database' / 'sqllite' / project_id).absolute()
+            repository / 'database' / 'sqllite').absolute()
     if any(p.is_symlink() for p in (root,*root.parents)):
         raise ValueError('Project root cannot be a symbolic link')
     root = root.resolve()
@@ -66,7 +66,19 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
         from .task_generation import _qc_policy
         qc_policy = _qc_policy(qc_policy)
     floors = numbering_floors(numbering_from)
-    root.mkdir(parents=True,exist_ok=False)
+    owned = [root/'scope.json',manifest,registry,pool_path,state/'site-facts.sqlite3',
+             state/'producer-jobs.sqlite3',state/'consumer-jobs.sqlite3',state/'policy.json',
+             state/'producer-config.json',state/'consumer-config.json']
+    if qc_policy is not None:
+        owned.append(state/'qc-policy.json')
+    existing = [str(path) for path in owned if path.exists() or path.is_symlink()]
+    if existing:
+        raise ValueError('Persistent project root already contains project files: ' + ', '.join(existing))
+    if root.exists() and not root.is_dir():
+        raise ValueError('Persistent project root must be a directory')
+    # The fixed root may contain unrelated legacy project subdirectories. Only
+    # this root's own scope/config/database files exclude a new initialization.
+    root.mkdir(parents=True,exist_ok=True)
     # An incomplete initialization keeps its files for diagnosis. The scope is published last.
     results.mkdir(parents=True, exist_ok=True)
     owner = initialize_chain(manifest,registry,chain_id=project_id,current_result_roots=[results],
@@ -102,7 +114,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=['init'])
     parser.add_argument('--root', type=Path,
-                        help='Persistent project root (default: database/sqllite/<project-id>)')
+                        help='Persistent project root (default: database/sqllite)')
     parser.add_argument('--output-root', type=Path,
                         help='Collection output root (default: results/<project-id>/collections)')
     for name in ('project-id','policy-template','producer-config','consumer-config'):

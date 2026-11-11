@@ -364,6 +364,35 @@ class CandidatePool:
                             or not isinstance(access.get('entry_uri'),str)
                             or wire_uri(access['entry_uri'])!=wire_uri(value['entry_url'])):
                         raise ValueError('Entry GET receipt does not confirm this original URI')
+            if row_header is not None and not old and aid:
+                # Preflight only saves work. Recheck both application limits under
+                # the publication lock so concurrent workers cannot all consume
+                # the same last slot.
+                frozen = con.execute('SELECT config FROM runs WHERE id=?', (row_header['run_id'],)).fetchone()
+                limits = json.loads(frozen[0]) if frozen else {}
+                new_target = limits.get('application_new_target')
+                pending_cap = int(limits.get('application_pending_cap', 100))
+                pending = con.execute(
+                    "SELECT COUNT(*) FROM data_candidates WHERE application_id=? AND state='pending'",
+                    (aid,)).fetchone()[0]
+                new_count = con.execute(
+                    "SELECT COUNT(DISTINCT c.candidate_id) FROM data_candidates c "
+                    "JOIN candidate_batch_rows b ON b.candidate_id=c.candidate_id "
+                    "WHERE c.application_id=? AND b.result='NEW'", (aid,)).fetchone()[0] \
+                    if new_target is not None else None
+                reason = (f"APP_NEW_TARGET: cumulative distinct NEW {new_count} >= {new_target}"
+                          if new_target is not None and new_count >= new_target
+                          else f"APP_PENDING_CAP: application pending inventory {pending} >= {pending_cap}"
+                          if pending >= pending_cap else None)
+                if reason is not None:
+                    record = {'row_id':row_header['row_id'],'raw_index':row_header['raw_index'],
+                              'result':'OVER_LIMIT','reason':reason,'candidate_id':None,'row':None}
+                    con.execute('INSERT INTO candidate_batch_rows(row_id,run_id,batch,request_id,response_sha256,raw_index,result,reason,candidate_id,record,created)'
+                                ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                                (row_header['row_id'],row_header['run_id'],row_header['batch'],row_header['request_id'],
+                                 row_header['response_sha256'],row_header['raw_index'],record['result'],reason,
+                                 None,canonical(record),time.time()))
+                    return record
             duplicate = old is not None
             cid = old['candidate_id'] if old else 'candidate-' + str(uuid.uuid4())
             landed_key = None
