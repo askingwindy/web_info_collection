@@ -536,6 +536,7 @@ def planned_terminal_narrative(record, final_state, final_id):
     if evidence.get('business_goal_status') == 'VERIFIED' and checks:
         basis = []
         final_quotes = []
+        verified_results = []
         operations = {row['operation_id']: row for row in record['trajectory']}
         for check in checks:
             if check.get('status') != 'VERIFIED':
@@ -558,15 +559,13 @@ def planned_terminal_narrative(record, final_state, final_id):
             if not quotes:
                 return None
             field = str(check.get('field') or '原目标条件')
+            verified_results.append(field + '：' + '、'.join(dict.fromkeys(quotes)))
             labels = list(dict.fromkeys((operations[action_id].get('target') or {}).get('label')
                                         or operations[action_id]['goal'] for action_id in action_ids))
             operation_basis = ('，已实际操作' + '、'.join('「' + label + '」' for label in labels)) if labels else ''
             basis.append(field + operation_basis + '，绑定页面证据' +
                          '、'.join('「' + quote + '」' for quote in dict.fromkeys(quotes)))
-        final_result = (numeric['final_result'] if numeric else '；'.join(
-            str(check.get('field') or '原目标条件') + '：' + '、'.join(dict.fromkeys(
-                item['quote'] for item in check.get('evidence') or [] if item.get('quote')))
-            for check in checks))
+        final_result = numeric['final_result'] if numeric else '；'.join(verified_results)
         return {'final_result': final_result,
                 'completion_judgement': '原目标各项核验依据：' + '；'.join(basis) + '。',
                 'basis': checks, 'is_ai_review': False}

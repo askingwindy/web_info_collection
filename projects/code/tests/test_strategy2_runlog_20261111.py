@@ -219,6 +219,11 @@ class FakePage:
     async def content(self):
         return '<html><body>' + self.surface.state['visible_text'] + '</body></html>'
 
+    async def evaluate(self, expression, *args):
+        if 'scrollWidth' in expression and 'scrollHeight' in expression:
+            return list(self.surface.state['screen_resolution'])
+        raise AssertionError('Unexpected browser evaluation in offline harness')
+
     def on(self, event, cb):
         pass
 
@@ -250,6 +255,9 @@ class SessionHarness(unittest.IsolatedAsyncioTestCase):
             p = patch(name, side_effect=self.surface.capture)
             p.start()
             self.addCleanup(p.stop)
+        observation_patch = patch('webcollect.browser.observe', side_effect=self._fake_observe)
+        observation_patch.start()
+        self.addCleanup(observation_patch.stop)
         execute_patch = patch('webcollect.browser.execute', side_effect=self._fake_execute)
         execute_patch.start()
         self.addCleanup(execute_patch.stop)
@@ -262,6 +270,9 @@ class SessionHarness(unittest.IsolatedAsyncioTestCase):
 
     async def _fake_execute(self, page, action_type, arguments, execution):
         self.surface.execute_action(action_type, arguments)
+
+    async def _fake_observe(self, page, selector=None, index=0, **kw):
+        return (await self.surface.capture(page, selector, index))['state']
 
     async def _fake_verify(self, page, state, selector=None, index=0, **kw):
         return {'matched': True, 'state_fingerprint': hashlib.sha256(

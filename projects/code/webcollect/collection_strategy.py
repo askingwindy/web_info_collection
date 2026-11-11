@@ -91,7 +91,7 @@ def outcome_facts(*, goal_status, end_reason, eligibility, save_status, details=
     end_reason: goal_completed / no_path / unsuitable / no_progress /
                 user_stopped / engine_error / unknown
     eligibility: eligible / ineligible / unresolved (+ reason)
-    save_status: not_saved / collected_pending_review / save_failed
+    save_status: not_saved / collected_pending_review / save_failed / unresolved
     """
     return {'goal_status': goal_status, 'end_reason': end_reason,
             'save_eligibility': eligibility, 'save_status': save_status,
@@ -159,7 +159,9 @@ def finalize_strategy_result(result, *, save_status, eligibility=None, details=N
 
     Called only after RuntimeStore commit or a decision not to save; the
     sealed session originals are never rewritten. save_status:
-    collected_pending_review / not_saved / save_failed.
+    collected_pending_review / not_saved / save_failed / unresolved.
+    unresolved means the commit outcome cannot be read back from the ledger;
+    known eligibility remains independent of that uncertainty.
     """
     finalized = deepcopy(result)
     if eligibility is None:

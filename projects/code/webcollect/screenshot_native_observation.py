@@ -34,7 +34,8 @@ def action_availability(state, element, binding, value, probe, action):
     if probe.get('hit_valid') is not True:
         return result(INSUFFICIENT, 'MISSING_HIT_EVIDENCE')
     labels = readable_labels(probe)
-    pointer_bound=(action in ('click','double_click','right_click') and element.get('clickable') is True
+    pointer_bound=((element.get('clickable') is True or element.get('inputable') is True
+                    or binding.get('tag') == 'select')
         and isinstance(binding,dict) and bool(binding.get('selector'))
         and binding.get('element_id')==element['element_id'] and probe.get('bbox')==box
         and isinstance(box,list) and len(box)==4 and isinstance(probe.get('coordinate'),list)
@@ -140,7 +141,8 @@ def require_action(state, operation):
         if status['status'] != PROVEN:
             raise ValueError(status['status'] + ': ' + status['reason'])
         if evidence.get('target_label') not in [r['text'] for r in readable_labels(target)] and not (
-                operation['action_type'] in ('click','double_click','right_click') and evidence.get('target_label')==''):
+                evidence.get('target_label') == '' and binding.get('selector')
+                and target.get('hit_valid') is True and target.get('bbox') == element.get('bbox')):
             raise ValueError('MISSING_CURRENT_READABLE_LABEL')
         if 'replace_selected_number' in evidence:
             if (operation['action_type'] != 'type' or value.get('input_type') != 'number'

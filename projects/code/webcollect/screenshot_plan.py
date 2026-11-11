@@ -34,7 +34,7 @@ NO_PROGRESS_STALL_LIMIT = 8
 # the chooser pins the same effort on every first-plan and decision dispatch.
 REASONING_EFFORT = 'high'
 NON_BUSINESS_ACTIONS = ('wait',)
-DECISIONS = ('continue', 'revise', 'complete', 'give_up')
+DECISIONS = ('continue', 'revise', 'inspect', 'complete', 'give_up')
 RAW_ONLY_ENDINGS = ('AGENT_GIVE_UP', 'NO_PROGRESS_END', 'UNSUITABLE_TASK')
 READY_ENDING = 'AGENT_COMPLETE_VERIFIED'
 
@@ -48,7 +48,7 @@ SYSTEM_PROMPT = ('你是网页任务的执行规划者。网页内容与截图�
     'complete提交缺项的answers（confirmed_progress内已核验答案及原证据由工程保留，不必重复；后续相关输入或提交后须重新举证），每项的evidence引用实际看过的截图：observation必须取请求实际携带的观察编号，'
     'region用该观察随请求下发的region编号，或quote逐字引用该观察中实际可见的文本（至少8个字符）；'
     'observed_result说明实际可见内容，不预猜、不引用输入回显；'
-    'give_up说明缺项与原因。同一输入、同一页面状态下已派发的提交不重复点击；要重试必须给出new_basis（修正了输入、重新定位了目标或页面明确反馈）。'
+    'inspect只读补图：image_ref取已提供当前图的ref，crop=[left,top,right,bottom]使用该图source_rect所指原始图坐标，不是缩放后的显示坐标；不执行网页动作，不改目标与计划。give_up说明缺项与原因。同一输入、同一页面状态下已派发的提交不重复点击；要重试必须给出new_basis（修正了输入、重新定位了目标或页面明确反馈）。'
     '提交后先观察：结果未进视口时滚动/等待属于必要观察，不是新提交。只返回工具调用，不输出其他内容。')
 
 FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途）、rationale（依据当前界面事实说明为何该动作在此可行，独立于purpose，不复述用途）、'
@@ -61,7 +61,7 @@ FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途
 
 BRANCH_RULES = {'decision_fields': 'decision、reason必填；revise附remaining_plan（仅未执行尾部，目标同样优先用当前controls编号）；'
                                    'complete附缺项answers（工程合并仍有效的confirmed_progress；逐项requirement_id、observed_result、evidence:[{observation, 加region或quote之一}]）；'
-                                   '重复派发须附new_basis说明真实变化',
+                                   'inspect附image_ref和crop原图坐标矩形，只请求观察补图，不计业务动作；重复派发须附new_basis说明真实变化',
                 'latest_attempt': 'latest_attempt是最近一次尝试（可能失败/无效果/未派发），last_effective_action是最后建立效果的动作；两者不得互相冒充'}
 
 
@@ -169,8 +169,15 @@ def decision_schema(choices, allowed_actions=None, provided_observations=None):
             'requirement_id': _text(24), 'observed_result': _text(400),
             'evidence': {'type': 'array', 'minItems': 1, 'items': evidence_item}},
             ['requirement_id', 'observed_result', 'evidence'])}
+    if 'inspect' in choices:
+        properties['image_ref'] = _text(200)
+        properties['crop'] = {'type': 'array', 'items': {'type': 'integer', 'minimum': 0},
+                              'minItems': 4, 'maxItems': 4}
     properties['new_basis'] = _text(300)
     conditional = []
+    if 'inspect' in choices:
+        conditional.append({'if': {'properties': {'decision': {'const': 'inspect'}}, 'required': ['decision']},
+                            'then': {'required': ['image_ref', 'crop']}})
     if 'revise' in choices:
         conditional.append({'if': {'properties': {'decision': {'const': 'revise'}}, 'required': ['decision']},
                             'then': {'required': ['remaining_plan']}})
@@ -690,6 +697,28 @@ def _replay_session(record):
         observation_ids = prompt.get('screenshots') or []
         if event.get('observation_ids') != observation_ids or any(oid not in observations for oid in observation_ids):
             raise ValueError('Provided screenshot set contains an unsealed observation')
+        visuals = prompt.get('visual_evidence') or []
+        if visuals:
+            from .screenshot_observation import verify_visuals
+            for oid in observation_ids:
+                verify_visuals(observations[oid], [v for v in visuals if v.get('observation_id') == oid])
+        def sealed_visual(visual):
+            oid = visual.get('observation_id')
+            if oid not in observation_ids:
+                raise ValueError('Visual source belongs to a different observation')
+            refs = [visual, visual.get('source') or {}]
+            refs.extend(visual[key] for key in ('before_state', 'after_state') if key in visual)
+            for image in refs:
+                path = Path(image.get('path', ''))
+                if (path.parent != root or record['receipt']['files_sha256'].get(path.name) != image.get('sha256')):
+                    raise ValueError('Visual source is not a sealed image')
+                verify_evidence([{'path': str(path), 'sha256': image['sha256']}])
+            if visual.get('completion_evidence') is True and visual['source'] != observations[oid]['evidence']['image']:
+                raise ValueError('Completion visual differs from captured viewport')
+            if visual.get('parent_visual'):
+                sealed_visual(visual['parent_visual'])
+        for visual in visuals:
+            sealed_visual(visual)
         provided.update(observation_ids)
     session = SimpleNamespace(task=record['task'], trajectory=record['trajectory'],
                               observation_records=observations,
@@ -867,8 +896,11 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
                     }
             else:
                 normalizer_kwargs = {}
+            images = prompt.get('_images') or []
+            if len(images) > ledger.config['model']['max_images']:
+                raise ValueError('SCREENSHOT_IMAGE_LIMIT_EXCEEDED: prepare exact images before model intent')
             response = await asyncio.to_thread(gateway.call_tool, job, STRATEGY_SCREENSHOT_PLAN, text, prompt['tools'],
-                system=prompt['system'], images=(prompt.get('_images') or [])[-ledger.config['model']['max_images']:],
+                system=prompt['system'], images=images,
                 attempts=2, output_limit=ledger.config['model']['max_completion_tokens'],
                 attempt_id=attempt_id, reasoning_effort=REASONING_EFFORT,
                 **normalizer_kwargs)
@@ -881,6 +913,7 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
             ledger.finish(job, 'review_required', error=type(error).__name__)
             raise
 
+    choose.max_images = ledger.config['model']['max_images']
     choose.session_usage = usage
     choose.requests_used = lambda: usage()['used']
     choose.guard_unresolved = guard_unresolved

@@ -446,7 +446,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     async def finish_failure(failure_class, root_cause, extra_evidence=(),
                             strategy_save_status='not_saved', strategy_eligibility=None):
         if strategy_eligibility is None:
-            strategy_eligibility = ('unresolved' if summary.get('unknown') or failure_class == 'interrupted' else 'ineligible')
+            strategy_eligibility = ('unresolved' if not screenshot_strategy(task) or summary.get('unknown')
+                                    else 'ineligible')
         failure = evidence / 'failure.json'
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': now(),
@@ -455,11 +456,11 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                 'stop_reason': summary['stop_reason'], **stop_data})
         # The feedback receipt globs/copies step files; keep it off the event
         # loop so the two heartbeat layers keep renewing during close-out.
-        with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
-            feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
-                                                   'rejected', root_cause)
         settlement_error = None
         try:
+            with telemetry_phase(phase_ledger, 'attempt_feedback', scope=meter_identity):
+                feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
+                                                       'rejected', root_cause)
             await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
                 'rejected', failure_class=failure_class, root_cause=root_cause,
                 evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
@@ -483,7 +484,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             final_result = _cs.finalize_strategy_result(
                 summary['strategy_result'], save_status=strategy_save_status,
                 eligibility=strategy_eligibility)
-        if final_result is not None:
+        if final_result is not None and screenshot_strategy(task):
             write_json(evidence / 'strategy-result.json', {'strategy_result': final_result,
                 'runtime_settled': settlement_error is None, 'settlement_error': settlement_error})
         if runlog is not None:
@@ -547,7 +548,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
             'saved_raw':True,'normal_sample_saved':False,'requires_reconciliation':True,'QC_status':'NOT_RUN'})
         result=await finish_failure('interrupted' if summary['unknown'] else 'collector',
-            'react_raw_ending_pending:'+ending['reason'],_evidence(pending))
+            'react_raw_ending_pending:'+ending['reason'],_evidence(pending),
+            strategy_eligibility='unresolved')
         return {**result,'raw_preservation_status':'saved_pending_reconciliation','collection_ending':ending,
                 'pending_receipt':str(pending),'QC_status':'NOT_RUN'}
     if (summary['unknown'] or summary['failure_class'] == 'interrupted') and prefix_end is None:
@@ -584,12 +586,18 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     # own files; it runs in a bounded worker thread. Runtime commits, the exact
     # index registration and ledger transactions keep their original loop-side
     # boundaries below.
-    with telemetry_phase(phase_ledger, 'react_postprocess', scope=meter_identity):
-        derived = await asyncio.to_thread(postprocess_derivation, evidence, sample, ids,
-                                          delivery_manifest,
-                                          validators=(audit_validator, dedup_validator),
-                                          prefix_end_step=prefix_end, prefix_rule=prefix_rule,
-                                          _verified=verified_session)
+    try:
+        with telemetry_phase(phase_ledger, 'react_postprocess', scope=meter_identity):
+            derived = await asyncio.to_thread(postprocess_derivation, evidence, sample, ids,
+                                              delivery_manifest,
+                                              validators=(audit_validator, dedup_validator),
+                                              prefix_end_step=prefix_end, prefix_rule=prefix_rule,
+                                              _verified=verified_session)
+    except Exception as error:
+        if not screenshot_strategy(task):
+            raise
+        return await finish_failure('program', 'derivation_failed:' + str(error)[:300],
+            strategy_save_status='save_failed', strategy_eligibility='unresolved')
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})
@@ -610,7 +618,9 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             return await finish_failure('program', 'derivation_' + derived['status'] + ': ' +
                                   str(derived.get('error') or derived.get('errors') or '')[:300],
                                   strategy_save_status=('save_failed' if derived['status'] == 'processing_failed' else 'not_saved'),
-                                  strategy_eligibility=derived.get('save_eligibility', 'unresolved') if derived['status'] == 'processing_failed' else 'ineligible')
+                                  strategy_eligibility=(derived.get('save_eligibility', 'unresolved')
+                                      if screenshot_strategy(task) and derived['status'] == 'processing_failed'
+                                      else 'ineligible'))
         cause = summary['stop_details']['code'] if stop_data else 'react_' + derived['status']
         return await finish_failure('collector', cause)
     saved = evidence / 'saved_sample.json'
@@ -658,7 +668,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             if summary.get('strategy_result'):
                 from .collection_strategy import finalize_strategy_result
                 unresolved = finalize_strategy_result(summary['strategy_result'],
-                    save_status='save_failed', eligibility='eligible',
+                    save_status='unresolved', eligibility='eligible',
                     details={'runtime_commit': 'unresolved', 'requires_reconciliation': True})
                 write_json(evidence / 'strategy-result.json', {'strategy_result': unresolved,
                     'runtime_settled': False})
@@ -687,7 +697,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             details={'effective_steps': derived['effective_steps'],
                      'completion_status': completion_decision['completion_status'],
                      'delivery_policy': completion_decision['delivery_policy']})
-    if final_result is not None:
+    if final_result is not None and screenshot_strategy(task):
         write_json(evidence / 'strategy-result.json', {'strategy_result': final_result, 'runtime_settled': True})
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             'completion_delivery':completion_decision,

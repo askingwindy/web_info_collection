@@ -57,6 +57,8 @@ def _identity_only_binding(control, semantic):
 
 
 def bind_target(observation, target, observations=None, *, carriers=True, advisory=False):
+    if target.get('_source'):
+        return resolve_control(observation, target)
     # A short node reference is evidence from one archived observation. It may
     # survive a same-document probe only with unchanged node identity/binding.
     reference=None
@@ -241,6 +243,10 @@ def bind_plan_targets(plan, observation, allowed_ids=None):
         for key in ('target', 'end_target'):
             target = step.get(key) or {}
             cid = target.get('control')
+            if not cid and target.get('text'):
+                matches = bind_target(observation, target)
+                if len(matches) == 1 and matches[0] in allowed:
+                    cid = matches[0]
             if cid:
                 if cid not in allowed or cid not in observation['controls']:
                     raise ValueError('CONTROL_NOT_PROVIDED_TO_MODEL: ' + str(cid))
@@ -256,7 +262,8 @@ def resolve_control(observation, target):
     def matches(cid):
         current = _source(observation, cid)
         return (observation['controls'][cid].get('element', {}).get('visible') is True
-                and all(current[k] == source[k] for k in ('binding', 'labels', 'text', 'role')))
+                and all(current[k] == source[k] for k in ('binding', 'text', 'role'))
+                and (not source['labels'] or current['labels'] == source['labels']))
     cid = source['control_id']
     if cid in observation['controls'] and matches(cid):
         return [cid]

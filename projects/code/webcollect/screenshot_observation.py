@@ -75,11 +75,16 @@ def controls_projection(observation, allowed_actions, limit=30):
     tiers = ([], [], [])
     for cid, control in (observation.get('controls') or {}).items():
         element = control.get('element') or {}
-        if element.get('visible') is not True:
+        box = element.get('bbox') or []
+        viewport = observation.get('viewport') or []
+        if (element.get('visible') is not True or len(box) != 4 or len(viewport) != 2
+                or not (0 <= box[0] < box[2] <= viewport[0] and 0 <= box[1] < box[3] <= viewport[1])):
             continue
         tiers[_control_tier(control, allowed)].append(_control_row(cid, control, allowed))
     rows = [row for tier in tiers for row in tier]
     rows = rows[:limit]
+    for number, row in enumerate(rows, 1):
+        row['number'] = number
     observation['provided_control_ids'] = [r['control'] for r in rows]
     return rows
 
@@ -150,7 +155,6 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
     from copy import deepcopy
     from PIL import Image, ImageDraw
     from .batch_core import load_json, file_sha
-    from .planning import object_sha256
     root = Path(directory)
     oid = observation['observation_id']
     if observation.get('visual_evidence'):
@@ -197,33 +201,95 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
                 path = root / ('visual-' + oid[:16] + '-overview.png')
                 with path.open('xb') as stream:
                     overview.save(stream, format='PNG')
+                import json
+                def exclusive(path, data):
+                    with path.open('x', encoding='utf-8') as stream:
+                        json.dump(data, stream, ensure_ascii=False, sort_keys=True, indent=2)
+                    return {'path': str(path.resolve()), 'sha256': file_sha(path)}
+                before_ref = exclusive(root / ('visual-' + oid[:16] + '-full-before.json'), before)
+                after_ref = exclusive(root / ('visual-' + oid[:16] + '-full-after.json'), after)
                 visuals.insert(0, {'ref': oid + '-overview', 'observation_id': oid,
                     'scope': 'full_page_overview', 'path': str(path.resolve()), 'sha256': file_sha(path),
                     'source': {'path': str(full.resolve()), 'sha256': file_sha(full)},
                     'source_rect': [0, 0, full_image.width, full_image.height], 'scale': ratio,
                     'document_identity': before.get('document_identity'),
-                    'before_state_sha256': object_sha256(before), 'after_state_sha256': object_sha256(after),
+                    'before_state': before_ref, 'after_state': after_ref,
                     'completion_evidence': False, 'note': '整体定位图；细节和完成引用使用当前清晰图或有来源的清晰裁图'})
     observation['visual_evidence'] = visuals
     return visuals
 
 
-def crop_visual(observation, directory, rect):
-    """Read-only detail from the retained same-capture full page, never a scroll."""
+def crop_visual(observation, directory, rect, image_ref=None):
+    """Detail from an already supplied original image; never a browser action."""
     from pathlib import Path
+    from copy import deepcopy
     from PIL import Image
     from .batch_core import file_sha
     visuals = observation.get('visual_evidence') or []
-    full = next((v for v in visuals if v['scope'] == 'full_page_overview'), None)
-    if not full:
-        raise ValueError('NO_SAME_CAPTURE_FULL_PAGE')
-    image = Image.open(full['source']['path'])
-    if len(rect) != 4 or not (0 <= rect[0] < rect[2] <= image.width and 0 <= rect[1] < rect[3] <= image.height):
+    source_visual = next((v for v in visuals if v.get('ref') == image_ref), None) if image_ref else next((v for v in visuals if v['scope'] == 'full_page_overview'), None)
+    if not source_visual or source_visual.get('scope') not in ('viewport', 'full_page_overview'):
+        raise ValueError('IMAGE_REF_NOT_PROVIDED_OR_NOT_ORIGINAL_VIEW')
+    image = Image.open(source_visual['source']['path'])
+    if (len(rect) != 4 or any(not isinstance(x, int) or isinstance(x, bool) for x in rect)
+            or not (0 <= rect[0] < rect[2] <= image.width and 0 <= rect[1] < rect[3] <= image.height)):
         raise ValueError('CROP_OUTSIDE_SOURCE')
-    path = Path(directory) / ('visual-' + observation['observation_id'][:16] + '-crop-' + '-'.join(map(str,rect)) + '.png')
-    with path.open('xb') as stream:
-        image.crop(rect).save(stream, format='PNG')
-    return {'ref': path.stem, 'observation_id': observation['observation_id'], 'scope': 'full_page_crop',
-            'path': str(path.resolve()), 'sha256': file_sha(path), 'source': full['source'],
-            'source_rect': list(rect), 'scale': 1, 'completion_evidence': False,
-            'note': '同次原图清晰补图，不代表新观察或业务动作；须新观察建立可执行编号和完成区域'}
+    path = Path(directory) / ('visual-' + observation['observation_id'][:16] + '-' + source_visual['scope'] + '-crop-' + '-'.join(map(str,rect)) + '.png')
+    cropped = image.crop(rect)
+    if path.exists():
+        with Image.open(path) as existing:
+            if existing.size != cropped.size or existing.convert('RGB').tobytes() != cropped.convert('RGB').tobytes():
+                raise ValueError('EXISTING_CROP_SOURCE_MISMATCH')
+    else:
+        with path.open('xb') as stream:
+            cropped.save(stream, format='PNG')
+    return {'ref': path.stem, 'observation_id': observation['observation_id'], 'scope': 'image_crop',
+            'parent_ref': source_visual['ref'], 'parent_visual': deepcopy(source_visual), 'path': str(path.resolve()), 'sha256': file_sha(path),
+            'source': source_visual['source'], 'source_rect': list(rect), 'scale': 1,
+            'completion_evidence': False,
+            'note': '已提供原图的清晰补图，不代表新观察或业务动作；完成引用仍绑定原观察的区域'}
+
+
+def verify_visuals(observation, visuals):
+    """Validate the exact host-generated image list in live calls and sealed replay."""
+    from PIL import Image
+    from .planning import verify_evidence
+    from .batch_core import load_json
+    if not visuals or not any(v.get('scope') == 'viewport' for v in visuals):
+        raise ValueError('MISSING_CLEAR_VIEWPORT_IMAGE')
+    state = load_json(observation['evidence']['state']['path'])
+    keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text')
+    for visual in visuals:
+        if visual.get('observation_id') != observation['observation_id']:
+            raise ValueError('VISUAL_OBSERVATION_MISMATCH')
+        verify_evidence([{'path': visual['path'], 'sha256': visual['sha256']}, visual['source']])
+        scope = visual.get('scope')
+        with Image.open(visual['source']['path']) as image:
+            width, height = image.size
+        rect = visual.get('source_rect') or []
+        if len(rect) != 4 or not (0 <= rect[0] < rect[2] <= width and 0 <= rect[1] < rect[3] <= height):
+            raise ValueError('VISUAL_SOURCE_RANGE_MISMATCH')
+        if scope == 'viewport':
+            if visual['source'] != observation['evidence']['image'] or rect != [0, 0, width, height]:
+                raise ValueError('VIEWPORT_SOURCE_MISMATCH')
+            for row in visual.get('control_mapping', []):
+                c = observation['controls'].get(row['control']) or {}
+                if row.get('bbox') != c.get('element', {}).get('bbox'):
+                    raise ValueError('VISUAL_CONTROL_MAPPING_MISMATCH')
+        elif scope == 'full_page_overview':
+            verify_evidence([visual['before_state'], visual['after_state']])
+            before, after = load_json(visual['before_state']['path']), load_json(visual['after_state']['path'])
+            if not all(before.get(k) == after.get(k) == state.get(k) for k in keys):
+                raise ValueError('FULL_PAGE_CAPTURE_STATE_DRIFT')
+            if visual.get('completion_evidence') is not False:
+                raise ValueError('OVERVIEW_IS_CONTEXT_ONLY')
+        elif scope == 'image_crop':
+            parent = visual.get('parent_visual') or {}
+            if (parent.get('ref') != visual.get('parent_ref') or parent.get('source') != visual['source']
+                    or parent.get('scope') not in ('viewport', 'full_page_overview')
+                    or visual.get('completion_evidence') is not False):
+                raise ValueError('CROP_REQUIRES_SAME_CAPTURE_SOURCE')
+            viewport = next(v for v in visuals if v.get('scope') == 'viewport')
+            verify_visuals(observation, [viewport, parent] if parent['scope'] != 'viewport' else [parent])
+        else:
+            raise ValueError('UNKNOWN_VISUAL_SCOPE')
+    return [v['path'] for v in visuals]

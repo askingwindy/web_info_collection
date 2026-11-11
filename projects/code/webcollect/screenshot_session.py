@@ -21,7 +21,7 @@ from .screenshot_plan import (SYSTEM_PROMPT,
     DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, NO_PROGRESS_STALL_LIMIT, submit_plan_tools,
     decision_tools, normalize_submit_plan, normalize_decision,
     first_plan_admission, business_actions, verify_completion)
-from .screenshot_observation import controls_projection, region_registry
+from .screenshot_observation import controls_projection, region_registry, prepare_visuals, verify_visuals, crop_visual
 from .session_core import RawSessionCore, ReactStop
 from .screenshot_execution import bind_target, react_step, bind_plan_targets, resolve_control
 
@@ -80,6 +80,8 @@ class ScreenshotPlanSession(RawSessionCore):
         self._stall_count = 0
         self.verified_answers = {}
         self.verified_checks = {}
+        self.provided_visual_refs = {}
+        self._inspection_visual = None
         self.verified_requirement_ids = []
 
     # ------------------------------------------------------------------ run
@@ -165,12 +167,31 @@ class ScreenshotPlanSession(RawSessionCore):
 
     async def _decide(self, prompt):
         """One model call at a checkpoint; UNKNOWN and stop semantics shared."""
+        controls_projection(self.current, self.task['fragment']['allowed_actions'])
+        visuals = await prepare_visuals(self.current, self.root, self.page,
+                                        first=prompt.get('phase') == 'first')
+        available = list(visuals)
+        if self._inspection_visual and self._inspection_visual['observation_id'] == self.current['observation_id']:
+            if not any(row['ref'] == self._inspection_visual['ref'] for row in available):
+                available.append(self._inspection_visual)
+        limit = int(getattr(self.choose, 'max_images', len(available)))
+        if limit < 1:
+            raise ReactStop('blocked', '模型图片配置至少须允许一张清晰视口图', 'program')
+        if len(available) > limit:
+            viewport = next(row for row in available if row['scope'] == 'viewport')
+            details = [self._inspection_visual] if self._inspection_visual in available else []
+            visuals = [viewport] + details
+            if len(visuals) > limit:
+                raise ReactStop('blocked', '模型图片配置无法同时提供清晰视口和请求补图', 'program')
+        else:
+            visuals = available
+        prompt['_images'] = [row['path'] for row in visuals]
+        prompt['visual_evidence'] = deepcopy(visuals)
         observation_ids = list(dict.fromkeys(prompt.get('screenshots') or []))
-        expected_images = [self.observation_records[oid]['evidence']['image']['path']
-                           for oid in observation_ids if oid in self.observation_records]
-        if (not observation_ids or len(expected_images) != len(observation_ids)
-                or list(prompt.get('_images') or []) != expected_images):
-            raise ReactStop('blocked', '截图观察编号与实际请求图片不一致', 'program')
+        if observation_ids != [self.current['observation_id']]:
+            raise ReactStop('blocked', '补图必须与当前观察绑定', 'program')
+        if verify_visuals(self.current, visuals) != prompt['_images']:
+            raise ReactStop('blocked', '模型图片与已核验视觉证据不一致', 'program')
         self._last_model_intent = self.event('model-intent', prompt=_stripped(prompt))
         self._consume('max_decisions')
         guard = getattr(self.choose, 'guard_unresolved', None)
@@ -195,6 +216,7 @@ class ScreenshotPlanSession(RawSessionCore):
                     self.used['max_model_calls'] = used
                 if self.glm_session_id:
                     self.glm_http_requests = used
+        self.provided_visual_refs.update({visual['ref']: deepcopy(visual) for visual in visuals})
         self.provided_observations.update(observation_ids)
         self.event('model-observations-provided', model_intent=self._last_model_intent,
                    observation_ids=observation_ids)
@@ -619,6 +641,21 @@ class ScreenshotPlanSession(RawSessionCore):
             return
         if choice == 'complete':
             return await self._checkpoint(reason, self.completion_feedback)
+        if choice == 'inspect':
+            reference = self.provided_visual_refs.get(decision.get('image_ref'))
+            try:
+                if reference is None or reference.get('observation_id') != self.current['observation_id']:
+                    raise ValueError('INSPECT_REQUIRES_PROVIDED_CURRENT_IMAGE')
+                if int(getattr(self.choose, 'max_images', 2)) < 2:
+                    raise ValueError('INSPECT_REQUIRES_TWO_IMAGE_SLOTS: viewport and requested crop')
+                self._inspection_visual = crop_visual(self.current, self.root,
+                    decision.get('crop') or [], image_ref=reference['ref'])
+            except ValueError as error:
+                return await self._checkpoint(reason, {'kind': 'INSPECT_REQUEST_INVALID',
+                    'message': str(error), 'dispatched': False})
+            self.event('screenshot-inspection', visual=deepcopy(self._inspection_visual), dispatched=False)
+            return await self._checkpoint(reason, {'kind': 'INSPECT_IMAGE_PROVIDED',
+                'image_ref': self._inspection_visual['ref'], 'dispatched': False})
         if choice == 'continue':
             if not self.plan['steps'][self.position:]:
                 self.event('screenshot-decision-rejected', reason='continue_without_remaining_steps')

@@ -37,7 +37,7 @@ def main():
                 if scope.get(key): bound[option] = scope[key]
         else:
             entry = ['webcollect.candidate_consumer', 'run']
-            bound = {'--protocol': 'entry', '--pool': scope['pool'], '--producer-batch': scope['batch'],
+            bound = {'--pool': scope['pool'], '--producer-batch': scope['batch'],
                      '--config': scope['consumer_config'], '--ledger': scope['consumer_db'],
                      '--output': scope['output'], '--registry': scope['registry'],
                      '--policy': scope['policy'], '--history-set': scope['history_set'],
