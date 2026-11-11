@@ -40,8 +40,9 @@ def pool_for_catalog(catalog):
     if not path.exists():
         return None
     value = load_json(path)
-    if value.get('schema_version') != 'webcollect-site-pool-binding-1' or value.get('catalog') != {
-            'path': str(Path(catalog).resolve()), 'sha256': file_sha(catalog)}:
+    if (value.get('schema_version') not in ('site-pool-binding', 'webcollect-site-pool-binding-1')
+            or value.get('catalog') != {
+            'path': str(Path(catalog).resolve()), 'sha256': file_sha(catalog)}):
         raise ValueError('Shared pool catalog binding changed')
     return str(Path(value['pool']).resolve())
 
@@ -249,7 +250,7 @@ def validate_handoff(handoff_reference, dataset):
     """Check original capture bytes before QC jobs can be dispatched."""
     verify_evidence([handoff_reference])
     handoff = load_json(handoff_reference['path'])
-    if handoff.get('schema_version') != 'webcollect-qc-handoff-1':
+    if handoff.get('schema_version') not in ('qc-handoff', 'webcollect-qc-handoff-1'):
         raise ValueError('Original current-chain QC handoff required')
     from quality_inspector.profiles import package_files
     from .qc_handoff import _attempts
@@ -312,7 +313,7 @@ def sync_candidate_qc(pool_path, registry):
     pool=CandidatePool(pool_path)
     registry=str(Path(registry).resolve())
     with pool.pool.connect() as con:
-        rows=[dict(r) for r in con.execute("SELECT r.*,json_extract(c.binding,'$.research_replay.schema_version') AS research_version FROM candidate_results r JOIN candidate_claims c USING(candidate_id,claim_id) WHERE r.effective=1 OR json_extract(c.binding,'$.research_replay.schema_version') IN ('candidate-research-replay-1','candidate-research-replay-2','candidate-research-replay-3')")]
+        rows=[dict(r) for r in con.execute("SELECT r.*,json_extract(c.binding,'$.research_replay.schema_version') AS research_version FROM candidate_results r JOIN candidate_claims c USING(candidate_id,claim_id) WHERE r.effective=1 OR json_extract(c.binding,'$.research_replay.schema_version') IN ('candidate-research-replay-1','candidate-research-replay-2','candidate-research-replay-3','candidate-research-replay')")]
     for row in rows:
         result=json.loads(row['record'])
         if result['registry']!=registry: continue

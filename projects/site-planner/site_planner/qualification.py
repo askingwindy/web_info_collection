@@ -135,7 +135,7 @@ def qualification_status(decision, ratios, *, preflight_blocked=False):
 
 def validate_qualification(record):
     q = record['site_qualification']
-    if q.get('schema_version')=='site-source-review-2':
+    if q.get('schema_version') in ('site-source-review-2', 'site-source-review'):
         from .source_review import validate
         return validate(record)
     category_policy, schema = _category_contract(q)
@@ -208,7 +208,7 @@ def validate_qualification(record):
 
 def qualify_catalog(ledger, catalog_path, output, *, access=None):
     catalog = load_json(catalog_path)
-    if catalog.get('schema_version') != 'webcollect-capability-catalog-1' or catalog.get('mode') != ledger.config['mode']:
+    if catalog.get('schema_version') not in ('capability-catalog','webcollect-capability-catalog-1') or catalog.get('mode') != ledger.config['mode']:
         raise ValueError('Current same-mode capability catalog required')
     output = Path(output).resolve(); output.mkdir(parents=True, exist_ok=True)
     access = access or {'kind': 'public', 'source': 'No account or credentials used'}

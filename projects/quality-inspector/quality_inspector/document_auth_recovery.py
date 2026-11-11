@@ -18,10 +18,13 @@ from webcollect.batch_core import BatchLedger
 from webcollect.model_gateway import parse_content, response_usage
 from . import document_text_qc as lane, delivery_pipeline as pipeline
 
-VERSION = 'document-auth-recovery-1'
+VERSION = 'document-auth-recovery'
 EVENT = 'document_auth_recovery_increment'
-AUTH_VERSION = 'webcollect-document-auth-recovery-authorization-1'
-PROOF_VERSION = 'webcollect-model-authentication-evidence-1'
+AUTH_VERSION = 'document-auth-recovery-authorization'
+PROOF_VERSION = 'model-authentication-evidence'
+LEGACY_VERSION = 'document-auth-recovery-1'
+LEGACY_AUTH_VERSION = 'webcollect-document-auth-recovery-authorization-1'
+LEGACY_PROOF_VERSION = 'webcollect-model-authentication-evidence-1'
 
 
 def _ref(path): return pipeline._ref(path)
@@ -66,7 +69,7 @@ def _original(path):
 
 def _authorization(path, original_path, request):
     value = _read(path)
-    if (value.get('schema_version') != AUTH_VERSION or value.get('original_document_receipt') != _ref(original_path)
+    if (value.get('schema_version') not in (AUTH_VERSION, LEGACY_AUTH_VERSION) or value.get('original_document_receipt') != _ref(original_path)
             or value.get('original_request_id') != request['id'] or type(value.get('maximum_additional_requests')) is not int
             or value['maximum_additional_requests'] != 1
             or value.get('explicit_authentication_recovery') is not True
@@ -106,8 +109,12 @@ def prepare(ledger, original_receipt, authorization, output):
     original, failed, job, request = _original(original_receipt)
     _authorization(authorization, original_receipt, request); _budget(ledger, failed)
     parent_path = original['parent_receipt']['path']; parent = pipeline.verify(parent_path); parent_ledger = pipeline._ledger(parent)
-    identity = _digest({'version': VERSION, 'failed_ledger': str(failed.path), 'failed_config': _digest(failed.config),
-                        'job_id': job['id'], 'request_id': request['id']})
+    # The identity binds only recovery facts; a legacy identity is still honored so an
+    # already-recovered rejection can never receive a second increment.
+    recovery_facts = {'failed_ledger': str(failed.path), 'failed_config': _digest(failed.config),
+                      'job_id': job['id'], 'request_id': request['id']}
+    identity = _digest({'version': VERSION, **recovery_facts})
+    legacy_identity = _digest({'version': LEGACY_VERSION, **recovery_facts})
     output = Path(output).resolve()
     if any(ledger.path.is_relative_to(root) for root in pipeline._roots(parent)):
         raise ValueError('Recovery ledger must be outside inspected packages')
@@ -115,7 +122,7 @@ def prepare(ledger, original_receipt, authorization, output):
     with _file_gate(failed.path.with_name(failed.path.name + '.auth-recovery.prepare.lock')), pipeline._lock(parent_path):
         original, failed, job, current = _original(original_receipt)
         if current != request: raise ValueError('Original rejection changed during recovery preparation')
-        existing = _events(parent_ledger, identity)
+        existing = _events(parent_ledger, identity) or _events(parent_ledger, legacy_identity)
         if existing:
             event = existing[0]
             if (len(existing) != 1 or event['ledger'] != str(ledger.path)
@@ -155,7 +162,7 @@ def prepare(ledger, original_receipt, authorization, output):
 
 def verify(receipt_path):
     value = _read(receipt_path)
-    if (value.get('schema_version') != VERSION or value.get('receipt_sha256') != _digest(
+    if (value.get('schema_version') not in (VERSION, LEGACY_VERSION) or value.get('receipt_sha256') != _digest(
             {key: item for key, item in value.items() if key != 'receipt_sha256'})
             or value.get('implementation_sha256') != _implementation()):
         raise ValueError('Recovery receipt or implementation changed')
@@ -177,7 +184,7 @@ def verify(receipt_path):
 
 def _authentication(path, value, *, require_fresh=True):
     proof = _read(path)
-    if proof.get('schema_version') != PROOF_VERSION: raise ValueError('Actual persisted authentication evidence required')
+    if proof.get('schema_version') not in (PROOF_VERSION, LEGACY_PROOF_VERSION): raise ValueError('Actual persisted authentication evidence required')
     pipeline._check_ref(proof['config']); config = _read(proof['config']['path'])
     metadata = _rows(proof['ledger'], 'SELECT config FROM batch_meta WHERE id=1')
     if len(metadata) != 1 or json.loads(metadata[0]['config']) != config: raise ValueError('Authentication ledger/config mismatch')

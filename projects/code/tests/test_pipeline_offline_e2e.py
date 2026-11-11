@@ -130,7 +130,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
         # new unflagged default is covered independently below and by the v3 suite.
         args=['produce-entries','--config',str(self.producer_cfg),'--pool',str(self.pool.path),
             '--ledger',str(self.producer_ledger),'--history-set',str(self.chain),
-            '--target','1','--max-batches','1','--batch-size','1','--model-protocol','entry-tools-2']
+            '--target','1','--max-batches','1','--batch-size','1']
         args.extend(['--query','受控工具搜索'] if search else ['--sources',str(self.sources_path)])
         if goals:args.extend(['--goals',str(goals)])
         return args
@@ -548,7 +548,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
         for n in range(3):
             guard.record(self.uri, 'previous-attempt-'+str(n), stage='formal', state='failed',
                          reason='fixture', real_execution=True, evidence=[reference(goals)], usage_refs=[])
-        args = producer + ['--goals',str(goals),'--target','2','--model-protocol','entry-tools-1']
+        args = producer + ['--goals',str(goals),'--target','2']
         initial = deepcopy(self.surface.state)
         decisions = list(self.decisions)
         with self.boundaries():
@@ -611,7 +611,7 @@ class PipelineAcceptance(engineering.EntryEngineering):
             report = await asyncio.to_thread(self.invoke,producer_cli,producer+['--query','受控工具','--target','1'])
             result, = await asyncio.to_thread(self.invoke,consumer_cli,consumer+[
                 '--producer-batch',report['batch_scope'],'--request-prefix','default-entry'])
-        self.assertEqual(report['model_protocol'],'entry-tools-4')
+        self.assertEqual(report['model_protocol'],'entry-tools')
         self.assertEqual(report['row_results'],{'NEW':1})
         self.assertEqual(result['state'],'succeeded',result)
         self.assertEqual(result['QC'],'pending_review')

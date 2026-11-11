@@ -15,7 +15,12 @@ sys.path.insert(0, str(REPO / 'projects/quality-inspector/tests'))
 from quality_inspector.engine import inspect
 from quality_inspector.checksums import verify_manifest
 from delivery_scope_fixture import freeze_scope
-from quality_inspector.semantic import rule_ids
+from quality_inspector.semantic import CHECKS
+
+
+def rule_ids():
+    return {name: digest_value for name, digest_value in
+            zip(CHECKS, ['qc-' + name for name in CHECKS])}
 
 
 class BoundClientReports(unittest.TestCase):

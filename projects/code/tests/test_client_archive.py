@@ -10,7 +10,12 @@ from webcollect.client_package import build_client_package,sha,sample_hashes
 from webcollect.client_reports import archive_client_package
 sys.path.insert(0, str(REPO / 'projects/quality-inspector/tests'))
 from delivery_scope_fixture import freeze_scope
-from quality_inspector.semantic import rule_ids
+from quality_inspector.semantic import CHECKS
+
+
+def rule_ids():
+    return {name: digest_value for name, digest_value in
+            zip(CHECKS, ['qc-' + name for name in CHECKS])}
 
 
 class ClientArchive(unittest.TestCase):

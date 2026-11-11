@@ -48,7 +48,7 @@ def load(index, layout):
     try:
         result['sha256'] = sha(path)
         data = json.loads(path.read_text())
-        if not isinstance(data, dict) or data.get('schema_version') != 'webcollect-client-evidence-1':
+        if not isinstance(data, dict) or data.get('schema_version') not in ('client-evidence', 'client-evidence'):
             raise ValueError('Unsupported external evidence schema')
         if not isinstance(data.get('samples'), list):
             raise ValueError('External evidence samples must be an array')

@@ -6,10 +6,10 @@ import tempfile
 import unittest
 
 from webcollect.collect import describe_change, visible_result_description
-from webcollect.react_protocol import atomic_effect, LEGACY_EFFECT_RULE, SYSTEM, native_tools
+from webcollect.react_protocol import atomic_effect, SYSTEM, native_tools
 from webcollect.react_context import project
 from webcollect.qc_handoff import qc_layers
-from webcollect.browser import stability_pair, STABILITY_V4
+from webcollect.browser import stability_pair
 from test_related_capture_stability import state, png
 
 
@@ -67,7 +67,6 @@ class MultistepChecks(unittest.TestCase):
             node('news','aside','p','旧侧栏')])
         after = deepcopy(before);after['elements'][-1]['text']='新侧栏';after['visible_text']='查询\n旧结果\n新侧栏'
         self.assertFalse(atomic_effect(before, after, 'click', {}, 'button')['verified'])
-        self.assertTrue(atomic_effect(before, after, 'click', {}, 'button', rule_version=LEGACY_EFFECT_RULE)['verified'])
         after['elements'][2]['text']='找到三项';after['visible_text']+='\n找到三项'
         self.assertTrue(atomic_effect(before, after, 'click', {}, 'button')['verified'])
         scoped=deepcopy(before)
@@ -112,7 +111,6 @@ class MultistepChecks(unittest.TestCase):
             peripheral=True,controls=False,geometry_and_style_clear=True,hit_samples=[True]*9,
             protected_boxes=[[0,15,9,25]]))]
         self.assertTrue(stability_pair(first,deepcopy(first),png(),png(pixel=(15,5)))['accepted'])
-        self.assertFalse(stability_pair(first,deepcopy(first),png(),png(pixel=(15,5)),rule_version=STABILITY_V4)['accepted'])
         self.assertFalse(stability_pair(first,deepcopy(first),png(),png(pixel=(5,20)))['accepted'])
         first['capture_media'][0]['proof']['protected_boxes'].append([15,2,20,8])
         self.assertFalse(stability_pair(first,deepcopy(first),png(),png(pixel=(15,5)))['accepted'])

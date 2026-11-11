@@ -61,7 +61,12 @@ def run_config(run_id, model, purpose, max_requests, max_wall_seconds, max_image
     return {'run_id': run_id, 'model': model, 'purpose': purpose,
             'max_exec_invocations': max_requests, 'max_wall_seconds': max_wall_seconds,
             'max_images': max_images, 'auth': 'chatgpt', 'provider': 'openai',
-            'version': VERSION, 'implementation': implementation_sha256()}
+            'implementation': implementation_sha256()}
+
+
+def governance_config(config):
+    """Compare ledger configs structurally; retired version labels never gate loading."""
+    return {key: value for key, value in config.items() if key != 'version'}
 
 
 def ledger_snapshot(db, keys=None):
@@ -193,7 +198,7 @@ def load_amendment(db, amendment_id, slot, config, bound):
         raise ValueError('Stored amendment bytes changed')
     validate_amendment(value)
     check_amendment_bindings(db, value)
-    if config != value['config'] or bound != value['slots'][slot-1]['candidate']:
+    if governance_config(config) != governance_config(value['config']) or bound != value['slots'][slot-1]['candidate']:
         raise ValueError('Invocation does not match its explicitly frozen amendment slot')
     return value
 
@@ -252,8 +257,8 @@ def validate_slot_revision(db, value):
     if len(prior_slots) != 1 or prior_slots[0][1] not in keys:
         raise ValueError('Slot revision requires the first bounded attempt')
     config = value['config']
-    if {k:v for k,v in config.items() if k != 'implementation'} != {
-            k:v for k,v in amendment['config'].items() if k != 'implementation'}:
+    if {k:v for k,v in config.items() if k not in ('implementation', 'version')} != {
+            k:v for k,v in amendment['config'].items() if k not in ('implementation', 'version')}:
         raise ValueError('Slot repurpose cannot change model, count, time or image limits')
     if config['implementation'] != implementation_sha256() or value['contract_sha256'] != fingerprint()[1]:
         raise ValueError('Slot revision implementation or contract changed')
@@ -315,7 +320,8 @@ def load_slot_revision(db, revision_id, amendment_id, slot, config, bound, codex
     if digest(value) != row[0]:
         raise ValueError('Stored slot revision bytes changed')
     amendment = validate_slot_revision(db, value)
-    if (slot != 2 or amendment_id != value['amendment_id'] or config != value['config']
+    if (slot != 2 or amendment_id != value['amendment_id']
+            or governance_config(config) != governance_config(value['config'])
             or bound != value['candidate'] or str(Path(codex).resolve()) != value['cli']['path']):
         raise ValueError('Invocation does not match its explicit repair slot')
     return amendment, value
@@ -498,7 +504,7 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
                 amendment = load_amendment(db, amendment_id, slot, config, bound)
         elif current is None:
             db.execute('INSERT INTO run VALUES (1,?,NULL)', (frozen_config,))
-        elif current[0] != frozen_config:
+        elif governance_config(json.loads(current[0])) != governance_config(config):
             raise ValueError('Run configuration changed; existing ledger cannot reset its budget')
         previous = db.execute('SELECT state,result,directory FROM requests WHERE key=?', (key,)).fetchone()
         if previous:

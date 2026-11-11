@@ -4,10 +4,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from webcollect.banded_plan import plan_schema, remaining_step_allowance, system_with_attempt_limit, V11_PLANNING_GUIDANCE
+from webcollect.banded_plan import plan_schema
 from webcollect.plan_evidence import page_matches, region_matches, facts, unverified_required_checks
 
-POLICY='webcollect-five-ten-effective-ending-5'
+POLICY='goal-completion-ending'  # single current ending policy
 
 class FiveTenFactsTests(unittest.TestCase):
     def test_wiki_namespace_title_edit_and_redirect_are_observation_bound(self):
@@ -34,17 +34,6 @@ class FiveTenFactsTests(unittest.TestCase):
     def test_list_heading_is_not_page_identity(self):
         state={'url':'https://a.test/list','title':'目录','elements':[{'visible':True,'native_role':'h3','text':'天津历史'}]}
         self.assertFalse(page_matches('天津历史',state))
-
-    def test_remaining_is_cumulative_not_plan_position(self):
-        s=SimpleNamespace(task={'fragment':{'ending_policy':POLICY}},trajectory=[{}]*7,plan_controller=SimpleNamespace(frozen_band='long'))
-        self.assertEqual(remaining_step_allowance(s),3)
-        s.plan_controller.position=0
-        self.assertEqual(remaining_step_allowance(s),3)
-        self.assertEqual(plan_schema(max_steps=10)['properties']['steps']['maxItems'],10)
-        prompt=system_with_attempt_limit(V11_PLANNING_GUIDANCE+'先核算完整路径的8步额度：',10)
-        self.assertIn('累计最多10步',prompt)
-        self.assertNotIn('凑足',prompt)
-        self.assertNotIn('8步',prompt)
 
     def test_facts_keep_original_checks_and_attach_action_references(self):
         with TemporaryDirectory() as td:

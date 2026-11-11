@@ -26,8 +26,12 @@ GROUP_PROFILES = {
     'A': {'first_plan': 'high', 'branch': 'low'},
     'B': {'first_plan': 'high', 'branch': 'high'},
 }
-ROSTER_SCHEMA = 'webcollect-consumer-ab-roster-1'
-SLOT_STATE_SCHEMA = 'webcollect-consumer-ab-slot-state-1'
+ROSTER_SCHEMA = 'consumer-ab-roster'
+SLOT_STATE_SCHEMA = 'consumer-ab-slot-state'
+LEGACY_SLOT_STATE_SCHEMA = 'webcollect-consumer-ab-slot-state-1'
+DRAFT_SCHEMA = 'consumer-ab-draft'
+LEGACY_DRAFT_SCHEMA = 'webcollect-consumer-ab-draft-1'
+REPORT_SCHEMA = 'consumer-ab-report'
 WORKERS_PER_GROUP = 4
 
 
@@ -105,9 +109,9 @@ def prepare(pool_path, draft_path, output_dir, *, seed=20261106, objectives_dir=
     from site_planner.candidate_pool import CandidatePool
     pool = CandidatePool(pool_path)
     draft = _load(draft_path)
-    if draft.get('schema_version') != 'webcollect-consumer-ab-draft-1' or not isinstance(draft.get('candidates'), list):
-        raise ValueError('Draft must use webcollect-consumer-ab-draft-1 with a candidates list')
-    rows = pool.rows(protocols=('webcollect-data-candidate-2',))
+    if draft.get('schema_version') not in (DRAFT_SCHEMA, LEGACY_DRAFT_SCHEMA) or not isinstance(draft.get('candidates'), list):
+        raise ValueError('Draft must use consumer-ab-draft with a candidates list')
+    rows = pool.rows()
     by_id = {row['candidate_id']: row for row in rows}
     selected = []
     for entry in draft['candidates']:
@@ -168,7 +172,7 @@ def _existing_state(output_dir, slot):
     if not path.exists():
         return None
     state = _load(path)
-    if state.get('schema_version') != SLOT_STATE_SCHEMA:
+    if state.get('schema_version') not in (SLOT_STATE_SCHEMA, LEGACY_SLOT_STATE_SCHEMA):
         raise ValueError('Unknown slot state schema: ' + str(path))
     return state
 
@@ -181,7 +185,7 @@ def worker(roster, slot_name_value, *, config, ledger_path, registry, policy_pat
     receipt and never dispatches a new collection.
     """
     import asyncio
-    from site_planner.candidate_pool import CandidatePool, VERSION2
+    from site_planner.candidate_pool import CandidatePool
     from webcollect.batch_core import BatchLedger, BudgetStop, OutcomeUnknown
     from webcollect.candidate_consumer import consume
     slot = next((s for s in roster['slots'] if s['slot'] == slot_name_value), None)
@@ -196,7 +200,7 @@ def worker(roster, slot_name_value, *, config, ledger_path, registry, policy_pat
     pool = CandidatePool(roster['pool'])
     ledger = BatchLedger(ledger_path, _load(config))
     claim = pool.claim_next(slot['worker_id'], slot['request_prefix'],
-                            candidate_id=slot['candidate']['candidate_id'], protocols=(VERSION2,))
+                            candidate_id=slot['candidate']['candidate_id'])
     if claim.get('state') in ('EMPTY', 'ALREADY_CLAIMED'):
         # The outcome is always a record so the report reader never has to
         # branch on shape; the unclaimable reason is preserved verbatim.
@@ -321,7 +325,7 @@ def report(roster, ledger_path, experiment_dir):
                           'unknown_requests': sum(1 for s in rows for r in s.get('requests', []) if r['state'] == 'unknown'),
                           'statuses': {st: sum(1 for o in outcomes if o.get('state') == st)
                                        for st in {str(o.get('state')) for o in outcomes} - {'None'}}}
-    return {'schema_version': 'webcollect-consumer-ab-report-1', 'slots': slots, 'groups': summary,
+    return {'schema_version': REPORT_SCHEMA, 'slots': slots, 'groups': summary,
             'generated_at': time.time()}
 
 
@@ -344,7 +348,7 @@ def adjust_concurrency(ledger_path, config_path, *, target, authorization):
         changed = before != target or ledger.consumer_concurrency(con) is None
         if changed:
             ledger.event(con, 'consumer_concurrency', {
-                'schema_version': 'webcollect-consumer-concurrency-1',
+                'schema_version': 'consumer-concurrency',
                 'ledger': str(ledger.path), 'run_id': config['run_id'],
                 'config_sha256': object_sha256(config),
                 'max_concurrent_jobs': target,

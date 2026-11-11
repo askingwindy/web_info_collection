@@ -69,7 +69,7 @@ class Evidence(fixture.unittest.TestCase):
 
     def test_v5_formal_publish_restart_reuses_original_no_io(self):
         _,home=self.f.site()
-        opts=dict(key='v5',target=2,model_protocol='entry-tools-5')
+        opts=dict(key='v5',target=2)
         first=self.f.run_new(home,**opts);replay=self.f.run_new(home,**opts)
         self.assertEqual(first['listed_unique_candidates'],2,first)
         self.assertEqual(replay['new_dispatches'],{'model':0,'GET':0,'search':0})

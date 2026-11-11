@@ -13,7 +13,7 @@ def authority():
     root = Path(__file__).parent
     manifest = json.loads((root / 'contract-authority.json').read_text(encoding='utf-8'))
     roles = [item['role'] for item in manifest['documents']]
-    if (manifest.get('schema_version') != 'qc-installed-authority-1'
+    if (manifest.get('schema_version') not in ('installed-authority','qc-installed-authority-1')
             or len(roles) != len(set(roles)) or roles != manifest.get('source_precedence')
             or not {'clarification', 'site_trajectory_scope', 'trajectory_supplement',
                     'qc_sampling', 'requirement', 'annex_a', 'annex_b'} <= set(roles)):
@@ -29,7 +29,6 @@ def authority():
 
 
 def installed_contract():
-    from . import __version__
     from .format_checks import ANNOTATION, TREE, ACTIONS, catalog
     from .reviews import SEMANTIC, REVIEW_POLICY
     from .category_coverage import POLICY as CATEGORY_COVERAGE_POLICY
@@ -38,7 +37,7 @@ def installed_contract():
     return {
         'schema_version': 'webcollect-delivery-contract-2',
         'annotation': ANNOTATION, 'tree': TREE, 'actions': ACTIONS,
-        'rules_version': __version__, 'authority': documents,
+        'authority': documents,
         'attachments': {Path(row['path']).name: row['sha256']
                         for row in documents['documents'] if row['role'] in ('annex_a', 'annex_b')},
         'rule_catalog': catalog(), 'semantic_checks': SEMANTIC,

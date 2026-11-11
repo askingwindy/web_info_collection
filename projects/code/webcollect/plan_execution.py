@@ -4,7 +4,7 @@ from urllib.parse import urldefrag, unquote
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence
 
-VERSION = 'webcollect-plan-execution-1'
+from .plan_protocol import PLAN_EXECUTION_POLICY as VERSION
 
 
 def enabled(task):

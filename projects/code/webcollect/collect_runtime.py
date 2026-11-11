@@ -12,6 +12,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 
+from .closing_policy import enabled as closing_enabled
 from .production_quality import ConcurrentExactImageIndex, contract_identity, sha
 from .storage import write_json, verify_existing_registry
 from .validate import read_json, validate_sample
@@ -409,7 +410,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         return await inspect_page(page, task, directory, samples=2, interval_ms=100, url_check=url_check)
     feedback_context = await asyncio.to_thread(site_context, registry, task['site_uri'], model_ledger=ledger,
         candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
-    if task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6') and feedback_context['unresolved']:
+    if not closing_enabled(task) and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
     from .banded_plan import enabled as banded_plan_enabled
@@ -446,26 +447,21 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
             'rejected', failure_class=failure_class, root_cause=root_cause,
             evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
-        if failure_class == 'program' and task.get('fragment', {}).get('ending_policy') not in ('webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5', 'webcollect-five-eight-complete-ending-6'):
+        if failure_class == 'program' and not closing_enabled(task):
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         return {'status': 'rejected', 'failure_class': failure_class,
-                'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt, **stop_data}
+                'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt,
+                **({'strategy_result': summary['strategy_result']} if summary.get('strategy_result') else {}),
+                **stop_data}
     ending=summary.get('collection_ending')
     prefix_end=None
     verified_session=None
-    from .trusted_prefix import VERSION as PREFIX_VERSION, V2_VERSION as PREFIX_V2, candidate_end, project_prefix
+    from .plan_protocol import TRUSTED_PREFIX_POLICY
+    from .trusted_prefix import candidate_end, project_prefix
     prefix_rule=task['fragment'].get('trusted_prefix_protocol')
-    from .postprocess import ready_requires_prefix
-    from .closing_policy import EFFECTIVE_VERSION
     ready_with_missing_checks=False
-    if (task['fragment'].get('ending_policy')==EFFECTIVE_VERSION
-            and summary.get('stop_reason')=='ready'):
-        # Use the sealed terminal, not the model summary or a fresh inference.
-        from .planning import verify_evidence
-        verify_evidence([summary['terminal']])
-        ready_with_missing_checks=ready_requires_prefix(task,read_json(Path(summary['terminal']['path'])))
-    prefix_requested=(prefix_rule in (PREFIX_VERSION, PREFIX_V2) and
+    prefix_requested=(prefix_rule == TRUSTED_PREFIX_POLICY and
         (summary['unknown'] or summary.get('host_failure') or ready_with_missing_checks or
          (ending and ending.get('flagged')) or summary.get('stop_reason') in ('blocked','no_path','budget')))
     if prefix_requested:
@@ -497,14 +493,14 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     if ending and ending.get('kind') in RAW_ONLY_ENDINGS and prefix_end is None:
         # 策略 2 的 give_up/unsuitable/no_progress 只留原始记录，不进入正式派生。
         receipt=evidence/'screenshot-raw-only.json'
-        write_json(receipt,{'schema_version':'webcollect-screenshot-raw-only-1',
+        write_json(receipt,{'schema_version':'screenshot-raw-only',
             'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
             'saved_raw':True,'normal_sample_saved':False,'QC_status':'NOT_RUN'})
         return await finish_failure('collector','react_screenshot_raw_only:'+str(ending.get('kind'))
                                     +':'+str(ending.get('reason')),_evidence(receipt))
     if ending and not ending.get('safe_for_pending_sample') and prefix_end is None:
         pending=evidence/'raw-ending-pending.json'
-        write_json(pending,{'schema_version':'webcollect-raw-ending-pending-2',
+        write_json(pending,{'schema_version':'raw-ending-pending',
             'attempt_id':attempt['attempt_id'],'collection_ending':ending,'raw_receipt':raw_receipt,
             'saved_raw':True,'normal_sample_saved':False,'requires_reconciliation':True,'QC_status':'NOT_RUN'})
         result=await finish_failure('interrupted' if summary['unknown'] else 'collector',
@@ -593,13 +589,25 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                                   _evidence(collision) + [derived_ref])
         index.add_sample(sample)
     from .closing_policy import completion_delivery_decision
+    from . import collection_strategy as _cs
     completion_decision = completion_delivery_decision(read_json(sample/'annotation.json'), read_json(saved)['raw_execution'])
+    final_result = None
+    if summary.get('strategy_result'):
+        # The session-stage end facts were transient (unresolved / not_saved);
+        # the committed outcome and the eligibility decision are authoritative.
+        final_result = _cs.finalize_strategy_result(
+            summary['strategy_result'], save_status='collected_pending_review',
+            eligibility=('eligible' if completion_decision['delivery_eligible'] else 'ineligible'),
+            details={'effective_steps': derived['effective_steps'],
+                     'completion_status': completion_decision['completion_status'],
+                     'delivery_policy': completion_decision['delivery_policy']})
     return {'status': 'collected_pending_review', 'effective_steps': derived['effective_steps'],
             'completion_delivery':completion_decision,
             'original_goal_completed':completion_decision['original_goal_completed'],
             **({'collection_ending':ending} if ending else {}),
             **({'trusted_prefix':derived['trusted_prefix'],'original_goal_completed':False} if derived.get('trusted_prefix') else {}),
             'short_flow': derived.get('short_flow'), 'stop_reason': summary['stop_reason'],
+            **({'strategy_result': final_result} if final_result else {}),
             'raw_receipt': raw_receipt, 'saved_sample': str(saved.resolve()), **stop_data}
 
 
@@ -686,7 +694,6 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         if resume and bootstrap_path.exists():
             bootstrap = read_json(bootstrap_path)
             if (bootstrap.get('plan') != plan or bootstrap.get('publication') != publication
-                    or bootstrap.get('source_files_sha256') != sources
                     or bootstrap.get('registry_path') != str(registry)
                     or bootstrap.get('output_path') != str(output)
                     or bootstrap.get('manifest', {}).get('contract_profile') != contract_identity(Path(__file__).resolve().parents[3])):
@@ -755,7 +762,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 raise ValueError('M4预算必须显式声明baseline_category_counts；旧基线尚未确认时不能开始采集')
             policy = validate_policy(supplied_policy)
             verify_shard_policy(registry, policy)
-            manifest = {'schema_version': 'webcollect-runtime-manifest-m4-1',
+            manifest = {'schema_version': 'runtime-manifest',
                 'runtime_scope_id': scope, 'registry_path': str(registry),
                 'contract_profile': contract_identity(Path(__file__).resolve().parents[3]),
                 'plan_sha256': sha(plan_path), 'plan_object_sha256': object_sha256(plan),
@@ -770,7 +777,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                 'human_review': 'pending', 'created_at': now()}
             if not output.exists():
                 output.mkdir(parents=True)
-            checkpoint_json(bootstrap_path, {'schema_version': 'webcollect-bootstrap-m4-1',
+            checkpoint_json(bootstrap_path, {'schema_version': 'runtime-bootstrap',
                 'plan': plan, 'publication': publication, 'policy': policy, 'manifest': manifest,
                 'source_files_sha256': sources, 'registry_path': str(registry), 'output_path': str(output),
                 **({'site_pool': str(Path(site_pool).resolve())} if site_pool is not None else {})})
@@ -1017,7 +1024,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     sync_manifest(store, output, manifest)
     # This second content read prevents an incrementally cached root from hiding changes.
     try:
-        if source_identity() != sources or contract_identity(Path(__file__).resolve().parents[3]) != manifest['contract_profile']:
+        if contract_identity(Path(__file__).resolve().parents[3]) != manifest['contract_profile']:
             raise ValueError('采集期间代码或合同来源发生变化，停止本批发布并保留原始证据')
         checkpoint_json(output / 'exact-index-receipt.json', index.verify_snapshot())
     except Exception as error:

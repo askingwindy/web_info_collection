@@ -84,7 +84,7 @@ class ProducerReuseQuery(unittest.TestCase):
         save_json(goals,{'schema_version':'webcollect-caller-goals-1','goals':[{'uri':uri,
                   'requested_goal':{'kind':'换算','entity':'长度','parameters':{'公里':3}}}]})
         def produce(source,batch):
-            return self.f.run_new(source,key=batch,target=1,goals_path=goals,model_protocol='entry-tools-4')
+            return self.f.run_new(source,key=batch,target=1,goals_path=goals)
         with patch.object(access,'fetch_status',return_value=(404,uri)):
             self.assertEqual(produce(home,'original')['row_results'],{'REJECTED':1})
         evidence=self.f.t.docs/'site-repair.json';save_json(evidence,{'uri':uri,'fact':'fixture site restored'})
@@ -125,7 +125,7 @@ class ProducerReuseQuery(unittest.TestCase):
         patch.object(self.f.f.provider.opener,'open',side_effect=provider_response).start()
         args=dict(pool_path=self.f.pool.path,ledger_path=self.root/'model.db',history_set=self.f.f.chain,
             output=self.root/'output/category',batch_key='category',categories=['在线工具'],target=1,
-            max_batches=1,max_searches=1,model_protocol='entry-tools-3')
+            max_batches=1,max_searches=1)
         # Search transport is controlled; Table1 classification still uses the existing fake provider.
         from site_planner import grounded_entries as g
         with patch('webcollect.model_gateway.ModelGateway.call',new=model), patch('site_planner.application_discovery.homepage_document',return_value=(home,home['reference'])):

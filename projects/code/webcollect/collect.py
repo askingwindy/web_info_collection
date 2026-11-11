@@ -29,7 +29,7 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
     """
     protection={'protected_selectors':protected_selectors} if protected_selectors else {}
     started=time.monotonic()
-    timing={'policy':'complete-full-refresh-1','started_at':now(),'attempt_limit':3,
+    timing={'policy':'complete-full-refresh','started_at':now(),'attempt_limit':3,
             'timeout_seconds':12,'quiet_window_ms':1000,'retry_wait_ms':250,
             'natural_wait_requested_ms':0,'natural_wait_observed_ms':0.0,'attempts':[]}
 
@@ -990,10 +990,10 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
     contract_result=None
     task_identity={'task_id':task.get('task_id'),'task_version':task.get('task_version'),
                    'task_sha256':canonical_sha({k:v for k,v in task.items() if not k.startswith('_')})} if m4 else None
-    if m4:checkpoint_json(evidence/'task_contract.json',{'schema_version':'webcollect-task-contract-evidence-1',
+    if m4:checkpoint_json(evidence/'task_contract.json',{'schema_version':'task-contract-evidence',
             **task_identity,'machine_status':'IN_PROGRESS','semantic_status':'REVIEW_REQUIRED'})
     settings=preparation_settings(task)
-    preparation={'schema_version':'content-preparation-v1',
+    preparation={'schema_version':'content-preparation',
                  'mode':'disabled' if settings['mode']=='off' else 'enabled',
                  'settings':settings,'decisions':[]}
     planned_index=0;preparation_actions=0;preparation_scrolls=0
@@ -1041,7 +1041,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             except Exception as assessment_error:
                 # A failed observer must still retain the first available
                 # pre-action frame, not click/scroll or lose the landing state.
-                assessment={'schema_version':'content-preparation-assessment-1',
+                assessment={'schema_version':'content-preparation-assessment',
                     'page_url':page.url,'settings':settings,
                     'decision':{'action':'blocked','reason':'正文与广告判断失败：'+str(assessment_error)},
                     'observer_error':str(assessment_error)}
@@ -1130,7 +1130,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                 op={**op,'goal':final_goal,'rationale':final_description,'expected':final_description}
             if i==1:
                 (evidence/'initial_capture.png').write_bytes(observation['png'])
-                write_json(evidence/'initial_capture.json',{'policy':'content-preparation-v1',
+                write_json(evidence/'initial_capture.json',{'policy':'content-preparation',
                     'state':state,'capture':observation['capture'],'first_step_id':1,'pre_action':True,
                     'settings':settings,'page_url':state['url']})
             if pending_preparation is not None:
@@ -1158,7 +1158,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             if preparation_error:
                 entry['blocked_reason']=preparation_error
                 checkpoint_json(evidence/'preparation_decisions.json',preparation)
-                write_json(evidence/'preparation_failure.json',{'policy':'content-preparation-v1','reason':preparation_error,
+                write_json(evidence/'preparation_failure.json',{'policy':'content-preparation','reason':preparation_error,
                     'step_id':i,'decision_id':decision_id,'action_executed':False,
                     'state':state,'capture':observation['capture'],
                     'screenshot_sha256':observation['capture']['screenshot_sha256']})
@@ -1200,7 +1200,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                     'input_text':arguments['text'] if op['action_type']=='type' else '+'.join(arguments['keys']) if op['action_type']=='hotkey' else '',
                     'precondition':op.get('precondition',f'当前页面为「{state["title"]}」'+((f'，可见「{element["text"]}」控件' if element['text'] else '，可见目标控件') if element else '')),
                     'expected_result':op['expected']}
-            if element and op.get('evidence',{}).get('observation_protocol')=='webcollect-trusted-observation-1':
+            if element and op.get('evidence',{}).get('observation_protocol')=='trusted-observation':
                 label=op['evidence']['target_label']
                 action['precondition']=f'当前页面为「{state["title"]}」，可见「{label}」目标控件'
             if element:action.update(target_bbox=element['bbox'],target_control_type=element['element_type'])
@@ -1337,11 +1337,11 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
             checkpoint_json(evidence/'task_contract.json',contract_result)
         write_json(evidence/'ground_truth.json',ground_truth)
         write_json(evidence/'capture_summary.json',{'snapshot_source':'browser_dom','capture_count':len(steps),
-              'minimum_chinese_character_ratio':min(ratios),'language_check_version':'page-control-language-consistency-1',
+              'minimum_chinese_character_ratio':min(ratios),'language_check_version':'page-control-language-consistency',
               'chinese_ratio_diagnostic_only':True,'language_review':'pending',
               'chinese_ratio_method':'Han / Unicode letters, deduplicated visible DOM text plus form values; image text needs human review',
               'human_review':'pending','agent_visual_review':'pending','task_id':task['task_id'],
-              'preparation_policy':'content-preparation-v1','preparation_actions':preparation_actions,
+              'preparation_policy':'content-preparation','preparation_actions':preparation_actions,
               'preparation_scrolls':preparation_scrolls})
         return annotation
     except Exception as error:
@@ -1367,7 +1367,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                 'screenshot_sha256':hashlib.sha256(rejected_png).hexdigest(),
                 'accepted_as_formal_frame':False,'evidence_source':'rejected_original_synchronized_png'})
         if m4:
-            checkpoint_json(evidence/'task_contract.json',{'schema_version':'webcollect-task-contract-evidence-1',
+            checkpoint_json(evidence/'task_contract.json',{'schema_version':'task-contract-evidence',
                 **task_identity,'machine_status':'FAIL','semantic_status':'REVIEW_REQUIRED','reason':str(error),
                 'executed_step_ids':[r['step_id'] for r in raw_records],
                 'original_evidence_preserved':True})
@@ -1432,7 +1432,7 @@ async def collect_plan(plan_path, output, registry, channel='chrome', headless=T
                        controller_ledger=None):
     from playwright.async_api import async_playwright
     plan=read_json(Path(plan_path));validate_plan(plan)
-    if plan.get('schema_version') == 'webcollect-plan-m4-1':
+    if plan.get('schema_version') == PLAN_SCHEMA:
         from .collect_runtime import collect_m4
         return await collect_m4(plan_path, output, registry, publication_path=publication_path,
                                 policy_path=policy_path, resume=resume, channel=channel,
@@ -1451,7 +1451,7 @@ async def collect_plan(plan_path, output, registry, channel='chrome', headless=T
     from .production_quality import contract_identity,sha
     repository=Path(__file__).resolve().parents[3]
     contract=contract_identity(repository)
-    manifest={'contract_profile':contract,'plan_sha256':sha(plan_path),'preparation_policy':'content-preparation-v1','generator_files_sha256':{name:sha(Path(__file__).parent/name) for name in ['collect.py','browser.py','snapshot.js','production_quality.py','content_preparation.py','content_preparation.js','action_normalization.py']},'batch_id':None,'sample_kind':'real','program_version':program_version(),'rule_version':'1.0.0',
+    manifest={'contract_profile':contract,'plan_sha256':sha(plan_path),'preparation_policy':'content-preparation-v1','generator_files_sha256':{name:sha(Path(__file__).parent/name) for name in ['collect.py','browser.py','snapshot.js','production_quality.py','content_preparation.py','content_preparation.js','action_normalization.py']},'batch_id':None,'sample_kind':'real','program_version':program_version(),
               'configuration':{'viewport':[1280,720],'device_scale_factor':1,'locale':'zh-CN','timezone':'Asia/Shanghai',
                                'channel':channel,'headless':headless,'default_settle_ms':500,'task_interval_seconds':1},
               'sites':[],'samples':[],'collection_status':'in_progress','human_review':'pending','created_at':now()}

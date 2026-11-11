@@ -300,7 +300,7 @@ def validate_visual_target(state,operation):
     return True
 
 
-def compile_html_table(capability,spec,task_version='observed-html-table-compiler-1'):
+def compile_html_table(capability,spec,task_version=ADAPTER_ID + '-compiler'):
     from .planning import object_sha256
     from .collect import validate_plan
     from .task_contract import validate_m4_task

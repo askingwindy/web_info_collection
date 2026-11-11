@@ -20,7 +20,6 @@ from .contract import fingerprint
 from .reviews import SEMANTIC, evidence_files, intake, record_hash, sha
 
 VERSION = 'delivery-semantic-sampling-1'
-SAMPLING_RULES_VERSION = 'sample-slot-seeded-ceil-independent-roles-and-human-escalation-1'
 
 
 def digest(value):
@@ -140,7 +139,6 @@ def freeze(dataset, output, *, ai_percent=100, human_percent=0, seed, stratify='
         chosen = _selection(slots, policy, role)
         for slot in slots: slot[role + '_selected'] = slot['slot_id'] in chosen
     plan = _seal({'schema_version': VERSION, 'contract_sha256': fingerprint()[1],
-                  'sampling_rules_version':SAMPLING_RULES_VERSION,
                   'implementation_sha256':sha(__file__),
                   'policy': policy, 'original_denominator': len(slots), 'slots': slots,
                   'parent': None, 'revision': 0, 'not_an_actual_review': True})
@@ -197,7 +195,7 @@ def verify(plan_path, dataset=None, _visited=None):
         raise ValueError('Invalid or changed delivery sampling plan')
     if plan.get('contract_sha256') != fingerprint()[1]: raise ValueError('Sampling contract changed; freeze a new scope')
     if 'sampling_rules_version' in plan:
-        if plan['sampling_rules_version']!=SAMPLING_RULES_VERSION:raise ValueError('Sampling rules changed; freeze a new scope')
+        raise ValueError('Historical sampling plan carries a retired rules version; freeze a new scope')
     elif plan.get('implementation_sha256') != sha(__file__):
         raise ValueError('Legacy sampling implementation changed; freeze a new scope')
     policy = plan['policy']; _percent(policy['ai_percent']); _percent(policy['human_percent'])

@@ -13,9 +13,10 @@ from unittest.mock import patch
 import test_candidate_entry_engineering as entry_tests
 from test_model_provider_protocols import StubOpener
 from webcollect.batch_core import BatchLedger, file_sha, load_json, save_json
-from webcollect.closing_policy import COMPLETE_VERSION, completion_delivery_decision
+from webcollect.closing_policy import completion_delivery_decision
 from webcollect.collect_runtime import runtime_scope
 from webcollect.model_gateway import ModelGateway
+from webcollect.plan_protocol import ENDING_POLICY as COMPLETE_VERSION
 from webcollect.runtime import RuntimeStore
 
 
@@ -37,13 +38,34 @@ class UnifiedEntryContract(unittest.IsolatedAsyncioTestCase):
             'document_ready': 'complete', 'fonts_ready': True, 'images_ready': True}
         # The declared check region is backed by the synthetic paragraph's
         # captured selector, just as in the complete-goal session fixtures.
-        f.surface.state['capture_controls'][-1]['selector'] = 'html > body > main > p'
+        # The current strategy-1 completion route requires a real input+submit
+        # causality chain: one submit control, one shared form, and a result
+        # region whose text appears only after the submission.
+        state = f.surface.state
+        state['elements'].append({'element_id': 'submit-control', 'text': '计算',
+            'native_role': 'button', 'element_type': 'button', 'bbox': [10, 200, 210, 240],
+            'visible': True, 'enabled': True, 'clickable': True, 'inputable': False,
+            'parent_id': 'root', 'scrollable': False, 'state': 'default'})
+        state['capture_controls'].append({'element_id': 'submit-control', 'selector': '#submit-control',
+                                          'index': 0, 'tag': 'button', 'input_type': 'submit',
+                                          'form_selector': '#calculator'})
+        for binding in state['capture_controls']:
+            if binding['element_id'] in ('control-0', 'control-1'):
+                binding['form_selector'] = '#calculator'
+        result_binding = next(b for b in state['capture_controls'] if b['element_id'] == 'control-2')
+        result_binding.update(selector='html > body > main > p', form_selector='#calculator',
+                              result_region_selector='#actual-result')
         original_capture = f.capture
         async def captured(*args, **kwargs):
             import base64
             from webcollect.browser import CAPTURE_VERSION, fingerprint, stability_pair
             frame = await original_capture(*args, **kwargs)
             state, png = frame['state'], frame['png']
+            # The current action-scoped dispatch proof needs per-element hit
+            # samples; the synthetic surface is fully visible and unobstructed.
+            state['geometry_witnesses'] = [{'element_id': e['element_id'],
+                'samples': [{'point': [i % 3, i // 3], 'ancestor': True} for i in range(9)]}
+                for e in state['elements']]
             proof = stability_pair(state, state, png, png)
             encoded = base64.b64encode(png).decode('ascii')
             attempt = frame['capture']['attempts'][0]
@@ -60,9 +82,20 @@ class UnifiedEntryContract(unittest.IsolatedAsyncioTestCase):
         executed = f.surface.execute_action
         def browser_action(kind, arguments):
             executed(kind, arguments)
-            if len(f.surface.executed) == count:
+            if kind == 'click':
+                from pathlib import Path as _P
+                _P('/tmp/unified-clicks.jsonl').open('a').write(json.dumps(arguments) + '\n')
+            if kind == 'click' and (arguments or {}).get('y', 0) >= 200:
+                # The submission produces the result text; before it, the page
+                # never shows the declared endpoint content.
                 f.surface.state['visible_text'] += '\n当前终点内容'
-                f.surface.state['elements'][-1]['text'] += '\n当前终点内容'
+                result_row = next(e for e in f.surface.state['elements']
+                                  if e['element_id'] == 'control-2')
+                result_row['text'] += '\n当前终点内容'
+                from pathlib import Path as _P
+                _P('/tmp/unified-submit-state.json').write_text(json.dumps(
+                    {'visible_text': f.surface.state['visible_text'],
+                     'result_text': result_row['text']}, ensure_ascii=False))
         f.surface.execute_action = browser_action
         opener = StubOpener()
         original = ModelGateway.call_tool
@@ -74,28 +107,73 @@ class UnifiedEntryContract(unittest.IsolatedAsyncioTestCase):
             prompt['system'] = kwargs['system']
             f.prompts.append(prompt)
             wire_tools.append(tools)
-            if len(f.prompts) == 1:
-                name = 'submit_plan'
-                arguments = {
-                    'goal': '逐段核对当前页面相关信息',
-                    'checks': [{'field': '终点事实', 'page': 'p0', 'region': '正文',
-                                'visible_text': '当前终点内容'}],
-                    'steps': [{'action': 'scroll', 'direction': 'down',
-                        'purpose': f'核对第{i + 1}段独立信息',
-                        'expected': {'kind': 'scroll_changed', 'text': '滚动后位置改变'},
-                        'rationale': '原目标要求逐段核对，本步读取下一段独立正文。',
-                        'expected_result': '滚动后露出下一段正文，供后续核对原目标。'}
-                        for i in range(count)],
-                    'finish_when': {'kind': 'visible_text', 'text': '当前终点内容'},
-                }
-            else:
-                raise AssertionError('Unhandled completion request: ' + json.dumps(prompt, ensure_ascii=False))
+            name = 'submit_plan'
+            form_steps = [
+                {'action': 'click', 'target': {'text': '查询条件'},
+                 'expected': {'kind': 'focused', 'text': '查询条件'}},
+                {'action': 'hotkey', 'keys': ['ctrl', 'a'],
+                 'expected': {'kind': 'text_selected', 'text': '10'}},
+                {'action': 'type', 'target': {'text': '查询条件'}, 'value': '20',
+                 'expected': {'kind': 'value', 'text': '20'}},
+                {'action': 'click', 'target': {'text': '确认查询'},
+                 'expected': {'kind': 'focused', 'text': '确认查询'}},
+                {'action': 'hotkey', 'keys': ['ctrl', 'a'],
+                 'expected': {'kind': 'text_selected', 'text': '10'}},
+                {'action': 'type', 'target': {'text': '确认查询'}, 'value': '30',
+                 'expected': {'kind': 'value', 'text': '30'}},
+                {'action': 'click', 'target': {'text': '计算'},
+                 'expected': {'kind': 'visible_text', 'text': '当前终点内容'}}]
+            scrolls = [{'action': 'scroll', 'direction': 'down',
+                        'expected': {'kind': 'scroll_changed', 'text': '滚动后位置改变'}}
+                       for _ in range(count - len(form_steps))]
+            arguments = {
+                'goal': '输入两个查询数值并提交，核对当前终点内容',
+                'checks': [{'field': '终点事实', 'page': 'p0', 'region': '正文',
+                            'visible_text': '当前终点内容'}],
+                'steps': [dict(step, purpose='完成本次输入、提交并核对终点内容',
+                               rationale='原目标要求输入并提交后核对真实结果，本步是其中的必要动作。',
+                               expected_result='当前操作得到可见反馈，最终核对本次提交后的终点内容。')
+                          for step in form_steps + scrolls],
+            }
             assistant = {'role': 'assistant', 'content': None,
                 'reasoning_content': 'opaque-unified-private',
                 'tool_calls': [{'id': f'unified-{len(f.prompts)}', 'type': 'function',
                     'function': {'name': name, 'arguments': json.dumps(arguments, ensure_ascii=False)}}]}
             opener.raw['choices'] = [{'finish_reason': 'tool_calls', 'message': assistant}]
             return original(gateway, job, purpose, text, tools, **kwargs)
+        original_message = ModelGateway.call_message
+        def provider_message(gateway, job, purpose, text, schema, **kwargs):
+            # Branch round: the placeholder endpoint is only closable through an
+            # explicit finish_result naming catalog evidence from the same run.
+            gateway._session_id = kwargs.get('attempt_id')
+            gateway._credential = 'CONTROLLED_UNUSED'
+            prompt = json.loads(text)
+            prompt['system'] = kwargs['system']
+            f.prompts.append(prompt)
+            catalog = prompt.get('result_evidence_catalog') or []
+            if not any(o.get('choice') == 'finish_result' for o in prompt.get('options') or []):
+                from pathlib import Path as _P
+                _P('/tmp/unified-branch-debug.json').write_text(json.dumps(
+                    {'options': prompt.get('options'), 'catalog': catalog,
+                     'branch_reason': prompt.get('branch_reason'),
+                     'current_step': prompt.get('current_step'),
+                     'last_actual_result': prompt.get('last_actual_result'),
+                     'executed_steps': prompt.get('executed_steps'),
+                     'attempt_facts': prompt.get('attempt_facts'),
+                     'prompt_keys': sorted(prompt)}, ensure_ascii=False, indent=2))
+                reply = {'choice': 'stop', 'decision_summary': '调试：无完成选项'}
+            else:
+                source = next(row for row in catalog if '当前终点内容' in row['quote'])
+                reply = {'choice': 'finish_result',
+                         'decision_summary': '原目标检查已有本次提交后的实际输出',
+                         'result_answer': {'check_answers': [{'check_index': 0,
+                                                              'evidence_ids': [source['evidence_id']]}]}}
+            opener.raw = {'id': 'unified-branch-response', 'model': 'glm-5.3-flash',
+                          'choices': [{'finish_reason': 'stop', 'message': {
+                              'role': 'assistant', 'content': json.dumps(reply, ensure_ascii=False)}}],
+                          'usage': {'prompt_tokens': 60, 'completion_tokens': 15,
+                                    'prompt_tokens_details': {'cached_tokens': 0}}}
+            return original_message(gateway, job, purpose, text, schema, **kwargs)
         args = f.cli_args() + ['--first-plan-effort', 'high', '--branch-effort', 'high']
         def invoke():
             with redirect_stdout(io.StringIO()) as output:
@@ -105,6 +183,7 @@ class UnifiedEntryContract(unittest.IsolatedAsyncioTestCase):
               patch('webcollect.key_health.pool_available', return_value=True),
               f.io_boundaries(mock_gateway=False, legacy_protocol=False),
               patch.object(ModelGateway, 'call_tool', new=provider_response),
+              patch.object(ModelGateway, 'call_message', new=provider_message),
               patch('webcollect.model_gateway.socket.getaddrinfo', return_value=[('CONTROLLED_DNS',)]),
               patch('urllib.request.build_opener', return_value=opener)):
             result = (await asyncio.to_thread(invoke))[0]
@@ -112,7 +191,7 @@ class UnifiedEntryContract(unittest.IsolatedAsyncioTestCase):
         request_errors = []
         with f.ledger.connect() as con:
             request_errors = [tuple(row) for row in con.execute('SELECT state,error FROM model_requests')]
-        self.assertEqual(result['state'], 'succeeded', (result, failures, request_errors, [c['text'] for c in json.loads(opener.calls[-1].data)['messages'][-1]['content'] if c['type'] == 'text']))
+        self.assertEqual(result['state'], 'succeeded', (result, failures, request_errors))
         self.assertEqual(result['QC'], 'pending_review')
         self.assertEqual(len(f.gotos), 1)
         self.assertEqual(len(f.contexts), 1)
@@ -135,8 +214,8 @@ class UnifiedEntryContract(unittest.IsolatedAsyncioTestCase):
                 self.assertNotRegex(system, r'累计(?:最多|不得超过|不能超过)\s*(?:8|10)\s*(?:步|个)')
                 self.assertNotRegex(system, r'(?:无法|不能|不在|超过)[^。；\n]{0,20}5[–—~-]8[^。；\n]{0,35}(?:stop|停止|放弃)')
                 self.assertNotRegex(system, r'5[–—~-]8[^。；\n]{0,25}(?:无法完成|不能完成)[^。；\n]{0,20}(?:stop|停止|放弃)')
-            transmitted = next(tool['function']['parameters'] for tool in payload['tools']
-                               if tool['function']['name'] == 'submit_plan') if index == 0 else None
+            transmitted = next((tool['function']['parameters'] for tool in payload.get('tools') or []
+                               if tool['function']['name'] == 'submit_plan'), None) if index == 0 else None
             if transmitted is not None:
                 self.assertEqual(transmitted['properties']['steps']['minItems'], 5)
                 self.assertNotIn('maxItems', transmitted['properties']['steps'])

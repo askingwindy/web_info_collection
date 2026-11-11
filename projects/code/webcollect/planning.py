@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 
 CAPABILITY_REVIEW_RULES = {
-    'version': 'capability-review-1',
+    'version': 'capability-review',
     'checks': ['visible_chinese', 'chinese_controls', 'no_login_or_overlay',
                'task_capability_visible', 'exact_page_scope'],
     'ready_requires': 'all PASS', 'minimum_chinese_ratio': 0.7,
@@ -86,7 +86,7 @@ def _scoped_page_uris(record):
 def _validate_capability_review(record, current):
     """Recheck new review provenance at every publication; legacy records stay intact."""
     provenance = record['review_provenance']
-    if not isinstance(provenance, dict) or provenance.get('schema_version') != 'webcollect-capability-review-provenance-1':
+    if not isinstance(provenance, dict) or provenance.get('schema_version') != 'capability-review-provenance':
         raise ValueError('能力复核来源协议错误')
     refs = [provenance[name] for name in ('catalog', 'packet', 'review')]
     verify_evidence(refs)
@@ -99,12 +99,12 @@ def _validate_capability_review(record, current):
         raise ValueError('能力复核原始记录缺失或重复')
     original = originals[0]
     verify_evidence(original.get('evidence'))
-    if (packet.get('schema_version') != 'webcollect-capability-review-packet-1'
+    if (packet.get('schema_version') != 'capability-review-packet'
             or packet.get('catalog') != provenance['catalog']
             or packet.get('rules') != CAPABILITY_REVIEW_RULES
             or provenance.get('parent_version') != original['version']):
         raise ValueError('能力复核原目录、规则或父版本绑定不一致')
-    if (review.get('schema_version') != 'webcollect-capability-review-1'
+    if (review.get('schema_version') != 'capability-review'
             or review.get('packet_sha256') != provenance['packet']['sha256']
             or review.get('completed') is not True):
         raise ValueError('能力复核未完成或审核包摘要不匹配')
@@ -174,7 +174,7 @@ def _validate_capability_review(record, current):
 
 
 def validate_capability(record, *, now=None, require_ready=True):
-    if not isinstance(record, dict) or record.get('schema_version') != 'webcollect-site-capability-1':
+    if not isinstance(record, dict) or record.get('schema_version') != 'site-capability':
         raise ValueError('能力记录schema错误')
     for name in ('capability_id', 'version', 'site_uri', 'site_category'):
         if not isinstance(record.get(name), str) or not record[name].strip():
@@ -218,13 +218,13 @@ def validate_capability(record, *, now=None, require_ready=True):
 
 
 def is_probe_failure(record):
-    return (record.get('schema_version') == 'webcollect-site-probe-failure-1'
+    return (record.get('schema_version') in ('site-probe-failure', 'webcollect-site-probe-failure-1')
             or not record.get('schema_version') and bool(record.get('error_message')))
 
 
 def _records(capabilities):
     if isinstance(capabilities, dict):
-        if capabilities.get('schema_version') != 'webcollect-capability-catalog-1':
+        if capabilities.get('schema_version') not in ('capability-catalog','webcollect-capability-catalog-1'):
             raise ValueError('能力目录schema错误')
         capabilities = capabilities.get('records')
     if not isinstance(capabilities, list):
@@ -266,7 +266,7 @@ def _build_publication(plan, capabilities, *, now=None, require_preflight=True):
     from .collect import validate_plan
     from .preflight import validate_preflight_binding
     from .react_session import is_react_task
-    if not isinstance(plan, dict) or plan.get('schema_version') != 'webcollect-plan-m4-1':
+    if not isinstance(plan, dict) or plan.get('schema_version') != 'plan-m4':
         raise ValueError('规划发布仅接受严格M4计划')
     plan = deepcopy(plan)
     validate_plan(plan)
@@ -346,7 +346,7 @@ def _build_publication(plan, capabilities, *, now=None, require_preflight=True):
                       'task_sha256': object_sha256(task), 'capability_id': key[0],
                       'capability_version': key[1], 'capability_sha256': object_sha256(capability),
                       'capability_expires_at': timestamp(capability['expires_at'])})
-    receipt = {'schema_version': 'webcollect-plan-publication-1', 'published_at': current,
+    receipt = {'schema_version': 'plan-publication', 'published_at': current,
                'plan_sha256': object_sha256(plan), 'task_count': len(tasks), 'tasks': tasks,
                'capabilities': list(used.values()),
                'preflight_report_sha256': (plan['media_preflight']['report_sha256']
@@ -368,7 +368,7 @@ def verify_publication(plan, publication, *, now=None):
 
 
 def _verify_publication(plan, publication, *, now=None):
-    if not isinstance(publication, dict) or publication.get('schema_version') != 'webcollect-plan-publication-1':
+    if not isinstance(publication, dict) or publication.get('schema_version') != 'plan-publication':
         raise ValueError('计划发布收据格式错误')
     body = {k: v for k, v in publication.items() if k != 'publication_sha256'}
     if publication.get('publication_sha256') != object_sha256(body):

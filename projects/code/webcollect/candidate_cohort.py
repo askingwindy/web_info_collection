@@ -15,7 +15,7 @@ from .candidate_consumer import guard_candidate_dispatch
 from .planning import object_sha256, verify_evidence
 from .agent_feedback import reference
 
-VERSION = 'webcollect-candidate-dispatch-selection-1'
+VERSION = 'candidate-dispatch-selection'
 
 
 class ReadOnlyLedger(BatchLedger):
@@ -174,7 +174,7 @@ def freeze(scope_path, output, *, count=50, seed='round2', candidate_ids=None, d
     output.mkdir(parents=True, exist_ok=False)
     save_json(output/'audit.json',audit); save_json(output/'rows.json',rows)
     if not dry_run and audit['selection_complete']:
-        cohort = {'schema_version':'webcollect-consumer-multibatch-cohort-1',
+        cohort = {'schema_version':'consumer-multibatch-cohort',
             'selection_protocol':VERSION, 'selection_seed':seed, 'scope':audit['scope'],
             'manifest':audit['manifest'], 'pool':scope['pool'], 'registry':scope['registry'],
             'consumer_ledger':scope['consumer_db'], 'denominator':len(selected),

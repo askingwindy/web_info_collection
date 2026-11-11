@@ -320,7 +320,7 @@ async def _discover_legacy(config, *, pool_path, ledger_path, output, categories
         raise ValueError('Supported discovery search engine required')
     output = Path(output).resolve(); output.mkdir(parents=True, exist_ok=True)
     run_id = config['run_id']
-    frozen = {'schema_version': 'webcollect-ai-discovery-run-2', 'run_id': run_id,
+    frozen = {'schema_version': 'ai-discovery-run', 'run_id': run_id,
         'categories': categories, 'target': target, 'per_category': per_category,
         'max_rounds': max_rounds, 'max_searches': max_searches,
         'pool': str(Path(pool_path).resolve()), 'ledger': str(Path(ledger_path).resolve()),
@@ -436,7 +436,7 @@ async def _discover_legacy(config, *, pool_path, ledger_path, output, categories
             'SELECT key,value FROM checkpoints WHERE run_id=? ORDER BY created,key', (run_id,))
             if '/page/' in r['key'] or r['key'].endswith('/search-summary') or r['key'].startswith('stop/')]
         tool_rows = [dict(r) for r in con.execute('SELECT id,kind,state,result FROM tool_requests WHERE run_id=? ORDER BY started', (run_id,))]
-    report = {'schema_version': 'webcollect-ai-discovery-report-2',
+    report = {'schema_version': 'ai-discovery-report',
         'status': 'TARGET_REACHED' if complete(stats, categories, per_category) and stopped is None else 'PARTIAL',
         'target': target, 'deficit': max(0, target - sum(min(per_category, stats['confirmed_categories'].get(c,0)) for c in categories)),
         'statistics': stats, 'events': events, 'stopped': stopped,
@@ -463,10 +463,15 @@ async def discover_ai(config, **kwargs):
         for name in ('max_rounds', 'max_searches'):
             if kwargs.get(name) is None:
                 kwargs[name] = previous.get(name)
-    if kwargs.get('interaction_policy') is None and not ((root/'run-frozen.json').exists() and load_json(root/'run-frozen.json').get('version')=='glm-discovery-interaction-3'):
+    # Old frozen runs carry the generational interaction version; both are current.
+    from .discovery_batch import VERSION as INTERACTION_VERSION, PREVIOUS_VERSION
+    def _interaction_run():
+        if not (root/'run-frozen.json').exists():return None
+        return load_json(root/'run-frozen.json').get('version')
+    if kwargs.get('interaction_policy') is None and _interaction_run() not in (INTERACTION_VERSION,PREVIOUS_VERSION):
         kwargs.pop('interaction_policy',None)
         return await _discover_legacy(config,**kwargs)
-    if (root/'run-frozen.json').exists() and load_json(root/'run-frozen.json').get('version')!='glm-discovery-interaction-3':
+    if _interaction_run() is not None and _interaction_run() not in (INTERACTION_VERSION,PREVIOUS_VERSION):
         if kwargs.get('interaction_policy') is not None:raise ValueError('Original interaction frozen; no policy replacement')
         return await _discover_legacy(config,**kwargs)
     from .discovery_batch import discover

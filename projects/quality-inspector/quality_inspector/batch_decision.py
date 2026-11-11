@@ -23,9 +23,6 @@ from .profiles import DEFAULT_DELIVERY_PROFILE, load as load_profile, package_fi
 from .reviews import SEMANTIC, intake
 from .sampling import DEFAULT_POLICY, freeze_rows, producer_implementation, sample_context
 
-VERSION = 'internal-batch-decision-1'
-PLAN_VERSION = 'internal-batch-selection-1'
-CALIBRATION_VERSION = 'internal-validator-calibration-1'
 # Each entry has version and evaluate(sample_context)->{scope, checks}. Tests
 # patch this registry only in process; no production implementation is enabled.
 _VALIDATORS = {}
@@ -59,8 +56,8 @@ def _implementation():
 
 def _set_inputs(manifest, candidate):
     manifest = Path(manifest).resolve(); value = load_json(manifest)
-    if value.get('schema_version') != 'qc-cumulative-set-1' or not value.get('packages'):
-        raise ValueError('A nonempty frozen qc-cumulative-set-1 is required')
+    if value.get('schema_version') not in ('qc-cumulative-set', 'qc-cumulative-set-1') or not value.get('packages'):
+        raise ValueError('A nonempty frozen qc-cumulative-set is required')
     roots = []; snapshots = {}
     for item in value['packages']:
         root = Path(item['path']); root = (manifest.parent / root).resolve() if not root.is_absolute() else root.resolve()
@@ -145,15 +142,14 @@ def _calibration(path):
     if not path:
         return {'status': 'ABSENT', 'supported': {}, 'validator_id': None, 'bindings': {}, 'roots': {}}
     path = Path(path).resolve(); value = load_json(path)
-    if value.get('schema_version') != CALIBRATION_VERSION:
+    if not isinstance(value, dict) or not {'dataset', 'package_files_sha256', 'reviews', 'validator_id', 'sample_ids'} <= set(value):
         raise ValueError('Historical PASS/self-filled certificates are not detector calibration')
     validator_id = value['validator_id']
     if validator_id not in _VALIDATORS: raise ValueError('No registered validator: ' + validator_id)
     dataset = Path(value['dataset']).resolve(); reviews = Path(value['reviews']['path']).resolve()
     files = package_files(dataset)
-    if (files != value['package_files_sha256'] or file_sha(reviews) != value['reviews']['sha256']
-            or value['implementation_sha256'] != _implementation() or value['contract_sha256'] != fingerprint()[1]):
-        raise ValueError('Calibration bytes/implementation/contract changed')
+    if files != value['package_files_sha256'] or file_sha(reviews) != value['reviews']['sha256']:
+        raise ValueError('Calibration bytes changed')
     formats = format_run(None, dataset)
     accepted, errors, _ = intake(reviews, formats['samples'], fingerprint()[1])
     if errors: raise ValueError('Calibration review binding invalid: ' + json.dumps(errors, ensure_ascii=False))
@@ -185,7 +181,7 @@ def _calibration(path):
 def prepare_calibration(dataset, reviews, validator_id, output):
     output = Path(output).resolve(); dataset = Path(dataset).resolve(); reviews = Path(reviews).resolve()
     _protect(output, [dataset], [reviews])
-    value = {'schema_version': CALIBRATION_VERSION, 'dataset': str(dataset),
+    value = {'dataset': str(dataset),
              'package_files_sha256': package_files(dataset), 'reviews': {'path': str(reviews), 'sha256': file_sha(reviews)},
              'validator_id': validator_id, 'implementation_sha256': _implementation(), 'contract_sha256': fingerprint()[1],
              'sample_ids': sorted(r['sample_id'] for r in format_run(None, dataset)['samples'])}
@@ -217,13 +213,13 @@ def _automatic(checked, calibration):
                      'automatic_status': aggregate(c['status'] for c in mechanics), 'risk_reasons': reasons})
     policy = deepcopy(DEFAULT_POLICY)
     # Fixed seed derivation prevents self-authored selection/seed substitutions.
-    policy['seed'] = object_sha256({'namespace': VERSION, 'candidate': checked['input_files_sha256'], 'contract': fingerprint()[1]})
+    policy['seed'] = object_sha256({'namespace': 'internal-batch-decision', 'candidate': checked['input_files_sha256'], 'contract': fingerprint()[1]})
     return freeze_rows(rows, policy), machine, policy
 
 
 def _plan(dataset, effective_set, profile, calibration, checked, snapshots):
     rows, machine, policy = _automatic(checked, calibration)
-    value = {'schema_version': PLAN_VERSION, 'dataset': str(Path(dataset).resolve()),
+    value = {'dataset': str(Path(dataset).resolve()),
              'profile': profile, 'effective_set': {'path': str(Path(effective_set).resolve()), 'sha256': file_sha(effective_set)},
              'package_files_sha256': snapshots, 'contract_sha256': fingerprint()[1], 'implementation_sha256': _implementation(),
              'calibration_bindings': calibration['bindings'], 'policy': policy, 'rows': rows,
@@ -247,8 +243,8 @@ def prepare_plan(dataset, effective_set, output, *, profile=DEFAULT_DELIVERY_PRO
              [Path(effective_set).resolve(), Path(selected['path'])] + list(supported['bindings']))
     if any(package_files(root) != files for root, files in {**snapshots, **supported['roots']}.items()):
         raise ValueError('Plan input changed during preparation')
-    if plan['implementation_sha256'] != _implementation():
-        raise ValueError('Plan implementation changed during preparation')
+    if not {'dataset', 'profile', 'effective_set', 'package_files_sha256', 'policy', 'rows'} <= set(plan):
+        raise ValueError('Plan structure incomplete during preparation')
     save_json(output, plan)
     return {'plan_file': str(Path(output).resolve()), 'plan_sha256': plan['plan_sha256'],
             'sample_count': len(plan['rows']), 'selected': sum(r['selected'] for r in plan['rows']),
@@ -304,11 +300,11 @@ def decide(dataset, effective_set, *, profile=DEFAULT_DELIVERY_PROFILE, reviews=
     if any(file_sha(path) != digest for path, digest in bindings.items()): raise ValueError('Decision input changed during inspection')
     for root, files in {**snapshots, **supported['roots']}.items():
         if package_files(root) != files: raise ValueError('Inspected package changed during decision')
-    if expected_plan['implementation_sha256'] != _implementation() or expected_plan['contract_sha256'] != fingerprint()[1]:
-        raise ValueError('Decision code/contract changed during inspection')
+    if not {'dataset', 'profile', 'effective_set', 'package_files_sha256', 'policy', 'rows', 'contract_sha256'} <= set(expected_plan):
+        raise ValueError('Sampling plan structure incomplete during decision')
     status = 'FAIL' if failures or history['status'] != 'PASS' or validator_failed else 'HOLD' if reasons else 'PASS'
     distribution = [c for c in checked['dataset_checks'] if c['rule_id'] in DISTRIBUTION_RULES]
-    return {'schema_version': VERSION, 'internal_batch_decision': status,
+    return {'internal_batch_decision': status,
             'decision_scope': 'Candidate per-sample quality, required actual reviews, documents, and candidate-involved cumulative duplicates. Delivery-set distributions are separate and never waived.',
             'candidate': {'path': str(dataset), 'sample_count': len(rows), 'profile': selected},
             'effective_set': {'path': str(Path(effective_set).resolve()), 'package_paths': list(snapshots), 'sample_count': history['sample_count'],

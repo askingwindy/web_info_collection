@@ -7,7 +7,9 @@ import hashlib
 import json
 import re
 
-PLAN_SCHEMA = 'webcollect-plan-m4-1'
+from .plan_protocol import FRAGMENT_POLICY
+
+PLAN_SCHEMA = 'plan-m4'
 CONTROL_ACTIONS = {'click', 'double_click', 'right_click', 'drag', 'select', 'type'}
 NON_EFFECTIVE = {'wait', 'complete'}
 
@@ -64,7 +66,7 @@ def _assertions(conditions):
 
 
 def validate_m4_task(task):
-    from .fragment_workflow import is_fragment, POLICY
+    from .fragment_workflow import is_fragment
     fragment = is_fragment(task)
     from .agent_controller import is_controlled, validate_task
     from .react_session import is_react_task
@@ -89,9 +91,9 @@ def validate_m4_task(task):
         # task. All business, operation and assertion bytes remain bound.
         static_identity({key: value for key, value in task.items()
                          if key not in ('_plan_schema_version', 'require_public_origin')})
-    if not _text(task.get('task_version')):
-        raise ValueError('M4 task_version is required')
-    if task.get('workflow_proposal', {}).get('schema_version') == 'webcollect-semantic-workflow-3':
+    if 'task_version' in task and not _text(task['task_version']):
+        raise ValueError('M4 task_version must be nonempty when present')
+    if task.get('workflow_proposal', {}).get('schema_version') == 'semantic-workflow':
         conditions = task.get('initial_preconditions')
         if not isinstance(conditions, list) or not conditions or 'initial_focus' not in task:
             raise ValueError('Normalized workflow requires frozen initial state assertions')
@@ -103,10 +105,10 @@ def validate_m4_task(task):
                     or condition['tag'] not in ('input','textarea','select')):
                 raise ValueError('Invalid normalized initial state assertion')
     if fragment:
-        if (task['fragment'].get('policy_version') != POLICY or task.get('stop_when_final') is not False
+        if (task['fragment'].get('policy_version') != FRAGMENT_POLICY or task.get('stop_when_final') is not False
                 or task['fragment'].get('business_completion') != 'NOT_CLAIMED'
                 or task['workflow_proposal'].get('schema_version') not in
-                    ('webcollect-workflow-proposals-1', 'webcollect-fragment-workflow-1')):
+                    ('workflow-proposals', 'fragment-workflow')):
             raise ValueError('Invalid versioned operation fragment')
         if (not isinstance(task.get('final_assertions'), list)
                 or not 5 <= len(task.get('operations', [])) <= 8
@@ -143,7 +145,7 @@ def validate_m4_task(task):
         if op.get('completion_view') and not task.get('task_admission'):
             view = op['completion_view']
             if (not isinstance(view, dict) or set(view) != {'schema_version', 'distance'}
-                    or view.get('schema_version') != 'webcollect-live-completion-view-1'
+                    or view.get('schema_version') != 'live-completion-view'
                     or type(view.get('distance')) is not int or not 1 <= view['distance'] <= 480
                     or op is not operations[-1] or op.get('action_type') != 'scroll'
                     or op.get('arguments') != {'direction': 'down'}
@@ -246,7 +248,7 @@ def terminal_evidence(task, raw_records, assertions, final_binding):
         executed = executed_action_ids(raw_records)
         if set(task['required_actions']) != executed or not final_binding.get('screenshot_sha256'):
             raise ValueError('Fragment needs every actual operation and the saved synchronized ending frame')
-        return {'schema_version': 'webcollect-fragment-evidence-1', 'machine_status': 'PASS',
+        return {'schema_version': 'fragment-evidence', 'machine_status': 'PASS',
             'executed_operation_ids': sorted(executed), 'effective_steps': len(executed),
             'business_completion': 'NOT_CLAIMED', 'ending_frame': final_binding,
             'semantic_status': 'REVIEW_REQUIRED'}
@@ -297,7 +299,7 @@ def terminal_evidence(task, raw_records, assertions, final_binding):
             references.append({'reference': reference, 'observation': result, 'binding': binding})
         observations.append({'subgoal_id': goal['id'], 'evidence': references})
     return {'schema_version': 'webcollect-task-contract-evidence-1',
-            'task_id': task['task_id'], 'task_version': task['task_version'],
+            'task_id': task['task_id'], 'task_version': task.get('task_version'),
             'machine_status': 'PASS', 'required_actions': task['required_actions'],
             'executed_operation_ids': sorted(executed), 'subgoals': observations,
             'semantic_status': 'REVIEW_REQUIRED',
@@ -336,7 +338,7 @@ def narrative_evidence(text, before, after, operation):
     placeholder = ('具体可见变化待独立审核' in text or
                    '已执行本步动作并保存后续实际视口' in text)
     safe = None if missing or placeholder else text
-    return safe, {'schema_version': 'webcollect-narrative-evidence-1',
+    return safe, {'schema_version': 'narrative-evidence',
                   'machine_status': 'REVIEW_REQUIRED' if missing or placeholder else 'PASS',
                   'semantic_status': 'REVIEW_REQUIRED', 'quoted_evidence': matches,
                   'unsupported_quotes': missing, 'proposed_text': text,

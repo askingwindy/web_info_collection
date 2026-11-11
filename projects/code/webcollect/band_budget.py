@@ -10,7 +10,7 @@ import sqlite3
 import time
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence
-from .banded_plan import distribution, VERSION, band_counts
+from .banded_plan import distribution, PLAN_PROTOCOL, band_counts
 
 EVENT='conditional_plan_band_reserved_1'
 ACCEPTED='conditional_plan_accepted_set_1'
@@ -176,8 +176,8 @@ def _refresh(registry,key,project):
 
 
 def reserve(registry,task,attempt):
-    from .closing_policy import VERSION as CONTINUOUS, EFFECTIVE_VERSION
-    if task.get('fragment',{}).get('ending_policy') in (CONTINUOUS, EFFECTIVE_VERSION):
+    from .closing_policy import ENDING_POLICY
+    if task.get('fragment',{}).get('ending_policy') == ENDING_POLICY:
         return {'protocol':'continuous-consumer-1','assigned_band':None,'project':None,
                 'assignment_basis':'natural goal; no band quotas'}
     project=_project(registry);key=object_sha256(project)
@@ -209,7 +209,7 @@ def reserve(registry,task,attempt):
         objective=task.get('fragment',{}).get('session_objective',{}).get('objective',{})
         if objective.get('preferred_band') in ('five','long'):
             band=objective['preferred_band'];basis='explicit frozen user objective; '+basis
-        budget.update(protocol=VERSION,project=project,reservation_ordinal=ordinal,assigned_band=band,
+        budget.update(protocol=PLAN_PROTOCOL,project=project,reservation_ordinal=ordinal,assigned_band=band,
             assignment_basis=basis,planned={'denominator':five+long,'counts':{'five':five,'long':long,'short':0}},
             in_flight=flight,stage_meanings={'planned':'host reservations','pending_review':'official saved effective steps',
                                            'accepted':'existing reviewed_pass/batch_accepted receipts in deduplicated effective set'})

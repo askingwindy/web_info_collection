@@ -11,11 +11,11 @@ from webcollect.batch_core import load_json
 from webcollect.planning import canonical, object_sha256, verify_evidence
 from .site_pool import SitePool, category, host_identity, page_uri
 
-VERSION = 'webcollect-data-candidate-1'
+# The single current Candidate body structure. The literal is also the dedup
+# key salt; existing pools depend on it staying byte-identical.
 VERSION2 = 'webcollect-data-candidate-2'
 EXTENSION = 'candidate-pool-1'
 EXTENSION2 = 'candidate-pool-2'
-PROTOCOLS = (VERSION, VERSION2)
 EXTENSIONS = (EXTENSION, EXTENSION2)
 ROW_RESULTS = ('NEW', 'DUPLICATE', 'REJECTED', 'OVER_LIMIT', 'HELD')
 # Frozen default: explicit known tracking parameters never create new inventory.
@@ -303,44 +303,9 @@ class CandidatePool:
 
     def put(self, candidate, source):
         value = deepcopy(candidate)
-        if value.get('schema_version') == VERSION2:
-            return self._put_v2(value, source)[0]
-        if set(value) != {'schema_version','name','business_kind','description','parent_category','entry_url','target'}:
-            raise ValueError('Candidate IDs/state are assigned by the program, not supplied')
-        if value.get('schema_version') != VERSION or set(value['target']) != {'kind','entity','parameters'}:
-            raise ValueError('Versioned structured target required')
-        for key in ('name','business_kind','description'):
-            if not isinstance(value.get(key), str) or not value[key].strip():
-                raise ValueError('Candidate requires ' + key)
-        if not all(isinstance(value['target'].get(k), str) and normalize(value['target'][k]) for k in ('kind','entity')) or not isinstance(value['target']['parameters'], dict):
-            raise ValueError('Target kind, entity and parameter map required')
-        category(value['parent_category']); value['entry_url'] = page_uri(value['entry_url'])
-        validate_target(value)
-        verify_evidence(source['references'])
-        # This retains the original discovery contract without page browsing/assessment.
-        inserted = self.pool.record({'schema_version':'webcollect-site-discovery-1',
-            'origin':source['origin'], 'run_id':source['run_id'],
-            'event_id':object_sha256([value, source]), 'uri':value['entry_url'],
-            'name':value['name'], 'category_hint':value['parent_category'], 'source_refs':source['references']})
-        aid = inserted['application_id']
-        key = object_sha256([VERSION, aid, normalize(value['target'])])
-        with self.transaction() as con:
-            old = con.execute('SELECT * FROM data_candidates WHERE dedup_key=?', (key,)).fetchone()
-            cid = old['candidate_id'] if old else 'candidate-' + str(uuid.uuid4())
-            # Description, classification and discovery URL are metadata, never identity.
-            version = old['version'] if old else 1
-            if not old or json.loads(old['body']) != value:
-                if old: version += 1
-                con.execute('INSERT INTO candidate_versions VALUES(?,?,?,?)', (cid,version,canonical(value),time.time()))
-                if old:
-                    con.execute('UPDATE data_candidates SET version=?,body=? WHERE candidate_id=?', (version,canonical(value),cid))
-                else:
-                    # Version and candidate become visible in the same transaction.
-                    con.execute('INSERT INTO data_candidates VALUES(?,?,?,?,?,?,?)',
-                                (cid,aid,key,version,canonical(value),time.time(),'pending'))
-            con.execute('INSERT OR IGNORE INTO candidate_sources VALUES(?,?,?,?)', (cid,object_sha256(source),canonical(source),time.time()))
-            self.event(con,cid,None,'discovered',{'version':version,'source':source})
-            return cid
+        if value.get('schema_version') != VERSION2:
+            raise ValueError('Only the current candidate body structure is accepted')
+        return self._put_v2(value, source)[0]
 
     def _put_v2(self, value, source, *, application_id=None, row_header=None):
         """Insert/append a webcollect-data-candidate-2 candidate.
@@ -528,19 +493,13 @@ class CandidatePool:
             self.event(con,candidate_id,None,'producer_target_rejected',receipt)
             if only_never_claimed:return receipt
 
-    def rows(self, *, categories=None, application_id=None, state=None, protocols=None):
+    def rows(self, *, categories=None, application_id=None, state=None):
         """Rows visible to one protocol generation. Callers that did not opt in
         to the entry protocol only ever see webcollect-data-candidate-1 rows."""
-        if protocols is None:
-            protocols = (VERSION,)
-        protocols = tuple(protocols)
-        if protocols and not set(protocols) <= set(PROTOCOLS):
-            raise ValueError('Supported candidate body protocols required')
         with self.pool.connect() as con:
             out = []
             for r in con.execute('SELECT * FROM data_candidates ORDER BY created,candidate_id'):
                 row = dict(r); row['candidate'] = json.loads(row.pop('body'))
-                if row['candidate'].get('schema_version') not in protocols: continue
                 if categories and self._row_category(row, con) not in categories: continue
                 if application_id and row['application_id'] != application_id: continue
                 if state and row['state'] != state: continue
@@ -578,83 +537,23 @@ class CandidatePool:
 
     def claim_research(self, worker_id, request_id, *, candidate_id, version, original_claim_id,
                        objective, authorization, lease_seconds=300,
-                       replay_version='candidate-research-replay-1', comparisons=None):
+                       replay_version='candidate-research-replay', comparisons=None):
         """Explicit same-target development replay; never replaces production output."""
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, request and bounded lease required')
         verify_evidence([objective, authorization])
-        if replay_version in ('candidate-research-replay-2', 'candidate-research-replay-3'):
-            return self._claim_research_v2(worker_id, request_id, candidate_id=candidate_id, version=version,
-                original_claim_id=original_claim_id, objective=objective, authorization=authorization,
-                comparisons=[] if comparisons is None else comparisons, lease_seconds=lease_seconds,
-                replay_version=replay_version)
-        if replay_version != 'candidate-research-replay-1' or comparisons is not None:
-            raise ValueError('Unknown research replay version or comparisons on v1')
-        from webcollect.session_objective import bind
-        with self.transaction() as con:
-            row=con.execute('SELECT * FROM data_candidates WHERE candidate_id=?',(candidate_id,)).fetchone()
-            original=con.execute('SELECT * FROM candidate_claims WHERE claim_id=? AND candidate_id=?',
-                                 (original_claim_id,candidate_id)).fetchone()
-            if not row or not original or row['version']!=version or original['version']!=version:
-                raise ValueError('Research requires original candidate version')
-            saved=con.execute('SELECT * FROM candidate_results WHERE candidate_id=? AND claim_id=? AND effective=1',
-                              (candidate_id,original_claim_id)).fetchone()
-            if not saved or original['state']!='succeeded':
-                raise ValueError('Research requires a settled original saved execution')
-            old_binding=json.loads(original['binding'] or '{}')
-            proposed_objective=load_json(objective['path'])
-            original_objective_path=__import__('pathlib').Path(old_binding['output'])/'session-objective.json'
-            if original_objective_path.is_file():
-                if proposed_objective!=load_json(original_objective_path):
-                    raise ValueError('Research cannot change the original objective')
-                objective_origin='original'
-            else:
-                # The original production execution carried no explicit session
-                # objective. A research replay may bind one NEW objective for the
-                # pair: the first research claim freezes its exact bytes and every
-                # later research claim on this candidate must reuse them. It is
-                # model-proposed research input, never written back to the
-                # producer's candidate goal.
-                frozen=None
-                for prior in con.execute("SELECT binding FROM candidate_claims WHERE candidate_id=?",(candidate_id,)):
-                    prior_replay=(json.loads(prior[0] or '{}') if prior[0] else {}).get('research_replay') or {}
-                    if prior_replay.get('objective_origin')=='model-proposed-research':
-                        frozen=prior_replay['objective']
-                if frozen is not None:
-                    from webcollect.planning import verify_evidence as _verify
-                    _verify([frozen])
-                    if proposed_objective!=load_json(frozen['path']):
-                        raise ValueError('Research objective differs from the frozen model-proposed objective for this candidate')
-                objective_origin='model-proposed-research'
-            descriptor={'schema_version':'candidate-research-replay-1','original_claim_id':original_claim_id,
-                        'objective':objective,'objective_origin':objective_origin,
-                        'authorization':authorization,'production_counted':False}
-            prior=con.execute('SELECT * FROM candidate_claims WHERE request_id=?',(request_id,)).fetchone()
-            if prior:
-                if prior['worker_id']!=worker_id or prior['candidate_id']!=candidate_id or json.loads(prior['binding'] or '{}').get('research_replay')!=descriptor:
-                    raise ValueError('Research request identity conflict')
-                return self._claim(prior)
-            settled_history=[]
-            for unresolved in con.execute("SELECT * FROM candidate_claims WHERE candidate_id=? AND state IN ('consuming','reconcile')",(candidate_id,)):
-                if unresolved['state']=='consuming' or unresolved['created']>=original['created'] or unresolved['expires']>time.time():
-                    raise ValueError('Original collection unresolved; no research dispatch')
-                from webcollect.candidate_consumer import known_unstarted_historical_claim
-                proof=known_unstarted_historical_claim(self._claim(unresolved),old_binding)
-                if not proof:raise ValueError('Original collection unresolved; no research dispatch')
-                settled_history.append(proof)
-            body=json.loads(row['body']);sources=[json.loads(r[0]) for r in con.execute('SELECT source FROM candidate_sources WHERE candidate_id=?',(candidate_id,))]
-            for source in sources:verify_evidence(source['references'])
-            bind(objective,{'candidate_id':candidate_id,'version':version,'snapshot':body})
-            now=time.time();cid=str(uuid.uuid4())
-            con.execute('INSERT INTO candidate_claims(claim_id,candidate_id,version,snapshot,worker_id,request_id,token,expires,state,stage,binding,reason,created,updated,sources) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                        (cid,candidate_id,version,canonical(body),worker_id,request_id,str(uuid.uuid4()),now+lease_seconds,
-                         'consuming','claimed',canonical({'research_replay':descriptor}),None,now,now,canonical(sources)))
-            self.event(con,candidate_id,cid,'research_claimed',{**descriptor,'settled_history':settled_history})
-            return self._claim(con.execute('SELECT * FROM candidate_claims WHERE claim_id=?',(cid,)).fetchone())
+        if replay_version != 'candidate-research-replay':
+            raise ValueError('Unknown research replay version')
+        # Historical '-1'/'-2'/'-3' descriptors stay readable as data; new claims
+        # write only the single schema_version 'candidate-research-replay'.
+        return self._claim_research_v2(worker_id, request_id, candidate_id=candidate_id, version=version,
+            original_claim_id=original_claim_id, objective=objective, authorization=authorization,
+            comparisons=[] if comparisons is None else comparisons, lease_seconds=lease_seconds,
+            replay_version=replay_version)
 
     def _claim_research_v2(self, worker_id, request_id, *, candidate_id, version, original_claim_id,
                            objective, authorization, comparisons, lease_seconds,
-                           replay_version='candidate-research-replay-2'):
+                           replay_version='candidate-research-replay'):
         from webcollect.candidate_contract import validate_research_v2
         from webcollect.candidate_consumer import guard_original_dispatch
         from webcollect.session_objective import bind
@@ -704,18 +603,10 @@ class CandidatePool:
         if isinstance(binding,str):binding=json.loads(binding)
         return binding.get('research_replay')
 
-    def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, protocols=None, producer_batch=None, recovery_version=None, frozen_row=None):
+    def claim_next(self, worker_id, request_id, *, lease_seconds=300, categories=None, application_id=None, candidate_id=None, producer_batch=None, recovery_version=None, frozen_row=None):
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, unique request and bounded lease required')
-        if protocols is None:
-            protocols = (VERSION,)
-        protocols = tuple(protocols)
-        if protocols and not set(protocols) <= set(PROTOCOLS):
-            raise ValueError('Supported candidate body protocols required')
-        if producer_batch and protocols != (VERSION2,):
-            raise ValueError('Producer batch selection requires the entry protocol')
-        if VERSION2 in protocols:
-            self._require_v2()
+        self._require_v2()
         with self.transaction() as con:
             if frozen_row is not None:
                 if candidate_id != frozen_row['candidate_id'] or not producer_batch or recovery_version:
@@ -762,7 +653,6 @@ class CandidatePool:
                     continue
                 body = json.loads(row['body'])
                 if self.consumption(body['entry_url'],con,kind=body.get('candidate_kind')):continue
-                if body.get('schema_version') not in protocols: continue
                 if categories and self._row_category(row, con) not in categories: continue
                 if application_id and row['application_id'] != application_id: continue
                 sources=[json.loads(s[0]) for s in con.execute('SELECT source FROM candidate_sources WHERE candidate_id=?', (row['candidate_id'],))]
@@ -786,7 +676,7 @@ class CandidatePool:
                     con.execute('INSERT INTO candidate_claims VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                 (claim,cid,row['version'],canonical(body),worker_id,request_id,token,now+lease_seconds,'consuming','claimed',None,None,now,now))
                 con.execute("UPDATE data_candidates SET state='consuming' WHERE candidate_id=?", (cid,))
-                self.event(con,cid,claim,'claimed',{'request_id':request_id,'version':row['version'],'protocols':list(protocols), 'recovery_version':recovery_version})
+                self.event(con,cid,claim,'claimed',{'request_id':request_id,'version':row['version'],'recovery_version':recovery_version})
                 return self._claim(con.execute('SELECT * FROM candidate_claims WHERE claim_id=?', (claim,)).fetchone())
             con.execute('INSERT INTO candidate_empty_requests VALUES(?,?,?)',(request_id,worker_id,now))
             return {'state':'EMPTY'}
@@ -860,7 +750,7 @@ class CandidatePool:
     def stats(self):
         with self.pool.connect() as con:
             counts = {r[0]:r[1] for r in con.execute('SELECT state,COUNT(*) FROM data_candidates GROUP BY state')}
-            by_protocol = {p:0 for p in PROTOCOLS}
+            by_protocol = {}
             for r in con.execute("SELECT json_extract(body,'$.schema_version') AS v, COUNT(*) FROM data_candidates GROUP BY v"):
                 if r[0] in by_protocol: by_protocol[r[0]] = r[1]
             qc = {r[0]:r[1] for r in con.execute('SELECT qc_state,COUNT(*) FROM candidate_results WHERE effective=1 GROUP BY qc_state')}

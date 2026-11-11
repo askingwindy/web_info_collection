@@ -1,5 +1,9 @@
 # Agent 接手说明
 
+2026-11-11 无版本改造已按[执行 Prompt](docs/无版本改造执行Prompt-20261111.md)集中实施到当前工作区：稳定业务名统一收敛到 `projects/code/webcollect/plan_protocol.py`（`conditional-plan`、`goal-completion-ending`、策略 `react`/`screenshot_plan` 等），删除 V1–V13/ending-2..6 代际常量与分派、legacy_v5 5–10 步上限、action_stability focus 系列（仅剩 action-scoped evidence）、生产者 entry-content/entry-tools 多协议路径与 `--model-protocol`、候选协议筛选、QC RULE_VERSIONS/跨包 supersedes 链与 `--version-policy`、三个包的内部版本号与控制台脚本（改 PYTHONPATH + `python -m` 启动）。strategy_result 经 `finalize_strategy_result` 与 RuntimeStore 实际保存收据收口；task_key 改 `sha256([campaign_id, task_id])` 无版本盐，m4_tasks 列保留并写稳定值。五库已取全量一致备份（`verify_results/noversion-switch-20261111-r01/*.bak`），切换脚本 `projects/code/scripts/switch_noversion_db_20261111.py` 在工作副本验证通过，正式运行库未修改。**一次相关集成与真实 GLM 基线均未运行**，测试残留与逐组状态见[改造清单实施结果](docs/无版本运行改造清单与方案-20261111.md#2026-11-11-实施结果)；不据此启动采集。
+
+2026-11-11（实施前状态）用户确定后续维护原则：所有代码更新直接修复当前工作区实现，不新增实现/协议/规则版本或旧版兼容分支；本地运行直接使用当前源码，运行期间只能分析、不能修改源码，由人工保证。[改造清单与方案](docs/无版本运行改造清单与方案-20261111.md)已对照最新未提交缺陷修复重新审核，补充保留检查、旧 V5 上限删除、最终保存状态收口及数据库约束处理；[逐文件索引](docs/版本维护代码索引-20261111.md)和[执行 Prompt](docs/无版本改造执行Prompt-20261111.md)同步更新。去版本源码和数据库切换当时尚未实施。下文旧“升级协议/冻结旧实现/版本兼容”要求仅解释历史，不作为后续新增版本的依据；旧原件、费用、UNKNOWN、claim 和审核事实仍保留。
+
 2026-11-10 停止后已只读查清固定四条的两笔invalid_response：均为Muxtly完整首轮工具回包，在用户停止后才返回并被gateway schema拒绝；w01是wait/scroll冗余target，另只有4个业务动作；w02是6步缺expected_result及target/value/expected.value结构不兼容。集成规范回包覆盖不足，计算新完成协议的首轮仍强制finish_when字面也未收口。详见[诊断与最小方案](docs/固定四条invalid_response根因与最小修复-20261110.md)。本次未改源码、重启或重跑已通过检查，仍全部停止，不据文档自行采集。
 
 2026-11-10 统一方案集中修复及相关集成已完成，固定四条真实验证随后按用户“优雅停止”结束：协调器与4个worker全部退出，不补位、不重启。领取4、正式attempt4均interrupted；原目标success/annotation/正式保存/导出均0。Muxtly两条终态有效步0，Wiki两条无终态计步不填0；145条旧未决记录未变，源码无漂移。全部子Agent `gpt-6.1-sol / low`，采集high/high。新执行无累计8/10步上限，异常/短流程禁止正式保存；独立QC/人工/发布未运行，不能称真实闭环通过。见[本轮记录](docs/统一方案集中实施与固定四条验证-20261110.md)。本轮授权已结束，旧claim/UNKNOWN/原件不改写，不自动续跑。
@@ -61,7 +65,7 @@ WebCollect 在单机运行，按需使用同机多进程。优先用现有 Pytho
 | 编号、恢复、预算、整站停止 | `runtime.py`、`collect_runtime.py`、`storage.py`、`site_failure_stop.py` |
 | 当前链、QC交接 | `current_chain.py`、`qc_handoff.py` |
 | 格式、审核、抽检、审核复用 | `projects/quality-inspector/quality_inspector/{engine,format_checks,reviews,delivery_sampling,semantic,semantic_runtime}.py` |
-| 导出、最终封包、跨包版本 | `client_package.py`、`client_reports.py`；QC 的 `delivery_pipeline.py`、`delivery_scope.py`、`cumulative.py`、`version_compare.py` |
+| 导出、最终封包、跨包样本集合 | `client_package.py`、`client_reports.py`；QC 的 `delivery_pipeline.py`、`delivery_scope.py`、`cumulative.py`、`version_compare.py` |
 | 跨站并发/静态分片 | `site_scheduler.py`、`batch_protocol.py`、[分片协议](projects/code/docs/static-batch-protocol.md) |
 
 以上简写文件名均相对 `projects/code/webcollect/`，除非另注明。三个包相互通过 Python 模块与文件契约协作，没有独立 HTTP 后端。
@@ -78,10 +82,10 @@ WebCollect 在单机运行，按需使用同机多进程。优先用现有 Pytho
 - 根据生产者结果讨论“消费优化”时，计划和复盘分为工程代码优化、站点挖掘 Agent 优化（goal、prompt、tool）两部分。工具的宿主实现和模型看到的协议分别说明，每部分各给问题证据和验收口径。
 - 优化规划采集 Agent 时，只从当前工程的生产者 Table2（`data_candidates`）选取已发布的有效网页作真实基准。固定候选和目标，按原失败证据修复，再以该目标的可见结果和正式保存收据验收。找站、分类和补库存由生产者负责。[生产表基准与复验](docs/消费者Agent整体研发与单条真实验收实施方案-20261101.md#后续优化的生产表基准)
 - 修改前运行 `git status --short`，保留已有用户改动。文档任务只修改文档。
-- 首选 `rg` 定位函数与对应 `test_*.py`。三个包共同使用 `projects/code/.venv/bin/python`；未安装包时设置 `PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector`。
+- 首选 `rg` 定位函数与对应 `test_*.py`。三个包共同使用 `projects/code/.venv/bin/python`，2026-11-11 起统一以 `PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector` 从当前源码导入（不再安装内部发行包和控制台脚本）。
 - 一次集成测试通过后进入稳定基线试跑；失败时修复实际断点，只复验相关链路，不反复跑已通过且未受影响的单测。只有定位具体问题确有需要时，才使用 [README 的选定离线验证命令](README.md#离线验证)运行最小相关用例；不默认做历史全量回归。
 - 验证目录必须是新目录，测试日志、源码摘要与失败保留，不把夹具 PASS 写成真实生产 PASS。按既有正常入口完成集成和基线验证，调用前核对命令的任务范围和 I/O；`--help` 可用于核对命令，不另设与本次功能无关的前置检查。
-- 文档、路径或封包改变不应自动重做 AI 审核；使用现有证据/规则绑定判断失效范围。语义检查意义改变时更新 `semantic.py` 对应规则版本，并测试局部失效。
+- 文档、路径或封包改变不应自动重做 AI 审核；使用现有证据/规则绑定判断失效范围。语义检查含义改变时直接更新 `semantic.py` 当前检查实现（稳定检查名，无规则版本），并测试局部失效。
 - 同时维护相关 README、工程说明和设计说明，避免复制易过期的运行统计。
 
 ## 必须保持的工程边界

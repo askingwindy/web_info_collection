@@ -1,7 +1,7 @@
 """Evidence-only exclusion of readable non-Chinese pages; never a QC PASS."""
 import re
 
-VERSION = 'webcollect-chinese-page-exclusion-1'
+VERSION = 'chinese-page-exclusion'
 _HAN = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U000323af]')
 _SELECTOR = re.compile(r'简体中文|簡體中文|繁体中文|繁體中文|中文（简体）|中文（繁體）|中文')
 

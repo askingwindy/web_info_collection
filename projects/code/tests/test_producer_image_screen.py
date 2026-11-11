@@ -154,14 +154,6 @@ class ImageScreen(unittest.TestCase):
   self.assertIsNone(self.pool.consumption(self.uri,kind='target'))
   self.assertEqual(policy.register(self.pool,self.ledger,result),legacy)
 
- def test_v1_historical_candidate_dispatch_is_not_reinterpreted(self):
-  from site_planner.candidate_pool import VERSION
-  candidate={'schema_version':VERSION,'entry_url':self.uri,'name':'受控离线站点','parent_category':'图书文化',
-   'business_kind':'阅读','description':'查看作品详情','target':{'kind':'read','entity':'book','parameters':{'query':'fixture'}}}
-  cid=self.pool.put(candidate,self.source)
-  policy.register(self.pool,self.ledger,self.result())
-  self.assertIsNone(self.pool.rows(protocols=(VERSION,))[0]['consumption'])
-  self.assertEqual(self.pool.claim_next('legacy','legacy-request',candidate_id=cid,protocols=(VERSION,))['state'],'consuming')
  def test_publication_gate_precedes_http_and_preserves_old_row_replay(self):
   header={'row_id':'old','run_id':'fixture','batch':0,'request_id':'controlled','response_sha256':'original','raw_index':0}
   old=self.pool.publish_row(header,self.entry(),self.source)
@@ -176,8 +168,8 @@ class ImageScreen(unittest.TestCase):
    probes.append(uri);width=94 if uri.endswith('/article') else 100
    return self.result(uri,view=self.view(url=uri,elements=[{'element_type':'image','visible':True,'bbox':[0,0,width,100]}]))
   with patch.object(policy,'_probe',side_effect=probe),patch.object(purpose,'homepage_document',side_effect=self.b.get),patch.object(self.f.f.provider.opener,'open',side_effect=self.b.provider):
-   report=self.f.run_new(self.home,key='image-v9',target=2,max_batches=1,batch_size=2,sources=[{**self.home,'context_only':True}],model_protocol='entry-tools-9')
-   other=self.f.run_new(self.home,key='image-v9-next',target=1,max_batches=1,batch_size=2,sources=[{**self.home,'context_only':True}],model_protocol='entry-tools-9')
+   report=self.f.run_new(self.home,key='image-v9',target=2,max_batches=1,batch_size=2,sources=[{**self.home,'context_only':True}])
+   other=self.f.run_new(self.home,key='image-v9-next',target=1,max_batches=1,batch_size=2,sources=[{**self.home,'context_only':True}])
   self.assertEqual(report['listed_unique_candidates'],1,report)
   self.assertEqual(other['listed_unique_candidates'],0,other);self.assertEqual(other['new_dispatches'],{'model':0,'GET':0,'search':0})
   self.assertEqual(len(probes),2);self.assertEqual(len(self.b.inputs),1)
@@ -191,7 +183,7 @@ class ImageScreen(unittest.TestCase):
   save_json(goals,{'schema_version':'webcollect-caller-goals-1','goals':[{'uri':uri,'requested_goal':{'kind':'visual_compare','entity':'地图','parameters':{'specific':True}}}]})
   async def probe(pool,ledger,uri,root):return self.result(uri,view=self.view(url=uri,title='地图查询'))
   with patch.object(policy,'_probe',side_effect=probe),patch.object(purpose,'homepage_document',side_effect=self.b.get),patch.object(self.f.f.provider.opener,'open',side_effect=self.b.provider):
-   report=self.f.run_new(self.home,key='image-v9-targets',target=1,max_batches=1,batch_size=2,goals_path=goals,model_protocol='entry-tools-9')
+   report=self.f.run_new(self.home,key='image-v9-targets',target=1,max_batches=1,batch_size=2,goals_path=goals)
   self.assertEqual(report['listed_unique_candidates'],0,report)
   self.assertEqual(self.b.inputs,[]);self.assertEqual(self.pool.consumption(uri)['scope'],'entry_and_target')
 

@@ -10,7 +10,7 @@ from .batch_core import load_json, save_json
 from .candidate_monitor import rows
 from .planning import verify_evidence, object_sha256
 
-VERSION = 'candidate-first-frame-feedback-1'
+VERSION = 'candidate-first-frame-feedback'
 
 
 def fold_groups(outcomes):
@@ -89,7 +89,7 @@ def summarize_scope(scope):
             source = json.loads(discovered[0]['record']).get('source',{}) if discovered else {}
             body = rows(s['pool'],'SELECT body FROM data_candidates WHERE candidate_id=?',(cid,))
             uri = json.loads(body[0]['body'])['entry_url']
-            page_type = source.get('page_type','UNKNOWN') if source.get('selection_version')=='entry-selection-2' else 'UNKNOWN'
+            page_type = source.get('page_type','UNKNOWN')
             firsts = []; jobs_seen = []; time_events = []
             for claim in claims:
                 claim_id = claim['claim_id'];all_claim_ids.add(claim_id)

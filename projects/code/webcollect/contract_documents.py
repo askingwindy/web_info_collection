@@ -8,7 +8,7 @@ def load_facts(path):
         return None
     facts = json.loads(Path(path).read_text(encoding='utf-8'))
     fields = ('collection_method', 'frequency_policy', 'accounts_and_privacy', 'change_detection', 'narrative_generation')
-    if (facts.get('schema_version') != 'webcollect-production-facts-1' or
+    if (facts.get('schema_version') not in ('production-facts', 'webcollect-production-facts-1') or
             not all(isinstance(facts.get(k), str) and facts[k].strip() for k in fields) or
             not isinstance(facts.get('selection'), dict)):
         raise ValueError('Production facts need actual collection, account, frequency and narrative declarations')

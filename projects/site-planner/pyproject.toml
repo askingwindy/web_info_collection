@@ -4,12 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webcollect-site-planner"
-version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["webcollect>=0.2.0"]
-
-[project.scripts]
-webcollect-sites = "site_planner.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["site_planner*"]

@@ -135,7 +135,7 @@ def _source_population(report):
     if not isinstance(path, str) or not Path(path).is_file() or sha(path) != evidence.get('sha256'):
         return {'status': 'UNKNOWN', 'reason': 'Original evidence index is unavailable or changed'}
     index = read_json(Path(path))
-    if not isinstance(index, dict) or index.get('schema_version') != 'webcollect-client-evidence-1':
+    if not isinstance(index, dict) or index.get('schema_version') not in ('client-evidence', 'webcollect-client-evidence-1'):
         return {'status': 'UNKNOWN', 'reason': 'No supported source population index'}
     excluded = []
     for record in index.get('excluded_samples', []):

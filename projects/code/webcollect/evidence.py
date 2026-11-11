@@ -72,7 +72,7 @@ def audit_capture(batch, sample_id):
                         fail(number,'缺少最终页面断言的实际通过记录')
                 checked+=1
             except (OSError,ValueError,KeyError,TypeError,IndexError) as e:fail(number,'证据不完整或格式错误：'+str(e))
-        if contract_path.exists() and contract.get('schema_version') == 'webcollect-controlled-fragment-evidence-1':
+        if contract_path.exists() and contract.get('schema_version') in ('controlled-fragment-evidence', 'webcollect-controlled-fragment-evidence-1'):
             from .agent_audit import terminal_proof
             records = [read_json(evidence/f"step_{s['step_id']:03}.json") for s in data['steps'][:-1]]
             intent = read_json(Path(records[0]['controller_dispatch']['path']))

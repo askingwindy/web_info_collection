@@ -13,14 +13,13 @@ import time
 from zoneinfo import ZoneInfo
 
 
-CAMPAIGN_VERSION = 'consumer-site-campaign-3'
-from .closing_policy import COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY, completion_delivery_decision
+from .closing_policy import COMPLETED_GOAL_DELIVERY, completion_delivery_decision
 
-ORDINARY_COUNTING = 'ordinary-complete-five-ten-1'
-RANGE_CAMPAIGN_VERSION = 'consumer-site-campaign-4'
-VALID_RANGE_COUNTING = 'valid-range-five-ten-export-1'
-SITE_CAMPAIGN_VERSION = 'consumer-site-campaign-5'
-COUNTED_VERSIONS = (CAMPAIGN_VERSION, RANGE_CAMPAIGN_VERSION, SITE_CAMPAIGN_VERSION)
+# The one current campaign schema. Historical state files written as
+# 'consumer-site-campaign-3', 'consumer-site-campaign-4' or
+# 'consumer-site-campaign-5' still load: their delivery rows keep their stored
+# counting fields as plain data, which the current code never reinterprets.
+CAMPAIGN_SCHEMA = 'consumer-site-campaign'
 TARGET_REASONS = ('ORDINARY_TARGET_REACHED', 'TARGET_REACHED')
 
 
@@ -39,17 +38,9 @@ def write_state(path, state):
 
 
 def target_count(state, application_id=None):
-    if state.get('schema_version') in COUNTED_VERSIONS:
-        policy = state.get('counting_policy')
-        if policy in (ORDINARY_COUNTING, COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY):
-            key = 'ordinary_target_eligible'
-        elif policy == VALID_RANGE_COUNTING and state.get('schema_version') in (RANGE_CAMPAIGN_VERSION, SITE_CAMPAIGN_VERSION):
-            key = 'valid_range_target_eligible'
-        else:
-            raise ValueError('Unknown campaign counting policy')
-        return sum(row.get(key) is True for row in state['deliveries']
-                   if application_id is None or row.get('application_id') == application_id)
-    return len(state['deliveries'])
+    """A delivery counts toward the target iff ordinary_target_eligible."""
+    return sum(row.get('ordinary_target_eligible') is True for row in state['deliveries']
+               if application_id is None or row.get('application_id') == application_id)
 
 
 def site_reached(state, application_id):
@@ -58,46 +49,23 @@ def site_reached(state, application_id):
 
 
 def target_reached(state):
-    if state.get('schema_version') == SITE_CAMPAIGN_VERSION:
-        return bool(state['site_targets']) and all(site_reached(state, app) for app in state['site_targets'])
+    if state.get('site_targets'):
+        return all(site_reached(state, app) for app in state['site_targets'])
     return state.get('target') is not None and target_count(state) >= state['target']
 
 
-def ordinary_completion(saved):
-    """Count only ordinary complete samples; keep all other exports intact."""
-    from .batch_core import load_json, file_sha
-    receipt=load_json(saved['save_receipt']['path'])
-    annotation_path=Path(saved['result_location'])/'annotation.json'
-    if file_sha(annotation_path)!=receipt['sample_files_sha256']['annotation.json']:
-        raise ValueError('Campaign annotation differs from the saved receipt')
-    annotation=load_json(annotation_path)
-    decision = completion_delivery_decision(annotation, receipt.get('raw_execution', {}))
-    return {**decision, 'counting_policy': ORDINARY_COUNTING,
-            'target_count_status': ('ordinary_goal_completed_pending_review'
-                if decision['delivery_eligible'] else 'retained_outside_ordinary_target'),
-            'target_count_is_QC_pass': False}
-
-
-
 def completed_goal_completion(saved):
+    """Single qualification: original-goal-complete ordinary delivery."""
     from .batch_core import load_json, file_sha
     receipt = load_json(saved['save_receipt']['path'])
     annotation = Path(saved['result_location']) / 'annotation.json'
     if file_sha(annotation) != receipt['sample_files_sha256']['annotation.json']:
         raise ValueError('Campaign annotation differs from saved receipt')
     result = completion_delivery_decision(load_json(annotation), receipt.get('raw_execution', {}))
-    return {**result, 'counting_policy': result['delivery_policy'],
+    return {**result, 'counting_policy': COMPLETED_GOAL_DELIVERY,
+            'target_count_status': ('ordinary_goal_completed_pending_review'
+                if result['delivery_eligible'] else 'retained_outside_ordinary_target'),
             'target_count_is_QC_pass': False}
-
-
-def valid_range_completion(saved):
-    """Legacy policy name; new exports share complete-goal qualification."""
-    result = ordinary_completion(saved)
-    eligible = result['delivery_eligible']
-    return {**result, 'counting_policy': VALID_RANGE_COUNTING,
-            'valid_range_target_eligible': eligible,
-            'target_count_status': ('valid_range_exported_pending_review' if eligible
-                                    else 'retained_outside_valid_range_target')}
 
 
 def reached(path):
@@ -139,8 +107,6 @@ def publish_pending(path, pool):
             return
         pending = dict(state['pending_deliveries'][0])
         output, evidence_root = Path(state['delivery_root']), Path(state['evidence_root'])
-        counting_policy = (state.get('counting_policy') if state.get('schema_version') in
-                           COUNTED_VERSIONS else None)
     # The coordinator is the sole publisher for this campaign. Other campaigns
     # using the same minute serialize only package updates in the exporter.
     result = None
@@ -151,9 +117,7 @@ def publish_pending(path, pool):
             capture = Path(saved['result_location']).parent.parent
             source = capture.parent / 'candidate'
             receipt = capture.parent / 'candidate-receipt.json'
-            qualification = (completed_goal_completion(saved) if counting_policy in (COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY)
-                             else valid_range_completion(saved) if counting_policy == VALID_RANGE_COUNTING
-                             else ordinary_completion(saved) if counting_policy == ORDINARY_COUNTING else {})
+            qualification = completed_goal_completion(saved)
             if qualification.get('delivery_eligible') is not True:
                 with locked(path) as state:
                     state.setdefault('internal_retained', []).append({**saved, **pending, **qualification, 'sample_id':saved['sample_id']})
@@ -200,8 +164,8 @@ def main():
     p.add_argument('--workers-per-site', type=int, required=True)
     p.add_argument('--target-per-site', type=int, help='Independent target for each selected site; uses campaign v5')
     p.add_argument('--target', type=int, help='optional exported-sample target under --counting-policy; otherwise continuous')
-    p.add_argument('--counting-policy', choices=(ORDINARY_COUNTING, VALID_RANGE_COUNTING, COMPLETED_GOAL_DELIVERY, COMPLETE_GOAL_V6_DELIVERY),
-                   default=COMPLETED_GOAL_DELIVERY, help='New campaigns require original-goal-complete ordinary delivery; explicit historical policies remain available')
+    p.add_argument('--counting-policy', choices=(COMPLETED_GOAL_DELIVERY,), default=COMPLETED_GOAL_DELIVERY,
+                   help='Campaigns count original-goal-complete ordinary deliveries only')
     p.add_argument('--target-stop-mode', choices=('drain', 'cancel'), default='drain',
                    help='drain finishes in-flight work; cancel signals only this launch workers after target export')
     p.add_argument('--output', type=Path, required=True, help='new campaign state/log directory')
@@ -231,8 +195,7 @@ def main():
     evidence = a.output / 'delivery-evidence'; evidence.mkdir()
     launch_delivery = a.delivery_root.resolve() / datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d%H%M')
     state = a.output / 'campaign.json'
-    write_state(state, {'schema_version':(SITE_CAMPAIGN_VERSION if a.target_per_site else RANGE_CAMPAIGN_VERSION if a.counting_policy == VALID_RANGE_COUNTING
-        or a.target_stop_mode == 'cancel' else CAMPAIGN_VERSION),
+    write_state(state, {'schema_version':CAMPAIGN_SCHEMA,
         'counting_policy':a.counting_policy, 'target_stop_mode':a.target_stop_mode, 'target':a.target,
         'delivery_root':str(launch_delivery), 'evidence_root':str(evidence.resolve()),
         'scope':str(a.scope.resolve()), 'sites':a.site, 'deliveries':[],
@@ -257,7 +220,7 @@ def main():
         generation = worker.get('generation', 0) + 1
         ws = worker['scope']
         identity = f"{a.prefix}-w{worker['number']}-g{generation}"
-        command = [sys.executable, '-m', 'webcollect.candidate_consumer', '--pool', ws['pool'], 'run', '--protocol', 'entry']
+        command = [sys.executable, '-m', 'webcollect.candidate_consumer', '--pool', ws['pool'], 'run']
         for flag, key in (('config','consumer_config'),('ledger','consumer_db'),('output','output'),('registry','registry'),('policy','policy'),('history-set','history_set')):
             command += ['--' + flag, str(ws[key])]
         command += ['--worker-id',identity,'--request-prefix',identity,'--application-id',application,
@@ -282,9 +245,7 @@ def main():
                 dispatch_closed=bool(current.get('dispatch_stopped') or target_reached(current))
                 closed_sites={app for app in current.get('site_targets', {}) if site_reached(current, app)}
                 if target_reached(current) and not current.get('dispatch_stopped'):
-                    current.update(dispatch_stopped=True, stop_reason=(
-                        'TARGET_REACHED' if current.get('schema_version') == RANGE_CAMPAIGN_VERSION
-                        else 'ORDINARY_TARGET_REACHED'))
+                    current.update(dispatch_stopped=True, stop_reason='ORDINARY_TARGET_REACHED')
                     write_state(state,current)
             if a.target_stop_mode == 'cancel':
                 for worker in roster['workers']:
@@ -364,9 +325,6 @@ def main():
             exported=len(current['deliveries'])
             counted=target_count(current)
             ordinary=sum(row.get('ordinary_target_eligible') is True for row in current['deliveries'])
-            valid_ranges=sum(row.get('valid_range_target_eligible') is True or
-                row.get('delivery_eligible') is True
-                for row in current['deliveries'])
             stop_reason=current.get('stop_reason')
             pending_count=len(current.get('pending_deliveries',[]))
         (a.output / 'launch-result.json').write_text(json.dumps({
@@ -376,7 +334,7 @@ def main():
             'target_cancelled':target_cancelled, 'stop_reason':stop_reason,
             'counting_policy':a.counting_policy, 'target_stop_mode':a.target_stop_mode,
             'site_target_counts':{app:target_count(current, app) for app in current.get('site_targets', {})},
-            'target_eligible_exports':counted, 'valid_range_exports_pending_review':valid_ranges,
+            'target_eligible_exports':counted,
             'exported_pending_review':exported,'ordinary_goal_completed_pending_review':ordinary,
             'retained_outside_ordinary_target':exported-ordinary,'pending_exports':pending_count,
             'statuses':'saved_pending_review; QC and publication separate'}, indent=2) + '\n')

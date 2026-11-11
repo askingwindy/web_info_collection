@@ -65,8 +65,7 @@ from copy import deepcopy
 from test_react_session import ReactHarness
 import test_complete_goal_v6_20261110 as complete_goal_fixture
 from webcollect.react_session import build_url_task
-from webcollect.banded_plan import V13_VERSION
-from webcollect.closing_policy import COMPLETE_VERSION
+from webcollect.plan_protocol import PLAN_PROTOCOL as V13_VERSION, ENDING_POLICY as COMPLETE_VERSION
 
 
 class UnifiedAgentExecutionSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):

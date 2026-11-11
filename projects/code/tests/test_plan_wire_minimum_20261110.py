@@ -2,9 +2,11 @@
 from copy import deepcopy
 import unittest
 from jsonschema import Draft202012Validator, ValidationError
-from webcollect.banded_plan import (V11_VERSION,V12_VERSION,bind_reply_scope,
+from webcollect.plan_protocol import PLAN_PROTOCOL
+from webcollect.banded_plan import (bind_reply_scope,
     plan_schema,validate_plan,tools)
-from webcollect.wiki_reading import FIELD,VERSION as WIKI_VERSION,FINISH_WHEN,schema
+from webcollect.plan_protocol import WIKI_READING_COMPLETION as WIKI_VERSION
+from webcollect.wiki_reading import FIELD,FINISH_WHEN,schema
 from webcollect.model_gateway import strict_plan_content
 import json
 import tempfile
@@ -20,7 +22,7 @@ def step():
 
 class PlanWireMinimum(unittest.TestCase):
     def prompt(self):
-        return {'protocol':V12_VERSION,'attempt_id':'a1',FIELD:WIKI_VERSION,
+        return {'protocol':PLAN_PROTOCOL,'attempt_id':'a1',FIELD:WIKI_VERSION,
                 'session_objective':{'description':'了解原条目的制作情况'},
                 'observation':{'observation_id':'o1','rendered_dom':[]}}
 
@@ -45,30 +47,33 @@ class PlanWireMinimum(unittest.TestCase):
                                'entry_url':'https://zh.wikipedia.org/wiki/Test'}}
             from webcollect.agent_controller import exclusive
             claim_ref=exclusive(root/'claim.json',claim)
+            state_ref=exclusive(root/'first-state.json',{'elements':[],'capture_controls':[]})
             with patch('webcollect.candidate_contract.validate_task_binding'):
                 result=_generate_react_url(ledger,root/'generation',url=claim['snapshot']['entry_url'],
                     react_candidate={'claim':claim,'claim_reference':claim_ref})
             task=result['generated_task_details'][0]
-            self.assertEqual(task['fragment']['plan_protocol'],V12_VERSION)
+            self.assertEqual(task['fragment']['plan_protocol'],PLAN_PROTOCOL)
             self.assertEqual(task['fragment'][FIELD],WIKI_VERSION)
             controller=Controller()
             session=SimpleNamespace(task=task,plan_controller=controller,root=root,attempt_id='a1',
                 current={'observation_id':'o1','url':task['initial_url'],'document_identity':{'nonce':'first'},
-                         'evidence':{'image':{'path':str(root/'first.png')}},'controls':{},'visible_text':''},
+                         'evidence':{'image':{'path':str(root/'first.png')},'state':state_ref},'controls':{},'visible_text':''},
                 requested_goal=None,trajectory=[],context={},actual_dispatches=0,
                 used={'max_decisions':0},page_urls=[task['initial_url']],event=lambda *args,**kwargs:None)
             with patch('webcollect.inference_image.derive',return_value={'path':str(root/'inference.jpg')}), \
                  patch('webcollect.banded_plan.initial_projection',return_value=([],{})):
                 prompt=controller.prompt(session)
             contract=prompt['tools'][0]['function']['parameters']
-            wire={**self.wire(),'goal':'阅读当前词条的制作情况'}
+            wire={**self.wire(),'goal':'阅读当前词条的制作情况',
+                  'steps':[{**step(),'rationale':'原目标需要继续阅读下一段正文',
+                            'expected_result':'视口移动并显示下一段正文'} for _ in range(5)]}
             Draft202012Validator(contract).validate(wire)
-            self.assertEqual(contract['oneOf'][0]['properties']['steps']['minItems'],5)
+            self.assertEqual(contract['properties']['steps']['minItems'],5)
             self.assertNotIn('必须填写本请求的attempt_id',prompt['system'])
             bound=bind_reply_scope(wire,prompt)
             self.assertEqual(bound['attempt_id'],'a1')
             validate_plan(bound,'a1','o1',task['fragment']['allowed_actions'],pending_checks=True,
-                direct_completion=True,wiki=True,max_steps=10,ordinary_minimum=True)
+                direct_completion=True,wiki=True,max_steps=10,ordinary_minimum=True,extended_actions=True)
 
     def test_qc_handoff_forwards_explicit_delivery_policy_and_preserves_legacy_call(self):
         from webcollect.task_generation import _prepare_qc_handoff

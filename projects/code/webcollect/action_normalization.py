@@ -2,8 +2,8 @@
 from copy import deepcopy
 import re
 
-WINDOWS_KEYBOARD_NORMALIZATION_VERSION = 'delivery-windows-keys-2'
-ACTUAL_KEYBOARD_VERSION = 'delivery-actual-keys-1'
+WINDOWS_KEYBOARD_NORMALIZATION_VERSION = 'windows-keys'
+ACTUAL_KEYBOARD_VERSION = 'actual-keys'
 SELECT_ALL_NORMALIZATION_VERSION = WINDOWS_KEYBOARD_NORMALIZATION_VERSION  # API compatibility
 _MODIFIERS = ('ctrl', 'alt', 'shift', 'win')
 _MODIFIER_ALIASES = {'control': 'ctrl', 'ctl': 'ctrl', 'windows': 'win', 'super': 'win'}

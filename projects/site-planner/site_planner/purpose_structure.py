@@ -5,7 +5,7 @@ import re
 from .page_purpose_v5 import generic
 from webcollect.planning import object_sha256
 
-VERSION='producer-main-structure-1'
+VERSION='producer-main-structure'
 VOID={'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'}
 BLOCKS={'p','li','dt','dd','td','th','h1','h2','h3','h4','h5','h6','figcaption','label','output'}
 

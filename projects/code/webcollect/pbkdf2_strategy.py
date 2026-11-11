@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 ADAPTER_ID = 'jyshare-pbkdf2-widget-1'
 EXECUTION_ID = 'observed-form-result-v1'
-EXECUTION_VERSION = 'observed-form-result-1'
+EXECUTION_VERSION = 'observed-form-result'
 BUSINESS_ID = 'password-key-derivation-v1'
 STRATEGY_ID = BUSINESS_ID
 URI = 'https://www.jyshare.com/crypto/pbkdf2/'
@@ -190,7 +190,7 @@ def _subgoals():
 
 
 def _business_identity(task):
-    return {'schema_version': 'webcollect-business-identity-1', 'business_id': BUSINESS_ID, 'execution_capability_id': EXECUTION_ID,
+    return {'schema_version': 'business-identity', 'business_id': BUSINESS_ID, 'execution_capability_id': EXECUTION_ID,
             'definition': {'business_goal': '从公开演示口令素材与盐派生固定长度密钥',
                            'necessary_input_roles': ['public-password-material', 'public-salt'],
                            'state_path': ['empty-form', 'salt-visible', 'password-material-visible', 'derived-key-visible'],
@@ -241,7 +241,7 @@ def validated_business_identity(task):
     return task['business_identity']
 
 
-def compile_pbkdf2(capability, spec, task_version='observed-pbkdf2-compiler-1'):
+def compile_pbkdf2(capability, spec, task_version=ADAPTER_ID + '-compiler'):
     from .planning import object_sha256
     from .collect import validate_plan
     from .task_contract import validate_m4_task

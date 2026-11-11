@@ -9,13 +9,14 @@ from .batch_core import load_json
 from .plan_evidence import region_matches, same_url
 from .planning import verify_evidence
 
-LEGACY_VERSION = 'webcollect-goal-evidence-1'
-VERSION = 'webcollect-goal-evidence-2'
+from .plan_protocol import GOAL_EVIDENCE_PROTOCOL, PLAN_PROTOCOL, ACTION_STABILITY_PROTOCOL
+
+VERSION = GOAL_EVIDENCE_PROTOCOL
 
 
 def contract_for(task):
     from .react_session import struct_goal
-    if task.get('fragment', {}).get('plan_protocol') not in ('webcollect-banded-conditional-plan-7','webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11'):
+    if task.get('fragment', {}).get('plan_protocol') != PLAN_PROTOCOL:
         return None
     objective = task['fragment'].get('session_objective', {}).get('objective') or struct_goal(task)
     return objective.get('evidence_contract') if isinstance(objective, dict) else None
@@ -46,7 +47,7 @@ def validate_contract(contract):
                 or len({norm(t) for t in titles})!=len(titles)):
             raise ValueError('Invalid direct article identity contract')
         return
-    if not isinstance(contract, dict) or contract.get('version') not in (LEGACY_VERSION, VERSION):
+    if not isinstance(contract, dict) or contract.get('version') != GOAL_EVIDENCE_PROTOCOL:
         raise ValueError('Unknown explicit goal evidence version')
     kind = contract.get('kind')
     if kind == 'reading':
@@ -54,7 +55,7 @@ def validate_contract(contract):
         required = {'version', 'kind', 'subject', 'aspects'}
         # v2 reading contracts may declare direct entry: the entry page itself is
         # the subject article and site search is not part of the objective.
-        allowed = required | ({'direct_entry'} if contract.get('version') == VERSION else set())
+        allowed = required | {'direct_entry'}
         valid = (required <= set(contract) <= allowed and text(contract['subject'])
                  and contract.get('direct_entry') in (None, True)
                  and isinstance(aspects, list) and 2 <= len(aspects) <= 4 and all(map(text, aspects))
@@ -119,7 +120,7 @@ def calc_evidence(s, start, contract):
             new_id, new = field_value(after, label)
             if (before.get('capture_verified') and after.get('capture_verified') and cid and cid == old_id == new_id
                     and number(old) != desired and number(new) == desired and after['document_identity'] == s.current['document_identity']):
-                if latest_id != cid and (contract['version'] == VERSION or not latest_id):
+                if latest_id != cid:
                     # The earlier synchronized edit proves what was visible. After a scroll,
                     # the same bound field can corroborate the value outside the readable area.
                     current = s.current['controls'].get(cid) or {}
@@ -127,7 +128,7 @@ def calc_evidence(s, start, contract):
                     previous_binding = after['controls'][cid]['binding']
                     binding = current.get('binding') or {}
                     prior_scroll, final_scroll = state(after).get('scroll'), state(s.current).get('scroll')
-                    if (contract['version'] != VERSION or latest_id or cid != first_id
+                    if (latest_id or cid != first_id
                             or type(final_value.get('value_visible')) is not bool
                             or not previous_binding.get('selector') or binding.get('selector') != previous_binding['selector']
                             or binding.get('input_type') != previous_binding.get('input_type')
@@ -145,13 +146,13 @@ def calc_evidence(s, start, contract):
         if source and dest and old not in (None, '') and old == new:
             retained.append({'label': label, 'value': new})
     previous = start
-    if contract['version'] == VERSION and changed:
+    if changed:
         operations = {item['operation_id'] for item in changed}
         last_input = next(step for step in reversed(s.trajectory) if step['operation_id'] in operations)
         previous = s.observation_records[last_input['before_observation_id']]
     base, now = state(previous), state(s.current)
     base = {**base, 'values': base.get('values', []) + now.get('values', [])}
-    card = {'card_labels':(contract['result_label'], contract['unit'])} if contract['version'] == VERSION else {}
+    card = {'card_labels':(contract['result_label'], contract['unit'])}
     results = [p['quotes'] for p in result_evidence(now, base, html(s.current), html(previous), **card)
                if all(norm(x) in norm(' '.join(p['quotes'])) for x in (contract['result_label'], contract['unit']))]
     verified = (start['document_identity'] == s.current['document_identity'] and len(changed) == len(contract['inputs'])
@@ -274,7 +275,7 @@ def reading_evidence(s, start, contract):
     # A direct-entry contract opens the subject article itself: the initial
     # observation is the landing document, no search chain is required or
     # allowed, and passages/downward reading are collected on that article.
-    direct_entry = contract.get('direct_entry') is True and contract['version'] == VERSION
+    direct_entry = contract.get('direct_entry') is True
     if direct_entry:
         initial = state(start)
         headings = [e for e in initial.get('elements', []) if e.get('visible') and e.get('native_role') == 'h1'
@@ -441,10 +442,10 @@ def reading_evidence(s, start, contract):
     # silently waived because the task binds a different stability protocol
     # version (the raw-drive wwiki break left it false). Legacy sealed receipts
     # keep their original coupling.
-    if contract['version']==VERSION and description:
+    if description:
         requires_reading=bool(requested_scroll)
     else:
-        requires_reading=bool(fragment.get('action_stability_protocol') in ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4') and requested_scroll)
+        requires_reading=bool(fragment.get('action_stability_protocol') == ACTION_STABILITY_PROTOCOL and requested_scroll)
     reading_met=not requires_reading or bool(downward_reading)
     status=('VERIFIED' if reading_met else 'READING_REQUIRED') if selected else 'PASSAGE_AVAILABLE' if candidates else 'UNVERIFIED'
     if direct_entry:
@@ -470,8 +471,4 @@ def progress(s, initial_id, contract):
     from .direct_article import VERSION as DIRECT_VERSION, progress as direct_progress
     evaluate = direct_progress if contract['version']==DIRECT_VERSION else calc_evidence if contract['kind'] == 'calculation' else reading_evidence
     result = evaluate(s, start, contract)
-    if contract['version'] == LEGACY_VERSION and contract['kind'] == 'reading':
-        # Preserve the evidence shape of already sealed experimental receipts.
-        result.pop('result_page_current')
-        result['search_inputs'] = [{k:row[k] for k in ('operation_id','query')} for row in result['search_inputs']]
     return {**base, **result}

@@ -3,11 +3,7 @@ from copy import deepcopy
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
 
-VERSION='webcollect-session-objective-1'
-# Per-objective execution-evidence policies a frozen objective may select. The
-# chosen protocol is stamped into spec+fragment before the task-id hash, so it
-# is part of frozen task identity; older objectives without the field keep the
-# protocol their generator bound.
+from .plan_protocol import SESSION_OBJECTIVE_PROTOCOL as VERSION
 from .action_stability import ACTION_SCOPED_VERSIONS
 EVIDENCE_POLICIES=ACTION_SCOPED_VERSIONS
 

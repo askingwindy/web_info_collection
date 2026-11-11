@@ -4,9 +4,9 @@ import re
 import unicodedata
 from copy import deepcopy
 from .batch_core import load_json
+from .plan_protocol import PLAN_FACTS_PROTOCOL, READING_PLAN_COMPLETION_POLICY as _READING_POLICY, PLAN_EXECUTION_POLICY as _EXECUTION_POLICY
 
-LEGACY_VERSION = 'webcollect-plan-facts-1'
-VERSION = 'webcollect-plan-facts-2'
+VERSION = PLAN_FACTS_PROTOCOL
 
 
 def same_url(a,b):
@@ -59,7 +59,7 @@ def unverified_required_checks(evidence):
     return missing
 
 
-READING_COMPLETION_POLICY = 'webcollect-reading-plan-completion-1'
+READING_COMPLETION_POLICY = _READING_POLICY
 
 
 def remaining_plan_coverage(s, plan, position, evidence):
@@ -100,7 +100,7 @@ def remaining_plan_coverage(s, plan, position, evidence):
         rows.append({'plan_step':index,'purpose':purpose,'expected':predicate,
                      'status':'COVERED' if proofs else 'UNRESOLVED','evidence':proofs,
                      'reason':None if proofs else 'No exact purpose-to-verified-body-fact binding; keep remaining useful work'})
-    return {'protocol':READING_COMPLETION_POLICY,'status':'COVERED' if all(r['status']=='COVERED' for r in rows) else 'UNRESOLVED',
+    return {'policy':READING_COMPLETION_POLICY,'status':'COVERED' if all(r['status']=='COVERED' for r in rows) else 'UNRESOLVED',
             'remaining_steps':rows,'model_semantic_review':False}
 
 
@@ -205,7 +205,7 @@ def observed_basis(s, objective_evidence):
         'interpretation':'Observed witnesses only; no semantic mapping from free-text checks or independent QC judgment'}
 
 
-PLAN_EXECUTION_POLICY = 'webcollect-plan-execution-1'
+PLAN_EXECUTION_POLICY = _EXECUTION_POLICY
 
 
 def bind_check_pages(plan, registered_pages):
@@ -242,7 +242,7 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
     checks=plan.get('checks',[]); rows=[]
     bound_plan=bool(hasattr(s,'task') and s.task.get('fragment',{}).get('plan_execution_policy')==PLAN_EXECUTION_POLICY)
     if bound_plan:verify_page_binding(plan,page_binding)
-    modern=s.task.get('fragment',{}).get('ending_policy') in ('webcollect-five-ten-effective-ending-5','webcollect-five-eight-complete-ending-6') if hasattr(s,'task') else True
+    modern=bool(hasattr(s,'task'))
     basis=observed_basis(s,objective_evidence) if modern else None
     navigation=basis['navigation'] if basis else []
     from .result_completion import answer_rows
@@ -356,7 +356,7 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
         or bool(re.search(r'计算|計算|换算|換算',s.requested_goal or s.working_goal or '')))
     has_result=any(p.get('result_execution_binding') for row in rows for p in row.get('evidence',[]))
     execution_status='VERIFIED' if has_result else 'UNVERIFIED' if result_task else 'NOT_REQUIRED'
-    return {'protocol':VERSION if modern else LEGACY_VERSION,'requested_goal':s.requested_goal,'working_goal':s.working_goal,
+    return {'protocol':VERSION,'requested_goal':s.requested_goal,'working_goal':s.working_goal,
             'checks':rows,'verified':done,'total':len(rows),
             **({'host_observed_basis':observed_basis(s, objective_evidence)} if any(r['status']=='PENDING' for r in rows) else {}),
             'business_goal_status':('UNVERIFIED' if execution_status=='UNVERIFIED' else ('VERIFIED' if done==len(rows) else 'PARTIAL' if done else 'UNVERIFIED') if rows else 'NOT_SPECIFIED'),

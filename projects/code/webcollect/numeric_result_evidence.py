@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 import unicodedata
 
-VERSION = 'webcollect-numeric-result-evidence-1'
+VERSION = 'numeric-result-evidence'
 _NUMBER = re.compile(r'(?<![\d.,])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.,])')
 _UNITS = {'%':'percent', '百分比':'percent', '百分之':'percent',
           '元':'cny', '人民币':'cny', '人民币元':'cny', 'CNY':'cny', 'RMB':'cny', '¥':'cny',
@@ -83,19 +83,24 @@ def match_result(expected, observed, *, field, result_bound, input_node=False):
             return None
         if rounded != wanted:
             return None
-    return {'protocol': VERSION, 'observed_visible_text': str(observed),
+    return {'policy': VERSION, 'observed_visible_text': str(observed),
             'expected_visible_text': str(expected),
             'comparison': 'rounded_to_explicit_approximate_precision' if got != wanted else 'normalized_exact'}
 
 
-def substantive_result_text(value, *, field=""):
-    """A label is not an answer, even inside a genuine submitted result area."""
+def substantive_result_text(value, *, field="", numeric=True):
+    """A label is not an answer, even inside a genuine submitted result area.
+
+    numeric=False keeps the label/weak-text filtering but accepts a text-only
+    endpoint; its causality is then checked separately (result execution
+    binding), not by the digit rule used for numeric answers.
+    """
     text=normalized(value)
     label=normalized(field).rstrip(":：")
     if not text or weak_result_text(text) or text.rstrip(":：") == label:
         return False
     # Result labels commonly end in a colon while their value is a sibling.
-    if text.endswith((":", "：")) or not re.search(r"[0-9]",text):
+    if text.endswith((":", "：")) or numeric and not re.search(r"[0-9]",text):
         return False
     return True
 

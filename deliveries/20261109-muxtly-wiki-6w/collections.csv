@@ -1,1 +1,0 @@
-worker,claim_id,candidate_id,site,entry_url,goal,claim_state,stage,sample_id,effective,wall_seconds,model_requests,input_tokens,output_tokens,cached_input_tokens,reason

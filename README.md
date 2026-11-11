@@ -1,5 +1,7 @@
 # WebCollect
 
+2026-11-11 无版本改造已按[执行 Prompt](docs/无版本改造执行Prompt-20261111.md)集中实施，方案见[34 项改造清单](docs/无版本运行改造清单与方案-20261111.md)：稳定业务名收敛到 `projects/code/webcollect/plan_protocol.py`，删除 V1–V13/ending-2..6 代际分派、legacy_v5 步数上限、生产者多协议路径与 `--model-protocol`（仅剩单一 grounded 业务内容路径）、候选协议筛选、QC supersedes 链与内部包版本/控制台脚本；启动统一为 `PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector` 加 `projects/code/.venv/bin/python -m <模块>`。数据库五库全量备份于 `verify_results/noversion-switch-20261111-r01/`，切换脚本已在工作副本验证，正式库未修改。一次相关集成与真实 GLM 基线尚未运行，不据此启动采集；实施细节与残留见[改造清单实施结果](docs/无版本运行改造清单与方案-20261111.md#2026-11-11-实施结果)。下文旧版本号、协议组合与控制台脚本描述保留历史含义。
+
 2026-11-11 [双策略固定对照真实验证](docs/双策略固定对照真实验证-20261111.md)已按用户有界授权执行并停止：冻结 10 条候选（Muxtly/Wiki 各5）× 策略1/策略2 共 20 次。**策略1组完整运行（1/10 保存、6 失败、3 reconcile，约 95 笔真实请求）；策略2组零完整会话**——三轮启动暴露并修复 3 个策略2真实缺陷（chooser 属性、normalizer 误传决策调用、decision schema 无条件必填 remaining_plan）与 2 处启动管线失误（历史冻结文件被删致链断言全断，已按池事件 sha256 逐字节恢复），随后候选研究通道被卡死 claim 阻断，对照无法完成；两组均无合格条目，唯一保存样本的独立 AI QC 请求 EOF 落 UNKNOWN（不重发）。全轮结果 effective=0 不计产量；相关决策作业结算波及面单独记录于回执。不自动续跑；恢复需新工程/候选授权。
 
 2026-11-10 采集双策略 P0–P4 已实施并通过一次相关集成（隔离目录 `verify_results/dual-strategy-20261110-r01/`，13 项用例全部通过）：策略 1（`webcollect-collection-banded-react-1`，现有 ReactSession+条件计划链）保持缺省与历史语义；策略 2（`webcollect-collection-screenshot-plan-2`，消费者 `--collection-strategy screenshot-plan` 显式选择、同一 attempt 冻结不切换）新增截图首轮 submit_plan（≥5 必要业务动作、wait 不计、无硬上限、自然不足可报 unsuitable）与 continue/revise/complete/give_up 检查点循环、等价整理先于严格校验（原回包与整理记录均保存）、动作身份去重、latest_attempt/last_effective 分离、逐项证据完成核验与四件事分开记录；两策略共用同一资格函数（`collection_strategy.save_eligibility` 即 `closing_policy.completion_delivery_decision`）与保存入口。w01/w02 真实失败回包经 HTTP 边界夹具验证：w01 整理后 4 业务动作+1 wait 不合格、无派发无正式文件；w02 保留六步意图、750/405/812 值/标签正确映射并精确反馈六个缺失 expected_result；result-completion 首轮不再要求预猜 finish_when，全选谓词与实际按键/当前值对齐。集成通过不等于策略 2 真实业务验收；真实 GLM/浏览器采集、独立 QC 与人工审核均未运行。2026-11-11 收口补记：修复 `--collection-strategy` 参数经 `run()` 落入 `**kwargs` 致 `startup_check` TypeError、任何真实 worker CLI 启动即无限轮询挂死的断点（缺省策略1同样触发，入口契约用例已端到端覆盖）；六套件回归 84 passed / 10 failed，失败经 HEAD 对照核实全部为既有失败（回执 `verify_results/dual-strategy-20261110-r01/regression-batch-20261111.json`）。见[执行记录](docs/采集双策略实施与集成-20261110.md)、[设计文档](docs/采集双策略设计-20261110.md)及[实施计划](docs/采集双策略实施计划-20261110.md)。
@@ -299,27 +301,31 @@ WebCollect/
 
 ## 安装与查看入口
 
-在仓库根目录执行。三个包声明 Python ≥3.11；现有依赖锁定文件记录的是 Python 3.14.4/macOS 环境，其他平台需另验依赖兼容性。浏览器采集默认使用本机 Chrome，Playwright Chromium 也可由底层参数选择；只阅读代码或运行纯离线测试无需安装浏览器。
+在仓库根目录执行。三个包声明 Python ≥3.11；现有依赖锁定文件记录的是 Python 3.14.4/macOS 环境，其他平台需另验依赖兼容性。浏览器采集默认使用本机 Chrome，Playwright Chromium 也可由底层参数选择；只阅读代码或运行纯离线测试无需安装浏览器。2026-11-11 起不再维护内部包发布号，也不安装 `webcollect`、`webcollect-qc` 等控制台脚本；本地一律以 `PYTHONPATH` 加 `python -m` 从当前源码启动。
 
 ```sh
 python3 -m venv projects/code/.venv
 projects/code/.venv/bin/python -m pip install -r projects/code/requirements.lock
-projects/code/.venv/bin/python -m pip install --no-deps \
-  -e projects/code -e projects/site-planner -e projects/quality-inspector
 ```
 
-安装后三个包共用同一虚拟环境。以下只显示帮助，不访问网站或模型：
+三个包共用同一虚拟环境，源码通过 `PYTHONPATH` 导入。以下只显示帮助，不访问网站或模型，可直接在仓库根目录执行：
 
 ```sh
-projects/code/.venv/bin/python -m site_planner --help
-projects/code/.venv/bin/python -m webcollect --help
-projects/code/.venv/bin/python -m webcollect.task_generation execute --help
-projects/code/.venv/bin/python -m webcollect.qc_handoff --help
-projects/code/.venv/bin/python -m quality_inspector --help
-projects/code/.venv/bin/python -m quality_inspector.delivery_pipeline --help
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+  projects/code/.venv/bin/python -m site_planner --help
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+  projects/code/.venv/bin/python -m webcollect --help
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+  projects/code/.venv/bin/python -m webcollect.task_generation execute --help
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+  projects/code/.venv/bin/python -m webcollect.qc_handoff --help
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+  projects/code/.venv/bin/python -m quality_inspector --help
+PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector \
+  projects/code/.venv/bin/python -m quality_inspector.delivery_pipeline --help
 ```
 
-没有 editable 安装时，可在命令前加 `PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector`。生产命令所需计划、manifest、账本和审核记录必须来自实际绑定输入；配置模板不能直接充当运行授权。
+仍可用 `pip install --no-deps -e projects/code -e projects/site-planner -e projects/quality-inspector` 做可选的 editable 安装，但它不再提供控制台脚本或包间依赖，运行入口与上面相同。生产命令所需计划、manifest、账本和审核记录必须来自实际绑定输入；配置模板不能直接充当运行授权。
 
 ## 主流程
 

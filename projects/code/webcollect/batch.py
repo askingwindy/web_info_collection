@@ -40,7 +40,7 @@ def main(argv=None):
             from .batch_core import file_sha, BudgetStop, OutcomeUnknown
             ledger = BatchLedger(args.ledger, config)
             jid = ledger.enqueue('model-smoke', {'image': str(args.image.resolve()), 'sha256': file_sha(args.image),
-                                               'protocol': 'image-json-usage-1'})
+                                               'protocol': 'image-json-usage'})
             job = ledger.claim('model-smoke', job_id=jid)
             if job:
                 schema = {'type': 'object', 'properties': {'visible_observation': {'type': 'string'}},

@@ -2,7 +2,7 @@
 from copy import deepcopy
 import math
 
-VERSION = 'webcollect-frame-geometry-1'
+VERSION = 'frame-geometry'
 MAX_CSS_EDGE = 5
 
 

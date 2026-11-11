@@ -8,8 +8,8 @@ from webcollect.batch_core import load_json, save_json
 from webcollect.planning import object_sha256
 from .discovery_tools import reference
 
-VERSION='producer-page-feedback-1'
-QUERY_VERSION='producer-category-query-4'
+VERSION='producer-page-feedback'
+QUERY_VERSION='producer-category-query'
 INSTRUCTION=(' 页面访问反馈是近期有限窗口的观测事实，不是站点永久不可用的结论。'
     'HTTP 成功不等于有效候选；confirmed_http_failed 与 UNKNOWN 分开理解。'
     '结合各域成功和失败比例，优先尝试其他公开业务来源或不同功能检索表达，减少无效访问。'

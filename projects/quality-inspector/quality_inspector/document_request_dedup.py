@@ -19,8 +19,8 @@ import sys
 import time
 
 
-VERSION = 'document-request-dedup-1'
-TRANSPORT_VERSION = 'document-request-dedup-transport-1'
+VERSION = 'document-request-dedup'
+TRANSPORT_VERSION = 'document-request-dedup-transport'
 PROTOCOL = '_webcollect_lossless_references_v1'
 SPLICE = '$webcollect_json_string_splice_v1'
 INSTRUCTION = (
@@ -308,7 +308,7 @@ def restore_request(text, *, expected_sha256):
             raise ValueError('Uncompacted request differs from external binding')
         return text
     if (not isinstance(metadata, dict) or set(metadata) != {'version', 'instruction', 'original_text_sha256', 'original_text_utf8_bytes', 'original_json_format', 'supporting_file_indices'}
-            or metadata['version'] != VERSION or metadata['instruction'] != INSTRUCTION
+            or metadata['version'] not in (VERSION, 'document-request-dedup-1') or metadata['instruction'] != INSTRUCTION
             or metadata['original_text_sha256'] != expected_sha256
             or metadata['original_json_format'] != 'sorted-unicode-default-separators'):
         raise ValueError('Reference protocol or external binding changed')

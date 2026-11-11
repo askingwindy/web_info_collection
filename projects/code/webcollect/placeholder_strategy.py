@@ -116,7 +116,7 @@ def validate_placeholder_assertion_scope(task,condition):
         task.get('deterministic_strategy',{}).get('id')!=STRATEGY_ID):
         raise ValueError('Placeholder pixel assertion requires exact URI, business and fixed Chinese text')
 
-def compile_placeholder(capability,spec,task_version='observed-placeholder-compiler-1'):
+def compile_placeholder(capability,spec,task_version=ADAPTER_ID + '-compiler'):
     from .planning import object_sha256
     from .collect import validate_plan
     from .task_contract import validate_m4_task

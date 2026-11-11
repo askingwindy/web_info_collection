@@ -5,11 +5,12 @@ submission from this attempt must precede the result. No answer is calculated.
 """
 import re
 from .batch_core import load_json
+from .plan_protocol import RESULT_EXECUTION_POLICY
 
-VERSION = 'webcollect-result-execution-1'
+VERSION = RESULT_EXECUTION_POLICY
 RESULT_REGIONS = ('结果区','结果区域','计算结果','计算结果/正文','计算结果/业务区域','IRS计算器结果区')
 _ESCAPE = re.compile(r'\\u[0-9a-fA-F]{4}')
-_SUBMIT = re.compile(r'计算|計算|提交|生成|转换|轉換|calculate|compute|submit|convert', re.I)
+_SUBMIT = re.compile(r'计算|計算|提交|生成|转换|轉換|换算|換算|求解|搜索|calculate|compute|submit|convert|solve|search', re.I)
 
 
 def page_feedback(state):
@@ -28,7 +29,7 @@ def page_feedback(state):
         if (e.get('clickable') or e.get('inputable') or role in ('button','label','option','select','input','textarea')
                 or b.get('result_region_selector')) and _ESCAPE.search(text):
             unreadable.append({'node':cid,'visible_text':text,'reason':'LITERAL_UNICODE_ESCAPE_IN_CRITICAL_UI'})
-    return {'protocol':VERSION,'validation_feedback':invalid,'unreadable_critical_ui':unreadable,
+    return {'policy':RESULT_EXECUTION_POLICY,'validation_feedback':invalid,'unreadable_critical_ui':unreadable,
             'business_submission_accepted':False if invalid else None,
             'additional_model_calls':0}
 
@@ -61,6 +62,30 @@ def _rows(s):
     return sorted(rows,key=lambda r:order.get(r.get('after_observation_id'),-1))
 
 
+def is_submission(action, arguments, binding, element):
+    """One submit predicate for dispatch guards and completion evidence.
+
+    Focusing an input is never a submission. A native submit control, an
+    explicitly labelled submit action, or Enter may be one. An arbitrary
+    type=button control (expand/cancel/etc.) is not inherently a submission.
+    """
+    if action == 'hotkey':
+        return 'enter' in str((arguments or {}).get('keys', arguments or {})).lower()
+    if action != 'click':
+        return False
+    input_type = (binding or {}).get('input_type')
+    label = (element or {}).get('text') or ''
+    return bool(input_type == 'submit' or _SUBMIT.search(label))
+
+
+def submission_row(row, before_state):
+    """Return the real submit identity of a trajectory row, if it has one."""
+    cid = (row.get('target') or {}).get('control_id')
+    binding = _binding(before_state, cid)
+    element = next((e for e in before_state.get('elements', []) if e['element_id'] == cid), {})
+    return is_submission(row.get('action'), row.get('arguments'), binding, element)
+
+
 def result_execution_binding(s, oid, state, node):
     """Bind a real result node to this attempt's input and submit, not a table."""
     binding=_binding(state,node['element_id'])
@@ -81,8 +106,7 @@ def result_execution_binding(s, oid, state, node):
             inputs.append({'operation_id':row['operation_id'],'node':cid,'form_selector':form,
                            'after_observation_id':row['after_observation_id'],'arguments':row.get('arguments')})
             submit=None
-        is_submit=(action=='click' and (b.get('input_type')=='submit' or _SUBMIT.search(e.get('text') or ''))
-                   or action=='hotkey' and 'enter' in str(row.get('arguments',{})).lower())
+        is_submit = is_submission(action, row.get('arguments'), b, e)
         matching=[i for i in inputs if not form or i['form_selector']==form]
         if is_submit and matching and not page_feedback(after)['validation_feedback']:
             # The result must already be captured after submission. Scrolling
@@ -105,7 +129,7 @@ def result_execution_binding(s, oid, state, node):
                     'after_observation_id':row['after_observation_id'],'node':cid,
                     'definite_zero_effect':row.get('definite_zero_effect',False),'input_refs':matching}
     if not submit:return None
-    return {'protocol':VERSION,'result_region_selector':binding['result_region_selector'],
+    return {'policy':RESULT_EXECUTION_POLICY,'result_region_selector':binding['result_region_selector'],
             'result_node':node['element_id'],'result_observation_id':oid,'submission':submit,
             'result_value_change_required':False,'additional_model_calls':0}
 
@@ -131,6 +155,6 @@ def completion_result_summary(evidence, *, final_observation_id):
             'input_operation_ids':[r['operation_id'] for r in execution['submission']['input_refs']]})
     if not rows:return None
     final_result='；'.join((str(r['field'])+'：' if r['field'] else '')+r['visible_result'] for r in rows)
-    return {'protocol':VERSION,'final_result':final_result,
+    return {'policy':RESULT_EXECUTION_POLICY,'final_result':final_result,
             'completion_judgement':'本次输入已提交；各事项由所列原观察中的实际结果支持：'+final_result+'。',
             'basis':rows,'is_ai_review':False}

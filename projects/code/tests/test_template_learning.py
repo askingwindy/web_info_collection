@@ -5,8 +5,9 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock
-from webcollect.template_learning import (DOM, VERSION, match, result_evidence,
+from webcollect.template_learning import (DOM, match, result_evidence,
     TemplateLibrary, LearningSession, Inapplicable, enabled, derive_program, validate_program)
+VERSION = 'learned-template-1'  # local fixture template identity, no source rule-version gate
 from webcollect import react_session
 
 
@@ -185,8 +186,7 @@ class OfficialEntryTests(unittest.TestCase):
 
 class WiringTests(unittest.TestCase):
     def test_explicit_adapter_builds_original_four_tools_before_task_hash(self):
-        from webcollect.banded_plan import VERSION as PLAN
-        from webcollect.closing_policy import VERSION as CLOSE
+        from webcollect.plan_protocol import PLAN_PROTOCOL as PLAN, ENDING_POLICY as CLOSE
         from webcollect.react_session import validate_task
         class Library:
             def snapshot(self):return {'templates':[]}

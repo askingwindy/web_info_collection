@@ -9,37 +9,11 @@ import time
 import json
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence
-from .goal_evidence import VERSION as GOAL_EVIDENCE_VERSION, contract_for
+from .goal_evidence import contract_for
+from .plan_protocol import (PLAN_PROTOCOL, RESULT_COMPLETION_PROTOCOL, WIKI_READING_COMPLETION,
+                            ACTION_STABILITY_PROTOCOL, GOAL_EVIDENCE_PROTOCOL, DIRECT_ARTICLE_PROTOCOL,
+                            READING_PLAN_COMPLETION_POLICY, DIRECT_COMPLETION_PROTOCOL)
 
-LEGACY_VERSION = 'webcollect-banded-conditional-plan-1'
-V2_VERSION = 'webcollect-banded-conditional-plan-2'
-V3_VERSION = 'webcollect-banded-conditional-plan-3'
-V4_VERSION = 'webcollect-banded-conditional-plan-4'
-V5_VERSION = 'webcollect-banded-conditional-plan-5'
-V6_VERSION = 'webcollect-banded-conditional-plan-6'
-V7_VERSION = 'webcollect-banded-conditional-plan-7'
-V8_VERSION = 'webcollect-banded-conditional-plan-8'
-V9_VERSION = 'webcollect-banded-conditional-plan-9'
-V10_VERSION = 'webcollect-banded-conditional-plan-10'
-V11_VERSION = 'webcollect-banded-conditional-plan-11'
-V12_VERSION = 'webcollect-banded-conditional-plan-12'
-V13_VERSION = 'webcollect-banded-conditional-plan-13'
-VERSION = V11_VERSION
-VERSIONS = (LEGACY_VERSION, V2_VERSION, V3_VERSION, V4_VERSION, V5_VERSION, V6_VERSION, V7_VERSION, V8_VERSION, V9_VERSION, V10_VERSION, VERSION, V12_VERSION, V13_VERSION)
-# V9: the ordinary (non-contract) branch uses the same choice wire protocol as
-# grounded branches -- one choice object or a bare remaining plan, IDs bound by
-# the host -- instead of the former full-plan schema. Frozen V1-V8 replies and
-# receipts keep their original interpretation.
-# V10: the ambiguous branch choice `original` is split into explicit semantics.
-# Viewing the current frame at original resolution is `request_original_image`
-# (supplementary visual evidence, never execution); it is offered at most once
-# per observation and branch context and repeated same-frame requests are a
-# protocol fault. Historical `original` replies keep their frozen meaning.
-MODERN_BRANCH_PROTOCOLS = (V8_VERSION, V9_VERSION, V10_VERSION, VERSION, V12_VERSION, V13_VERSION)
-PAGE_POLICY_PROTOCOLS = (V7_VERSION, V8_VERSION, V9_VERSION, V10_VERSION, VERSION, V12_VERSION, V13_VERSION)
-IMAGE_CHOICE_PROTOCOLS = (V10_VERSION, VERSION, V12_VERSION, V13_VERSION)
-CLOSING_POLICY_ATTEMPT_CEILING = 8
-LONG_PLAN_ATTEMPT_CEILING = 12
 # Bounded same-frame image re-requests before the branch loop is stopped as
 # making no progress (reuses the session's max_no_progress budget slot).
 NO_PROGRESS_IMAGE_LIMIT = 2
@@ -81,33 +55,11 @@ def remaining_step_allowance(s):
     return None if limit is None else max(0,limit-len(s.trajectory))
 
 
-def system_with_attempt_limit(text, limit, complete_goal=False):
-    if complete_goal:
-        text=text.replace(V11_PLANNING_GUIDANCE,'').replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；','').replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。','')
-        return text+'\n首轮优先把自由目标设计为可用5–8个必要有效动作的完整自然路径，并逐步核算可达路径和终态证据；自然必要路径可以超过8步，不因长度淘汰。固定requested_goal不得改写，按原目标规划实际所需的全部动作，只有少于5步或无法完成才如实stop。目标冻结后不得缩成阶段目标；全部checks有实际证据且实际至少5步才能形成候选，不设首轮或累计最大步数。short_flow、可信前缀和controlled_exception均不形成有效样本，未完成只内部留证。重规划仅列剩余必要动作，完成即结束，不截断，也不凑步。'
-    if limit is None:
-        replacements = {
-            '5步档自然5步，长档6–8步且第6步之后有具体业务用途；':'',
-            '首轮规划自然可行的至少5个有用动作':'首轮规划完成目标所需的自然动作',
-            '按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。':'band只描述计划长度，不限制动作数。',
-            '先核算完整路径的8步额度：':'依据完整目标规划路径：',
-            '继承原档与总额度，不重新申请short流程':'保持原目标，按当前证据修订剩余路径',
-            '原band与总额度不变':'保持原目标，不设动作额度',
-            '及剩余预算':'', '原会话调用预算继续累计。':'原会话用量继续记账。',
-            '同一观察的同一情境最多提供一次，已提供后该选项不再出现；':'按当前证据需要请求原图；',
-            '（每帧每情境一次）':'', '按剩余额度修订':'修订剩余路径',
-        }
-        for old,new in replacements.items():text=text.replace(old,new)
-        return text+'\n不设模型调用次数、动作次数、固定档位、重规划次数或会话总时长配额。自然完成即结束，无法继续照实停止；不为数量补动作。'
-    if limit==10:
-        text=text.replace(V11_PLANNING_GUIDANCE,'').replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；','').replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。','').replace('先核算完整路径的8步额度：','先核算累计10个有效业务动作的额度：')
-        text=text.replace('本次期望至少5个有实际效果的业务动作；','本次按完成原目标所需的自然有效动作规划；')
-        text += V11_READING_LINK_PREFERENCE.replace('计划含跨页访问时安排核验落地并阅读，再返回来源继续剩余计划；可先完成已计划的落地阅读，不要求立即back。','跨页访问只为核对原问题所需事实，核验落地并读取正文；仅原剩余计划确需来源页时返回，不为组合动作跨页或返回。') + '阅读以原问题及具体正文事实为目标；标题、年份或目录卡片出现不等于正文问题已回答。没有与原问题相关的可见链接时可纯滚动，不固定点击次数、顺序或往返模板。'
-        text += '相关链接查阅后返回来源继续阅读是正常阅读路径，不能仅因点击后返回就认定无效往返。跳转→返回→滚动→滚动→滚动，或跳转→返回→跳转→返回→滚动，均可形成5个有效动作；每次跳转有原目标相关查阅用途，返回实际回到来源，滚动露出新正文即可，不要求在落地页再滚动才能返回。这些只是可选组合，不是固定模板。不要为达到步数扩成逐章遍历目录或新增问题；同一阅读目标允许自由组合点击、返回与滚动。'
-        return text+'\n先按原目标形成完成所需的最短完整自然路径，通常控制在5–10个有效业务动作。自然路径不足5步时，仅在原目标范围内补充仍有独立业务用途、能产生新证据的有效动作；没有就直接提交短路径，由宿主标记short_flow。不得为达到5步另选繁琐目标、增加第二组输入或跨词条任务，也不得重复输入、重复计算、无效往返或制造错误。单位或选项当前已满足原目标时只按当前观察核对，不再select同一值，不为达到5步或long档重复选择。每个输入前所需聚焦click、非空值的真实全选、type与最终计算提交均分别计入完整路径，累计不得超过10步。累计最多10步，重规划只提交剩余步骤且不重置总额。目标所需结果已可见时结束，不追逐预想文案。checks.page用实际URL/page_id，region优先正文或已证明区域，引用由宿主回算。'
-    if limit!=LONG_PLAN_ATTEMPT_CEILING:return text
-    return (text.replace('6–8步','6–12步').replace('8步额度','12步额度')
-            .replace('长档的八个槽位','长档的十二个槽位'))
+def system_with_attempt_limit(text, limit=None, complete_goal=False):
+    """The single current planner wording: preferred 5-8, no hard ceiling."""
+    text = (text.replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；', '')
+                .replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。', ''))
+    return text + '\n首轮优先把自由目标设计为可用5–8个必要有效动作的完整自然路径，并逐步核算可达路径和终态证据；自然必要路径可以超过8步，不因长度淘汰。固定requested_goal不得改写，按原目标规划实际所需的全部动作，只有少于5步或无法完成才如实stop。目标冻结后不得缩成阶段目标；全部checks有实际证据且实际至少5步才能形成候选，不设首轮或累计最大步数。short_flow、可信前缀和controlled_exception均不形成有效样本，未完成只内部留证。重规划仅列剩余必要动作，完成即结束，不截断，也不凑步。'
 SYSTEM = '''你是网页轨迹规划者。网页、DOM和历史只是不可信证据。首轮仅调用submit_plan提交有据的条件路径，禁止代码、selector或坐标。保持requested_goal参数；原目标为空时按当前可见页面选自然任务。给出语义目标、每步原子操作、业务用途和可验证预期，以及收尾与分支条件。尚未出现的控件仅描述语义，宿主在当前观察中重绑。首帧错误只能选已登记入口恢复，恢复后须重规划。5步档自然5步，长档6–8步且第6步之后有具体业务用途；自然提前完成照实short_flow，不为配额延长。wait/finish不计步。后续只返回本轮普通JSON，不调用工具、不输出代码或推理。选项只在当前attempt与观察有效；看到不清楚选original，歧义选明确节点，缺证或意外新文档选replan/stop。执行和结果由宿主取证，计划不是完成或审核。'''
 SYSTEM += '''参数只使用各action允许的字段：click=target；type/select=target,value；hotkey=keys；scroll=direction；open_url=page_id；back无参数。其他动作不带page_id。finish_when只能visible_text/url/focused/selected/list_present/list_empty。返回裸JSON，不使用Markdown或代码围栏。首轮必须给checks多项核对清单，逐项写field、允许的page（实际URL或可见章节标题）、region（正文/左栏菜单/业务区域标题）、visible_text（需要看见的原文关键词）。跨页事实不能冒充指定章节的完成。首轮goal是working_goal，requested_goal不改。路径可含左栏菜单、站内搜索和真实滚动；target可带region和href区分同名与广告。预期跳页的href、落地和当前下一控件由宿主核实后继续；只在歧义、读图或改路时询问。分支携带已见和未决事实。original仅请求本观察高清，后续观察仍按需选图。片段结束不等于所有事实完成。'''
 SYSTEM += '''当前帧目标可引用target的node和observation_id，必须同时提供可见text；未来页面只用业务语义，不能预填旧节点ID。正常入口已由宿主打开，首次直接提交完整计划。初始化、观察、等待计零业务步。'''
@@ -138,21 +90,6 @@ V10_CHOICE_ADDENDUM = (
     '收到目标未绑定反馈时，先看已执行动作数与原图是否已提供：仍缺证据选request_original_image（若可选），'
     '路径失效选replan并给剩余步骤，无法有据继续选stop。原图是补充视觉证据，不是目标完成。'
 )
-V11_READING_LINK_PREFERENCE = (
-    '浏览型任务在任务契约允许范围内，路径可自由组合向上或向下滚动、不同页内点击和跨页访问；点击不限相关词条，不设点击次数配额，每步仍需实际浏览目的。'
-    '当前页面证据存在与目标相关的目录章节或正文链接时，首轮计划自然包含至少一次有独立查阅目的的点击；纯滚动只在页面确无目标相关可读链接时才是合理选择，不强制每条轨迹含点击或返回。'
-    '计划含跨页访问时安排核验落地并阅读，再返回来源继续剩余计划；可先完成已计划的落地阅读，不要求立即back。'
-    '预期的跨页和返回本身不要求重规划，原计划仍有目的且可执行的剩余步骤继续；真正办理型跳转按办理目标继续，不强制返回。'
-)
-V11_PLANNING_GUIDANCE = (
-    '默认按至少5个有独立业务用途的有效动作规划完整路径；执行中自然提前完成不足5步仍照实short_flow，不为长度补动作。'
-    '自然规划不足5步时先不提交短计划：在原目标范围内扩展仍有独立用途的步骤（结果读取、关联词条核验、章节定位、补充核对），凑足有证据用途的5步；确无可扩展时才规划短路径，并在short_reason写出首帧证据依据，不得把惯用的"打开加一次滚动"当作充分阅读，也不得添加无关动作凑数。'
-    '结果型页面要把交互拆成原子动作，不把“修改参数并计算”压成一步。狗狗年龄等计算页有两种可参考的5步组合：已输入值确需更正时，用“输入→全选→删除→输入更正值→点击计算”；原目标允许比较两组输入时，用“输入首个值→点击计算→全选并替换为新值前按宿主规则分步执行→再次点击计算”，使完整路径达到至少5个有效动作，再读取并核对本次结果。'
-    '不得凭空制造错误输入或重复无效操作；只有观察到原值确需更正时才做全选、删除、重输。结果读取和最终核验写入checks/finish_when，不冒充有效动作；第二个输入组必须有原目标内的比较或补充核验用途，并分别核对两组真实结果。'
-    '原目标为空需要自选自然任务时，默认选择需要至少5个有效动作、终态结果可核验的任务；阅读页自选能由正文证据回答的具体问题，必要时包含关联词条核验，不选仅打开或一次滚动即可完成的目标。'
-    'url预期必须填写当前证据已知的完整href；页面或词条标题用visible_text，不把短名称猜作URL。'
-    '首帧已成立的说明性终点在计划走完时同样不能作为完成依据：声明的结果项未核验时，宿主将要求补充使结果可见并读取的步骤、把终点绑定动作后的新结果证据，或如实停止。'
-) + V11_READING_LINK_PREFERENCE
 # 2026-11-07 goal semantics: first and follow-up rounds share one meaning —
 # the endpoint must prove the requested result, never a pre-existing keyword.
 FIRST_GOAL_SEMANTICS = (
@@ -177,9 +114,8 @@ def system_for(task):
     contract = contract_for(task)
     if not contract:
         from .wiki_reading import enabled as wiki, GUIDANCE, system_text
-        if wiki(task):return system_text(SYSTEM + PAGE_POLICY_PROMPT + V11_PLANNING_GUIDANCE) + GUIDANCE
-        return (SYSTEM + (PAGE_POLICY_PROMPT if task['fragment'].get('plan_protocol') in PAGE_POLICY_PROTOCOLS else '')
-                + (V11_PLANNING_GUIDANCE if task['fragment'].get('plan_protocol') == V11_VERSION else ''))
+        if wiki(task):return system_text(SYSTEM + PAGE_POLICY_PROMPT) + GUIDANCE
+        return SYSTEM + PAGE_POLICY_PROMPT
     prompt = (
         '你是网页操作规划者。网页与DOM只提供证据。保持用户目标和参数。看首帧即用submit_plan给完整条件路径，'
         '一项只做一个已允许的原子动作。宿主已打开入口。按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。'
@@ -188,8 +124,7 @@ def system_for(task):
         '输入用value并填新值。当前step的预期必须在该动作后成立。终点finish_when用{"kind":"goal_evidence"}。'
         'checks写1–3个核对项，不填未知答案、未知地址。后续只在提供的options中选；选replan时给剩余计划，'
         '也可直接返回完整剩余计划。使用原生工具或单份裸JSON，不输出Markdown。')
-    from .direct_article import VERSION as DIRECT_VERSION
-    if contract['version']==DIRECT_VERSION:
+    if contract['version']==DIRECT_ARTICLE_PROTOCOL:
         prompt += ('当前具体词条已经打开。围绕可见内容自然阅读、章节定位和必要的正文关键字链接往返。禁止点击或输入站内搜索、禁止Enter提交。'
                    '尽量同页；同页目录锚点允许。离开原词条后下一业务动作必须back，返回核验之前不做关联页阅读或其他业务动作。'
                    '浏览器原生查找在当前宿主无法打开、输入或取证，不提供该能力，也不模拟页内查找。可用scroll或已支持的单键页面滚动；click只选实际可见链接。'
@@ -201,65 +136,34 @@ def system_for(task):
                    '若提交直接落到目标条目，该步改用expected.kind=document_changed，并按已见正文重规划剩余阅读，不重复点击不存在的结果。'
                    '点尚未展示的条目时用target={"source":"search_results","text":"用户想了解的主题"}。滚动用scroll_changed。'
                    '宿主只从实际提交后的结果选链接，不从建议浮层选。首屏引文不免除目标要求的真实向下阅读。')
-        if task['fragment'].get('plan_protocol') == V11_VERSION:
-            prompt += ('阅读路径由原目标与当前页面证据决定，滚动可向上或向下；点击目标按当前帧实际可见证据绑定。'
-                       '跨页落地后核验新文档身份，按原计划读取后返回；back后核验原页面身份并继续原剩余步骤，不因每次跳页重新规划。'
-                       '动作未派发时，按失败事实和最新观察调整位置或改选目标；条件未变时不机械重试。')
-            prompt += V11_READING_LINK_PREFERENCE
-        else:
-            prompt += ('长阅读由多段滚动自然组成：每段滚动须暴露并阅读与目标相关的新正文区域，不为凑步重复滚动已读区域；'
-                       '依据目标确需跨页核实时，点击相关链接并核验新文档身份，back后先核验原页面身份再继续阅读；每次点击须有独立查阅目的。')
+        prompt += ('长阅读由多段滚动自然组成：每段滚动须暴露并阅读与目标相关的新正文区域，不为凑步重复滚动已读区域；'
+                   '依据目标确需跨页核实时，点击相关链接并核验新文档身份，back后先核验原页面身份再继续阅读；每次点击须有独立查阅目的。')
         prompt += ('新正文出现后，仅在原段能回答用户所问关系时选其cite选项，否则重规划或诚实停止。')
         if contract.get('direct_entry'):
             prompt += ('本任务入口已直接打开目标词条，不经过站内检索：不聚焦或输入站内搜索框，也不提交搜索；'
                        '正文引用只来自原词条实际显示的内容。')
-            if task['fragment'].get('plan_protocol') == V11_VERSION:
-                prompt += ('可按阅读目的点击当前帧不同可见链接，跨页查阅后back核验原词条身份并续读原剩余计划；'
-                           '引用仍只来自原词条。')
     else:
         prompt += ('保持指定不变的字段。按页面触发计算或自动更新，再用goal_evidence核实本次具名数值和单位。'
                    '若输入后没有结果，滚动露出计算按钮时应点击一次；若结果已自动更新即可结束。'
                    '先核算完整路径的8步额度：已有值的每个输入需聚焦、全选、输入三个动作，必须为露出控件及实际触发计算预留余量。'
                    '没有实测自动更新证据时，不得把滚动当作计算触发；已经露出提交按钮但尚未产生新结果时，按实际按钮触发，不继续盲目滚动找结果。'
                    '静态示例和输入回显不算结果。不要预测数值或抄旧结果。')
-    if task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS:
-        prompt = prompt.replace('checks写1–3个核对项，不填未知答案、未知地址。',
-            'checks列待核事项，只需field，可加purpose；未知原文、地址与结果不填写。已知原文才可给page、region、visible_text。')
-        objective = task['fragment'].get('session_objective', {}).get('objective') or {}
-        prompt += (f"本次期望至少{objective.get('minimum_effective_steps', 5)}个有实际效果的业务动作；"
-                   '首轮自行规划完整条件路径，必要时包含真正触发计算的点击及站内检索后的正文阅读。'
-                   '未来正文只描述想核实的关系，不预填答案或未来visible_text；阅读checks可为空。'
-                   '已选引文后，只有原任务仍需且已规划的实际滚动阅读可继续，不为步数重复动作。'
-                   '有页面证据的网站快捷键可聚焦真实站内搜索框；浏览器原生查找当前宿主无法打开、输入或取证，不提供；不能以查找代替站内检索或要求的滚动。'
-                   'replan只写剩余步骤，继承原档与总额度，不重新申请short流程。checks和finish_when是plan直接字段，禁止plan.stop。'
-                   '未来选项出现后按实际选项和当前值核实；输入单位与输出单位分别判断，不猜选项。'
-                   '收到零派发的编译失配时，依据最新值、选项、可用控件及剩余预算修订，不重做已完成步骤。')
-    if contract['version']==DIRECT_VERSION:
+    prompt = prompt.replace('checks写1–3个核对项，不填未知答案、未知地址。',
+        'checks列待核事项，只需field，可加purpose；未知原文、地址与结果不填写。已知原文才可给page、region、visible_text。')
+    objective = task['fragment'].get('session_objective', {}).get('objective') or {}
+    prompt += (f"本次期望至少{objective.get('minimum_effective_steps', 5)}个有实际效果的业务动作；"
+               '首轮自行规划完整条件路径，必要时包含真正触发计算的点击及站内检索后的正文阅读。'
+               '未来正文只描述想核实的关系，不预填答案或未来visible_text；阅读checks可为空。'
+               '已选引文后，只有原任务仍需且已规划的实际滚动阅读可继续，不为步数重复动作。'
+               '有页面证据的网站快捷键可聚焦真实站内搜索框；浏览器原生查找当前宿主无法打开、输入或取证，不提供；不能以查找代替站内检索或要求的滚动。'
+               'replan只写剩余步骤，继承原档与总额度，不重新申请short流程。checks和finish_when是plan直接字段，禁止plan.stop。'
+               '未来选项出现后按实际选项和当前值核实；输入单位与输出单位分别判断，不猜选项。'
+               '收到零派发的编译失配时，依据最新值、选项、可用控件及剩余预算修订，不重做已完成步骤。')
+    if contract['version']==DIRECT_ARTICLE_PROTOCOL:
         prompt=prompt.replace('首轮自行规划完整条件路径，必要时包含真正触发计算的点击及站内检索后的正文阅读。','首轮根据当前词条规划自然阅读与必要链接往返，不使用站内检索。')
     elif contract.get('direct_entry'):
         prompt=prompt.replace('首轮自行规划完整条件路径，必要时包含真正触发计算的点击及站内检索后的正文阅读。','首轮从已打开的目标词条正文直接规划自然阅读路径，不经过站内检索。')
-    if task['fragment'].get('plan_protocol')==V11_VERSION and contract['version']!=DIRECT_VERSION:
-        if contract['kind'] == 'reading':
-            prompt = prompt.replace('已选引文后，只有原任务仍需且已规划的实际滚动阅读可继续，不为步数重复动作。',
-                                    '已选引文后，可继续原任务仍需的合法剩余动作，不为步数重复动作。')
-        # V11 action-space composition: the model plans the full path from the
-        # frozen goal and page evidence; no route template is hard-coded and no
-        # legal allowed_actions combination is pre-excluded by the prompt.
-        prompt += ('按冻结目标与当前页面证据自由组合allowed_actions中的合法动作'
-                   '（click、type、select、hotkey、scroll、open_url、back等）；'
-                   '不要求每条轨迹用全部动作，也不把某一路线当模板。'
-                   + ('同页多段阅读、目录定位、相关链接查阅及返回等都是合法组合，'
-                      if contract['kind'] == 'reading' else
-                      '同页多段阅读、跨页核对后back续读、两次独立目的的跨页查阅等都是合法组合，') +
-                   '由你依据目标与当前证据选择；不强制跨页，也不为步数添加无关动作。'
-                   + ('点击后核验实际效果；' if contract['kind'] == 'reading' else
-                      '每次scroll对应新的相关正文或未完成阅读事项；每次click有独立查阅目的并核验实际落地；') +
-                   '每次back核验原页面身份后才能续读。wait与观察计0步。'
-                   '宿主只按任务契约、当前观察和原子效果校验每一步。'
-                   '有效步数由真实业务动作和效果决定，不为档位凑步；自然完成少于5步照实short_flow。')
-        if contract['kind'] == 'reading':
-            prompt += ('首轮规划自然可行的至少5个有用动作，不因跳页舍弃仍有目的的剩余步骤；实际目标提前完成不足5步照实short_flow，不补动作。动作组合不固定比例、顺序或次数；纯滚动也可作为合法阅读路径，是否完成仍按原目标与实际证据判断。')
-    if contract['version']==DIRECT_VERSION:
+    if contract['version']==DIRECT_ARTICLE_PROTOCOL:
         prompt=prompt.replace('有页面证据的网站快捷键可聚焦真实站内搜索框；浏览器原生查找当前宿主无法打开、输入或取证，不提供；不能以查找代替站内检索或要求的滚动。','本任务限定原词条，不使用站内搜索，也不以站内快捷键聚焦搜索框；浏览器原生查找当前宿主无法打开、输入或取证，不提供。返回原词条后已读正文仍可核对时直接引用，不为恢复证据补滚动。')
         prompt=prompt.replace('未来选项出现后按实际选项和当前值核实；输入单位与输出单位分别判断，不猜选项。','目录与正文链接均可点击；目录文字不能代替正文引用。')
         prompt=prompt.replace('任何输入框都需先聚焦才能type；已有值须先全选。click聚焦用focused并填写text为目标的可见标签，全选用text_selected并填被选原值，输入用value并填新值。','本任务不提供输入或表单提交；只操作已见章节和正文链接。')
@@ -274,7 +178,7 @@ def system_for(task):
                 '只引用reading_evidence_catalog提供的原观察/节点/原文和actual_operations中的真实动作ID。阅读事项须给实际读过的passages及引出它的动作；动作事项还须对应确实执行的点击/返回。'
                 '一段起源说明不能证明纪录，也不能证明访问或返回。缺任何原事项就继续或修订剩余路线；自然提前全部完成允许short_flow，不补无意义动作。'
                 '同页目录点击预期用scroll_changed，不把fragment变化当成新文档。')
-    return prompt + PAGE_POLICY_PROMPT + (V11_PLANNING_GUIDANCE if task['fragment'].get('plan_protocol') == V11_VERSION else '')
+    return prompt + PAGE_POLICY_PROMPT
 
 
 def obj(fields, required=None):
@@ -310,7 +214,7 @@ CHOICE = obj({'attempt_id':text(200),'observation_id':text(200),'choice':text(40
               'decision_summary':text(80),'plan':PLAN,'visual_evidence':VISUAL}, ['attempt_id','observation_id','choice'])
 
 
-def plan_schema(grounded=False, *, wire=False, pending_checks=False, max_steps=CLOSING_POLICY_ATTEMPT_CEILING):
+def plan_schema(grounded=False, *, wire=False, pending_checks=False, max_steps=None):
     schema=deepcopy(PLAN);schema['required'].append('checks')
     if max_steps is None:
         schema['properties']['steps'].pop('maxItems',None)
@@ -357,12 +261,12 @@ def plan_schema(grounded=False, *, wire=False, pending_checks=False, max_steps=C
     return schema
 
 
-def tools(grounded=False, *, wire=False, pending_checks=False, max_steps=CLOSING_POLICY_ATTEMPT_CEILING):
+def tools(grounded=False, *, wire=False, pending_checks=False, max_steps=None):
     return [{'type':'function','function':{'name':'submit_plan','description':'提交有据的条件路径；不执行动作。',
                                          'parameters':plan_schema(grounded, wire=wire or grounded,pending_checks=pending_checks,max_steps=max_steps)}}]
 
 
-def choice_schema(grounded=False, *, inherited=False, wire=False, max_steps=CLOSING_POLICY_ATTEMPT_CEILING):
+def choice_schema(grounded=False, *, inherited=False, wire=False, max_steps=None):
     """Branch choice contract. The strict host form requires the scope IDs that
     bind_reply_scope fills first; the wire form shows the model what a reply
     may omit. A bare remaining plan stays the alternative replan shape."""
@@ -407,6 +311,10 @@ def strip_v13_wire(item, *, wiki=False, initial_complete=False, host_finish_when
             if wiki or host_finish_when:props.pop('finish_when',None)
             item['required']=[key for key in item.get('required',[])
                               if key!='band' and not ((wiki or host_finish_when) and key=='finish_when')]
+        # Host-owned finish_when is forbidden everywhere on the wire, including
+        # conditional allOf branches whose required list was moved there.
+        if (wiki or host_finish_when) and isinstance(item.get('required'),list):
+            item['required']=[key for key in item['required'] if key!='finish_when']
         if 'source_step_index' in props:props['source_step_index'].pop('maximum',None)
         # Conditional allOf branches can contain only minItems/maxItems. Only
         # the full array schema owns an items definition.
@@ -456,34 +364,33 @@ def bind_v13_result_checks(value, prompt):
 def bind_reply_scope(arguments, prompt):
     """Derive only IDs already fixed by this outgoing request; preserve the raw reply."""
     value = deepcopy(arguments)
-    if prompt.get('protocol') in (V12_VERSION,V13_VERSION) and 'steps' in value and 'choice' in value:
+    if prompt.get('protocol') == PLAN_PROTOCOL and 'steps' in value and 'choice' in value:
         if value.pop('choice') != 'plan':
             raise ValueError('PLAN_CHOICE_CONFLICT')
     current = prompt['observation']['observation_id']
     for key, expected in (('attempt_id', prompt['attempt_id']), ('observation_id', current)):
         if value.setdefault(key, expected) != expected:
             raise ValueError('PLAN_STALE_OR_WRONG_ATTEMPT')
-    if prompt.get('protocol') in (V12_VERSION,V13_VERSION) and 'steps' in value:
+    if prompt.get('protocol') == PLAN_PROTOCOL and 'steps' in value:
         fixed_goal=(prompt.get('session_objective') or {}).get('description')
         if fixed_goal:
             if value.setdefault('goal', fixed_goal) != fixed_goal:
                 raise ValueError('PLAN_FIXED_GOAL_CONFLICT')
-        if prompt.get('protocol')==V13_VERSION:
-            value.pop('band',None)
-            frozen=(prompt.get('replan_contract') or {}).get('band') if prompt.get('phase')=='branch' else None
-            value['band']=frozen or band_for_steps(sum(step.get('action') not in ('wait','complete') for step in value['steps']))
-            bind_v13_result_checks(value,prompt)
-        else:
-            expected_band=band_for_steps(len(value['steps']))
-            if value.setdefault('band', expected_band) != expected_band:
-                raise ValueError('PLAN_BAND_CONFLICT')
+        frozen=(prompt.get('replan_contract') or {}).get('band') if prompt.get('phase')=='branch' else None
+        band=frozen or band_for_steps(sum(step.get('action') not in ('wait','complete') for step in value['steps']))
+        if value.get('band') not in (None, band):
+            raise ValueError('PLAN_BAND_CONFLICT')
+        value['band']=band
+        bind_v13_result_checks(value,prompt)
         value.setdefault('replan_when', '当前目标无法唯一绑定或路径失效时，仅重规划原目标剩余动作')
-        if prompt.get('wiki_reading_completion_protocol') == 'webcollect-wiki-reading-completion-2':
+        if prompt.get('wiki_reading_completion_protocol') == WIKI_READING_COMPLETION:
             from .wiki_reading import bind_plan_wire, FINISH_WHEN
-            if prompt.get('protocol')==V13_VERSION:value['finish_when']=deepcopy(FINISH_WHEN)
+            if 'finish_when' in value and value['finish_when'] != FINISH_WHEN:
+                raise ValueError('WIKI_READING_FINISH_PROTOCOL_CONFLICT')
+            value['finish_when']=deepcopy(FINISH_WHEN)
             value=bind_plan_wire(value,prompt)
-        elif (prompt.get('result_completion_protocol') == 'webcollect-result-completion-1'
-                and prompt.get('protocol')==V13_VERSION):
+        elif (prompt.get('result_completion_protocol') == RESULT_COMPLETION_PROTOCOL
+                and prompt.get('protocol') == PLAN_PROTOCOL):
             # 宿主补协议占位：首轮不要求模型预猜终点字面（固定4条w01/w02缺口）。
             # 旧习惯仍返回的finish_when按Wiki路径同规则被占位替换，原回包保留原值。
             value['finish_when']=deepcopy(RESULT_FINISH_WHEN)
@@ -507,9 +414,7 @@ def bind_reply_scope(arguments, prompt):
                 # step falls back to current-frame semantic binding, which still
                 # demands a unique visible match before any dispatch. Older
                 # protocols keep the historical hard rejection byte-for-byte.
-                if (prompt.get('protocol') == V12_VERSION
-                        or prompt.get('protocol') not in MODERN_BRANCH_PROTOCOLS
-                        or not target.get('text')):
+                if not target.get('text'):
                     raise ValueError('PLAN_TARGET_OUTSIDE_REQUEST_OBSERVATION')
                 target.pop('node', None)
                 target.pop('observation_id', None)
@@ -544,7 +449,7 @@ def execution_keys(keys,platform=None):
     return ['meta','a'] if result==['ctrl','a'] and (platform or sys.platform)=='darwin' else result
 
 
-def enabled(task):return task.get('fragment',{}).get('plan_protocol') in VERSIONS
+def enabled(task):return task.get('fragment',{}).get('plan_protocol') == PLAN_PROTOCOL
 
 
 def band_for_steps(n):
@@ -552,7 +457,7 @@ def band_for_steps(n):
     return 'short' if n < 5 else 'five' if n == 5 else 'long'
 
 
-def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recovery=False, grounded=False, inherited_band=None,pending_checks=False,direct_completion=False,max_steps=CLOSING_POLICY_ATTEMPT_CEILING,replanning=False,wiki=False,ordinary_minimum=False,ordinary_maximum=10,extended_actions=False):
+def validate_plan(plan, attempt, observation, allowed, *, remaining=None, recovery=False, grounded=False, inherited_band=None,pending_checks=False,direct_completion=False,max_steps=None,replanning=False,wiki=False,ordinary_minimum=False,ordinary_maximum=10,extended_actions=False):
     from jsonschema import Draft202012Validator
     schema=plan_schema(grounded,pending_checks=pending_checks,max_steps=max_steps)
     if direct_completion:
@@ -992,8 +897,6 @@ class Controller:
         self.binding_miss_streak=0
         self.qualification_no_progress_key=None
         self.qualification_no_progress_streak=0
-        self.budget_feedback=None
-        self.budget_correction_contexts=set()
 
     def _normalize_select_all_predicate(self,s,step):
         """对齐全选语义：ctrl/cmd+a 的输入选择期望与实际按键、当前输入值对齐。
@@ -1045,12 +948,7 @@ class Controller:
         current_step=self.plan['steps'][self.position] if self.plan and self.position<len(self.plan['steps']) else None
         first=not self.submitted
         contract = contract_for(s.task)
-        reading_links = (s.task['fragment'].get('plan_protocol') == V11_VERSION and contract
-                         and contract['kind'] == 'reading'
-                         and contract['version'] != 'webcollect-direct-article-reading-1')
-        modern = s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS
-        v10 = s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS
-        payload={'protocol':s.task['fragment'].get('plan_protocol',VERSION),'phase':'first' if first else 'branch','system':SYSTEM+(PAGE_POLICY_PROMPT if s.task['fragment'].get('plan_protocol') in PAGE_POLICY_PROTOCOLS else ''),
+        payload={'protocol':s.task['fragment'].get('plan_protocol', PLAN_PROTOCOL),'phase':'first' if first else 'branch','system':SYSTEM+PAGE_POLICY_PROMPT,
                  'attempt_id':s.attempt_id,'session_objective':deepcopy(s.task['fragment'].get('session_objective',{}).get('objective')),
                  'observation':{'observation_id':s.current['observation_id'],'url':s.current['url'],
                                 'image_ref':image['path'],'document_identity':s.current['document_identity']},
@@ -1058,14 +956,12 @@ class Controller:
                              'effective_steps':len(s.trajectory),'actual_dispatches':s.actual_dispatches}}
         # Host-only membership scope for node references; stripped from the wire.
         payload['observation']['_node_scope']=sorted(s.current['controls'])
-        if not contract and s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS:
-            payload['system']=payload['system']+V9_NORMAL_ADDENDUM+(V10_CHOICE_ADDENDUM if v10 else '')
-        if v10:
-            # The shared first-plan wording must not teach the historical
-            # choice name that v10 withdrew; contracted prompts below use
-            # their own options-driven wording and are unaffected.
-            payload['system']=payload['system'].replace('看到不清楚选original，歧义选明确节点',
-                                                        '需要原图证据用request_original_image，歧义选明确节点')
+        if not contract:
+            payload['system']=payload['system']+V9_NORMAL_ADDENDUM+V10_CHOICE_ADDENDUM
+        # The shared first-plan wording must not teach a withdrawn choice name;
+        # contracted prompts below use their own options-driven wording.
+        payload['system']=payload['system'].replace('看到不清楚选original，歧义选明确节点',
+                                                    '需要原图证据用request_original_image，歧义选明确节点')
         from .dynamic_regions import summary as dynamic_summary,enabled as dynamic_enabled
         if dynamic_enabled(s.current.get('state',s.current)):
             payload['dynamic_regions']=(deepcopy(s.current['dynamic_region_summary'])
@@ -1074,7 +970,7 @@ class Controller:
             if self.initial_feedback:
                 payload['initial_plan_feedback']=deepcopy(self.initial_feedback)
             focus = getattr(s, 'preflight_search_focus', None)
-            pinned=[focus['node']] if modern and focus and not s.trajectory else []
+            pinned=[focus['node']] if focus and not s.trajectory else []
             if self.initial_feedback:
                 references=[step.get('target',{}) for step in self.initial_feedback.get('previous_arguments',{}).get('steps',[])]
                 references += [row for issue in self.initial_feedback.get('errors',[]) for row in issue.get('observed_same_href_alternatives',[])]
@@ -1090,7 +986,7 @@ class Controller:
                 for k,metric in facts.items() if isinstance(metric,dict)}
             payload.update(requested_goal=s.requested_goal,bands=self._band_advice(s.context.get('band_budget') or distribution()),
                            allowed_actions=[a for a in s.task['fragment']['allowed_actions'] if a in STEP['properties']['action']['enum']],
-                           tools=tools(bool(contract),wire=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),pending_checks=modern,max_steps=attempt_limit(s.task,planning_band(s.task,s.context))),
+                           tools=tools(bool(contract),wire=True,pending_checks=True,max_steps=attempt_limit(s.task,planning_band(s.task,s.context))),
                            registered_pages=[{'page_id':'p'+str(i),'url':u} for i,u in enumerate(s.page_urls[:24])])
             payload['session_objective']=deepcopy(s.task['fragment'].get('session_objective',{}).get('objective'))
         else:
@@ -1116,7 +1012,6 @@ class Controller:
                 remaining_plan=self._remaining_plan(),
                 branch_reason=self._branch_reason(s),
                 **({'binding_feedback':deepcopy(self.binding_feedback)} if getattr(self,'binding_feedback',None) else {}),
-                **({'budget_feedback':deepcopy(self.budget_feedback)} if getattr(self,'budget_feedback',None) else {}),
                 replan_contract={'band':getattr(self,'frozen_band',None),
                     'attempt_limit':attempt_limit(s.task,getattr(self,'frozen_band',None)),
                     'remaining_effective_limit':remaining_step_allowance(s),
@@ -1127,31 +1022,21 @@ class Controller:
                     'step_fields':'action,purpose,expected; click:target{text,role?,parent_text?}; type/select:target,value; scroll:direction; hotkey:keys; open_url:page_id; back:无参数',
                     'predicate_fields':'kind,text,region?; kind=visible_text|url|selected|text_selected|focused|value|scroll_changed|list_present|list_empty|list_changed; finish_when不可用value/scroll_changed/list_changed',
                     'allowed_actions':allowed})
-            if s.task['fragment'].get('plan_protocol')==V11_VERSION:
-                # V11 drops the duplicated remaining-step field and the
-                # "one step left" special wording: the model reads the total
-                # from attempt_limit plus its own executed steps. Historical
-                # protocols keep their frozen bytes unchanged.
-                contract_payload=payload.get('replan_contract')
-                if contract_payload is not None:
-                    contract_payload.pop('remaining_effective_limit',None)
-                    contract_payload['budget_instruction']=('replan只提交尚未执行的剩余目标动作，不得重复已完成动作；'
-                        '宿主按冻结总步数校验。')
             if 'open_url' in allowed:
                 payload['registered_pages']=[{'page_id':'p'+str(i),'url':u} for i,u in enumerate(s.page_urls[:24])]
         if contract:
             payload['system'] = system_for(s.task)
             payload['evidence_contract'] = contract
-            from .direct_article import VERSION as DIRECT_VERSION
-            if contract['version']==DIRECT_VERSION:
+            if contract['version']==DIRECT_ARTICLE_PROTOCOL:
                 payload['allowed_actions']=[a for a in payload.get('allowed_actions',s.task['fragment']['allowed_actions']) if a in ('scroll','click','back','hotkey')]
                 payload['direct_article_tools']={'native_browser_find':{'available':False,
                     'reason':'浏览器原生查找框属于浏览器界面，当前无头视口宿主无法打开、输入或取证；不模拟页内查找'},
                     'site_search':False,'next_business_action_after_departure':'back','hotkeys':['PageDown','PageUp','ArrowDown','ArrowUp','Home','End','Space']}
                 from .direct_article import protocol_schema
-                from .direct_completion import enabled as explicit,VERSION as COMPLETION
+                from .direct_completion import enabled as explicit
+                COMPLETION = DIRECT_COMPLETION_PROTOCOL
                 if explicit(s.task):
-                    payload['direct_completion_protocol']=COMPLETION
+                    payload['direct_completion_protocol']=DIRECT_COMPLETION_PROTOCOL
                     if not first:
                         facts=self.fact_progress(s)['session_objective']
                         payload['original_reading_goal']={'goal':self.frozen_plan['goal'],'checks':self.frozen_plan['checks']}
@@ -1163,12 +1048,11 @@ class Controller:
                 if 'tools' in payload:payload['tools']=protocol_schema(payload['tools'],contract,completion=explicit(s.task),max_steps=attempt_limit(s.task,planning_band(s.task,s.context)))
 
 
-            if modern:
-                payload['completion_policy']={'minimum_effective_steps':s.task['fragment'].get('session_objective',{}).get('objective',{}).get('minimum_effective_steps',5),
-                    'early_completion':'自然提前结束照实记不足；只有原目标相关且可核验的剩余计划可继续'}
-                if not first:
-                    payload.pop('plan_schema',None)
-                    payload['replan_contract']['fields']='steps必填；其他字段可省并继承原计划，原band与总额度不变'
+            payload['completion_policy']={'minimum_effective_steps':s.task['fragment'].get('session_objective',{}).get('objective',{}).get('minimum_effective_steps',5),
+                'early_completion':'自然提前结束照实记不足；只有原目标相关且可核验的剩余计划可继续'}
+            if not first:
+                payload.pop('plan_schema',None)
+                payload['replan_contract']['fields']='steps必填；其他字段可省并继承原计划，原band与总额度不变'
             entry_focus = getattr(s, 'preflight_search_focus', None)
             if entry_focus and not s.trajectory:
                 payload['first_action_constraint'] = {'action':'click','node':entry_focus['node'],
@@ -1177,33 +1061,10 @@ class Controller:
             dom,coverage=initial_projection(s.current,limit=6500,goal=s.requested_goal or s.working_goal)
             payload['observation'].update(rendered_dom=dom,dom_coverage=coverage)
         payload['target_references']={'scope':s.current['observation_id'],
-            'usage':('当前帧可用target{text,node,observation_id}；未来页面只用业务语义。scroll/hotkey/back不需控件ID。缺目标时request_original_image(未提供时)/replan/stop，不猜ID。'
-                     if v10 else
-                     '当前帧可用target{text,node,observation_id}；未来页面只用业务语义。scroll/hotkey/back不需控件ID。缺目标时replan/original/stop，不猜ID。')}
-        if s.task['fragment'].get('plan_protocol')==V11_VERSION:
-            # The wwiki-B loop: role vocabulary must be named up front, not only
-            # after a miss. Historical protocols keep their frozen bytes.
-            payload['target_references']['usage']+=(' target.role须与rendered_dom行的role原值一致'
-                '（如input/a/button），不用同义词；node须为rendered_dom行的node（如e_8）；'
-                'region/parent_text不确定时省略，宿主按当前帧唯一匹配绑定。')
-        if reading_links:
-            payload['target_references']['usage'] += (
-                ' 滚动后准备点击仍按当前帧绑定，仍能绑定就继续原计划。'
-                '旧目标不可绑定或已失效时，优先从本次current_link_candidates改选与原目标相关的链接，仅修订必要的剩余steps；'
-                '不要仅围绕旧名称反复上下滚动寻找。首轮也使用本次候选核对当前可见链接；只有立即执行的点击可引用当前node，'
-                '先滚动或切页后的未来点击只描述业务语义，届时按新观察绑定。动作组合与先后仍由原目标决定。'
-                '候选不等于已完成定向取证，仍由宿主按当前观察唯一绑定并核实点击资格。')
-            feedback = payload.get('binding_feedback')
-            if first or (current_step or {}).get('action') == 'click' or feedback:
-                links = current_link_candidates(s.current)
-                if feedback:
-                    # Feedback survives replans, so rebuild its diagnosis and
-                    # candidate inventory from this request's actual frame.
-                    feedback['diagnosis'] = {
-                        **binding_diagnosis(s.current, feedback.get('target') or {}),
-                        'observation_id': s.current['observation_id'], 'current_link_candidates': links}
-                else:
-                    payload['target_references']['current_link_candidates'] = links
+            'usage':('当前帧可用target{text,node,observation_id}；未来页面只用业务语义。scroll/hotkey/back不需控件ID。'
+                     '缺目标时request_original_image(未提供时)/replan/stop，不猜ID。target.role须与rendered_dom行的role原值一致'
+                     '（如input/a/button），不用同义词；node须为rendered_dom行的node（如e_8）；'
+                     'region/parent_text不确定时省略，宿主按当前帧唯一匹配绑定。')}
         expected=(current_step or {}).get('expected') if self.pending_effect else (self.plan or {}).get('finish_when')
         if not first and expected and expected.get('region'):
             region=region_evidence(load_json(s.current['evidence']['state']['path']),expected['region'])
@@ -1233,14 +1094,12 @@ class Controller:
                     '引用只能来自已读正文，动作只能引用已执行证据。省略重复目标及作用域ID时由宿主绑定。'
                     'replan只更新剩余steps，不重复已做动作；遵循随请求附带的输出协议。自然完成即结束，不凑步。'
                     '看不清选original，无法继续如实stop。')
-            elif s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS and not contract:
-                system+=V9_BRANCH_ADDENDUM+(V10_CHOICE_ADDENDUM if v10 else '')
-            if v10:
-                # Every v10 branch context (contracted or ordinary) names the
-                # image request exactly as the options do; the historical
-                # choice word never appears to the model.
-                system=system.replace('看不清选original，无法继续如实stop。',
-                    '需要原图证据选request_original_image（每帧每情境一次），无法继续如实stop。')
+            elif s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL and not contract:
+                system+=V9_BRANCH_ADDENDUM+V10_CHOICE_ADDENDUM
+            # Every branch context names the image request exactly as the
+            # options do; no withdrawn choice word ever reaches the model.
+            system=system.replace('看不清选original，无法继续如实stop。',
+                '需要原图证据选request_original_image（每帧每情境一次），无法继续如实stop。')
             payload['system']=system+PAGE_POLICY_PROMPT
             payload.pop('response_shape',None)
             if payload.get('original_reading_goal'):
@@ -1251,8 +1110,6 @@ class Controller:
         # 2026-11-07: one shared goal semantic on every round, appended after
         # all protocol-specific wording so first and follow-up requests cannot
         # drift apart on what the endpoint must prove.
-        if s.task['fragment'].get('plan_protocol') == V11_VERSION and V11_PLANNING_GUIDANCE not in payload['system']:
-            payload['system'] += V11_PLANNING_GUIDANCE
         limit=attempt_limit(s.task,planning_band(s.task,s.context) if first else getattr(self,'frozen_band',None))
         from .closing_policy import completed_goal_only
         complete_goal=completed_goal_only(s.task)
@@ -1281,25 +1138,23 @@ class Controller:
             payload['system']+='提前完成必须由宿主逐项证明剩余计划目的已被真实正文目标证据覆盖；finish_when命中和一句冗余说明均不充分。歧义时继续原计划中的有用动作或如实停止，不添加审核调用。'
             if getattr(self,'remaining_plan_feedback',None):
                 payload['remaining_plan_feedback']=deepcopy(self.remaining_plan_feedback)
-        from .wiki_reading import enabled as wiki, FIELD as WIKI_FIELD, VERSION as WIKI_VERSION, GUIDANCE, NEW_GUIDANCE, system_text
+        from .wiki_reading import enabled as wiki, FIELD as WIKI_FIELD, GUIDANCE, NEW_GUIDANCE, system_text
         if wiki(s.task):
             from .wiki_reading import schema as completion_schema
-            from .direct_completion import VERSION as COMPLETION
             payload[WIKI_FIELD]=s.task['fragment'][WIKI_FIELD]
-            payload['direct_completion_protocol']=COMPLETION
-            payload['system']=system_text(payload['system'])+'\n'+(NEW_GUIDANCE if s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION) else GUIDANCE)
-            if 'tools' in payload:payload['tools']=completion_schema(payload['tools'],max_steps=limit,evidence_ids=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION))
-            if 'plan_schema' in payload:payload['plan_schema']=completion_schema(payload['plan_schema'],max_steps=limit,evidence_ids=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION))
+            payload['direct_completion_protocol']=DIRECT_COMPLETION_PROTOCOL
+            payload['system']=system_text(payload['system'])+'\n'+NEW_GUIDANCE
+            if 'tools' in payload:payload['tools']=completion_schema(payload['tools'],max_steps=limit,evidence_ids=True)
+            if 'plan_schema' in payload:payload['plan_schema']=completion_schema(payload['plan_schema'],max_steps=limit,evidence_ids=True)
             if not first:
                 payload['original_reading_goal']={'goal':self.frozen_plan['goal'],'checks':self.frozen_plan['checks']}
                 payload['reading_evidence_catalog']=self.fact_progress(s)['session_objective']['new_visible_body']
-                if s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION):
+                if s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL:
                     from .wiki_reading import evidence_payload
                     payload.update(evidence_payload(s))
                 payload['actual_operations']=[{k:r.get(k) for k in ('operation_id','action','target','semantic_goal','before_observation_id','after_observation_id')} for r in s.trajectory]
                 if getattr(self,'completion_feedback',None):payload['completion_feedback']=deepcopy(self.completion_feedback)
-        if s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION):
-            payload['system']=payload['system'].replace(V11_PLANNING_GUIDANCE,'')
+        if s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL:
             initial_ceiling=None if complete_goal else 10
             step_ceiling=None if complete_goal else 10
             path_range='5–8' if complete_goal else '5–10'
@@ -1325,7 +1180,7 @@ class Controller:
                     '动作expected只描述实际操作效果；跳转按已见href和实测落地核验，不预猜答案关键词。必要结果核验放checks。'
                     '未来页面只写语义目标；当前node只能绑定本轮observation。控件region只用已证明区域。'
                     +actual_ending+FIRST_GOAL_SEMANTICS+PAGE_POLICY_PROMPT)
-                if wiki(s.task):payload['system']=system_text(payload['system'])+'\n'+(NEW_GUIDANCE if s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION) else GUIDANCE)
+                if wiki(s.task):payload['system']=system_text(payload['system'])+'\n'+NEW_GUIDANCE
                 schema=payload['tools'][0]['function']['parameters']
                 schema['required']=[k for k in schema['required'] if k not in ('attempt_id','observation_id','band','replan_when')]
                 if payload.get('session_objective',{}):
@@ -1347,17 +1202,17 @@ class Controller:
                     'else':{'required':plan_required,'properties':{'reason':False}}}]
                 payload['tools'][0]['function']['parameters']=schema
                 payload['system']+='submit_plan直接填写顶层goal、steps、checks、finish_when等计划字段，choice可省或为plan；attempt_id、observation_id、band、replan_when可省，由工程按本请求和动作数补齐，显式冲突仍拒绝。steps和checks须为JSON数组，expected和target须为JSON对象，不将其编码为字符串。没有至少5步的自然完整路径或无法完成时只提交{"choice":"stop","reason":"实际原因"}；宿主记录本任务不适合普通长流程，不废弃生产者页面。'
-                if s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1':
+                if s.task['fragment'].get('result_completion_protocol')==RESULT_COMPLETION_PROTOCOL:
                     # 收口新计算完成协议的首轮接口：不要求预猜finish_when字面，
                     # 由宿主补协议占位；执行后沿finish_result逐项绑定结果。
-                    payload['result_completion_protocol']='webcollect-result-completion-1'
+                    payload['result_completion_protocol']=RESULT_COMPLETION_PROTOCOL
                     payload['system']=payload['system'].replace(
                         'submit_plan直接填写顶层goal、steps、checks、finish_when等计划字段，',
                         'submit_plan直接填写顶层goal、steps、checks等计划字段，finish_when由工程生成且禁止填写，')
                     payload['system']=payload['system'].replace(
                         '必要结果核验放checks。','必要结果核验放checks，只描述要看的业务结果，不预猜答案字面。')
-            payload['planning_range']={'protocol':V12_VERSION,'initial_complete_path_minimum':5,'initial_complete_path_maximum':initial_ceiling,'initial_complete_path_preferred_maximum':8 if complete_goal else None,'cumulative_maximum':step_ceiling,'remaining_effective_steps':remaining_step_allowance(s),'replanning_minimum':1,'actual_short_flow':'不属于有效候选' if complete_goal else '按最终有效动作事实标记，完成即结束'}
-        if s.task['fragment'].get('plan_protocol')==V13_VERSION:
+            payload['planning_range']={'protocol':PLAN_PROTOCOL,'initial_complete_path_minimum':5,'initial_complete_path_maximum':initial_ceiling,'initial_complete_path_preferred_maximum':8 if complete_goal else None,'cumulative_maximum':step_ceiling,'remaining_effective_steps':remaining_step_allowance(s),'replanning_minimum':1,'actual_short_flow':'不属于有效候选' if complete_goal else '按最终有效动作事实标记，完成即结束'}
+        if s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL:
             payload['system']+='\n每步rationale说明原目标与已知规划依据为何需要此动作，区别purpose的步骤目标；当前观察可见事实才能用当前时态，后续步骤用计划依据，不冒称未来界面已看见。expected_result描述执行后的预期可见变化，不写成实测结果，不仅复述控件名或内部状态；计算只写结果区应出现本次输入的结果，不预猜数值。两项均用简体中文，原界面文字引用保持原样。'
             payload['system']+=f'\n动作空间含click、double_click、right_click、drag、type、select、hotkey、scroll、open_url、back、wait；complete由完成申请收尾。按真实页面用途选择，无动作类型配额。drag用target和end_target两个有据语义目标，宿主重绑并生成坐标；禁止提供猜测坐标。wait仅用于真实加载，duration_ms指定等待，零有效步；首轮优先{path_range}个必要业务动作，完整自然路径可超过该偏好范围。'
             if s.task['fragment'].get('result_execution_policy'):
@@ -1383,9 +1238,9 @@ class Controller:
                 '计算或格式验证页已经露出计算/提交按钮且尚无本次新结果时，下一必要动作必须实际click提交，不得连续滚动消耗预算；已实测自动更新时以真实结果为准，不强制增加点击。')
             for key in ('tools','plan_schema'):
                 if key in payload:strip_v13_wire(payload[key],wiki=wiki(s.task),initial_complete=first and complete_goal,
-                    host_finish_when=s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1')
-            payload['protocol']=V13_VERSION
-            if 'planning_range' in payload:payload['planning_range']['protocol']=V13_VERSION
+                    host_finish_when=s.task['fragment'].get('result_completion_protocol')==RESULT_COMPLETION_PROTOCOL)
+            payload['protocol']=PLAN_PROTOCOL
+            if 'planning_range' in payload:payload['planning_range']['protocol']=PLAN_PROTOCOL
         else:
             # Frozen protocols retain the original seven-action planner space.
             def legacy(item):
@@ -1398,9 +1253,9 @@ class Controller:
                     for child in item:legacy(child)
             for key in ('tools','plan_schema'):
                 if key in payload:legacy(payload[key])
-        if not first and complete_goal and not wiki(s.task) and s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1':
+        if not first and complete_goal and not wiki(s.task) and s.task['fragment'].get('result_completion_protocol')==RESULT_COMPLETION_PROTOCOL:
             from .result_completion import catalog
-            payload['result_completion_protocol']='webcollect-result-completion-1'
+            payload['result_completion_protocol']=RESULT_COMPLETION_PROTOCOL
             payload['result_evidence_catalog']=catalog(s)
             payload['original_result_checks']=deepcopy(self.frozen_plan.get('checks',[]))
             payload['system']+='\n原目标结果已经出现时选择finish_result，并提交result_answer={check_answers:[{check_index:原checks零起始编号,evidence_ids:[result_evidence_catalog中的编号]}]}。逐项覆盖原目标全部checks；只引用实际输出，不引用标题、标签或输入回显。缺项继续剩余动作或重规划，不改目标，不用stop表示完成。'
@@ -1490,8 +1345,10 @@ class Controller:
         from .result_completion import enabled as result_completion_task
         if (result_completion_task(s.task) and self.plan and predicate==self.plan['finish_when']
                 and predicate==RESULT_FINISH_WHEN):
-            # 占位终点由finish_result核验结果驱动，不做字面证明。
-            return self.fact_progress(s)['business_goal_status']=='VERIFIED'
+            # 占位终点只由一次已核验的finish_result申请驱动；事实进度单独成立时
+            # 计划耗尽仍走分支请求，避免产生无法回放的host_rendered_state占位终点。
+            return bool(getattr(s,'result_completion',None)) \
+                and self.fact_progress(s)['business_goal_status']=='VERIFIED'
         contract = contract_for(s.task)
         if contract and predicate['kind'] in ('goal_evidence','search_results','document_changed'):
             if predicate['kind'] == 'document_changed':
@@ -1504,7 +1361,7 @@ class Controller:
                 return proof['status'] == 'VERIFIED'
             return bool(contract.get('subject') and contract['kind'] == 'reading' and proof.get('result_page_current', proof.get('search_inputs'))
                         and (result_links(s.current, s.observation_records[initial], contract['subject']) or proof.get('opened_results')))
-        established=proves(predicate,s.current,before,cid,numeric=s.task['fragment'].get('plan_protocol')==V13_VERSION) or self.visual_key(predicate,s) in self.visual_confirmations
+        established=proves(predicate,s.current,before,cid,numeric=s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL) or self.visual_key(predicate,s) in self.visual_confirmations
         if established and self.plan and predicate==self.plan['finish_when']:
             from .session_objective import progress
             evidence=progress(s,getattr(self,'frozen_plan',self.plan)['observation_id'])
@@ -1518,7 +1375,7 @@ class Controller:
         ordinary_wiki=wiki(s.task)
         completion=({'result_completion':deepcopy(s.result_completion)} if getattr(s,'result_completion',None) else {})
         if not ordinary_wiki and not getattr(s,'result_completion',None) and s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY:
-            completion={'reading_plan_completion':{'protocol':READING_COMPLETION_POLICY,
+            completion={'reading_plan_completion':{'policy':READING_COMPLETION_POLICY,
                 'original_plan':self.original_plan_event,'current_plan':self.plan_event,
                 'original_plan_sha256':object_sha256(self.frozen_plan),'current_plan_sha256':object_sha256(self.plan),
                 'position':self.position,
@@ -1549,8 +1406,7 @@ class Controller:
         self._image_context=context
         if attempt_limit(s.task) is not None and (s.current['observation_id'],context) in self.provided_original_for:
             return []
-        name='request_original_image' if s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS else 'original'
-        return [{'choice':name,'meaning':meaning}]
+        return [{'choice':'request_original_image','meaning':meaning}]
 
     def remaining_coverage(self,s):
         if getattr(s,'result_completion',None):return None  # Explicit original-check result coverage replaces route redundancy.
@@ -1563,16 +1419,14 @@ class Controller:
 
     def continue_reading(self,s):
         """A citation does not cancel legal remaining work for the original goal."""
-        if s.task.get('fragment',{}).get('plan_protocol') not in IMAGE_CHOICE_PROTOCOLS:return False
         coverage=self.remaining_coverage(s)
         if coverage is not None and coverage['status']!='COVERED':return True
         contract=contract_for(s.task)
-        from .direct_article import VERSION as DIRECT_VERSION
-        if (contract or {}).get('version')==DIRECT_VERSION:return False
+        if (contract or {}).get('version')==DIRECT_ARTICLE_PROTOCOL:return False
         if not contract or contract['kind']!='reading':return False
         if self.position>=len(self.plan['steps']):return False
-        from .action_stability import ACTION_SCOPED_VERSIONS
-        action_scoped=s.task['fragment'].get('action_stability_protocol') in ACTION_SCOPED_VERSIONS
+        from .plan_protocol import ACTION_STABILITY_PROTOCOL
+        action_scoped=s.task['fragment'].get('action_stability_protocol') == ACTION_STABILITY_PROTOCOL
         if not action_scoped:
             minimum=s.task['fragment'].get('session_objective',{}).get('objective',{}).get('minimum_effective_steps',5)
             if len(s.trajectory)>=minimum:return False
@@ -1599,10 +1453,10 @@ class Controller:
                 if target.get('role')=='input':target['role']=c['element']['native_role']
         if target.get('source') != 'search_results':
             return bind_target(s.current, target, s.observation_records,
-                advisory=s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS)
+                advisory=s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL)
         from .goal_evidence import norm, progress, result_links
         contract = contract_for(s.task)
-        if not contract or contract['kind'] != 'reading' or contract.get('version')=='webcollect-direct-article-reading-1':
+        if not contract or contract['kind'] != 'reading' or contract.get('version')==DIRECT_ARTICLE_PROTOCOL:
             return []
         initial = self.frozen_plan['observation_id']
         proof = progress(s, initial, contract)
@@ -1626,7 +1480,7 @@ class Controller:
             if not any(o['choice']=='finish_reading' for o in options):
                 options.insert(0,{'choice':'finish_reading','meaning':'原问题及每项原checks已有累计正文/实际动作支持时提交完整reading_answer申请完成；缺项则继续或如实stop'})
         from .closing_policy import completed_goal_only
-        if completed_goal_only(s.task) and not wiki(s.task) and options is not None and s.task['fragment'].get('result_completion_protocol')=='webcollect-result-completion-1':
+        if completed_goal_only(s.task) and not wiki(s.task) and options is not None and s.task['fragment'].get('result_completion_protocol')==RESULT_COMPLETION_PROTOCOL:
             from .result_completion import catalog
             if catalog(s) and not any(o['choice']=='finish_result' for o in options):
                 options=[{'choice':'finish_result','meaning':'原目标全部事项已有本次提交后的实际输出；逐项提交result_answer引用申请完成'},*options]
@@ -1666,11 +1520,11 @@ class Controller:
         if not self.submitted:
             limit=attempt_limit(s.task,planning_band(s.task,s.context))
             content_plan=(response.get('response_kind')=='strict_plan_content'
-                and response.get('content_plan_protocol')=='strict-plan-content-1'
-                and s.task['fragment']['plan_protocol'] in (V6_VERSION,V7_VERSION,V8_VERSION,V10_VERSION,VERSION,V12_VERSION,V13_VERSION))
+                and response.get('content_plan_protocol')=='strict-plan-content'
+                and s.task['fragment']['plan_protocol'] == PLAN_PROTOCOL)
             if not content_plan and (response.get('name')!='submit_plan' or not response.get('tool_call_id')):
                 raise ValueError('Expected provider submit_plan response')
-            if prompt.get('protocol') in (V12_VERSION,V13_VERSION) and response.get('arguments',{}).get('choice')=='stop':
+            if prompt.get('protocol') == PLAN_PROTOCOL and response.get('arguments',{}).get('choice')=='stop':
                 from jsonschema import Draft202012Validator
                 stop=response['arguments']
                 Draft202012Validator(obj({'choice':{'const':'stop'},'reason':text(240)})).validate(stop)
@@ -1682,12 +1536,12 @@ class Controller:
             from .direct_completion import initial_plan_issues
             issues=[]
             try:
-                arguments = bind_reply_scope(response['arguments'], prompt) if grounded or wiki(s.task) or prompt.get('protocol') in (V12_VERSION,V13_VERSION) else response['arguments']
+                arguments = bind_reply_scope(response['arguments'], prompt) if grounded or wiki(s.task) or prompt.get('protocol') == PLAN_PROTOCOL else response['arguments']
                 if direct_completion and not wiki(s.task):
                     issues=initial_plan_issues(arguments,s.current,contract,max_steps=limit)
                 if issues:raise ValueError('INITIAL_PLAN_HAS_DETERMINISTIC_ERRORS')
                 plan=validate_plan(arguments,s.attempt_id,s.current['observation_id'],s.task['fragment']['allowed_actions'],recovery=error_page,grounded=grounded,
-                    pending_checks=s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS,direct_completion=direct_completion,max_steps=limit,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),ordinary_maximum=None if complete_goal else limit or 10,extended_actions=s.task['fragment'].get('plan_protocol')==V13_VERSION)
+                    pending_checks=s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL,direct_completion=direct_completion,max_steps=limit,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL,ordinary_maximum=None if complete_goal else limit or 10,extended_actions=s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL)
                 if error_page and (len(plan['steps'])!=1 or plan['steps'][0]['action']!='open_url'
                                    or plan['steps'][0].get('page_id') not in ['p'+str(i) for i in range(len(s.page_urls))]):
                     raise ValueError('ERROR_PAGE_ONLY_REGISTERED_RECOVERY_ALLOWED')
@@ -1711,7 +1565,7 @@ class Controller:
                         raise ValueError('PLAN_DIFFERS_FROM_HOST_LOCKED_BAND')
             except (ValueError,ValidationError) as error:
                 weak_first_frame = str(error)=='ENDPOINT_VISIBLE_ON_FIRST_FRAME'
-                recoverable_v13=(prompt.get('protocol')==V13_VERSION and str(error) in (
+                recoverable_v13=(prompt.get('protocol') == PLAN_PROTOCOL and str(error) in (
                     'NUMERIC_RESULT_CHECK_SOURCE_UNBOUND','PLAN_CHECK_PAGE_UNREGISTERED'))
                 if ((not direct_completion and not weak_first_frame and not recoverable_v13) or s.actual_dispatches
                         or self.plan is not None or s.unknown):
@@ -1744,7 +1598,7 @@ class Controller:
                         self.qualification_no_progress_key=key;self.qualification_no_progress_streak=1
                     if self.qualification_no_progress_streak>=REPEATED_BINDING_MISS_LIMIT:
                         raise ReactStop('blocked','WIKI_INITIAL_PLAN_NO_NEW_EVIDENCE: '+str(error),'collector')
-                self.initial_feedback={'version':'webcollect-initial-plan-feedback-1',
+                self.initial_feedback={
                     'attempt_id':s.attempt_id,'observation_id':s.current['observation_id'],
                     'previous_arguments':deepcopy(response['arguments']),'errors':issues,
                     'instruction':instruction,'weak_first_frame_endpoint':weak_first_frame}
@@ -1771,7 +1625,7 @@ class Controller:
             self.recovery_prefix=error_page
             self.target_steps=5 if self.frozen_band=='five' else (max(6,len(plan['steps'])) if self.frozen_band=='long' else len(plan['steps']))
             if (limit is not None and self.frozen_band == plan['band'] == 'long' and contract
-                    and contract['version'] == GOAL_EVIDENCE_VERSION):
+                    and contract['version'] == GOAL_EVIDENCE_PROTOCOL):
                 # Contracted long plans may reserve the whole current band for
                 # focus/type/scroll/trigger evidence, not merely the first draft.
                 self.target_steps = attempt_limit(s.task,self.frozen_band)
@@ -1786,34 +1640,33 @@ class Controller:
                 page_binding_event={'page_binding':deepcopy(self.plan_page_binding),
                     'registered_pages':deepcopy(prompt.get('registered_pages',[])),
                     'page_registry_source':s._last_model_intent}
-            elif grounded or s.task['fragment'].get('reading_completion_policy')=='webcollect-reading-plan-completion-1':
+            elif grounded or s.task['fragment'].get('reading_completion_policy')==READING_PLAN_COMPLETION_POLICY:
                 self.check_page_urls = {page['page_id']: page['url'] for page in prompt.get('registered_pages',[])}
             s.working_goal=plan['goal']
             s.goal_updates.append({'description':plan['goal'],'basis_observation_id':s.current['observation_id'],
                                   'reason':'frozen conditional plan','applied_at_decision':s.used['max_decisions']})
             s._last_decision=s.event('conditional-plan',plan=plan,provider_response=response,plan_sha256=object_sha256(plan),
                                      before_first_business_dispatch=s.actual_dispatches==0,**page_binding_event,
-                                     **({'check_page_urls':deepcopy(self.check_page_urls)} if s.task['fragment'].get('reading_completion_policy')=='webcollect-reading-plan-completion-1' else {}))
+                                     **({'check_page_urls':deepcopy(self.check_page_urls)} if s.task['fragment'].get('reading_completion_policy')==READING_PLAN_COMPLETION_POLICY else {}))
             self.original_plan_event=self.plan_event=s._last_decision
             # Provider call stays archived above; it is never sent in text-mode history.
             return
         from jsonschema import Draft202012Validator
-        modern = s.task['fragment'].get('plan_protocol') in MODERN_BRANCH_PROTOCOLS
         from .direct_article import protocol_schema
         from .model_gateway import normalize_branch,validate_branch
         response=normalize_branch(response,prompt)
         limit=attempt_limit(s.task,getattr(self,'frozen_band',None))
         # The wire form (IDs optional) validates what the model may send; the
         # host binds the unique current scope IDs right after, then checks them.
-        branch_schema=protocol_schema(choice_schema(grounded,inherited=modern,wire=modern,max_steps=limit),contract,completion=direct_completion,max_steps=limit,wiki=wiki(s.task))
-        if wiki(s.task) and prompt.get('protocol') in (V12_VERSION,V13_VERSION):
+        branch_schema=protocol_schema(choice_schema(grounded,inherited=True,wire=True,max_steps=limit),contract,completion=direct_completion,max_steps=limit,wiki=wiki(s.task))
+        if wiki(s.task) and prompt.get('protocol') == PLAN_PROTOCOL:
             from .wiki_reading import schema as wiki_schema
-            branch_schema=wiki_schema(choice_schema(grounded,inherited=modern,wire=modern,max_steps=limit),max_steps=limit,evidence_ids=True)
-        if prompt.get('protocol')==V13_VERSION:
+            branch_schema=wiki_schema(choice_schema(grounded,inherited=True,wire=True,max_steps=limit),max_steps=limit,evidence_ids=True)
+        if prompt.get('protocol') == PLAN_PROTOCOL:
             branch_schema=strip_v13_wire(branch_schema,wiki=wiki(s.task))
         validate_branch(response,branch_schema)
         raw_reply = response
-        if grounded or modern:
+        if grounded:
             if 'choice' not in response:
                 if not any(o['choice'] == 'replan' for o in options):
                     raise ValueError('BRANCH_REPLAN_NOT_OFFERED')
@@ -1823,10 +1676,15 @@ class Controller:
                 response.pop('plan', None)
             elif 'plan' in response:
                 response['plan'] = bind_reply_scope(response['plan'], prompt)
+        # The wire schema makes attempt_id/observation_id optional; the host
+        # binds the unique current scope IDs for choice replies right here,
+        # exactly like bind_reply_scope does for plan replies.
+        response.setdefault('attempt_id', prompt.get('attempt_id') or s.attempt_id)
+        response.setdefault('observation_id', s.current['observation_id'])
         if response['attempt_id']!=s.attempt_id or response['observation_id']!=s.current['observation_id']:
             raise ValueError('BRANCH_STALE_OR_WRONG_ATTEMPT')
         allowed={r['choice']:r for r in options}
-        if s.task['fragment'].get('plan_protocol') in IMAGE_CHOICE_PROTOCOLS and response['choice']=='original':
+        if s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL and response['choice']=='original':
             # V10 carries no continue-by-choice semantics, so the frozen
             # historical name maps determinably to the image request.
             response={**response,'choice':'request_original_image'}
@@ -1850,7 +1708,7 @@ class Controller:
                 self.citation_offered_at=None;self.completion_offered_at=None
                 return
         s._last_decision=s.event('plan-branch',response=response,options=options,
-                                 **({'provider_reply':raw_reply} if grounded or modern else {}))
+                                 **({'provider_reply':raw_reply} if grounded else {}))
         self.selection=allowed[response['choice']]
         if direct_completion and response.get('citations'):
             s.answer_citation=s._last_decision
@@ -1976,38 +1834,16 @@ class Controller:
             # re-listed: the fresh plan replaces only the remaining route.
             remaining=remaining_step_allowance(s)
             proposed=response['plan']
-            if prompt.get('protocol') in (V12_VERSION,V13_VERSION) and any(k in proposed and proposed[k]!=self.frozen_plan[k] for k in ('goal','checks')):
+            if prompt.get('protocol') == PLAN_PROTOCOL and any(k in proposed and proposed[k]!=self.frozen_plan[k] for k in ('goal','checks')):
                 raise ValueError('REPLAN_CANNOT_CHANGE_ORIGINAL_GOAL_OR_CHECKS')
             if direct_completion:
                 if any(k in proposed and proposed[k]!=self.frozen_plan[k] for k in ('goal','checks')):
                     raise ValueError('REPLAN_CANNOT_CHANGE_ORIGINAL_GOAL_OR_CHECKS')
                 proposed={**proposed,**{k:deepcopy(self.frozen_plan[k]) for k in ('goal','checks')}}
-            if modern:
-                proposed={**{k:deepcopy(v) for k,v in self.plan.items() if k not in ('steps','attempt_id','observation_id')},**proposed}
-            try:
-                plan=validate_plan(proposed,s.attempt_id,s.current['observation_id'],s.task['fragment']['allowed_actions'],remaining=remaining,grounded=grounded,
-                    inherited_band=self.frozen_band if modern else None,pending_checks=modern,direct_completion=direct_completion,max_steps=limit,replanning=True,wiki=wiki(s.task),ordinary_minimum=s.task['fragment'].get('plan_protocol') in (V12_VERSION,V13_VERSION),ordinary_maximum=None if complete_goal else limit or 10,extended_actions=s.task['fragment'].get('plan_protocol')==V13_VERSION)
-            except ValueError as error:
-                context_key=(s.current['observation_id'],object_sha256(options))
-                if (str(error)!='PLAN_EXCEEDS_FROZEN_REMAINING_STEPS'
-                        or s.task['fragment'].get('plan_protocol')!=V11_VERSION
-                        or context_key in self.budget_correction_contexts):
-                    raise
-                # The rejected plan-branch receipt above stays immutable. One
-                # same-context correction spends a model request, never a browser
-                # action; a second excess proposal follows the original stop path.
-                self.selection=None
-                self.budget_correction_contexts.add(context_key)
-                self.budget_feedback={'version':'webcollect-replan-budget-feedback-2',
-                    'error':str(error),'attempt_limit':limit,
-                    'proposed_steps':len(proposed.get('steps',[])),
-                    'rejected_decision':s._last_decision,
-                    'instruction':'只提交尚未执行的剩余目标动作，不得重复已完成动作；宿主按冻结总步数校验。'}
-                s.event('plan-budget-feedback',feedback=self.budget_feedback,
-                        rejected_decision=s._last_decision,no_browser_action_dispatched=True)
-                return
+            proposed={**{k:deepcopy(v) for k,v in self.plan.items() if k not in ('steps','attempt_id','observation_id')},**proposed}
+            plan=validate_plan(proposed,s.attempt_id,s.current['observation_id'],s.task['fragment']['allowed_actions'],remaining=remaining,grounded=grounded,
+                inherited_band=self.frozen_band,pending_checks=True,direct_completion=direct_completion,max_steps=limit,replanning=True,wiki=wiki(s.task),ordinary_minimum=True,ordinary_maximum=None if complete_goal else limit or 10,extended_actions=True)
             if limit is not None and plan['band'] not in (self.frozen_band,'short'):raise ValueError('REPLAN_CANNOT_CHANGE_FROZEN_BAND')
-            self.budget_feedback=None
             self.plan=plan;self.position=0;self.selection=None;self.recovery_prefix=False;self.pending_effect=None
             self.last_document=deepcopy(s.current['document_identity'])
             s.working_goal=plan['goal']
@@ -2103,8 +1939,8 @@ class Controller:
             unverified += [{'field':c.get('field'),'status':c.get('status'),'missing_binding_fields':c.get('missing_binding_fields')}
                            for c in s.goal_evidence.get('checks',[]) if c.get('status')=='PENDING']
         from .wiki_reading import enabled as wiki
-        from .closing_policy import effective_limit, completed_goal_only
-        if endpoint and not wiki(s.task) and (effective_limit(s.task) is not None or completed_goal_only(s.task)) and unverified:
+        from .closing_policy import completed_goal_only
+        if endpoint and not wiki(s.task) and completed_goal_only(s.task) and unverified:
             remaining=remaining_step_allowance(s)
             if remaining is None or remaining>0:
                 await self.offer_weak_endpoint(s,unverified)
@@ -2178,11 +2014,9 @@ class Controller:
         if contract:
             from .goal_evidence import progress
             evidence = progress(s, self.frozen_plan['observation_id'], contract)
-            from .goal_evidence import VERSION as EVIDENCE_VERSION
-            from .direct_article import VERSION as DIRECT_VERSION
             from .direct_completion import enabled as explicit
             direct_completion=explicit(s.task)
-            if (contract['version'] in (EVIDENCE_VERSION,DIRECT_VERSION) and evidence['status'] == 'VERIFIED'
+            if (contract['version'] in (GOAL_EVIDENCE_PROTOCOL,DIRECT_ARTICLE_PROTOCOL) and evidence['status'] == 'VERIFIED'
                     and self.proved(self.plan['finish_when'], s) and not self.continue_reading(s)):
                 await self.finish(s,'当前目标已在原轨迹和本帧得到验证，结束剩余计划')
                 return
@@ -2223,27 +2057,18 @@ class Controller:
                 await self.request(s,self.visual_option(predicate)+self.image_option(s,object_sha256(predicate),'同帧原图/ROI')+
                     self.pending_followup_options()+[{'choice':'replan','meaning':'按实际结果修订剩余路径'}, {'choice':'stop','meaning':'如实结束'}]);return
         if self.last_document != s.current['document_identity']:
-            from .plan_evidence import expected_navigation
-            expected = expected_navigation(s,self) if s.task['fragment']['plan_protocol'] in (V2_VERSION,V3_VERSION,V4_VERSION,V5_VERSION,V6_VERSION,V7_VERSION,V8_VERSION,V9_VERSION,V10_VERSION,VERSION) else None
-            if expected:
-                s.event('host-expected-navigation',**expected)
-                self.last_document=deepcopy(s.current['document_identity'])
-                return
             options=([{'choice':'continue','meaning':'新文档中按当前语义步骤重新绑定'}] if not getattr(self,'recovery_prefix',False) else [])+[
                      {'choice':'replan','meaning':'新文档需要修订剩余路径'},
                      *self.image_option(s,'document_change','当前同帧原清晰图'), {'choice':'stop','meaning':'如实结束'}]
             await self.request(s,options);return
-        from .closing_policy import limit_kind, effective_limit
         limit=attempt_limit(s.task,getattr(self,'frozen_band',None))
-        effective_ceiling=effective_limit(s.task)
-        consumed=(len(s.trajectory) if effective_ceiling is not None else len(getattr(s,'business_attempt_refs',[])))
+        consumed=len(getattr(s,'business_attempt_refs',[]))
         if limit is not None and consumed>=limit:
             from .wiki_reading import enabled as wiki
             if wiki(s.task):
                 await self.request(s,[{'choice':'stop','meaning':f'已到累计{limit}有效步；缺任何原阅读事项时如实停止，不补步'}])
                 return
-            unit='个有效业务动作' if effective_ceiling is not None else '次原子尝试'
-            s._range_close(limit_kind(limit,effective=effective_ceiling is not None),f'达到{limit}{unit}，原目标未完成时只保留内部原始记录');return
+            s._range_close('ACTION_BUDGET_LIMIT',f'达到{limit}次原子尝试上限，原目标未完成时只保留内部原始记录');return
         if self.position>=len(self.plan['steps']):
             if self.proved(self.plan['finish_when'],s) and not getattr(self,'recovery_prefix',False):
                 unverified=self.weak_endpoint_unverified(s)
@@ -2275,8 +2100,7 @@ class Controller:
                 self.revealed_controls_at=s.current['observation_id']
                 feedback={'newly_visible_controls':revealed,'next_planned_step':step,
                           'reason':'滚动后出现新操作控件，计算结果仍未证实；重新判断是否应先触发而非继续滚动'}
-                if s.task['fragment'].get('plan_protocol')!=V11_VERSION:
-                    feedback['remaining_effective_limit']=remaining_step_allowance(s)
+                feedback['remaining_effective_limit']=remaining_step_allowance(s)
                 s.event('plan-revealed-controls',**feedback)
                 await self.request(s,[{'choice':'replan','meaning':'按新观察修订剩余操作，宿主不代选按钮','new_controls':feedback},
                                       {'choice':'continue','meaning':'当前证据仍支持原下一步滚动'},
@@ -2387,7 +2211,7 @@ class Controller:
                 from .react_session import ReactStop
                 raise ReactStop('blocked','PREFLIGHT_FIRST_ACTION_OUTSIDE_STABLE_SEARCH','collector')
         actual={'action':action,'goal':step['purpose'],'expected':step['expected'].get('text') or ('实测滚动位置改变' if step['expected']['kind']=='scroll_changed' else '核验预期条件：'+step['expected']['kind'])}
-        if s.task['fragment'].get('plan_protocol')==V13_VERSION:
+        if s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL:
             actual['rationale']=step['rationale']
             actual['expected_result']=step['expected_result']
         for key in ('value','keys','direction','page_id','duration_ms'):
@@ -2414,12 +2238,10 @@ class Controller:
             await self.recover_precondition(s,step,cid,error.code,str(error))
             return
         except ValueError as error:
-            from .closing_policy import effective_limit, completed_goal_only
-            unchanged_selection=((effective_limit(s.task) is not None or completed_goal_only(s.task))
+            from .closing_policy import completed_goal_only
+            unchanged_selection=(completed_goal_only(s.task)
                                  and action=='select' and str(error)=='Unchanged selection is not effective')
             if (not isinstance(error,SelectionValueMismatch) and not unchanged_selection):
-                raise
-            if s.task['fragment'].get('plan_protocol') not in IMAGE_CHOICE_PROTOCOLS:
                 raise
             count=getattr(self,'compile_replans',0)
             if unchanged_selection:
@@ -2455,7 +2277,7 @@ class Controller:
                 feedback.update(reason_code='UNCHANGED_SELECTION',effective_step_delta=0,
                     remaining_effective_limit=remaining_step_allowance(s),
                     instruction='当前选项值已是请求值，重复select没有有效业务效果。保留原目标和checks，依据已见当前值核对单位，重新提交剩余必要动作；不要重放已完成动作，不为5步或long档加入重复选择。'+range_instruction+'。')
-            elif s.task['fragment'].get('plan_protocol')!=V11_VERSION:
+            else:
                 feedback['remaining_effective_limit']=remaining_step_allowance(s)
             s.event('plan-compile-mismatch',**feedback)
             await self.request(s,[{'choice':'replan','meaning':'按最新选项与控件修订未派发的剩余步骤',
@@ -2505,7 +2327,7 @@ class Controller:
         if s.state!='recording':return
         if await self.exit_boundary(s):return
         literal_established=(len(s.trajectory)==n+1 or (action=='wait' and result.get('data',{}).get('wait_executed'))) and (self.proved(step['expected'],s,before,cid)
-            if contract else proves(step['expected'],s.current,before,cid,numeric=s.task['fragment'].get('plan_protocol')==V13_VERSION))
+            if contract else proves(step['expected'],s.current,before,cid,numeric=s.task['fragment'].get('plan_protocol') == PLAN_PROTOCOL))
         execution_proof=None
         from .plan_execution import enabled as execution_enabled, step_execution_proof
         if execution_enabled(s.task) and len(s.trajectory)==n+1:

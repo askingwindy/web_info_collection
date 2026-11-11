@@ -170,7 +170,7 @@ def verify_loan_summary(actual):
     return isinstance(actual,dict) and actual==expected
 
 
-def compile_loan(capability,spec,task_version='observed-mortgage-compiler-1'):
+def compile_loan(capability,spec,task_version=ADAPTER_ID + '-compiler'):
     from .planning import object_sha256
     from .collect import validate_plan
     from .task_contract import validate_m4_task

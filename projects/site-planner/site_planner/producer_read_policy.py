@@ -2,9 +2,12 @@
 import asyncio
 import time
 
-VERSION = 'producer-readiness-1'
+VERSION = 'producer-readiness'
+# Old receipts were stamped with the generational values; reads accept them.
+PREVIOUS_VERSION = 'producer-readiness-1'
 OPTIMIZATION = 'observation-feedback-1'
-FAILURE_VERSION = 'producer-http-failure-1'
+FAILURE_VERSION = 'producer-http-failure'
+PREVIOUS_FAILURE_VERSION = 'producer-http-failure-1'
 PENDING_IMAGES_SCRIPT = '''() => [...document.images].filter(e=>{
     const r=e.getBoundingClientRect();return !e.complete && r.width>0 && r.height>0 &&
         r.right>0 && r.bottom>0 && r.left<innerWidth && r.top<innerHeight &&
@@ -77,7 +80,8 @@ def validate_http_failure(pool, ledger, result, identity):
     with pool.pool.connect() as con:
         tool=con.execute('SELECT state,result FROM tool_requests WHERE id=?',(identity,)).fetchone()
     status=receipt.get('http_status')
-    if (receipt.get('schema_version')!=FAILURE_VERSION or receipt.get('read_policy')!=VERSION
+    if (receipt.get('schema_version') not in (FAILURE_VERSION, PREVIOUS_FAILURE_VERSION)
+        or receipt.get('read_policy') not in (VERSION, PREVIOUS_VERSION)
         or type(status) is not int or not 400<=status<600 or receipt.get('method')!='GET'
         or receipt.get('navigation_error') is not None or receipt.get('tool_request_id')!=identity
         or receipt.get('job_id')!=job['id'] or receipt.get('visit_id')!=result['visit_id']

@@ -16,7 +16,7 @@ from webcollect.model_gateway import ModelGateway
 from webcollect.planning import object_sha256
 from . import ai_worker
 
-VERSION='three-neighbor-original-frame-calibration-2'
+VERSION='three-neighbor-original-frame-calibration'
 JOB_KIND='ai-difference-batch-calibration'
 PURPOSE='difference-three-neighbor-calibration-v2'
 STATES=('PASS','FAIL','REVIEW_REQUIRED')

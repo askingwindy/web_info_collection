@@ -10,7 +10,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from webcollect.batch_core import BatchLedger, file_sha, load_json
 from webcollect.model_gateway import ModelGateway
-from quality_inspector.ai_worker import (DOCUMENT_PROMPT_VERSION, PROMPT_VERSION, POLICY_VERSION, _document_request,
+from quality_inspector.ai_worker import (_document_request,
                                         MAX_DOCUMENT_INPUT_BYTES, do_documents, documents_job, load_text, report)
 from quality_inspector.contract import fingerprint
 from quality_inspector.profiles import DELIVERY_DOCUMENT_CHECKS, package_files
@@ -97,7 +97,7 @@ class DocumentMaterialsTests(unittest.TestCase):
         path=self.root/'queue.json'
         path.write_text(json.dumps({'dataset':str(self.dataset),'candidate_package_sha256':package_files(self.dataset),
             'contract_sha256':fingerprint()[1],'jobs':[],'sample_count':1,'mechanically_blocked':[],
-            'prompt_version':PROMPT_VERSION,'policy_version':POLICY_VERSION}))
+            }))
         return path
 
     class Gateway:
@@ -110,7 +110,6 @@ class DocumentMaterialsTests(unittest.TestCase):
     def test_full_documentary_json_inventory_and_unknown_support_before_one_request(self):
         job=self.job();value=job['payload'];gateway=self.Gateway(self.decision())
         outcome=do_documents(self.ledger,gateway,job)
-        self.assertEqual(value['prompt_version'],DOCUMENT_PROMPT_VERSION)
         self.assertEqual(len(gateway.calls),1)
         request=gateway.calls[0][2];context=request['supplementary_evidence']
         for name in ('site-list.json','samples/A/annotation.json','ground_truth/A.json'):
@@ -214,7 +213,7 @@ class DocumentMaterialsTests(unittest.TestCase):
     def test_qc_worker_drains_more_than_twenty_scoped_jobs_by_default(self):
         from quality_inspector import ai_worker
         for n in range(25):
-            self.ledger.enqueue('ai-visual', {'policy_version':ai_worker.POLICY_VERSION,'prompt_version':ai_worker.PROMPT_VERSION,'fixture':n})
+            self.ledger.enqueue('ai-visual', {'fixture':n})
         with patch.object(ai_worker,'_semantic_dispatch',return_value={'fixture':True}) as dispatch:
             first=ai_worker.run(self.ledger,max_jobs=2)
             rest=ai_worker.run(self.ledger)

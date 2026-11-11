@@ -8,14 +8,16 @@ from pathlib import Path
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
 
-VERSION = 'webcollect-direct-reading-completion-1'
-BRIDGE = 'webcollect-direct-terminal-overlay-1'
+from .plan_protocol import DIRECT_COMPLETION_PROTOCOL
+
+VERSION = DIRECT_COMPLETION_PROTOCOL
+BRIDGE = 'direct-terminal-overlay'
 
 
 def enabled(task):
     from .direct_article import enabled as direct
     from .wiki_reading import enabled as wiki
-    return wiki(task) or (direct(task) and task.get('fragment', {}).get('direct_completion_protocol') == VERSION)
+    return wiki(task) or (direct(task) and task.get('fragment', {}).get('direct_completion_protocol') == DIRECT_COMPLETION_PROTOCOL)
 
 
 def schema(value, *, max_steps=8):
@@ -266,7 +268,7 @@ def completion(session, evidence):
     if wiki(getattr(session,'task',{})):validate_sources(session,plan,answer,evidence)
     if (not wiki(getattr(session,'task',{})) and not evidence.get('selected_passage')) or evidence.get('return_required'):
         raise ValueError('DIRECT_COMPLETION_CURRENT_CITATION_OR_RETURN_MISSING')
-    return {'schema_version':(session.task['fragment'][__import__('webcollect.wiki_reading',fromlist=['FIELD']).FIELD] if wiki(getattr(session,'task',{})) else VERSION),'decision':reference,'original_working_goal':plan['goal'],
+    return {'policy':(session.task['fragment'][__import__('webcollect.wiki_reading',fromlist=['FIELD']).FIELD] if wiki(getattr(session,'task',{})) else DIRECT_COMPLETION_PROTOCOL),'decision':reference,'original_working_goal':plan['goal'],
         'original_checks':checks,'original_plan_sha256':object_sha256(plan),'answer':answer,
         'model_answer':model_answer,'reference_binding':'exact original passage identity and already executed operation references',
         'actual_operations':[{'operation_id':r['operation_id'],'action':r['action'],
@@ -284,7 +286,7 @@ def terminal_bridge(task, before, after, png_before, png_after, *, target_ids=()
     from PIL import Image,ImageChops,ImageDraw
     from io import BytesIO
     import re
-    result={'schema_version':BRIDGE,'accepted':False,'original_viewport_preserved':True,
+    result={'policy':BRIDGE,'accepted':False,'original_viewport_preserved':True,
             'dispatch_permission':False}
     try:
         if not enabled(task) or unverified_tail:raise ValueError('Explicit protocol and fully verified prefix required')

@@ -140,7 +140,7 @@ class EntryEngineering(legacy.Consumption):
                        'category_hint':'在线工具','application_hint':'受控应用'}
         self.pool = CandidatePool(self.pool.path, install=True)
         self.cid = self.pool.put(self.v2, self.source)
-        self.claim = self.pool.claim_next('entry-worker','entry/0',protocols=('webcollect-data-candidate-2',))
+        self.claim = self.pool.claim_next('entry-worker','entry/0')
         self.output = self.root/'results/entry'
         self.cfg_path = self.root/'config.json'
         save_json(self.cfg_path,self.ledger.config)
@@ -161,7 +161,7 @@ class EntryEngineering(legacy.Consumption):
             '--ledger',str(self.ledger.path),'--output',str(self.output),
             '--registry',os.path.relpath(self.registry),'--policy',str(self.policy_path),
             '--history-set',os.path.relpath(self.chain),'--worker-id',worker,
-            '--request-prefix',prefix,'--protocol','entry','--limit','1']
+            '--request-prefix',prefix,'--limit','1']
 
     def io_boundaries(self, *, mock_gateway=True, legacy_protocol=None):
         stack = ExitStack()
@@ -294,7 +294,7 @@ class EntryEngineering(legacy.Consumption):
         target=deepcopy(self.v2);target.update(candidate_kind='target',requested_goal={
             'kind':'edit','entity':'fields','parameters':{'quantity':20,'price':30}})
         cid=self.pool.put(target,self.source)
-        self.claim=self.pool.claim_next('entry-worker','target/0',candidate_id=cid,protocols=('webcollect-data-candidate-2',))
+        self.claim=self.pool.claim_next('entry-worker','target/0',candidate_id=cid)
         result=(await self.invoke_cli(self.cli_args('target')))[0]
         self.assertEqual(result['state'],'succeeded',(result,[load_json(p) for name in ('failure.json','terminal.json') for p in self.output.rglob(name)]))
         self.assertTrue(all(p['requested_goal']==target['requested_goal'] for p in self.prompts))
@@ -440,7 +440,7 @@ class EntryEngineering(legacy.Consumption):
         source={**self.source,'category_hint':'UNKNOWN'}
         cid=self.pool.put(self.v2,source)
         self.claim=self.pool.claim_next('entry-worker','unknown-category/0',candidate_id=cid,
-            protocols=('webcollect-data-candidate-2',))
+        )
         result=(await self.invoke_cli(self.cli_args('unknown-category')))[0]
         self.assertEqual(result['state'],'succeeded', result)
         self.assertEqual(statistics(self.pool)['formal_attempts'],1)

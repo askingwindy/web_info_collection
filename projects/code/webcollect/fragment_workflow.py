@@ -3,9 +3,10 @@ from copy import deepcopy
 from jsonschema import Draft202012Validator, ValidationError
 from .semantic_workflow import TEXT, obj, observation, TASK_SCHEMA as OLD_SCHEMA
 from .planning import object_sha256
+from .plan_protocol import FRAGMENT_POLICY
 
-VERSION = 'webcollect-fragment-workflow-1'
-POLICY = 'legal-web-actions-fragment-1'
+VERSION = 'fragment-workflow'
+POLICY = FRAGMENT_POLICY
 ACTIONS = ['click', 'double_click', 'right_click', 'type', 'set_value', 'select',
            'hotkey', 'scroll', 'open_url', 'back']
 STEP = {'type': 'object', 'properties': {
@@ -23,12 +24,12 @@ SCHEMA = obj({'tasks': {'type': 'array', 'maxItems': 5, 'items': TASK_SCHEMA},
 
 
 def is_fragment(task):
-    return task.get('fragment', {}).get('schema_version') in (VERSION, 'webcollect-fragment-workflow-2')
+    return task.get('fragment', {}).get('schema_version') == VERSION
 
 
 def logical_key(task):
     """Exact observed start + executable sequence, independent of prose/version."""
-    if task.get('fragment', {}).get('schema_version') == 'webcollect-fragment-workflow-2':
+    if task.get('fragment', {}).get('schema_version') == VERSION:
         return object_sha256({'url':task['initial_url'], 'boundary':task['fragment'],
                               'spec':task['workflow_proposal']['spec']})
     return object_sha256({'url': task['initial_url'],
@@ -159,7 +160,7 @@ def compile_fragment(capability, spec, version):
                              + '" is below the observed fold; add an explicit scroll before interacting with it')
     start = states[0]
     metadata = {'schema_version': VERSION, 'policy_version': POLICY,
-        'quality_policy_version': 'qc-sampling-v1-20261030',
+        'quality_policy_version': 'qc-sampling',
         'start_state_sha256': object_sha256({k: start.get(k) for k in ('url', 'visible_text', 'scroll', 'values')}),
         'effective_steps': len(operations), 'business_completion': 'NOT_CLAIMED',
         'operation_template': '+'.join(sorted({o['action_type'] for o in operations}))}

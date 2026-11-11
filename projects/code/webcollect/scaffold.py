@@ -4,7 +4,6 @@ from pathlib import Path
 import subprocess
 from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw
-from . import __version__
 from .storage import allocate, write_json
 from .action_normalization import normalize_delivery_step
 
@@ -16,7 +15,7 @@ def program_version():
         dirty=subprocess.run(['git','-C',str(root),'status','--porcelain'],capture_output=True,text=True,check=True)
         return result.stdout.strip()+('+dirty' if dirty.stdout.strip() else '')
     except (OSError,subprocess.CalledProcessError):
-        return __version__+'+uncommitted'
+        return 'workspace+uncommitted'
 
 
 def make_step(index, action_type, arguments, last=False):

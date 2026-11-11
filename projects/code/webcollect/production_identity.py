@@ -196,20 +196,6 @@ def validate_identity(task, *, observed_states=None):
                 and _contains_in_order(original, _normalized(row.get('visible_text', '')))
                 for row in observed_states)
         from .action_stability import ACTION_SCOPED_VERSION
-        if (not corroborated and page['kind']=='content' and 'candidate_binding' in task
-                and task.get('fragment',{}).get('action_stability_protocol') in
-                    ('webcollect-search-submit-link-stability-3','webcollect-post-action-observation-stability-4',ACTION_SCOPED_VERSION)):
-            from .action_stability import reading_projection
-            mains=[e for e in state.get('elements',[]) if e.get('native_role')=='main' and e.get('visible')]
-            if len(mains)==1:
-                try:
-                    basis=reading_projection(state,mains[0]['element_id'])
-                    for row in observed_states:
-                        if page_url(row['url']) not in aliases:continue
-                        try:corroborated=reading_projection(row,mains[0]['element_id'])==basis
-                        except ValueError:continue
-                        if corroborated:break
-                except ValueError:pass
         if (not corroborated and page['kind']=='content' and 'candidate_binding' in task):
             if task.get('fragment',{}).get('action_stability_protocol') == ACTION_SCOPED_VERSION:
                 corroborated=any(page_url(row['url']) in aliases and content_anchor_corroborated(state,row)
@@ -284,7 +270,7 @@ def validate_plan(plan, *, required=False):
     per_task = history.get('candidate_project', {}).get('rules') == PROJECT_RULES
     _require(not required or len(pilot) == len(tasks) > 0, 'campaign requires identity on every new pilot task')
     if pilot:
-        _require(plan.get('schema_version') == 'webcollect-plan-m4-1' and len(pilot) == len(tasks),
+        _require(plan.get('schema_version') == 'plan-m4' and len(pilot) == len(tasks),
                  'pilot requires homogeneous strict M4 plans; no legacy direct allocation')
         urls, contents, task_ids = set(), set(), set()
         for task in pilot:

@@ -10,11 +10,13 @@ from .result_execution import result_execution_binding
 from .numeric_result_evidence import substantive_result_text, match_result, process_field, process_result_text
 
 
-VERSION='webcollect-result-completion-1'
+from .plan_protocol import RESULT_COMPLETION_PROTOCOL
+
+VERSION = RESULT_COMPLETION_PROTOCOL
 
 
 def enabled(task):
-    return task.get('fragment',{}).get('result_completion_protocol')==VERSION
+    return task.get('fragment',{}).get('result_completion_protocol')==RESULT_COMPLETION_PROTOCOL
 
 
 def schema(item):
@@ -40,7 +42,7 @@ def catalog(session):
         state=load_json(obs['evidence']['state']['path'])
         for node in state.get('elements',[]):
             quote=node.get('text') or ''
-            if node.get('visible') is not True or not substantive_result_text(quote):continue
+            if node.get('visible') is not True or not substantive_result_text(quote,numeric=False):continue
             execution=result_execution_binding(session,oid,state,node)
             if not execution:continue
             identity={'observation_id':oid,'node':node['element_id'],'quote':quote}
@@ -79,7 +81,7 @@ def answer_rows(session,plan,decision=None, *, page_binding=None):
                 state=load_json(proof['state']['path'])
                 if not bound or not page_matches(bound,state):
                     raise ValueError('RESULT_COMPLETION_WRONG_ORIGINAL_PAGE')
-            if not substantive_result_text(quote,field=check.get('field','')):
+            if not substantive_result_text(quote,field=check.get('field',''),numeric=False):
                 raise ValueError('RESULT_COMPLETION_LABEL_IS_NOT_ANSWER')
             expected=check.get('visible_text')
             if expected and expected not in quote and not match_result(expected,quote,

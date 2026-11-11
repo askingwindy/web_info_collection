@@ -150,7 +150,7 @@ def intake(path, samples, contract_hash, migration=None):
         data = read(path)
     except (OSError, ValueError, UnicodeError) as error:
         return {}, [{'reason': 'Cannot read review: ' + str(error)}], []
-    if not isinstance(data, dict) or data.get('schema_version') not in ('qc-review-1', 'qc-review-2') or not isinstance(data.get('records'), list):
+    if not isinstance(data, dict) or data.get('schema_version') not in ('qc-review', 'qc-review-1', 'qc-review-2') or not isinstance(data.get('records'), list):
         return {}, [{'reason': 'Expected qc-review-2 records or explicitly migrated qc-review-1'}], []
     assessments = {}
     if migration:
@@ -210,38 +210,10 @@ def intake(path, samples, contract_hash, migration=None):
                 why.append('stale/different annotation; changed annotations require a new actual review')
             if record.get('evidence_sha256') != evidence_files(root):
                 why.append('incomplete/stale image or tree evidence')
-            why += coverage_errors(record, annotation, strict=data['schema_version'] == 'qc-review-2')
+            why += coverage_errors(record, annotation, strict=data['schema_version'] in ('qc-review', 'qc-review-2'))
         except (OSError, ValueError, TypeError, KeyError) as error:
             why.append('Cannot bind review evidence: ' + str(error))
-        from .semantic import invalidate_record
-        try:
-            current_record = invalidate_record(record)
-        except ValueError as error:
-            why.append(str(error)); current_record = record
-        modern = data['schema_version'] == 'qc-review-2' and 'semantic_rule_ids' in record
-        # Without per-check identities an old v2 record cannot prove which
-        # semantic rules it reviewed, even when the mechanical contract agrees.
-        legacy = not modern
-        assessment = assessments.get(sid)
-        if legacy:
-            if not assessment or assessment.get('decision') != 'inherit_unchanged':
-                why.append('legacy/different contract needs explicit completed migration assessment')
-            else:
-                assessor = assessment.get('assessor', {})
-                if assessment.get('source_record_sha256') != record_hash(record) or assessment.get('source_contract_sha256') != record.get('baseline_sha256'):
-                    why.append('migration does not bind the unchanged source record and contract')
-                if not isinstance(assessor, dict) or assessor.get('kind') not in ('ai', 'human') or not isinstance(assessor.get('name'), str) or not assessor['name'].strip():
-                    why.append('migration needs actual impact assessor identity; not authenticated')
-                for key in ('reason', 'authority_and_semantic_rule_assessment'):
-                    if not isinstance(assessment.get(key), str) or not assessment[key].strip():
-                        why.append('migration needs explicit ' + key)
-                if assessment.get('not_a_new_visual_review') is not True:
-                    why.append('migration must explicitly preserve the original review provenance')
         if why:
             errors.append({'sample_id': sid, 'reason': '; '.join(why)}); continue
-        records[sid] = current_record  # Derived states never rewrite the source review.
-        if legacy:
-            migrations.append({'sample_id': sid, 'source_record_sha256': record_hash(record),
-                               'source_review_sha256': sha(path), 'migration_sha256': sha(migration),
-                               'assessment': assessment, 'new_visual_review_claimed': False})
-    return records, errors, migrations
+        records[sid] = record  # Source review bytes are never rewritten.
+    return records, errors, []

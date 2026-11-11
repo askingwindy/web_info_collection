@@ -22,8 +22,9 @@ from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
-from webcollect.banded_plan import (VERSION, VERSIONS, validate_plan, bind_target, band_for_steps,
-                                    CLOSING_POLICY_ATTEMPT_CEILING, remaining_step_allowance, Controller)
+from webcollect.plan_protocol import PLAN_PROTOCOL as VERSION, ENDING_POLICY
+from webcollect.banded_plan import (validate_plan, bind_target, band_for_steps,
+                                    remaining_step_allowance, Controller)
 from webcollect import dynamic_regions
 from webcollect.browser import stability_pair
 import webcollect.consumer_ab as consumer_ab
@@ -51,7 +52,7 @@ class IdentityBindingTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
 
     async def _observed(self, name='bind'):
         from webcollect.react_session import ReactSession, build_url_task
-        from webcollect.closing_policy import VERSION as END
+        from webcollect.plan_protocol import ENDING_POLICY as END
         self.task = build_url_task(url=self.page.url, task_version='plan', ending_policy=END,
                                    plan_protocol=VERSION)
         ids = {'sample_id': 'S000101_sample_000001', 'site_id': 'S000101', 'batch_id': 'B20261106_101',
@@ -101,7 +102,7 @@ class BranchSemanticsTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         ReactHarness.setUp(self)
         from webcollect.react_session import build_url_task
-        from webcollect.closing_policy import VERSION as END
+        from webcollect.plan_protocol import ENDING_POLICY as END
         self.task = build_url_task(url=self.page.url, task_version='plan', ending_policy=END,
                                    plan_protocol=VERSION)
         self.ids = {'sample_id': 'S000102_sample_000001', 'site_id': 'S000102',
@@ -181,16 +182,6 @@ class PlanLengthFactTests(unittest.TestCase):
             self.assertEqual(plan['band'], expected, (n, declared))
         with self.assertRaises(Exception):  # >8 steps is not a plannable trajectory.
             validate_plan(self._plan(9, 'long'), 'a', 'o', allowed)
-
-    def test_replan_remaining_bound_is_the_session_ceiling(self):
-        allowed = ('click', 'type', 'hotkey', 'scroll', 'open_url', 'back', 'select')
-        executed = 3
-        plan = validate_plan(self._plan(CLOSING_POLICY_ATTEMPT_CEILING - executed, 'five'), 'a', 'o', allowed,
-                             remaining=CLOSING_POLICY_ATTEMPT_CEILING - executed, inherited_band='five')
-        self.assertEqual(plan['band'], 'five')
-        with self.assertRaisesRegex(ValueError, 'REMAINING'):
-            validate_plan(self._plan(CLOSING_POLICY_ATTEMPT_CEILING - executed + 1, 'five'), 'a', 'o', allowed,
-                          remaining=CLOSING_POLICY_ATTEMPT_CEILING - executed, inherited_band='five')
 
     def test_band_for_steps_covers_save_classification_boundaries(self):
         self.assertEqual([band_for_steps(n) for n in (1, 4)], ['short', 'short'])

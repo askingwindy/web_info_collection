@@ -99,20 +99,20 @@ def validate_config(value, *, credentials=False, require_model=False):
     """
     import os
     from urllib.parse import urlsplit
-    if (not isinstance(value, dict) or not {'schema_version', 'run_id', 'mode', 'budget', 'model'} <= set(value)
+    if (not isinstance(value, dict) or not {'run_id', 'mode', 'budget', 'model'} <= set(value)
             or set(value) - {'schema_version', 'run_id', 'mode', 'budget', 'model', 'site_failure_guard'}):
-        raise ValueError('Expected exact webcollect-batch-config-1 fields')
+        raise ValueError('Expected exact batch-config fields')
     if 'site_failure_guard' in value:
         from .site_failure_stop import validate_binding
         validate_binding(value['site_failure_guard'])
-    if value['schema_version'] != 'webcollect-batch-config-1' or value['mode'] not in ('real', 'synthetic'):
+    if value.get('schema_version') not in (None, 'batch-config', 'webcollect-batch-config-1') or value['mode'] not in ('real', 'synthetic'):
         raise ValueError('Invalid batch schema/mode')
     if not isinstance(value['run_id'], str) or not value['run_id'].strip():
         raise ValueError('run_id required')
     budget = value['budget']
     runtime_fields = {'max_concurrent_jobs', 'min_domain_interval_seconds', 'lease_seconds'}
     model_enabled = value['model'] is not None
-    token_only = model_enabled and isinstance(value['model'], dict) and value['model'].get('accounting_mode') == 'tokens-1'
+    token_only = model_enabled and isinstance(value['model'], dict) and value['model'].get('accounting_mode') in ('tokens', 'tokens-1')
     fields = runtime_fields | (({'min_model_interval_seconds'} | (set() if token_only else {'currency'})) if model_enabled else {'max_job_attempts'})
     # Old serialized ceilings remain part of the frozen configuration hash.
     historical_limits = ({'currency'} if token_only else set()) | {'max_discovery_candidates', 'max_probe_pages', 'max_run_seconds', 'max_top_level_visits'}
@@ -179,18 +179,32 @@ def validate_config(value, *, credentials=False, require_model=False):
         _integer(model[key], key, 1)
     if model['timeout_seconds'] + 5 >= budget['lease_seconds']:
         raise ValueError('Lease must exceed model timeout by more than 5 seconds')
-    if model.get('accounting_mode') not in (None, 'tokens-1'):
+    if model.get('accounting_mode') not in (None, 'tokens', 'tokens-1'):
         raise ValueError('Unknown accounting mode')
     if not token_only:
         _integer(model['reserve_cost_micros'], 'reserve_cost_micros')
-    rates = model.get('rates', {'version':'tokens-1','source':'token usage only','input':0,'cached_input':0,'output':0})
-    if not isinstance(rates, dict) or set(rates) != {'version', 'source', 'input', 'cached_input', 'output'}:
-        raise ValueError('Versioned rates in micros per million tokens required')
-    for key in ('input', 'cached_input', 'output'):
+    # Rates record the actual prices plus provenance (unit/basis/source/time);
+    # old ledger configs keep loading with their version tag as inert data.
+    price_keys = ('input', 'cached_input', 'output')
+    rates = model.get('rates', {'unit': 'micros per million tokens', 'basis': 'token usage only',
+                                'source': 'token usage only', 'time': 'not recorded',
+                                'input': 0, 'cached_input': 0, 'output': 0})
+    if not isinstance(rates, dict):
+        raise ValueError('Rates with actual prices in micros per million tokens required')
+    for key in price_keys:
+        if key not in rates:
+            raise ValueError('Rates with actual prices in micros per million tokens required')
         _integer(rates[key], key)
-    for key in ('version', 'source'):
-        if not isinstance(rates[key], str) or not rates[key].strip():
-            raise ValueError('Rate version and source required')
+    if set(rates) == {'version', 'source', *price_keys}:
+        for key in ('version', 'source'):
+            if not isinstance(rates[key], str) or not rates[key].strip():
+                raise ValueError('Rate version and source required')
+    elif set(rates) == {'unit', 'basis', 'source', 'time', *price_keys}:
+        for key in ('unit', 'basis', 'source', 'time'):
+            if not isinstance(rates[key], str) or not rates[key].strip():
+                raise ValueError('Rate unit/basis/source/time required')
+    else:
+        raise ValueError('Rates with actual prices in micros per million tokens required')
     if not isinstance(model['model'], str) or not model['model'].strip():
         raise ValueError('Explicit model/version required')
     if model['provider'] == 'ark':
@@ -270,7 +284,7 @@ class BatchLedger:
             self.producer_concurrency = json.loads(concurrency[0]) if concurrency else None
             if self.producer_concurrency:
                 decision = self.producer_concurrency
-                if (decision.get('schema_version') != 'webcollect-producer-concurrency-1'
+                if (decision.get('schema_version') not in ('producer-concurrency', 'webcollect-producer-concurrency-1')
                         or decision.get('ledger') != str(self.path)
                         or decision.get('run_id') != self.config['run_id']
                         or decision.get('config_sha256') != object_sha256(self.config)
@@ -295,7 +309,7 @@ class BatchLedger:
         self.require_consumer_ledger(con)
         decision = json.loads(row[0])
         limit = decision.get('max_concurrent_jobs')
-        if (decision.get('schema_version') != 'webcollect-consumer-concurrency-1'
+        if (decision.get('schema_version') not in ('consumer-concurrency', 'webcollect-consumer-concurrency-1')
                 or decision.get('ledger') != str(self.path)
                 or decision.get('run_id') != self.config['run_id']
                 or decision.get('config_sha256') != object_sha256(self.config)
@@ -353,7 +367,7 @@ class BatchLedger:
         verify_evidence([reference]);value=load_json(reference['path'])
         with self.transaction() as con:
             start=con.execute('SELECT started FROM batch_meta').fetchone()[0]
-            if (value.get('schema_version')!='webcollect-runtime-window-1' or value.get('run_id')!=self.config['run_id']
+            if (value.get('schema_version') not in ('runtime-window', 'webcollect-runtime-window-1') or value.get('run_id')!=self.config['run_id']
                     or value.get('ledger')!=str(self.path) or value.get('config_sha256')!=object_sha256(self.config)
                     or value.get('original_started')!=start or not value.get('user_instruction')
                     or not time.time()<value.get('deadline',0)<=time.time()+86400
@@ -850,7 +864,8 @@ class BatchLedger:
             from .provider_recovery import holds, permits_probe
             if not consumer and holds(con) and not permits_probe(con,job['id'],request_json,attempt):
                 raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
-            native_http = request_json and request_json.get('protocol') in ('native-tool-1','banded-plain-json-1') and request_json.get('http_dispatch')
+            native_http = request_json and request_json.get('protocol') in (
+                'native-tools', 'native-tool-1', 'banded-plain-json', 'banded-plain-json-1') and request_json.get('http_dispatch')
             aid = request_json.get('dispatch_attempt_id') if native_http else None
             react = owned['kind'] in ('react-decision','react-native-decision')
             if react and self.real_glm:
@@ -909,7 +924,7 @@ class BatchLedger:
                                            model.get('reserve_cost_micros', 0), time.time(),
                                            canonical({**(request_json or {}), 'cost_control':'observe_only'})))
             self.event(con, 'model_reserved', {'request_id': rid, 'job_id': job['id'], 'purpose': purpose,
-                                             'model': model['model'], **({} if (request_json or {}).get('accounting_mode') == 'tokens-1' else {'rate_version':model.get('rates', {}).get('version')})})
+                                             'model': model['model'], **({} if (request_json or {}).get('accounting_mode') in ('tokens', 'tokens-1') else {'rates': model.get('rates', {})})})
             return {'id': rid, 'state': 'new'}
 
     def settle_request(self, request_id, *, state, usage=None, response=None, error=None):
@@ -929,7 +944,7 @@ class BatchLedger:
         cost = None
         with self.connect(timeout=timeout) as con:
             original = con.execute('SELECT request_json FROM model_requests WHERE id=?', (request_id,)).fetchone()
-        token_only = self.config['model'].get('accounting_mode') == 'tokens-1' or (original and json.loads(original[0] or '{}').get('accounting_mode') == 'tokens-1')
+        token_only = self.config['model'].get('accounting_mode') in ('tokens', 'tokens-1') or (original and json.loads(original[0] or '{}').get('accounting_mode') in ('tokens', 'tokens-1'))
         if usage is not None and not token_only:
             rates = self.config['model']['rates']
             cached = usage.get('cached_input_tokens', 0)
@@ -944,7 +959,7 @@ class BatchLedger:
                          canonical(response) if response is not None else None, error, request_id))
             self.event(con, 'model_settled', {'request_id': request_id, 'state': state,
                 'usage_source': 'synthetic' if self.config['mode']=='synthetic' else 'provider_response',
-                **({} if token_only else {'rate_version': self.config['model'].get('rates', {}).get('version'), 'cost_micros': cost})})
+                **({} if token_only else {'rates': self.config['model'].get('rates', {}), 'cost_micros': cost})})
 
     def summary(self, *, final_qualified=0):
         _integer(final_qualified, 'final_qualified')
@@ -989,7 +1004,7 @@ class BatchLedger:
             stage['uncertain_reserved_cost_micros']+=row['reserved_cost'] if row['cost']is None else 0
             if usage:
                 for name in ('input_tokens','output_tokens','cached_input_tokens'):stage[name]+=usage[name]
-        result = {'schema_version': 'webcollect-batch-summary-1', 'run_id': self.config['run_id'],
+        result = {'schema_version': 'batch-summary', 'run_id': self.config['run_id'],
                 'mode': self.config['mode'], 'jobs': jobs, 'resources': resources,
                 'cost_control': 'observe_only', 'max_model_cost_micros': 'NOT_APPLICABLE',
                 'monetary_limit_applied': False,
@@ -1013,7 +1028,7 @@ class BatchLedger:
                 'model_cost_micros': known if covered == len(requests) else 'UNKNOWN',
                 'model_enabled': self.config['model'] is not None,
                 'currency': self.config['budget'].get('currency'),
-                'rate_version': self.config['model'].get('rates', {}).get('version') if self.config['model'] else None,
+                'rates': self.config['model'].get('rates', {}) if self.config['model'] else None,
                 'wall_seconds': elapsed,
                 'model_worker_seconds': sum((r['finished']-r['started']) for r in requests if r['finished']),
                 'final_qualified': final_qualified,
@@ -1034,7 +1049,7 @@ class BatchLedger:
             row.pop('response')
             row.pop('request_json')
             row.update(model=self.config['model']['model'],provider=self.config['model']['provider'],
-                       rate_version=self.config['model'].get('rates', {}).get('version'),currency=self.config['budget'].get('currency'))
+                   rates=self.config['model'].get('rates', {}),currency=self.config['budget'].get('currency'))
         # Snapshots are versioned by content; prior cost reports are retained.
         rows = token_report(rows)
         summary = self.summary()
@@ -1051,5 +1066,5 @@ def token_report(value):
         return [token_report(row) for row in value]
     if isinstance(value, dict):
         return {key:token_report(row) for key,row in value.items() if not any(
-            term in key for term in ('cost', 'currency', 'rate_version', 'monetary'))}
+            term in key for term in ('cost', 'currency', 'rates', 'rate_version', 'monetary'))}
     return value

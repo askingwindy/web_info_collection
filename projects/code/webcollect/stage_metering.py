@@ -53,5 +53,5 @@ def report(ledger):
         if observed:request['effective_output']={'valid':sum(e['status']=='valid' for e in observed),'rejected':sum(e['status']=='rejected' for e in observed)}
     for (raw,) in events:
         event=json.loads(raw);name=stage_for(event['kind']);stages[name]['cache_hits']+=1
-    return {'version':'webcollect-stage-metering-2','stages':stages,'requests':timeline,
+    return {'version':'stage-metering','stages':stages,'requests':timeline,
         'limits':'Effective outputs require compiled plans, qualification receipts, or actual QC evidence; token success alone is not effective output. Search billing is separate.'}

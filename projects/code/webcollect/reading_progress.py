@@ -1,7 +1,7 @@
 """Evidence-only reading position; seen means displayed, never human comprehension."""
 from .planning import object_sha256
 
-VERSION = 'webcollect-reading-progress-1'
+from .plan_protocol import READING_PROGRESS_PROTOCOL as VERSION
 END_POLICY = 'webcollect-five-effective-visible-ending-1'
 
 
@@ -55,7 +55,7 @@ def project(observations, current_id, trajectory):
                             'text_sha256':object_sha256(text), 'visible_quotes':text[:3]})
     text = lines(state); new = [line for line in text if line not in seen]
     repeat = any(same_view(state, item.get('state', item)) for oid,item in observations.items() if oid != current_id)
-    return {'schema_version':VERSION,'observation_id':current_id,'url':state.get('url'),
+    return {'policy':VERSION,'observation_id':current_id,'url':state.get('url'),
             'position':state.get('scroll'), 'displayed_line_count':len(text),
             'new_line_count':len(new),'already_displayed_line_count':len(text)-len(new),
             'new_visible_quotes':new[:5], 'previous_positions':earlier[-6:],

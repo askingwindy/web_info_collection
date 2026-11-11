@@ -37,7 +37,7 @@ from webcollect.hmac_strategy import (HMAC_INVENTORY_JS, ADAPTER_ID as HMAC_ADAP
 from webcollect.pbkdf2_strategy import (PBKDF2_INVENTORY_JS, ADAPTER_ID as PBKDF2_ADAPTER_ID,
     matches_uri as pbkdf2_matches_uri, validate_observation as validate_pbkdf2_observation)
 
-VERSION = 'site-supply-16-native-action-inventory'
+VERSION = 'site-supply-native-action-inventory'
 
 
 def normalize_uri(value):
@@ -138,7 +138,7 @@ async def reserve_visit_async(ledger, job, uri, purpose):
 
 def discover(ledger, sources_path, output):
     sources = load_json(sources_path)
-    if sources.get('schema_version') != 'webcollect-site-sources-1' or not sources.get('sources'):
+    if sources.get('schema_version') != 'site-sources' or not sources.get('sources'):
         raise ValueError('Nonempty versioned discovery sources required')
     for source in sources['sources']:
         if 'max_candidates' in source and (type(source['max_candidates']) is not int or source['max_candidates'] < 1):
@@ -222,7 +222,7 @@ def discover(ledger, sources_path, output):
                     candidates[uri]['source'].append(source_ref)
             source_summaries.append({'index':number,'link_occurrences':len(uris),
                                      'new_candidates':source_selected,'max_candidates':source.get('max_candidates')})
-        result = {'schema_version': 'webcollect-site-candidates-1', 'mode': ledger.config['mode'],
+        result = {'schema_version': 'site-candidates', 'mode': ledger.config['mode'],
                   'version': VERSION, 'input_source_sha256': file_sha(sources_path), 'records': list(candidates.values()),
                   'discovery_link_occurrences': occurrences, 'rejected_sources_or_links': rejects,
                   'source_errors': source_errors, 'fixed_candidate_count': len(candidates),
@@ -492,7 +492,7 @@ def probe_gateway(ledger,candidates,output,fixture_pages=None,structured_review=
         uri=normalize_uri(candidate['site_uri'])
         payload={'candidate':candidate,'version':VERSION,'output':str(Path(output).resolve()),
             'mode':ledger.config['mode'],'fixture_sha256':object_sha256(fixture_pages.get(uri)) if fixture_pages else None}
-        if structured_review:payload['source_review_protocol']='site-source-review-2'
+        if structured_review:payload['source_review_protocol']='site-source-review'
         try:job=ledger.get(object_sha256({'kind':'site-probe','payload':payload}))
         except ValueError:cached=False;break
         if job['state']!='done':cached=False;break
@@ -509,7 +509,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
     from webcollect.preflight import inspect_page
     from webcollect.browser import observe, capture
     candidates = load_json(candidates_path)
-    if candidates.get('schema_version') != 'webcollect-site-candidates-1' or candidates.get('mode') != ledger.config['mode']:
+    if candidates.get('schema_version') != 'site-candidates' or candidates.get('mode') != ledger.config['mode']:
         raise ValueError('Candidates/mode mismatch')
     if ledger.config['mode']=='synthetic' and fixture_pages is None:
         raise ValueError('Synthetic probe requires the dedicated controlled integration fixture runner')
@@ -525,7 +525,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                 jid = ledger.enqueue('site-probe', {'candidate': candidate, 'version': VERSION,
                     'output': str(output), 'mode': ledger.config['mode'],
                     'fixture_sha256': object_sha256(fixture_pages.get(uri)) if fixture_pages else None,
-                    **({'source_review_protocol':'site-source-review-2'} if structured_review else {})})
+                    **({'source_review_protocol':'site-source-review'} if structured_review else {})})
                 old = ledger.get(jid)
                 if old['state']=='done':
                     record = old['result']; validate_capability(record, require_ready=False)
@@ -665,11 +665,11 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                             from .source_review import review
                             decision=review(gateway,job,pages,capabilities,images)
                         else:
-                            decision=gateway.call(job,'site-screen-v2',json.dumps({'instruction':'Inspect every representative page image. Chinese visible text >=70%, Chinese navigation/controls, no mandatory login or blocking overlay. Dynamic/advertising uncertainties route to review_required. Supply one observation per page_id, including every evidence image_id for that page; multiple images are evidence of one page; readiness is provisional capability, not trajectory QC.','pages':pages},ensure_ascii=False),SCREEN_SCHEMA,images=images,synthetic_response=response)
+                            decision=gateway.call(job,'site-screen',json.dumps({'instruction':'Inspect every representative page image. Chinese visible text >=70%, Chinese navigation/controls, no mandatory login or blocking overlay. Dynamic/advertising uncertainties route to review_required. Supply one observation per page_id, including every evidence image_id for that page; multiple images are evidence of one page; readiness is provisional capability, not trajectory QC.','pages':pages},ensure_ascii=False),SCREEN_SCHEMA,images=images,synthetic_response=response)
                             validate_screen_coverage(pages,decision)
                     if any(r['routing']=='REVIEW_REQUIRED' for r in pages) and decision['status']=='ready':
                         decision={**decision,'status':'review_required','reason':'Preflight requires unresolved risk adjudication'}
-                    record={'schema_version':'webcollect-site-capability-1','capability_id':'site-'+object_sha256(uri)[:20],
+                    record={'schema_version':'site-capability','capability_id':'site-'+object_sha256(uri)[:20],
                         'version':object_sha256({'pages':capabilities,'screen':decision,'version':VERSION})[:24],
                         'site_uri':uri,'site_category':candidate['site_category'],'source':candidate['source'],
                         'observed_at':time.time(),'expires_at':time.time()+604800,'status':decision['status'],'reason':decision['reason'],
@@ -693,7 +693,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                     save_json(directory/('partial-attempt-'+str(ledger.get(jid)['attempts'])+'.json'),partial)
                     ledger.finish(job,'queued',result=partial,error=str(error));records.append(partial);stopped=str(error);break
                 except Exception as error:
-                    failure={'schema_version':'webcollect-site-probe-failure-1',
+                    failure={'schema_version':'site-probe-failure',
                         'site_uri':uri,'site_category':candidate['site_category'],'status':'review_required',
                         'reason':type(error).__name__,'responsibility':getattr(error,'responsibility','interface' if pages else 'unknown'),'error_message':str(error),'representative_pages':pages,
                         'capabilities':capabilities,'visit_ids':visit_ids,
@@ -708,7 +708,7 @@ async def probe(ledger, candidates_path, output, *, fixture_pages=None, structur
                 finally:await page.close()
         finally:
             await context.close();await browser.close()
-    result={'schema_version':'webcollect-capability-catalog-1','mode':ledger.config['mode'],'records':records,
+    result={'schema_version':'capability-catalog','mode':ledger.config['mode'],'records':records,
         'fixed_candidate_count':len(candidates['records']),'status_counts':dict(Counter(r['status'] for r in records)),
         'unprocessed':len(candidates['records'])-len(records),'stopped':stopped,
         'domain_count':len({urlsplit(r['site_uri']).hostname for r in records}),'categories':dict(Counter(r.get('site_category','UNKNOWN') for r in records)),

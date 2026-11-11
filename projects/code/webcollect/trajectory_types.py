@@ -6,7 +6,7 @@ are never a substitute for an actual control transition or a reading action.
 import re
 ENUM = ['搜索查询','填写表单','修改设置','创建/编辑/保存文件','发送消息','预约日程','购买流程',
         '筛选排序','上传下载','导入导出','权限配置','内容发布','数据查看','问题排查']
-VERSION = 'webcollect-actual-task-types-2'
+VERSION = 'actual-task-types'
 
 
 def classify(record):
@@ -105,7 +105,7 @@ def classify(record):
         families.append('unclassified_control_interaction')
     order=['搜索查询','筛选排序','修改设置','购买流程','填写表单','数据查看','问题排查']
     unique=set(tags);tags=[tag for tag in order if tag in unique][:3]
-    return {'rule_version':'webcollect-actual-task-types-3-boundary-return' if page_policy(record['task']) else VERSION,'status':'DERIVED' if tags else 'REVIEW_REQUIRED',
+    return {'rule_version':'actual-task-types-boundary-return' if page_policy(record['task']) else VERSION,'status':'DERIVED' if tags else 'REVIEW_REQUIRED',
             'interaction_types':list(dict.fromkeys(families)),'task_type':tags,'evidence':evidence,
             'planning_intents':record['terminal'].get('planning_intents',[]),
             'reason':None if tags else 'Actual interaction has no proven customer enum; preserve its internal type and evidence for review.'}

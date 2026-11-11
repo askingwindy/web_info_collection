@@ -11,8 +11,7 @@ sys.path[:0] = [str(REPO / 'projects/quality-inspector'),
                 str(REPO / 'projects/quality-inspector/tests')]
 from make_fixture import fixture
 from quality_inspector.ai_worker import (do_difference, do_visual, segments,
-                                         snapshot, synthetic_review, prepare, report, run,
-                                         POLICY_VERSION)
+                                         snapshot, synthetic_review, prepare, report, run)
 from webcollect.batch_core import BatchLedger, load_json
 
 
@@ -135,19 +134,6 @@ class UncertaintyRetentionTests(unittest.TestCase):
         result = run(ledger)
         self.assertEqual(result['outcomes'][0]['state'], 'review_required')
         self.assertEqual(result['cost']['model_requests'], 0)
-
-    def test_legacy_queue_cannot_export_old_results_as_current_policy(self):
-        config = load_json(REPO / 'projects/code/config/batch-synthetic.json')
-        ledger = BatchLedger(self.root / 'ops.sqlite3', config, initialize=True)
-        preparation = prepare(ledger, self.root / 'focal/batch', self.root / 'qc')
-        path = Path(preparation['queue_file'])
-        queue = load_json(path)
-        self.assertEqual(queue['policy_version'], POLICY_VERSION)
-        queue['policy_version'] = 'batch-review-worker-1'
-        path.write_text(json.dumps(queue))
-        with self.assertRaisesRegex(ValueError, 'worker policy changed'):
-            report(ledger, path, self.root / 'report')
-        self.assertEqual(ledger.summary()['model_requests'], 0)
 
 
 if __name__ == '__main__':

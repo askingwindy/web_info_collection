@@ -18,8 +18,7 @@ from .consumer_templates import (TemplateSession, ResultRegions, Inapplicable,
                                  shown, label, bind_control)
 from .react_session import ReactSession
 
-VERSION = 'webcollect-learned-calculator-4'
-SESSION_WIRING = 'template-original-four-tool-react-2'
+SESSION_WIRING = 'original-four-tool-react'
 REQUIRED = {'visual_alignment', 'terminal_semantics', 'language', 'privacy', 'substantive_difference'}
 COMPUTE = re.compile(r'^(?:(?:开始|開始)?(?:计算|計算)(?:税额|稅額|奖金|獎金)?|calculate(?:\s+.+)?|compute(?:\s+.+)?)$', re.I)
 
@@ -190,7 +189,10 @@ def validate_program(program):
 
 
 def match(template, application_id, state, html, requested_goal=None):
-    if template['version']!=VERSION:raise Inapplicable('OLD_TEMPLATE_VERSION')
+    if (not isinstance(template, dict) or not template.get('template_id')
+            or not template.get('application_id') or not template.get('site_host')
+            or not template.get('state')):
+        raise Inapplicable('TEMPLATE_FIELDS_MISSING')
     program=validate_program(template.get('program'))
     if any(k not in (['text','decimal'],['text','numeric'],['number',''],['number','decimal'],['number','numeric']) for k in program[0]['source_input_kinds']):
         raise Inapplicable('SOURCE_INPUT_KIND_UNSUPPORTED')
@@ -217,7 +219,7 @@ def match(template, application_id, state, html, requested_goal=None):
     if choices:desc+='；不修改首帧选择项：'+'；'.join(c['label'] for c in choices)
     return {'template':template['template_id'],'description':desc+'。执行计算并核对本次提交后可见结果的名称、数值及单位；不切换任务。',
             'fields':fields,'choices':choices,'button_selector':None,'button_label':None,
-            'source_version':VERSION,'library_template':template,'program':deepcopy(program),
+            'library_template':template,'program':deepcopy(program),
             'unresolved_choices':unresolved,'match_status':'GREY_NEEDS_CHOICE_OBSERVATION' if unresolved else 'HIT'}
 
 
@@ -295,7 +297,7 @@ class TemplateLibrary:
             t['state']='same_site_revalidated' if accepted and direct else 'trial' if accepted else 'draft'
             t['source_receipts']=[s['save_receipt'] for s in sources if s['template_id']==t['template_id']]
             t['cross_page_validation_receipts']=[s['save_receipt'] for s in direct] if accepted else []
-        return {'version':VERSION,'manifest':self.manifest,'pool':str(self.pool),'templates':templates,'sources':sources,'qc':qcs}
+        return {'manifest':self.manifest,'pool':str(self.pool),'templates':templates,'sources':sources,'qc':qcs}
 
     def learn(self, pool, claim_id, qc=None):
         """Same entry after any formal save, including a new ReAct success."""
@@ -332,7 +334,7 @@ class TemplateLibrary:
         # The reusable program contains roles, not the source answer or coordinates.
         with pool.pool.connect() as c:
             aid=c.execute('SELECT application_id FROM data_candidates WHERE candidate_id=?',(claim['candidate_id'],)).fetchone()[0]
-        definition={'version':VERSION,'application_id':aid,
+        definition={'application_id':aid,
             'site_host':urlsplit(state['url']).hostname,'program':derive_program(operations,fields,idx,proof),
             'parameter_roles':[{'numeric_kind':f['input_type'],'inputmode':f.get('inputmode'),'source_role_ordinal':i} for i,f in enumerate(fields,1)],
             'submit_mechanism':'unique_visible_compute_button; at_most_one_submission',
@@ -413,7 +415,7 @@ class LearningSession(TemplateSession):
             if len(matches)==1:
                 self.plan=matches[0];self.working_goal=self.plan['description']
                 update={'description':self.working_goal,'basis_observation_id':self.current['observation_id'],
-                        'reason':'原 claim 应用/原目标与可信首帧检索参数化模板 '+VERSION}
+                        'reason':'原 claim 应用/原目标与可信首帧检索参数化模板'}
                 self.goal_updates.append({**update,'applied_at_decision':0})
                 self.event('template-library-hit' if self.plan['match_status']=='HIT' else 'template-library-grey',template=self.plan['template'],plan=self.plan,update=update)
             else:self.fallback('NO_UNAMBIGUOUS_LIBRARY_MATCH:'+','.join(reasons))

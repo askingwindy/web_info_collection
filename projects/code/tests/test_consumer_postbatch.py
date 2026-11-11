@@ -11,7 +11,7 @@ from test_react_session import ReactHarness, Script, decide, act_step
 import test_react_native as native_tests
 from test_react_native import native, finish
 from webcollect.react_session import build_url_task, ReactSession
-from webcollect.react_protocol import REFERENCE_PROTOCOL, LEGACY_VERSION
+from webcollect.react_protocol import REFERENCE_PROTOCOL
 from webcollect.batch_core import load_json, file_sha, save_json
 from webcollect.postprocess import session_record, completion_evidence, terminal_outcome
 
@@ -80,11 +80,6 @@ class RequestReferenceTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         session,_,script=self.recorded([decide(tool='observe',arguments=remember),decide(tool='finish',arguments=lambda p:{
             'observation_id':old[0],'evidence_refs':[old[0]],'summary':'旧观察','stop_reason':'ready'}),finish()])
         await session.run();self.assertEqual(script.prompts[2]['last_tool_result']['status'],'rejected')
-        for version in ('webcollect-react-native-3',LEGACY_VERSION):
-            self.task=build_url_task(url=self.page.url,task_version='old',decision_protocol=version,reference_protocol=None)
-            session,_,script=self.recorded([finish()],name=version)
-            result=await session.run();self.assertEqual(result['stop_reason'],'ready')
-            self.assertNotIn('request_observation_ref',script.prompts[0])
 
     async def test_budget_focus_and_visible_result_keep_distinct_proven_effects(self):
         for visible in (False,True):

@@ -17,17 +17,12 @@ POINTER={'click','double_click','right_click','drag','select','scroll'}
 CONTROL={'click','double_click','right_click','drag','select','type'}
 _SCREENSHOT_SESSIONS=weakref.WeakKeyDictionary()
 _CAPTURE_FRAMES=weakref.WeakKeyDictionary()
-CAPTURE_VERSION='webcollect-capture-2'
-STABILITY_V2='webcollect-related-stability-2'
-STABILITY_V3='webcollect-related-stability-3'
-# v4: the repaint-noise guard now keys on the element tag (native_role) and
-# 'window'-typed opaque frames, not on element_type alone. Canvas/video/iframe
-# tags previously defaulted to 'text' and escaped their intended guard set, so
-# genuine self-painting content changes could pass as compact repaint noise.
-STABILITY_V4='webcollect-related-stability-4'
-STABILITY_V5='webcollect-related-stability-5'
-STABILITY_VERSION='webcollect-related-stability-6'
-STABILITY_RULES=('webcollect-related-stability-1',STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION)
+from .plan_protocol import CAPTURE_PROTOCOL, BROWSER_STABILITY_RULE
+# Capture receipts and related-stability proofs carry the single current
+# business names; historical sealed receipts keep their original bytes and are
+# not revalidated by the current rule.
+CAPTURE_VERSION=CAPTURE_PROTOCOL
+STABILITY_VERSION=BROWSER_STABILITY_RULE
 # Compact repaint-noise bounds, verified by the fixture set in
 # test_related_capture_stability: antialias/underline strips stay thin in one
 # dimension, tiny in area, low-amplitude, and away from text/interactive boxes.
@@ -339,9 +334,9 @@ def related_projection(state):
 def stability_pair(before,after,png_before,png_after, *, rule_version=None, allow_border=True, action_scope=None):
     """Recomputable full-state and exact-pixel proof; never mask saved evidence."""
     from .dynamic_regions import DYNAMIC_STABILITY_RULES, STABILITY as dynamic_rule, enabled as dynamic_enabled, pair as dynamic_pair
-    from .action_stability import ACTION_SCOPED_VERSIONS, action_scoped_pair
-    if (action_scope is not None and action_scope.get('schema_version') in ACTION_SCOPED_VERSIONS) \
-            or rule_version in ACTION_SCOPED_VERSIONS:
+    from .action_stability import ACTION_STABILITY_PROTOCOL, action_scoped_pair
+    if (action_scope is not None and action_scope.get('schema_version') == ACTION_STABILITY_PROTOCOL) \
+            or rule_version == ACTION_STABILITY_PROTOCOL:
         # The action-scoped protocol routes before any dynamic-region logic:
         # it never depends on region classification for unrelated overlays.
         if action_scope is None:raise ValueError('Scoped proof requires its frozen action scope')
@@ -349,35 +344,30 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
     if rule_version in DYNAMIC_STABILITY_RULES or (rule_version is None and dynamic_enabled(before) and dynamic_enabled(after)):
         return dynamic_pair(before,after,png_before,png_after,action_scope=action_scope,
                             rule_version=rule_version or dynamic_rule)
-    from .action_stability import VERSIONS as focus_versions, pair as focus_pair
-    if action_scope is not None or rule_version in focus_versions:
-        if action_scope is None:raise ValueError('Scoped proof requires its frozen action scope')
-        return focus_pair(before,after,png_before,png_after,action_scope)
     full=fingerprint(before)==fingerprint(after)
     rule_version=rule_version or STABILITY_VERSION
-    if rule_version not in STABILITY_RULES:raise ValueError('Unknown stability rule')
+    if rule_version!=STABILITY_VERSION:raise ValueError('Unknown stability rule')
     left,right=related_projection(before),related_projection(after)
     loading_proof=[];geometry_proof=[]
-    if rule_version==STABILITY_VERSION:
-        # Readiness exceptions do not exempt a single image pixel. A failed
-        # glyph, semantic image, control, overlap or incomplete proof stays held.
-        for original,projected in ((before,left),(after,right)):
-            failed=[i for i in original.get('capture_images',[]) if not
-                    (i.get('complete') and i.get('natural_width',0)>0 and i.get('natural_height',0)>0)]
-            safe={r['element_id'] for r in _image_regions(original,unloaded=True)}
-            safe |= _unrelated_failed_images(original)
-            if failed and all(i.get('element_id') in safe for i in failed):
-                projected['capture_readiness']['images_ready']=True
-                loading_proof.append({'state_fingerprint':fingerprint(original),'images':deepcopy(failed),
-                    'reason':'Failed images carry their own proof of being disjoint from target, results, text, controls and unknown paint; pixels remain exact.'})
-        from .capture_geometry import compare_geometry
-        right,geometry_proof=compare_geometry(left,right)
+    # Readiness exceptions do not exempt a single image pixel. A failed
+    # glyph, semantic image, control, overlap or incomplete proof stays held.
+    for original,projected in ((before,left),(after,right)):
+        failed=[i for i in original.get('capture_images',[]) if not
+                (i.get('complete') and i.get('natural_width',0)>0 and i.get('natural_height',0)>0)]
+        safe={r['element_id'] for r in _image_regions(original,unloaded=True)}
+        safe |= _unrelated_failed_images(original)
+        if failed and all(i.get('element_id') in safe for i in failed):
+            projected['capture_readiness']['images_ready']=True
+            loading_proof.append({'state_fingerprint':fingerprint(original),'images':deepcopy(failed),
+                'reason':'Failed images carry their own proof of being disjoint from target, results, text, controls and unknown paint; pixels remain exact.'})
+    from .capture_geometry import compare_geometry
+    right,geometry_proof=compare_geometry(left,right)
     loaded=_loaded(left) and _loaded(right)
-    if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
+    if loaded and before['capture_readiness']['document_ready']=='interactive' and after['capture_readiness']['document_ready']=='complete':
         left['capture_readiness']['document_ready']='complete'
     related=loaded and left==right
     regions=_image_regions(before) if related else []
-    media_regions=_media_regions(before) if related and rule_version in (STABILITY_V5,STABILITY_VERSION) else []
+    media_regions=_media_regions(before) if related else []
     with Image.open(BytesIO(png_before)) as first,Image.open(BytesIO(png_after)) as last:
         if first.format!='PNG' or last.format!='PNG' or list(first.size)!=before['screen_resolution'] or first.size!=last.size:
             raise ValueError('同步像素证明需要相同视口分辨率的完整原始PNG')
@@ -389,7 +379,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         changed_bbox=changed.getbbox()
         mask=Image.new('L',first.size,0);draw=ImageDraw.Draw(mask)
         geometry_regions=[]
-        if rule_version==STABILITY_VERSION and related:
+        if related:
             from .capture_geometry import translation_regions
             geometry_regions=translation_regions(before,after,geometry_proof,first,last)
         for region in regions+media_regions+geometry_regions:
@@ -397,7 +387,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # New receipts only. Never reinterpret v1 failures. A local edge proof
         # and unchanged full semantic state are necessary; no whole-page score.
         border_proof=[]
-        if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and related and allow_border:
+        if related and allow_border:
             bounds=changed_bbox or (0,0,0,0)
             for region in before.get('paint_borders',[]):
                 box=region['bbox'];edges=region['edges']
@@ -428,27 +418,20 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
         # untracked lines, tolerated only when compact, low-amplitude and away
         # from every text/interactive element box.
         paint_noise_proof=[]
-        if (rule_version in (STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) and allow_border and related and full
+        if (allow_border and related and full
                 and before['capture_readiness'].get('document_ready')=='complete'):
             guard=[]
             for element in before.get('elements',[]):
                 # DOM-backed text and control values cannot change under an
                 # identical fingerprint; only self-painting surfaces can, and
-                # those boxes stay guarded. v3 keyed on element_type, which
-                # canvas/video/iframe tags never receive (they default to
-                # 'text'); v4 additionally guards by native_role and opaque
+                # those boxes stay guarded, keyed by native_role and opaque
                 # 'window' frames so real repaints of embedded paint surfaces
-                # are never exempted by the small-pixel threshold. v3 receipts
-                # keep their exact original guard on revalidation.
-                if rule_version==STABILITY_V3:
-                    if element.get('element_type') not in ('image','canvas','video','iframe','embed','object'):
-                        continue
-                else:
-                    role=(element.get('native_role') or '').lower()
-                    if (element.get('element_type') not in ('image','canvas','video','iframe','embed','object')
-                            and element.get('element_type')!='window'
-                            and role not in _SELF_PAINTING_ROLES):
-                        continue
+                # are never exempted by the small-pixel threshold.
+                role=(element.get('native_role') or '').lower()
+                if (element.get('element_type') not in ('image','canvas','video','iframe','embed','object')
+                        and element.get('element_type')!='window'
+                        and role not in _SELF_PAINTING_ROLES):
+                    continue
                 box=element.get('bbox')
                 if isinstance(box,list) and len(box)==4 and box[2]-2>box[0] and box[3]-2>box[1]:
                     guard.append((box[0]+1,box[1]+1,box[2]-1,box[3]-1))
@@ -491,7 +474,7 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
                 for component,box,deltas in compliant:
                     for x,y in component:mask.putpixel((x,y),255)
                     paint_noise_proof.append({'bbox':list(box),'points':[list(point) for point in sorted(component)],'rgb_deltas':deltas,
-                                              'rule':'compact-repaint-noise-v2' if rule_version in (STABILITY_V4,STABILITY_V5,STABILITY_VERSION) else 'compact-repaint-noise-v1'})
+                                              'rule':'compact-repaint-noise'})
         outside=ImageChops.subtract(changed,mask)
         pixel_change={'changed_pixels':changed.histogram()[255],
                       'bbox':list(changed_bbox) if changed_bbox else None,
@@ -502,8 +485,9 @@ def stability_pair(before,after,png_before,png_after, *, rule_version=None, allo
             'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),
             'related_fingerprint':fingerprint(related_projection(before)),
             'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
-            'allowed_image_regions':regions,**({'allowed_media_regions':media_regions} if rule_version in (STABILITY_V5,STABILITY_VERSION) else {}),**({'border_proof':border_proof,'border_enabled':allow_border} if rule_version in (STABILITY_V2,STABILITY_V3,STABILITY_V4,STABILITY_V5,STABILITY_VERSION) else {}),
-            **({'geometry_proof':geometry_proof,'geometry_pixel_proof':geometry_regions,'unloaded_image_proof':loading_proof} if rule_version==STABILITY_VERSION else {}),
+            'allowed_image_regions':regions,'allowed_media_regions':media_regions,
+            'border_proof':border_proof,'border_enabled':allow_border,
+            'geometry_proof':geometry_proof,'geometry_pixel_proof':geometry_regions,'unloaded_image_proof':loading_proof,
             **({'paint_noise_proof':paint_noise_proof} if paint_noise_proof else {}),'pixel_change':pixel_change}
 
 

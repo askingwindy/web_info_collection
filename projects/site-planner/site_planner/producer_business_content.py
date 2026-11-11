@@ -3,7 +3,7 @@ import json
 import re
 import time
 
-from jsonschema import Draft202012Validator, ValidationError
+from jsonschema import Draft202012Validator
 
 from webcollect.batch_core import OutcomeUnknown
 from webcollect.model_gateway import ModelGateway
@@ -14,8 +14,8 @@ from .discovery_agent import model_tool_decision
 from .entry_selection import PAGE_TYPES
 from .candidate_pool import entry_identity
 
-VERSION = 'producer-business-value-2'
-CACHE = 'producer-business-value-decisions-2'
+VERSION = 'producer-business-value-3'
+CACHE = 'producer-business-value-decisions-3'
 QUERY_SYSTEM = ('只规划1–2个自然中文检索词，寻找与目标站点主类相关、有基本公开业务内容的第一方入口。'
                 '不要求生成消费者任务、步骤或预期答案，不填写页面类型，不为补齐用途分类检索。'
                 '不宣称可操作、采集成功或通过审核。')
@@ -31,18 +31,17 @@ SYSTEM = ('判断本页是否有与站点主营相关的基本公开业务内容
           'omitted_main_units与excluded_non_main_units分开；省略部分不构成已见正文证据。不得从另一页借编号。'
           'page_type及purpose_quote_ids仅为可选辅助信息；不确定或证据不合适直接UNKNOWN或省略，不影响业务判断。'
           '本次只调用submit_supply_decisions一次。没有inspect、补分类或重试请求，不要求结构编号，不回抄正文。'
-          '返回decisions对象，每个提供的page_key必须逐字完整返回，不省略或以placeholder代替；不回传row、URL或数据库ID，不声明消费、QC或人工通过。')
+          '返回decisions对象，每个提供的page_key必须逐字完整返回，不省略或以placeholder代替；不回传row、URL或数据库ID，不声明消费、QC或人工通过。'
+          ' 新政策：public_access只可为public_content/login_required/UNKNOWN。登录后才能使用的界面不选；公开可独立读取的具体产品条件、业务查询、条目列表与知识正文允许，不要求直接交易或输入。'
+          ' content_kind必须是tool、business_information、business_list、business_content、support、marketing、legal、UNKNOWN之一。具体费用、年龄/容量/期限/适用条件可作business_information；只有口号、产品功能泛宣传、使用教程、售后/隐私/服务协议、登录帮助不选。'
+          ' 只能引用原截图当帧可见的主区材料，DOM中后来出现或当前不可见内容不能证明公开业务。')
 
-VERSION_V3='producer-business-value-3'
-CACHE_V3='producer-business-value-decisions-3'
-SYSTEM_V3=SYSTEM + (' 新政策：public_access只可为public_content/login_required/UNKNOWN。登录后才能使用的界面不选；公开可独立读取的具体产品条件、业务查询、条目列表与知识正文允许，不要求直接交易或输入。'
-    ' content_kind必须是tool、business_information、business_list、business_content、support、marketing、legal、UNKNOWN之一。具体费用、年龄/容量/期限/适用条件可作business_information；只有口号、产品功能泛宣传、使用教程、售后/隐私/服务协议、登录帮助不选。'
-    ' 只能引用原截图当帧可见的主区材料，DOM中后来出现或当前不可见内容不能证明公开业务。')
+# The frozen grounded_entries caller still reads these historical V3 names.
+VERSION_V3 = VERSION
+SYSTEM_V3 = SYSTEM
 
 QUOTES = {'type': 'array', 'maxItems': 6, 'uniqueItems': True,
           'items': {'type': 'string', 'pattern': '^q[0-9]+$'}}
-LEGACY_SYSTEM = SYSTEM
-SYSTEM += 'reason为可选说明；省略时宿主仅按原business判定及引用编号生成机械说明，不补业务判断。'
 REASON_REVISION = 'reason-default-1'
 
 CORE = {'type': 'object', 'required': ['business', 'business_quote_ids'], 'properties': {
@@ -59,14 +58,12 @@ def evidence_for(pool, ledger, link, *, policy=None):
     doc, result = original
     evidence = previous.material({'reference': result['document'], 'raw_html': doc['rendered_dom'],
                                  'encoding': 'utf-8', 'uri': doc['landed_uri']})
+    from .producer_eligibility import visible_units
     evidence.update(version=VERSION, document=result['document'], raw_html=doc['raw_html'],
                     rendered_dom=doc['rendered_dom'], observation=result['observation'],
                     screenshot=result['image'], source_probe_job_id=doc['job_id'],
                     source_probe_visit_id=doc['visit_id'], material_source='shared_anonymous_rendered_dom')
-    if policy==VERSION_V3:
-        from .producer_eligibility import visible_units
-        evidence['version']=VERSION_V3
-        evidence['units'],evidence['page_eligibility']=visible_units(evidence)
+    evidence['units'],evidence['page_eligibility']=visible_units(evidence)
     return evidence
 
 
@@ -162,14 +159,12 @@ def assess(proposal, evidence, *, policy=None):
     menu = evidence['menu']
     legal = any(re.match(r'^(免责声明|隐私政策|法律声明|版权声明|用户协议)', u['text'])
                 for u in evidence['units'] if u['kind'] == 'heading' and u.get('region'))
-    if policy==VERSION_V3:
-        legal = legal or any(re.search(r'售后政策|退款政策|隐私|用户协议|服务条款|使用指南|帮助中心',u['text']) for u in evidence['units'] if u['kind']=='heading' and u.get('region'))
+    legal = legal or any(re.search(r'售后政策|退款政策|隐私|用户协议|服务条款|使用指南|帮助中心',u['text']) for u in evidence['units'] if u['kind']=='heading' and u.get('region'))
     business_ok = (proposal['business'] == 'public_business' and not legal
                    and quotes_valid(proposal['business_quote_ids'], menu))
     witnesses = [q for q in proposal['business_quote_ids'] if q in content_ids(evidence)]
     selected = business_ok and bool(witnesses)
-    if policy==VERSION_V3:
-        selected = selected and proposal.get('content_kind') in ('tool','business_information','business_list','business_content') and proposal.get('public_access')=='public_content' and evidence.get('page_eligibility',{}).get('status')!='REJECTED'
+    selected = selected and proposal.get('content_kind') in ('tool','business_information','business_list','business_content') and proposal.get('public_access')=='public_content' and evidence.get('page_eligibility',{}).get('status')!='REJECTED'
     page, purpose_reason = 'UNKNOWN', 'auxiliary_purpose_missing_or_unknown'
     proposed_page = proposal.get('page_type', 'UNKNOWN')
     ids = proposal.get('purpose_quote_ids', [])
@@ -191,43 +186,6 @@ def assess(proposal, evidence, *, policy=None):
             'reason_origin': 'model' if 'reason' in proposal else REASON_REVISION}
 
 
-def recover_reason_record(pool, ledger, cached):
-    """Append a revision of a settled original; never dispatch or rewrite it."""
-    proposal=cached.get('proposal')
-    if (cached.get('selection_reason')!='invalid_business_decision'
-            or not isinstance(proposal,dict) or 'reason' in proposal):return None
-    binding=cached['binding']
-    revised=pool.pool.checkpoint(CACHE+'/'+REASON_REVISION,binding)
-    if revised is not None:return revised
-    if not cached.get('model_calls'):return None
-    call=cached['model_calls'][0];job=ledger.get(call['job_id'])
-    with ledger.connect() as con:
-        request=con.execute('SELECT state,usage,response FROM model_requests WHERE id=? AND job_id=?',
-                            (call['request_id'],call['job_id'])).fetchone()
-    if (not request or request['state'] not in ('succeeded','invalid_response') or not request['usage']
-            or cached.get('version')!=VERSION or job['payload']['input'].get('version')!=VERSION
-            or object_sha256(job['payload']['input'])!=call['input_sha256']):return None
-    try:
-        msg=json.loads(request['response'])['provider_response']['choices'][0]['message']
-        toolcalls=msg.get('tool_calls') or []
-        if len(toolcalls)!=1 or toolcalls[0]['function']['name']!='submit_supply_decisions':return None
-        args=json.loads(toolcalls[0]['function']['arguments'])
-        if args['decisions'][cached['page_key']]!=proposal:return None
-        schema=json.loads(json.dumps(job['payload']['tools'][0]['function']['parameters']))
-        for row in schema['properties']['decisions']['properties'].values():
-            row['required']=[key for key in row['required'] if key!='reason']
-        Draft202012Validator(schema).validate(args)
-        evidence=cached['target_evidence']
-        verify_evidence([evidence[k] for k in ('document','raw_html','rendered_dom','observation','screenshot') if k in evidence])
-        assessment=assess(proposal,evidence)
-        if assessment.get('selection_reason')=='invalid_business_decision':return None
-    except (KeyError,TypeError,ValueError,ValidationError):return None
-    revised={**cached,**assessment,'revision':REASON_REVISION,
-             'original_cache':{'namespace':CACHE,'binding':binding,'record_sha256':object_sha256(cached)},
-             'model_calls':[{**c,'reused':True} for c in cached['model_calls']]}
-    return pool.pool.checkpoint(CACHE+'/'+REASON_REVISION,binding,revised)
-
-
 def _cache(pool, ledger, binding, *, version=VERSION, namespace=CACHE):
     cached = pool.pool.checkpoint(namespace, binding)
     if cached is None:
@@ -243,7 +201,7 @@ def _cache(pool, ledger, binding, *, version=VERSION, namespace=CACHE):
             or original['payload']['input']['version'] != version
             or object_sha256(original['payload']['input']) != call['input_sha256']):
         raise ValueError('Original supply decision binding changed')
-    return (recover_reason_record(pool,ledger,cached) or cached) if version==VERSION else cached
+    return cached
 
 
 def _purpose_holds(ledger):
@@ -260,8 +218,10 @@ def _purpose_holds(ledger):
 
 
 def classify(ledger, links, scope, root, *, pool, policy=None):
-    if policy not in (None,VERSION_V3):raise ValueError('Unsupported supply policy')
-    version,namespace,system=(VERSION_V3,CACHE_V3,SYSTEM_V3) if policy==VERSION_V3 else (VERSION,CACHE,SYSTEM)
+    # The policy value is caller data; the supply implementation is single-current.
+    if policy not in (None, VERSION):
+        raise ValueError('Unsupported supply policy')
+    version,namespace,system=VERSION,CACHE,SYSTEM
     records, pending, calls, rows = [], {}, [], {}
     # A purpose UNKNOWN belongs to its exact original pages, not every page
     # sharing this batch/site. Keep it out of a new multi-page model request.
@@ -289,7 +249,7 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
             record['reason'] = '原成功观察未保存文档；不为补分类或材料重新读取'
             continue
         record['target_evidence'] = evidence
-        if policy==VERSION_V3 and evidence.get('page_eligibility',{}).get('status')=='REJECTED':
+        if evidence.get('page_eligibility',{}).get('status')=='REJECTED':
             record.update(selection_reason=evidence['page_eligibility']['reason'],reason='原当帧中文/登录资格不满足；不派发业务模型')
             continue
         binding, key, visible = prepare(link, evidence, ledger.config.get('model'))
@@ -313,9 +273,8 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
     while pending:
         one = {**CORE, 'additionalProperties': False, 'properties': {
             **CORE['properties'], 'page_type': {'enum': list(PAGE_TYPES)}, 'purpose_quote_ids': QUOTES}}
-        if policy==VERSION_V3:
-            one['required']=[*one['required'],'content_kind','public_access']
-            one['properties'].update(content_kind={'enum':['tool','business_information','business_list','business_content','support','marketing','legal','UNKNOWN']},public_access={'enum':['public_content','login_required','UNKNOWN']})
+        one['required']=[*one['required'],'content_kind','public_access']
+        one['properties'].update(content_kind={'enum':['tool','business_information','business_list','business_content','support','marketing','legal','UNKNOWN']},public_access={'enum':['public_content','login_required','UNKNOWN']})
         schema = {'type': 'object', 'additionalProperties': False, 'required': ['decisions'],
                   'properties': {'decisions': {'type': 'object', 'additionalProperties': False,
                     'required': list(pending), 'properties': {key: one for key in pending}}}}

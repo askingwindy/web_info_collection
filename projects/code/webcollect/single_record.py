@@ -30,11 +30,11 @@ def candidate(pool_path, uri, output):
     hints = [c for c in row['category_hints'] if c != 'UNKNOWN']
     parent = row['category'] if row['category'] != 'UNKNOWN' else hints[0] if len(hints) == 1 else 'UNKNOWN'
     source_path = Path(output).with_suffix('.sources.json')
-    source = {'schema_version': 'webcollect-site-sources-1', 'sources': [
+    source = {'schema_version': 'site-sources', 'sources': [
         {'kind': 'seed', 'category': parent, 'uris': [row['uri']], 'discovery_provenance': row['discoveries']}]}
     save_json(source_path, source)
     evidence = list({r['path']: r for d in row['discoveries'] for r in d['source_refs']}.values())
-    result = {'schema_version': 'webcollect-site-candidates-1', 'mode': 'real',
+    result = {'schema_version': 'site-candidates', 'mode': 'real',
         'records': [{'site_uri': row['uri'], 'site_category': parent,
             'source': [{'kind': 'seed', 'source_sha256': file_sha(source_path), 'evidence': evidence}],
             'application_id': row['application_id'], 'page_id': row['page_id']}],
@@ -63,7 +63,7 @@ async def source(pool_path, uri, config_path, ledger_path, output, *, chain):
         for record in load_json(result['catalog']['path'])['records']:
             validate_capability(record, require_ready=True)
         save_json(Path(result['catalog']['path']).parent / 'site-pool-binding.json', {
-            'schema_version': 'webcollect-site-pool-binding-1', 'pool': str(Path(pool_path).resolve()),
+            'schema_version': 'site-pool-binding', 'pool': str(Path(pool_path).resolve()),
             'catalog': result['catalog']})
         return result
     ledger = BatchLedger(ledger_path, load_json(config_path), initialize=not Path(ledger_path).exists())
@@ -78,7 +78,7 @@ async def source(pool_path, uri, config_path, ledger_path, output, *, chain):
         return result
     path = output / 'candidates.json'; candidate(pool_path, uri, path)
     observed = await probe(ledger, path, output / 'probe', structured_review=True)
-    if len(observed['records']) != 1 or observed['records'][0].get('schema_version') != 'webcollect-site-capability-1':
+    if len(observed['records']) != 1 or observed['records'][0].get('schema_version') not in ('site-capability','webcollect-site-capability-1'):
         return {'status': 'SOURCE_FAILED', 'probe': observed, 'sample_ids_allocated': 0}
     if observed['records'][0]['status'] == 'rejected':
         return {'status': 'SOURCE_REJECTED', 'probe': observed, 'sample_ids_allocated': 0}
@@ -89,7 +89,7 @@ async def source(pool_path, uri, config_path, ledger_path, output, *, chain):
     record = validate_capability(catalog['records'][0], require_ready=True)
     SitePool(pool_path).bind_capability(ref(qualified['catalog_file']))
     save_json(Path(qualified['catalog_file']).parent / 'site-pool-binding.json', {
-        'schema_version': 'webcollect-site-pool-binding-1', 'pool': str(Path(pool_path).resolve()),
+        'schema_version': 'site-pool-binding', 'pool': str(Path(pool_path).resolve()),
         'catalog': ref(qualified['catalog_file'])})
     result = {'status': 'CAPABILITY_READY', 'catalog': ref(qualified['catalog_file']),
               'capability_id': record['capability_id'], 'sample_ids_allocated': 0}
@@ -98,7 +98,7 @@ async def source(pool_path, uri, config_path, ledger_path, output, *, chain):
 
 
 def identity(catalog_path, output, *, registry=None, candidate_observation=False):
-    from .production_identity import VERSION
+    from . import production_identity
     catalog = load_json(catalog_path)
     if len(catalog['records']) != 1:
         raise ValueError('Single-record runner requires exactly one capability')
@@ -118,23 +118,22 @@ def identity(catalog_path, output, *, registry=None, candidate_observation=False
         root_uri=next((row['canonical_uri'] for row in load_json(application_registry['path'])['applications']
                        if canonical_key(row['canonical_uri'],application_registry)==canonical_host),root_uri)
     binding = record.get('candidate_observation') or {}
-    v2 = binding.get('candidate', {}).get('schema_version') == 'webcollect-data-candidate-2'
-    application_name = parsed.hostname if v2 else page['title']
+    # Name by the bound candidate body shape, not by any protocol version.
+    application_name = parsed.hostname if isinstance(binding.get('candidate'), dict) else page['title']
     if registry is not None:
         import sqlite3
-        from .production_identity import page_url
         # A second function page must retain the original whole-application
         # allocation name, rather than renaming the application to its title.
         with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_pilot_applications'").fetchone():
                 existing=con.execute('SELECT canonical_uri,name FROM m4_pilot_applications WHERE application_key=?',
-                                     (page_url(root_uri),)).fetchone()
+                                     (production_identity.page_url(root_uri),)).fetchone()
                 if existing:
-                    if page_url(existing[0]) != page_url(root_uri):
+                    if production_identity.page_url(existing[0]) != production_identity.page_url(root_uri):
                         raise ValueError('Original whole-application mapping differs')
                     application_name=existing[1]
-    result = {'schema_version': 'webcollect-page-identities-1', 'pages': {record['site_uri']: {
-        'version': VERSION, 'application': {'canonical_uri': root_uri, 'name': application_name,
+    result = {'schema_version': 'page-identities', 'pages': {record['site_uri']: {
+        'version': production_identity.VERSION, 'application': {'canonical_uri': root_uri, 'name': application_name,
             'evidence': [anchor['state']]},
         'task_page': {'canonical_uri': record['site_uri'], 'aliases': [record['site_uri']],
             'kind': 'function' if page.get('forms') or page.get('widgets') or any(
@@ -152,7 +151,7 @@ def identity(catalog_path, output, *, registry=None, candidate_observation=False
 def numeric_workflow(catalog_path, output, *, inputs, submit_label, assertions, instruction, result_scroll=None):
     """Author a proposal from actual visible DOM controls, never a prior execution."""
     from .workflow_proposal import compile_workflow, SCHEMA
-    from .task_generation import VERSION
+    from . import task_generation
     from decimal import Decimal
     catalog = load_json(catalog_path)
     if len(catalog['records']) != 1:
@@ -200,7 +199,7 @@ def numeric_workflow(catalog_path, output, *, inputs, submit_label, assertions, 
         operations[-1].pop('postconditions')
         operations.append({'operation_id':'read-complete-result','subgoal_id':'result','action_type':'scroll',
             'selector':assertions[0]['selector'],'arguments':{'direction':'down'},'execution':{'distance':result_scroll},
-            'completion_view':{'schema_version':'webcollect-live-completion-view-1','distance':result_scroll},
+            'completion_view':{'schema_version':'live-completion-view','distance':result_scroll},
             'goal':'查看完整计算结果','rationale':'仅当实际结果被视口截断时向下查看','expected':'完整结果进入视口',
             'postconditions':assertions})
     goals.append({'id':'result','description':'核对完整计算结果','evidence':[{'final_assertion_index':i} for i in range(len(assertions))]})
@@ -209,7 +208,7 @@ def numeric_workflow(catalog_path, output, *, inputs, submit_label, assertions, 
         'instruction':instruction,'task_type':['填写表单','数据查看'],'operations':operations,'subgoals':goals,
         'required_actions':[o['operation_id'] for o in operations],'final_assertions':assertions,
         'final_result':instruction,'completion_judgement':'核对最终原始截图中任务要求的计算结果。','anchors':[anchor]}
-    compile_workflow(capability,spec,VERSION)
+    compile_workflow(capability,spec,task_generation.VERSION)
     result={'schema_version':SCHEMA,'tasks':[spec]};save_json(output,result);return result
 
 

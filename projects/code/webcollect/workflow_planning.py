@@ -3,7 +3,7 @@ import json
 from .planning import verify_evidence
 from .batch_core import load_json
 
-VERSION='source-workflow-planning-3-operation-contract'
+VERSION='workflow-planning'
 # The existing compiler is authoritative for nested action/anchor contracts.
 FIELDS={'capability_id':'string','capability_version':'string','task_family':'string','initial_url':'string',
         'instruction':'string','task_type':'array','operations':'array','subgoals':'array',
@@ -107,7 +107,7 @@ def propose(gateway, job, capability, *, synthetic_response=None, compiler_feedb
 
 def validate_feedback(ledger,capability,feedback):
     from .planning import object_sha256,verify_evidence
-    if set(feedback)!={'schema_version','prior_job_id','generation_result'} or feedback['schema_version']!='webcollect-workflow-compiler-feedback-1':
+    if set(feedback)!={'schema_version','prior_job_id','generation_result'} or feedback['schema_version']!='workflow-compiler-feedback':
         raise ValueError('Versioned bounded compiler feedback required')
     verify_evidence([feedback['generation_result']]);report=load_json(feedback['generation_result']['path'])
     job=ledger.get(feedback['prior_job_id'])
@@ -123,7 +123,7 @@ def validate_feedback(ledger,capability,feedback):
     from .workflow_proposal import compile_workflow
     from .fragment_workflow import compile_fragment
     def compile_for(spec):
-        if spec.get('schema_version')=='webcollect-fragment-workflow-1':
+        if spec.get('schema_version')=='fragment-workflow':
             return compile_fragment(capability,spec,'compiler-feedback-check')
         return compile_workflow(capability,spec,'compiler-feedback-check')
     for spec in specs:
@@ -131,7 +131,7 @@ def validate_feedback(ledger,capability,feedback):
         except ValueError as error:
             if not any(r['spec_sha256']==object_sha256(spec) and r['reason']==str(error) for r in report['rejected']):raise ValueError('Compiler feedback reason changed')
         else:raise ValueError('Cannot revise a valid plan through rejection feedback')
-    fragments=any(spec.get('schema_version')=='webcollect-fragment-workflow-1' for spec in specs)
+    fragments=any(spec.get('schema_version')=='fragment-workflow' for spec in specs)
     instruction=('仅修正以下明确编译错误。输入、替换或清空输入框一律用set_value并给value；'
                  '折线下方控件必须先滚动露出再操作；保持5至8个实际动作，不要凑步；'
                  '无法自然达到5步返回空tasks及结构化原因。本协议最多修订一次，仍需完整重新编译与冻结。'

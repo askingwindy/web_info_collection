@@ -13,7 +13,7 @@ from .checksums import verify_manifest
 from .layout import discover, package_document_paths
 from jsonschema import Draft202012Validator,validators
 
-VERSION='customer-proxy-0.3-actual-keys'
+VERSION='customer-proxy-actual-keys'
 REQ='request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md'
 A='request/web操作采集需求/附件A-字段说明.md'
 B='request/web操作采集需求/附件B-动作空间与坐标系.md'
@@ -462,7 +462,7 @@ def batch_check(batch,samples,layout=None):
     if execution_path.exists():
         try:
             attachment=load(execution_path)
-            if (attachment.get('schema_version')!='webcollect-actual-execution-1' or
+            if (attachment.get('schema_version')!='actual-execution' or
                     attachment.get('keyboard_policy')!='delivery-actual-keys-1' or
                     set(attachment)!={'schema_version','keyboard_policy','samples'}):
                 raise ValueError('Invalid actual execution attachment version')

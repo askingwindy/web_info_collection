@@ -13,9 +13,10 @@ from pathlib import Path
 from .planning import object_sha256, verify_evidence
 from .batch_core import file_sha, load_json, OutcomeUnknown
 from .agent_observation import project, action_availability, readable_labels, PROVEN, VERSION as OBS_VERSION, ACTIONS
+from .plan_protocol import FRAGMENT_POLICY
 
-VERSION = 'webcollect-fragment-controller-2'
-FRAGMENT_VERSION = 'webcollect-fragment-workflow-2'
+VERSION = 'fragment-controller'
+FRAGMENT_VERSION = 'fragment-workflow'
 # Worst honest cost per dispatched action: 3 observations (fresh-decision
 # capture, supplemental target capture, pre-dispatch rebind) and, when the
 # model asks observe-then-plan, 2 decisions/model calls. Eight actions plus
@@ -105,8 +106,8 @@ def compile_goal(capability, spec, version):
         'final_result': spec['end_description'], 'completion_judgement': spec['end_description'],
         'stop_when_final': False, 'content_preparation': False,
         'fragment': {'schema_version': FRAGMENT_VERSION, 'controller_version': VERSION,
-            'policy_version': 'legal-web-actions-fragment-1', 'business_completion': 'NOT_CLAIMED',
-            'quality_policy_version': 'qc-sampling-v1-20261030', 'budgets': deepcopy(spec['budgets']),
+            'policy_version': FRAGMENT_POLICY, 'business_completion': 'NOT_CLAIMED',
+            'quality_policy_version': 'qc-sampling', 'budgets': deepcopy(spec['budgets']),
             'allowed_actions': deepcopy(spec['allowed_actions']), 'page_urls': [s['url'] for s in states],
             'start_state_sha256': object_sha256({k: start.get(k) for k in ('url','visible_text','scroll','values')}),
             'operation_template': 'dynamic-bounded-fragment'},
@@ -117,8 +118,8 @@ def compile_goal(capability, spec, version):
         task['candidate_binding'] = deepcopy(validate_observation(capability))
         if spec['end_description']!=fragment_ending(task['candidate_binding']['candidate']):
             raise ValueError('Candidate ending must preserve the original claimed goal without extra business requirements')
-        task['fragment']['ending_policy']='candidate-fragment-ending-1'
-        task['fragment']['navigation_protocol'] = 'candidate-observed-navigation-1'
+        task['fragment']['ending_policy']='fragment-ending'
+        task['fragment']['navigation_protocol'] = 'observed-navigation'
         task['fragment']['candidate_attempt'] = task['candidate_binding']['claim_id']
         validate_task_binding(task, capability)
     from .task_instruction import validate_task_instruction

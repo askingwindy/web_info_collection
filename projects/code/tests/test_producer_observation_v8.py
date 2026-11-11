@@ -45,8 +45,8 @@ class Observation(unittest.TestCase):
   self.observation();home=self.f.site(html='<main><a href="/a">公开示例正文</a></main>')[1]
   self.b.inputs=[];self.b.inspect=[];self.b.plain=False
   with patch.object(p,'homepage_document',side_effect=self.b.get),patch.object(self.f.f.provider.opener,'open',side_effect=self.b.provider):
-   report=self.f.run_new(home,key='v8',target=1,sources=[{**home,'context_only':True}],model_protocol='entry-tools-8')
-   repeat=self.f.run_new(home,key='v8',target=1,sources=[{**home,'context_only':True}],model_protocol='entry-tools-8')
+   report=self.f.run_new(home,key='v8',target=1,sources=[{**home,'context_only':True}])
+   repeat=self.f.run_new(home,key='v8',target=1,sources=[{**home,'context_only':True}])
   self.assertEqual(report['listed_unique_candidates'],1,report);self.assertEqual(repeat['new_dispatches'],{'model':0,'GET':0,'search':0})
   row=self.f.pool.rows(protocols=('webcollect-data-candidate-2',))[0]
   self.assertEqual(set(row['candidate']),{'schema_version','candidate_kind','entry_url','requested_goal'})

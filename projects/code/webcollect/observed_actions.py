@@ -1,6 +1,6 @@
 """Read-only action projection shared by source inventory and workflow compiler."""
 
-VERSION = 'observed-native-actions-1'
+VERSION = 'observed-native-actions'
 # This is the subset emitted by the semantic compiler and accepted by the
 # existing executor. Select's argument is an observed, unique visible label.
 EXECUTABLE = frozenset({'click', 'hotkey', 'type', 'select'})

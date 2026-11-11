@@ -136,8 +136,7 @@ class Continuation(unittest.TestCase):
         envelope={'request_id':'good','tool_call_id':'tc','name':'submit_candidates',
                   'arguments':{'candidates':[{'source_index':0}]},'assistant_message':{'tool_calls':[]}}
         kwargs=dict(pool_path=scope['pool'],ledger_path=scope['producer_db'],history_set=scope['history_set'],
-                    queries=['first','second'],target=1,batch_size=1,
-                    model_protocol='entry-tools-2',batch_key='independent')
+                    queries=['first','second'],target=1,batch_size=1,batch_key='independent')
         config=load_json(scope['producer_config'])
         with patch('site_planner.candidate_discovery.glm_search',side_effect=search) as queries, \
              patch('site_planner.candidate_discovery.model_tool_decision',side_effect=[invalid,('good-job',envelope)]) as model, \
@@ -185,8 +184,7 @@ class Continuation(unittest.TestCase):
         with patch('site_planner.candidate_discovery.glm_search',side_effect=search), \
              patch('site_planner.candidate_discovery.time.sleep') as pause:
             result=produce_entries(cfg,pool_path=scope['pool'],ledger_path=scope['producer_db'],history_set=scope['history_set'],
-                queries=['first','second'],target=1,batch_size=1,max_batches=1,
-                model_protocol='entry-tools-2',batch_key='rate')
+                queries=['first','second'],target=1,batch_size=1,max_batches=1,batch_key='rate')
         self.assertEqual(calls,['first','second'])
         self.assertGreater(pause.call_args.args[0],119)
         self.assertEqual({r['state']:r['count'] for r in result['search_usage']},{'unknown':1,'succeeded':1})

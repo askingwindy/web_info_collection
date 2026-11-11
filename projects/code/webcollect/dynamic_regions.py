@@ -10,15 +10,15 @@ import math
 import re
 from PIL import Image, ImageChops, ImageDraw
 
-VERSION='webcollect-dynamic-regions-1'
-STABILITY='webcollect-dynamic-region-stability-2'
-STABILITY_V1='webcollect-dynamic-region-stability-1'
-DYNAMIC_STABILITY_RULES=(STABILITY_V1,STABILITY)
+from .plan_protocol import DYNAMIC_REGIONS_PROTOCOL, DYNAMIC_REGION_STABILITY
+VERSION=DYNAMIC_REGIONS_PROTOCOL
+STABILITY=DYNAMIC_REGION_STABILITY
+DYNAMIC_STABILITY_RULES=(STABILITY,)
 # Bounded combobox suggestion popup: exempted only with its binding proof that
 # a real focused search input of this same state owns the popup. The category
 # is not derivable from tag/attributes alone, so regions() re-binds it here.
 SUGGESTION_CATEGORY='search_suggestions'
-SUGGESTION_VERSION='webcollect-search-suggestions-1'
+SUGGESTION_VERSION='search-suggestions'
 # A frame-pair may carry animated paint that no DOM region classifies (the
 # 2026-11-06 experiment lost 18 pages to a ~300x108 animated block with no
 # element, text or control). Such change is tolerated only when its bounding
@@ -197,7 +197,7 @@ def _unclassified_dynamic_paint(a,b,outside,width,height):
             if element.get('text') or element.get('clickable') or element.get('inputable') or element.get('element_type')=='window':
                 content.append(element.get('bbox'))
     if any(_boxes_overlap(box,row) for row in content if row):return None
-    return {'schema_version':'webcollect-unclassified-dynamic-paint-1','bbox':list(box),
+    return {'schema_version':'unclassified-dynamic-paint','bbox':list(box),
         'changed_pixels':changed,
         'content_boxes_checked':len(content),
         'relation':'coherent animated paint outside every classified region and disjoint from all visible text/control/protected boxes',
@@ -206,7 +206,6 @@ def _unclassified_dynamic_paint(a,b,outside,width,height):
 
 def pair(before,after,png_before,png_after, *, action_scope=None, rule_version=STABILITY):
     from .browser import fingerprint,_loaded,stability_pair
-    legacy = rule_version==STABILITY_V1
     keep=protected_ids(before,scope_ids(action_scope))|protected_ids(after,scope_ids(action_scope))
     from .action_stability import validate_dynamic_scope
     scope_error=None
@@ -247,16 +246,17 @@ def pair(before,after,png_before,png_after, *, action_scope=None, rule_version=S
         # Existing border/geometry/repaint proofs govern all remaining pixels.
         compared=Image.composite(left.convert('RGBA'),right.convert('RGBA'),mask)
         buffer=BytesIO();compared.save(buffer,format='PNG');comparison_png=buffer.getvalue()
-        base=stability_pair(a,b,png_before,comparison_png,rule_version='webcollect-related-stability-6')
+        from .plan_protocol import BROWSER_STABILITY_RULE
+        base=stability_pair(a,b,png_before,comparison_png,rule_version=BROWSER_STABILITY_RULE)
         pixels={'changed_pixels':changed.histogram()[255],'outside_dynamic_pixels':outside.histogram()[255],'outside_allowed_pixels':base['pixel_change']['outside_allowed_pixels'],
             'bbox':list(changed.getbbox()) if changed.getbbox() else None,'difference_mask_sha256':hashlib.sha256(changed.tobytes()).hexdigest()}
     unclassified=None
-    if (not legacy and not base['accepted'] and base['related_dom_stable'] and base['loading_complete']
+    if (not base['accepted'] and base['related_dom_stable'] and base['loading_complete']
             and pixels['outside_dynamic_pixels']>0):
         unclassified=_unclassified_dynamic_paint(a,b,outside,*left.size)
     accepted=bool(enabled(before) and enabled(after) and not scope_error and target_ok
                   and (base['accepted'] or unclassified is not None))
-    return {'schema_version':STABILITY_V1 if legacy else STABILITY,'accepted':accepted,
+    return {'schema_version':STABILITY,'accepted':accepted,
         'full_dom_stable':fingerprint(before)==fingerprint(after),'related_dom_stable':bool(base['related_dom_stable'] and target_ok),'loading_complete':base['loading_complete'],
         'before_fingerprint':fingerprint(before),'after_fingerprint':fingerprint(after),'related_fingerprint':fingerprint(a),
         'png_before_sha256':hashlib.sha256(png_before).hexdigest(),'png_after_sha256':hashlib.sha256(png_after).hexdigest(),
@@ -269,7 +269,7 @@ def pair(before,after,png_before,png_after, *, action_scope=None, rule_version=S
 
 def summary(state):
     accepted={r['element_id'] for r in regions(state)}
-    return {'version':VERSION,'regions':[{'category':r['category'],'element_id':r['element_id'],'bbox':r['bbox'],
+    return {'contract':VERSION,'regions':[{'category':r['category'],'element_id':r['element_id'],'bbox':r['bbox'],
         'selector':r['selector'],'eligible_for_change':r['element_id'] in accepted,'basis':r['attributes'],
         'native_image_paint':r.get('native_image_paint'),'native_paint_bbox':r.get('native_paint_bbox'),
         'raw_bbox':r.get('raw_bbox'),'clip_bbox':r.get('clip_bbox'),'reasons':r['reasons']}

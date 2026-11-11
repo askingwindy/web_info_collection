@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 from playwright.async_api import async_playwright
 from webcollect import browser
-from webcollect.action_stability import VERSION, scope_for
+from webcollect.action_stability import VERSION
 from webcollect.batch_core import load_json
 from webcollect.goal_evidence import search_focus_target
 from webcollect.react_session import ReactSession, build_url_task
-from webcollect.banded_plan import VERSION as PLAN_VERSION
+from webcollect.plan_protocol import PLAN_PROTOCOL as PLAN_VERSION
 
 
 HTML = '''<!doctype html><meta charset="utf-8"><style>
@@ -150,10 +150,9 @@ class FirstFocusBrowser(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.trajectory), 0)
 
     async def test_new_dynamic_capture_allows_notice_for_both_action_protocols(self):
-        from webcollect.action_stability import TYPING_VERSION
         self.fixture_html=HTML.replace('id="q"','id="q" autofocus')
         original=browser.viewport_png
-        for name,protocol in (('v1-typing',VERSION),('v2-typing',TYPING_VERSION)):
+        for name,protocol in (('scoped-typing',VERSION),):
             await self.new_session(name,protocol=protocol)
             count=0
             async def changing(page):
@@ -173,7 +172,6 @@ class FirstFocusBrowser(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.page.locator('#q').input_value(),'月食')
 
     async def test_v2_typing_rejects_lost_focus_value_replacement_and_occlusion(self):
-        from webcollect.action_stability import TYPING_VERSION
         self.fixture_html=HTML.replace('id="q"','id="q" autofocus')
         original=browser.viewport_png
         for name,script in (
@@ -183,7 +181,7 @@ class FirstFocusBrowser(unittest.IsolatedAsyncioTestCase):
             ('covered',"let d=document.createElement('div');d.style='position:absolute;left:80px;top:190px;width:330px;height:50px;background:red;z-index:999';document.body.append(d)"),
         ):
             with self.subTest(name=name):
-                await self.new_session(name,protocol=TYPING_VERSION)
+                await self.new_session(name,protocol=VERSION)
                 injected=False
                 async def changed(page):
                     nonlocal injected
@@ -198,9 +196,8 @@ class FirstFocusBrowser(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.session.actual_dispatches,0)
 
     async def test_v2_input_combobox_existing_bottom_separator_retains_readable_keyboard_target(self):
-        from webcollect.action_stability import TYPING_VERSION
         self.fixture_html=HTML.replace('id="q"','id="q" autofocus')
-        await self.new_session('input-combobox',protocol=TYPING_VERSION)
+        await self.new_session('input-combobox',protocol=VERSION)
         await self.page.evaluate("""() => {
           const q=document.querySelector('#q');q.setAttribute('role','combobox');q.setAttribute('aria-expanded','true');q.style.height='42.25px';
           const r=q.getBoundingClientRect(),d=document.createElement('div');

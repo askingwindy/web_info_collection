@@ -21,10 +21,11 @@ from .planning import canonical, object_sha256, timestamp, verify_evidence, veri
 from .storage import allocate_in_transaction, ensure_registry_schema
 
 
+from .plan_protocol import ENDING_POLICY, TRUSTED_PREFIX_POLICY
+
+
 def continuous_task(task):
-    return task.get('fragment', {}).get('ending_policy') in (
-        'webcollect-continuous-attempt-ending-4', 'webcollect-five-ten-effective-ending-5',
-        'webcollect-five-eight-complete-ending-6')
+    return task.get('fragment', {}).get('ending_policy') == ENDING_POLICY
 
 
 DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_workers': 1,
@@ -288,7 +289,7 @@ class RuntimeStore:
             return {key: policy[key] for key in ('max_workers', 'max_domain_workers')}
         decision = json.loads(row[0])
         keys = ('max_workers', 'max_domain_workers')
-        if (decision.get('schema_version') != 'webcollect-runtime-concurrency-1'
+        if (decision.get('schema_version') not in ('runtime-concurrency', 'webcollect-runtime-concurrency-1')
                 or decision.get('registry') != str(self.registry)
                 or decision.get('campaign_id') != policy['campaign_id']
                 or any(key not in decision or (decision[key] is not None
@@ -311,7 +312,7 @@ class RuntimeStore:
                 con.execute("CREATE INDEX IF NOT EXISTS m4_concurrency_campaign "
                             "ON m4_events(campaign_id,event_id) WHERE event_type='consumer_concurrency'")
                 self._event(con, 'consumer_concurrency', timestamp(None), {
-                    'schema_version': 'webcollect-runtime-concurrency-1',
+                    'schema_version': 'runtime-concurrency',
                     'registry': str(self.registry), 'campaign_id': self._scope(con)['campaign_id'],
                     **settings, 'before': before, 'reason': reason})
         return settings
@@ -440,7 +441,7 @@ class RuntimeStore:
             con.execute('INSERT INTO m4_plans VALUES(?,?,?,?,?)', (self.scope_id, plan_sha, canonical(plan), canonical(publication), current))
             bindings = {(row['task_id'], row['task_version']): row for row in publication['tasks']}
             for ordinal, task in enumerate(plan['tasks']):
-                key = object_sha256([policy['campaign_id'], task['task_id'], task['task_version']])
+                key = object_sha256([policy['campaign_id'], task['task_id']])
                 old = con.execute('SELECT scope_id,status FROM m4_tasks WHERE task_key=?', (key,)).fetchone()
                 if old:
                     raise ValueError('同task/version已登记；跨scope不重跑，失败请在原scope恢复')
@@ -699,7 +700,7 @@ class RuntimeStore:
         failures = [json.loads(line) for line in (root/'derivations.jsonl').read_text().splitlines()]
         if not any(r.get('status') == 'processing_failed' and r.get('derivation', 0) < saved['derivation']['version'] for r in failures):
             raise ValueError('Original failed derivation must remain in its append-only ledger')
-        return {'schema_version':'webcollect-offline-derivation-recovery-1',
+        return {'schema_version':'offline-derivation-recovery',
                 'original_attempt':dict(row), 'original_failure':recovery['failure'],
                 'raw_receipt':recovery['raw_receipt'], 'closed_process':recovery['process_exit'],
                 'successor_save':receipts[0], 'settled_requests':requests,
@@ -765,7 +766,7 @@ class RuntimeStore:
         prefix = saved.get('raw_execution', {}).get('trusted_prefix')
         end_step = (prefix or {}).get('source_interval', {}).get('end_step')
         if (saved.get('attempt_id') != row['attempt_id'] or saved.get('sample_id') != row['sample_id']
-                or not prefix or prefix.get('protocol') != 'webcollect-trusted-prefix-2'
+                or not prefix or prefix.get('protocol') != TRUSTED_PREFIX_POLICY
                 or prefix.get('source_attempt_id') != row['attempt_id']
                 or type(end_step) is not int or not 1 <= end_step <= len(record['trajectory'])
                 or prefix.get('original_goal_completed') is not False
@@ -787,7 +788,7 @@ class RuntimeStore:
         saved_rows = [r for r in derivations if r.get('status') == 'derived_saved']
         if not saved_rows or any(r.get('effective_steps') != end_step for r in saved_rows):
             raise ValueError('Derivation ledger must hold exactly this interval as the only effective delivery')
-        return {'schema_version':'webcollect-historical-prefix-derivation-1',
+        return {'schema_version':'historical-prefix-derivation',
                 'original_attempt':dict(row), 'original_failure':recovery['failure'],
                 'raw_receipt':recovery['raw_receipt'],
                 'interval':prefix['source_interval'], 'rule':prefix['protocol'],
@@ -908,7 +909,7 @@ class RuntimeStore:
         re-derived through the normal offline derivation-recovery entry.
         """
         from .batch_core import load_json, file_sha
-        from .postprocess import session_record, effective_trajectory, VERSION as DERIVATION_VERSION, _append_derivation
+        from .postprocess import session_record, effective_trajectory, _append_derivation
         from .agent_controller import exclusive
         from .direct_article import verify_record
         from .candidate_contract import validate_task_binding
@@ -971,7 +972,7 @@ class RuntimeStore:
         if any(r.get('status') == 'derived_saved' for r in prior):
             raise ValueError('A sealed delivery already exists; use its own recovery path')
         version = len(prior) + 1
-        receipt = {'schema_version': DERIVATION_VERSION, 'derivation': version, 'status': 'processing_failed',
+        receipt = {'derivation': version, 'status': 'processing_failed',
                    'error_type': str(chain.get('type') or 'ValueError'), 'error': str(primary['error']),
                    'stage': 'seal', 'effective_steps': len(effective),
                    'browser_calls': 0, 'model_calls': 0,
@@ -980,7 +981,7 @@ class RuntimeStore:
         derived_failed = evidence_root / f'derived-failed-{version:02}.json'
         receipt_ref = exclusive(derived_failed, receipt)
         settlement = evidence_root / 'derivation-failure.json'
-        settlement_ref = exclusive(settlement, {'schema_version': 'webcollect-crashed-derivation-settlement-1',
+        settlement_ref = exclusive(settlement, {'schema_version': 'crashed-derivation-settlement',
             'attempt_id': attempt_id, 'failure_class': 'program', 'error': root_cause,
             'settled_root_cause': root_cause, 'cleanup_error': cleanup_error,
             'original_failure': failure,
@@ -1355,7 +1356,7 @@ class RuntimeStore:
                 if path.is_file():
                     sources.append({'role': roles.get(path.relative_to(output).as_posix(), 'capture_evidence'),
                                     'path': str(path), 'sha256': sha(path), 'size_bytes': path.stat().st_size})
-            receipt = {'schema_version': 'webcollect-runtime-scope-closure-1', 'closure_id': str(uuid.uuid4()),
+            receipt = {'schema_version': 'runtime-scope-closure', 'closure_id': str(uuid.uuid4()),
                 'scope_id': self.scope_id, 'campaign_id': scope['campaign_id'], 'batch_id': manifest['batch_id'],
                 'closed_at': datetime.fromtimestamp(timestamp(now), timezone.utc).isoformat(), 'reason': reason, 'prior_scope_status': scope['state'],
                 'final_scope_status': 'closed_replanned', 'source_files': sources, 'evidence_refs': evidence,
@@ -1689,7 +1690,7 @@ class RuntimeStore:
         for row in rows:
             verify_evidence([json.loads(row['report_json'])])
         accepted = [r for r in rows if r['quality_status']=='ACCEPTED_BY_BATCH_POLICY' and r['sample_id'] not in set(baseline_ids)]
-        return {'policy_version':'qc-sampling-v1-20261030','actual_attempts':attempts,'saved_fragments':saved,
+        return {'policy_version':'qc-sampling','actual_attempts':attempts,'saved_fragments':saved,
             'accepted_ai_pass':sum(r['ai_status']=='PASS' for r in accepted),
             'accepted_not_selected':sum(r['ai_status']=='NOT_SELECTED' for r in accepted),
             'accepted_count':len(accepted),'pending_count':saved-sum(r['quality_status']!='PENDING' for r in rows),

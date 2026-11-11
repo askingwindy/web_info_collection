@@ -381,7 +381,8 @@ def assert_current_evidence(scope, value):
             for entry in item:
                 walk(entry)
         elif isinstance(item, dict):
-            if item.get('schema_version') in ('candidate-research-replay-2', 'candidate-research-replay-3'):
+            if item.get('schema_version') in ('candidate-research-replay-2', 'candidate-research-replay-3',
+                                              'candidate-research-replay'):
                 from .candidate_contract import research_v2_inputs
                 authorization = research_v2_inputs(item)
                 _require(_path(authorization['registry']) == _path(scope['registry']),

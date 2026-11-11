@@ -2,7 +2,6 @@
 import hashlib,json,re
 from pathlib import Path
 from collections import Counter
-from . import __version__
 from .format_checks import run as format_run,sample_check,catalog,observations_from_examples,delivered_call_matches_capture
 from .duplicates import analyze, analysis_error
 from .checksums import verify_manifest
@@ -158,12 +157,12 @@ def capture_integrity(sample,a,evidence_dir=_NATIVE_EVIDENCE):
 
 def qc_rule(rule_id,status,location,sources,reason,suggestion,**extras):return {'rule_id':rule_id,'status':status,'location':location,'sources':sources,'reason':reason,'fix_suggestion':suggestion,**extras}
 
-def inspect(config=None,dataset=None,reviews=None,ai_evidence=None,samples_override=None,profile=None,evidence=None,inspection_stage='final',review_migration=None,delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
+def inspect(config=None,dataset=None,reviews=None,ai_evidence=None,samples_override=None,profile=None,evidence=None,inspection_stage='final',delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
     """Inspect delivered files; explicit pilot profiles retain the legacy audit."""
     from .profiles import DEFAULT_DELIVERY_PROFILE,load as profile_load
     selected=profile_load(profile or DEFAULT_DELIVERY_PROFILE) if profile or config is None else None
     if selected and selected['configuration']['scope']=='delivery':
-        return _inspect_delivery(dataset,selected,reviews,config,evidence,samples_override,ai_evidence,inspection_stage,review_migration,delivery_sampling_plan,human_reviews,ai_failures)
+        return _inspect_delivery(dataset,selected,reviews,config,evidence,samples_override,ai_evidence,inspection_stage,delivery_sampling_plan,human_reviews,ai_failures)
     if delivery_sampling_plan or human_reviews or ai_failures:raise ValueError('Delivery sampling is only available under the explicit delivery contract')
     if config is None:
         raise ValueError('A legacy pilot audit needs its explicit --baseline')
@@ -285,7 +284,7 @@ def _inspect_legacy(config,dataset,reviews=None,ai_evidence=None,samples_overrid
     status=aggregate([c['status'] for c in dataset_checks]+[s['status'] for s in outputs]+(['FAIL'] if base['integrity']=='FAIL' or review_errors or partial.get('errors') or f['package_errors'] else []))
     root_checksum=verify_manifest(dataset) if (dataset/'SHA256SUMS').exists() else {'pass':None,'status':'REVIEW_REQUIRED','reason':'No root manifest; per-batch checksum checks still apply.'}
     if root_checksum.get('pass') is False:status='FAIL'
-    report={'program':'quality-inspector','version':__version__,'status':status,'customer_actual_program_executed':False,'customer_actual_acceptance':'UNKNOWN','baseline':base,'dataset':str(dataset),'layout':layout.kind,'external_evidence':external,'sample_count':len(outputs),'sample_status_counts':dict(Counter(s['status'] for s in outputs)),'samples':outputs,'dataset_checks':dataset_checks,'local_sample_status':aggregate([s['status'] for s in outputs]),'rules':catalog()+[{'id':'BASELINE_SHAPE','certainty':'observed_and_documented','rule':'Reference field/type compatibility; no constants inferred from isolated values','sources':['config customer-samples.json, original two samples']},{'id':'DUPLICATE_SEQUENCE','certainty':'confirmed','rule':'Exact full action/control/page tuple sequence','sources':['request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md:101']},{'id':'NEAR_DUPLICATES','certainty':'proxy_requires_review','rule':'Execute configured dHash/SimHash proxies; client equivalence unknown','sources':['request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md:102-103']},{'id':'CAPTURE_INTEGRITY','certainty':'deterministic_evidence','rule':'Recorded screenshot hashes and executed actions agree; absent raw evidence requires review','sources':['supplied capture archives; archived requirement §1']},{'id':'FINAL_MACHINE_EVIDENCE','certainty':'recorded_assertions_only','rule':'Explicit failure is FAIL, absent evidence REVIEW_REQUIRED; not visual approval','sources':['final image, complete, supplied assertions; archived requirement §6']}]+[{'id':'REVIEW_'+name.upper(),'certainty':'evidence_bound_review','rule':name,'sources':['original sample evidence, archived requirement §1/4/5/6/7']} for name in SEMANTIC],'duplicates':dup,'format_layer_summary':{k:v for k,v in f.items() if k not in ['samples','batches','existing_internal_quality_layer']},'batch_results':f['batches'],'root_checksum':root_checksum,'review_import':{'accepted_count':len(accepted),'invalid_records':review_errors,'source':str(reviews) if reviews else None},'partial_ai_artifact':{k:v for k,v in partial.items() if k!='samples'},'baseline_compliance_is_not_customer_program_pass':True}
+    report={'program':'quality-inspector','status':status,'customer_actual_program_executed':False,'customer_actual_acceptance':'UNKNOWN','baseline':base,'dataset':str(dataset),'layout':layout.kind,'external_evidence':external,'sample_count':len(outputs),'sample_status_counts':dict(Counter(s['status'] for s in outputs)),'samples':outputs,'dataset_checks':dataset_checks,'local_sample_status':aggregate([s['status'] for s in outputs]),'rules':catalog()+[{'id':'BASELINE_SHAPE','certainty':'observed_and_documented','rule':'Reference field/type compatibility; no constants inferred from isolated values','sources':['config customer-samples.json, original two samples']},{'id':'DUPLICATE_SEQUENCE','certainty':'confirmed','rule':'Exact full action/control/page tuple sequence','sources':['request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md:101']},{'id':'NEAR_DUPLICATES','certainty':'proxy_requires_review','rule':'Execute configured dHash/SimHash proxies; client equivalence unknown','sources':['request/web操作采集需求/需求书-Web浏览器自动化操作轨迹数据集.md:102-103']},{'id':'CAPTURE_INTEGRITY','certainty':'deterministic_evidence','rule':'Recorded screenshot hashes and executed actions agree; absent raw evidence requires review','sources':['supplied capture archives; archived requirement §1']},{'id':'FINAL_MACHINE_EVIDENCE','certainty':'recorded_assertions_only','rule':'Explicit failure is FAIL, absent evidence REVIEW_REQUIRED; not visual approval','sources':['final image, complete, supplied assertions; archived requirement §6']}]+[{'id':'REVIEW_'+name.upper(),'certainty':'evidence_bound_review','rule':name,'sources':['original sample evidence, archived requirement §1/4/5/6/7']} for name in SEMANTIC],'duplicates':dup,'format_layer_summary':{k:v for k,v in f.items() if k not in ['samples','batches','existing_internal_quality_layer']},'batch_results':f['batches'],'root_checksum':root_checksum,'review_import':{'accepted_count':len(accepted),'invalid_records':review_errors,'source':str(reviews) if reviews else None},'partial_ai_artifact':{k:v for k,v in partial.items() if k!='samples'},'baseline_compliance_is_not_customer_program_pass':True}
     report['rules'].append({
         'id':'PREPARATION_INTEGRITY','certainty':'new_production_evidence_contract',
         'rule':'For declared content-preparation-v1, missing original first-frame, decision or actual-action evidence is FAIL. Legacy NOT_APPLICABLE maps to compatibility PASS without claiming new-policy verification. Mechanical evidence consistency is not visual approval.',
@@ -367,7 +366,7 @@ def _delivery_statistics(dataset,outputs,profile):
         listing=read(dataset/'site-list.json');declared={item['site_id']:item for item in listing['sites']}
         assignments={item['sample_id']:item['site_id'] for item in listing['samples']}
         ids={row['sample_id'] for row in outputs}
-        if listing.get('schema_version')!='webcollect-site-list-1' or len(declared)!=len(listing['sites']) or len(assignments)!=len(listing['samples']) or set(assignments)!=ids:
+        if listing.get('schema_version') not in ('site-list','webcollect-site-list-1') or len(declared)!=len(listing['sites']) or len(assignments)!=len(listing['samples']) or set(assignments)!=ids:
             errors.append('Site list must cover the delivered samples exactly once.')
         from urllib.parse import urlsplit
         uri_owners={}
@@ -544,7 +543,7 @@ def _verify_delivery_qc_report(dataset,report):
         'Generate the complete existing qc_report.md from the payload QC report, seal once, and inspect final read-only.',scope='batch',evidence=errors)
 
 
-def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,samples_override=None,ai_evidence=None,inspection_stage='final',review_migration=None,delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
+def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,samples_override=None,ai_evidence=None,inspection_stage='final',delivery_sampling_plan=None,human_reviews=None,ai_failures=None):
     """Contract checks use only delivered files plus installed rule resources.
 
     Historical baselines/raw logs are optional engineering diagnostics. Their
@@ -566,7 +565,6 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
           'samples':[],'known_limits':[],'note':'No external reference sample, baseline or raw log is required.'}
     semantic_sampling=None
     if delivery_sampling_plan:
-        if review_migration:raise ValueError('Frozen delivery sampling requires current-version reviews, not legacy migration')
         from .delivery_sampling import evaluate as evaluate_sampling
         human_paths=[human_reviews] if isinstance(human_reviews,(str,Path)) else list(human_reviews or [])
         failure_paths=[ai_failures] if isinstance(ai_failures,(str,Path)) else list(ai_failures or [])
@@ -575,7 +573,7 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         review_errors=[];review_migrations=[]
     else:
         if human_reviews or ai_failures:raise ValueError('Separate human/failure inputs require an explicit delivery sampling plan')
-        accepted,review_errors,review_migrations=delivery_review_intake(reviews,formats['samples'],fingerprint,review_migration)
+        accepted,review_errors,review_migrations=delivery_review_intake(reviews,formats['samples'],fingerprint)
     try:duplicates=analyze(dataset)
     except (OSError,ValueError,TypeError,KeyError,IndexError) as error:
         duplicates=analysis_error(error,sample_count=len(formats['samples']),dataset_label=dataset)
@@ -680,12 +678,12 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
             'Invalid package or review bindings.','Correct the indicated input without suppressing failures.',scope='batch',
             evidence=formats['package_errors']+review_errors+initial_errors))
     sample_status=aggregate(row['status'] for row in outputs);batch_status=aggregate(row['status'] for row in batch)
-    report={'program':'quality-inspector','version':__version__,'scope':'delivery','dataset':str(dataset),'layout':layout.kind,
+    report={'program':'quality-inspector','scope':'delivery','dataset':str(dataset),'layout':layout.kind,
         'baseline':base,'local_profile':profile,'requirements_baseline':{'configuration':contract,'sha256':fingerprint},
         'sample_count':len(outputs),'samples':outputs,'statistics':stats,'duplicates':duplicates,'root_checksum':checksum,
         'dataset_checks':batch,'batch_results':formats['batches'],'format_layer_summary':{key:value for key,value in formats.items() if key not in ('samples','batches','existing_internal_quality_layer')},
         'review_import':{'accepted_count':len(accepted),'invalid_records':review_errors,'source':str(reviews) if reviews else None,
-            'migrated_records':review_migrations,'identity_authenticated':False,'actual_reading_authenticated':False},
+            'identity_authenticated':False,'actual_reading_authenticated':False},
         'rules':catalog()+[{'id':'REVIEW_'+name.upper(),'certainty':'evidence_bound_review','rule':name,'sources':['Delivered sample evidence']} for name in SEMANTIC]
             +([{'id':'SEMANTIC_SAMPLING_ADMISSION','certainty':'explicit_policy_admission','rule':'Frozen sampling selection and actual human escalation; NOT_SELECTED is not semantic PASS','sources':['2026-10-27 sampling clarification']}] if semantic_sampling else []),
         'package_files_sha256':input_files,'input_files_sha256':input_files,'partial_ai_artifact':{'status':'not_used_for_whole_trajectory_acceptance'},
@@ -697,8 +695,6 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         'acceptance_scopes':{'sample':{'status':sample_status,'sample_count':len(outputs)},'batch':{'status':batch_status,'checks':batch},
             'pilot':{'status':'NOT_APPLICABLE','checks':[],'reason':'Delivery does not apply a pilot minimum.'},
             'corpus':{'status':'UNKNOWN'},'external':{'status':'UNKNOWN'}}}
-    from .semantic import rule_ids
-    report['semantic_rule_ids']=rule_ids()
     payload_files={key:value for key,value in input_files.items() if key not in ('qc_report.md','SHA256SUMS')}
     report['payload_files_sha256']=payload_files
     report['payload_sha256']=hashlib.sha256(json.dumps(payload_files,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()

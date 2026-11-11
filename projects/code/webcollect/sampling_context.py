@@ -6,7 +6,8 @@ from pathlib import Path
 from .fragment_workflow import is_fragment
 from .planning import object_sha256
 
-POLICY = 'qc-sampling-v1-20261030'
+POLICY = 'qc-sampling'
+LEGACY_POLICY = 'qc-sampling-v1-20261030'
 
 
 def ensure_schema(con):
@@ -44,11 +45,15 @@ def register_capture(con, row):
 def group_key(task):
     if not (is_fragment(task) or _is_react(task)):
         raise ValueError('Sampled production policy requires an explicitly versioned fragment/react boundary')
-    if not _is_react(task) and task['fragment'].get('quality_policy_version') != POLICY:
+    # The group salt stays the task's own persisted sampling policy, so frozen
+    # captures keep their original group identity across the policy rename.
+    policy = task['fragment'].get('quality_policy_version')
+    if not _is_react(task) and policy not in (POLICY, LEGACY_POLICY):
         raise ValueError('New sampled production policy requires an explicitly versioned fragment')
     from .application_identity import host_key
     app = task.get('pilot_identity', {}).get('application', {}).get('canonical_uri', task['site_uri'])
-    return object_sha256([host_key(app), task['fragment']['operation_template'], task['fragment']['policy_version'], POLICY])
+    return object_sha256([host_key(app), task['fragment']['operation_template'], task['fragment']['policy_version'],
+                          policy if isinstance(policy, str) and policy else LEGACY_POLICY])
 
 
 def production_context(scope, sample_ids):
@@ -85,7 +90,10 @@ def production_context(scope, sample_ids):
 
 def verify_context(context):
     actual = production_context(context['source'], list(context['groups']))
-    if actual != context:
+    # A frozen sampling context may predate the policy rename; its group
+    # identities were salted with the policy it declares.
+    if (context.get('version') not in (POLICY, LEGACY_POLICY)
+            or actual != {**context, 'version': actual['version']}):
         raise ValueError('Original sampling groups/ordinals/tasks changed')
 
 

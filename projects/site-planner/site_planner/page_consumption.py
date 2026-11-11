@@ -9,12 +9,17 @@ from webcollect.planning import canonical, object_sha256, verify_evidence
 from .candidate_pool import entry_identity
 
 LEGACY_VERSION = 'producer-image-only-entry-1'
-VERSION = 'producer-first-frame-image-2'
-OBSERVATION_VERSION = 'producer-image-viewport-observation-2'
+PREVIOUS_VERSION = 'producer-first-frame-image-2'
+VERSION = 'producer-first-frame-image'
+PREVIOUS_OBSERVATION_VERSION = 'producer-image-viewport-observation-2'
+OBSERVATION_VERSION = 'producer-image-viewport-observation'
 RUN = 'producer-page-consumption-1'
 SCREEN_RUN = 'producer-image-screen-1'
-VISIBLE_FRAME_VERSION = 'producer-visible-first-frame-1'
-LOGIN_REQUIRED_VERSION = 'producer-login-page-exclusion-2'
+VISIBLE_FRAME_VERSION = 'producer-visible-first-frame'
+LOGIN_REQUIRED_VERSION = 'producer-login-page-exclusion'
+# Old probes and receipts were stamped with the generational values; reads accept them.
+ACCEPTED_PROBE_VERSIONS = (LEGACY_VERSION, PREVIOUS_VERSION, VERSION)
+ACCEPTED_OBSERVATION_VERSIONS = (LEGACY_VERSION, PREVIOUS_OBSERVATION_VERSION, OBSERVATION_VERSION)
 
 
 def required_login_exclusion(result):
@@ -63,7 +68,7 @@ def lookup(pool, uri, con=None):
     row=con.execute('SELECT value FROM checkpoints WHERE run_id=? AND key=?',(RUN,key(uri))).fetchone()
     if not row:return None
     record=json.loads(row[0]);verify_evidence(record['references'])
-    if record.get('policy') not in (LEGACY_VERSION,VERSION) or record.get('status')!='NO_CONSUME' or entry_identity(uri) not in record['entry_identities']:
+    if record.get('policy') not in ACCEPTED_PROBE_VERSIONS or record.get('status')!='NO_CONSUME' or entry_identity(uri) not in record['entry_identities']:
         raise ValueError('Invalid original producer consumption decision')
     return record
 
@@ -79,7 +84,7 @@ def assess(view):
     """Use the consumer's >=95% geometry rule without semantic exceptions."""
     from webcollect.consumer_page_policy import full_image
     out={'policy':VERSION,'status':'UNKNOWN','reason':'image_coverage_not_established'}
-    if view.get('schema_version') not in (LEGACY_VERSION,OBSERVATION_VERSION):
+    if view.get('schema_version') not in ACCEPTED_OBSERVATION_VERSIONS:
         return {**out,'reason':'incomplete_rendered_inventory'}
     image=full_image(view)
     if not image:return {**out,'reason':'viewport_not_image_filled'}
@@ -92,7 +97,7 @@ def assess(view):
 
 def register(pool, ledger, result):
     """Only a completed producer probe can create an immutable page exclusion."""
-    if result.get('image_policy') not in (LEGACY_VERSION,VERSION):raise ValueError('Versioned producer image probe required')
+    if result.get('image_policy') not in ACCEPTED_PROBE_VERSIONS:raise ValueError('Versioned producer image probe required')
     refs=[result['observation'],result['image']];verify_evidence(refs)
     observation=load_json(result['observation']['path']);job=ledger.get(result['job_id'])
     if (job['payload'].get('image_policy')!=result['image_policy']

@@ -42,7 +42,7 @@ class PipelineOverlap(unittest.TestCase):
 
     def run_overlap(self, home, key='ov', **kwargs):
         args = dict(key=key, target=4, batch_size=2, max_batches=2, producer_pipeline='overlap-1',
-                    sources=[{**home, 'context_only': True}], model_protocol='entry-tools-13')
+                    sources=[{**home, 'context_only': True}])
         args.update(kwargs)
         return self.f.f.f.run_new(home, **args)
 
@@ -217,7 +217,7 @@ class PipelineOverlap(unittest.TestCase):
         def dispatcher(request, timeout):
             return current['provider'](request, timeout)
 
-        common = dict(target=4, batch_size=2, max_batches=2, model_protocol='entry-tools-13')
+        common = dict(target=4, batch_size=2, max_batches=2)
 
         def settle_with(fixture):
             def screen(pool, ledger, links, root):

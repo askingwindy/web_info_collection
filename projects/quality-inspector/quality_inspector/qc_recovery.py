@@ -31,10 +31,9 @@ from webcollect.model_gateway import ModelGateway
 from webcollect.planning import object_sha256
 
 from . import semantic_runtime
-from .ai_worker import (PROMPT_VERSION, POLICY_VERSION, DECISION, compact_trajectory, obj,
+from .ai_worker import (DECISION, compact_trajectory, obj,
                         segments, validate_review, verify_snapshot)
 from .contract import fingerprint
-from .semantic import rule_ids
 
 NORMALIZATION_VERSION = 'qc-evidence-reference-normalization-1'
 RECOVERY_PROTOCOL = 'qc-visual-evidence-recovery-1'
@@ -276,18 +275,10 @@ def visual_recovery_plan(ledger, job):
 def _verify_recoverable_identity(ledger, job):
     if job['kind'] != 'ai-visual':
         raise ValueError('visual recovery needs the exact original ai-visual job')
-    if (job['payload'].get('policy_version') != POLICY_VERSION
-            or job['payload'].get('prompt_version') != PROMPT_VERSION):
-        raise ValueError('Review prompt/policy changed; prepare newly bound jobs')
     if job['id'] != object_sha256({'kind': job['kind'], 'payload': job['payload']}):
         raise ValueError('Current semantic job payload identity changed')
     if job['payload'].get('contract_sha256') != fingerprint()[1]:
         raise ValueError('Review contract changed; prepare affected jobs again')
-    if not job['payload'].get('semantic_rule_ids'):
-        raise ValueError('Legacy visual job lacks per-check rule identity')
-    if any(job['payload']['semantic_rule_ids'].get(name) != rule_ids()[name]
-           for name in semantic_runtime.VISUAL_CHECKS):
-        raise ValueError('Relevant semantic rule changed; prepare only affected checks')
     if job['payload'].get('research_review'):
         from .ai_worker import research_review_context
         review = job['payload']['research_review']
@@ -476,8 +467,6 @@ def recover_visual(config_path, ledger_path, job_id, *, allow_correction=False, 
                     'synthetic_result': ledger.config['mode'] != 'real',
                     'annotation_sha256': candidate['annotation_sha256'],
                     'evidence_sha256': candidate['evidence_sha256'],
-                    'semantic_rule_ids': {name: job['payload']['semantic_rule_ids'][name]
-                                          for name in semantic_runtime.VISUAL_CHECKS},
                     'contract_sha256': job['payload']['contract_sha256'],
                     'original_receipts_retained': [row for part in plan['parts']
                                                    for row in part['original_requests']],

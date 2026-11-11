@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from site_planner.candidate_pool import CandidatePool, VERSION
+from site_planner.candidate_pool import CandidatePool
+VERSION = 'webcollect-data-candidate-1'  # historical v1 body, kept only as fixture data
 from site_planner.site_pool import SitePool
 from site_planner.discovery_tools import reference
 from webcollect.batch_core import save_json

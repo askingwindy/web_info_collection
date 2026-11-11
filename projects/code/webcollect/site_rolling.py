@@ -5,7 +5,7 @@ from pathlib import Path
 from .batch_core import load_json, save_json, file_sha, BatchLedger
 from .planning import object_sha256, verify_evidence
 
-VERSION = 'site-rolling-fragments-1'
+VERSION = 'site-rolling-fragments'
 
 
 def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, history_set=None,
@@ -24,12 +24,12 @@ def plan_round(ledger, catalog, site_uri, output, *, history_registry=None, hist
         pages = {}
         for number, record in enumerate(records):
             one = output/f'identity-catalog-{number}.json'
-            save_json(one, {'schema_version':'webcollect-capability-catalog-1',
+            save_json(one, {'schema_version':'capability-catalog',
                            'mode':ledger.config['mode'],'records':[record]})
             result = identity(one, output/f'identity-{number}.json', registry=history_registry)
             pages.update(result['pages'])
         page_identities = output/'page-identities.json'
-        save_json(page_identities, {'schema_version':'webcollect-page-identities-1','pages':pages})
+        save_json(page_identities, {'schema_version':'page-identities','pages':pages})
     with ledger.transaction() as con:
         con.execute('CREATE TABLE IF NOT EXISTS site_planning_rounds ('
             'site TEXT NOT NULL, round INTEGER NOT NULL, output TEXT UNIQUE NOT NULL, '

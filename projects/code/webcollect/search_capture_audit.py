@@ -12,7 +12,7 @@ from urllib.parse import urljoin,urlsplit
 from .batch_core import load_json,file_sha
 from .planning import verify_evidence,object_sha256
 
-VERSION='webcollect-readonly-search-capture-audit-1'
+VERSION='readonly-search-capture-audit'
 ACTION='account_original_readonly_search_capture_failure'
 
 class _Forms(HTMLParser):
@@ -106,7 +106,7 @@ def search_capture_audit(raw_root,authorization):
     if (Path(rejection_ref['path']).parent!=raw or rejection.get('reason')!='Reading region not fully loaded'
             or rejection.get('after_dispatch') is not True or rejection.get('actual_actions')!=3
             or rejection.get('effective_steps')!=2 or rejection.get('accepted_as_formal_frame') is not False
-            or diag.get('schema_version')!='webcollect-capture-exception-1' or diag.get('attempts')):
+            or diag.get('schema_version') not in ('capture-exception', 'webcollect-capture-exception-1') or diag.get('attempts')):
         raise ValueError('Original loading rejection diagnostic differs')
     png=base64.b64decode(diag['diagnostic_png_base64'],validate=True);png_sha=hashlib.sha256(png).hexdigest()
     if (allowed.get('rejected_capture')!=rejection_ref or allowed.get('diagnostic_png_sha256')!=png_sha

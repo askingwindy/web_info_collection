@@ -19,7 +19,7 @@ from .engine import inspect
 from .profiles import DELIVERY_DOCUMENT_CHECKS, package_files
 from .reporting import write_outputs
 
-VERSION = 'document-text-qc-1'
+VERSION = 'document-text-qc'
 KIND = 'ai-document-text-consistency'
 POLICY = {
     'version': VERSION,

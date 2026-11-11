@@ -9,8 +9,9 @@ from urllib.parse import urlsplit
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence
 
-LEGACY_VERSION = 'webcollect-wiki-reading-completion-1'
-VERSION = 'webcollect-wiki-reading-completion-2'
+from .plan_protocol import PLAN_PROTOCOL, WIKI_READING_COMPLETION
+
+VERSION = WIKI_READING_COMPLETION
 FIELD = 'wiki_reading_completion_protocol'
 GUIDANCE = '''本次使用普通Wiki累计阅读完成协议。首轮submit_plan顶层必须填写本请求的attempt_id和observation_id；不要新增requested_goal顶层字段。保留requested_goal；已有具体任务必须原样覆盖。仅无具体任务时首轮可选一个具体适度的阅读问题，goal和checks接受后冻结，不得因失败缩小。
 checks至少一项，列待核阅读事项field，可给已知page/region。section仅填写当前真实目录或HTML章节标题原文，不填“某词条正文”等描述性位置；原目标没有明确章节要求且当前没有可核章节时可省略section，跨词条check使用已知真实page URL/href，不猜章节、不省去原目标必需章节。原目标要求通读整节必须scope=section，普通具体问题scope=passage，不预填未来visible_text或预猜答案关键词；每项evidence_kind为reading或actions。reading的required_step_indices为空可省。actions只用于原业务目标明确要求的click/back，用原首轮steps零起始索引；可选实现路线不自动成为业务义务。
@@ -34,23 +35,22 @@ def system_text(value):
 
 
 def enabled(task):
-    return task.get('fragment', {}).get(FIELD) in (LEGACY_VERSION, VERSION)
+    return task.get('fragment', {}).get(FIELD) == WIKI_READING_COMPLETION
 
 
 def stable_ids(task):
-    return task.get('fragment', {}).get(FIELD) == VERSION
+    return enabled(task)
 
 
 def configure(task):
-    """Only newly generated ordinary Wiki tasks opt in; frozen tasks stay intact."""
-    from .banded_plan import V11_VERSION, V12_VERSION, V13_VERSION
+    """Only newly generated ordinary Wiki tasks opt in."""
     from .goal_evidence import contract_for
     url = urlsplit(task['initial_url'])
-    if (task['fragment'].get('plan_protocol') not in (V11_VERSION, V12_VERSION, V13_VERSION) or contract_for(task)
+    if (task['fragment'].get('plan_protocol') != PLAN_PROTOCOL or contract_for(task)
             or not (url.hostname or '').endswith('.wikipedia.org') or not url.path.startswith('/wiki/')):
         return
     for part in (task['fragment'], task['workflow_proposal']['spec']):
-        part[FIELD] = VERSION if task['fragment']['plan_protocol'] in (V12_VERSION,V13_VERSION) else LEGACY_VERSION
+        part[FIELD] = WIKI_READING_COMPLETION
 
 
 
@@ -106,7 +106,7 @@ def progress(session, initial_observation_id):
                                  'operation_id':row['operation_id'], 'epoch':0,
                                  **({'evidence_id':'e'+object_sha256({'attempt':getattr(session,'attempt_id',None),
                                      'observation_id':oid,'url':state['url'],'node':p['node'],'quote':p['quote']})[:32]} if modern else {})})
-    result = {'required':True, 'protocol':session.task['fragment'][FIELD], 'status':'UNVERIFIED',
+    result = {'required':True, 'policy':session.task['fragment'][FIELD], 'status':'UNVERIFIED',
               'new_visible_body':readings, 'passages':[], 'selected_passage':None,
               'return_required':False, 'semantic_goal_judgment':'MODEL_REPORTED_REQUIRES_INDEPENDENT_QC'}
     if blocked_reason:
@@ -243,24 +243,19 @@ def progress_key(session,action,failure):
 
 
 FINISH_WHEN={'kind':'visible_text','text':'阅读完成由finish_reading核验','region':'正文'}
-NEW_GUIDANCE = '''普通Wiki正文证据新版：保留requested_goal；已有具体任务原样覆盖，仅无具体任务时可选择一次具体问题，首轮接受后goal与checks冻结。checks列原目标必要事项field、evidence_kind（reading/actions），不预填未来原文或答案。已知来源写page；查阅新条目可用source_step_index关联首轮click，工程能唯一确认查阅动作时可省，不能猜未来URL。section只写真实章节标题，明确通读整节才用scope=section；普通问题scope=passage，目录标题不是正文。actions只声明原业务必需的click/back，required_step_indices用首轮零起始索引，普通实现路线不是新增义务。
+NEW_GUIDANCE = '''普通Wiki正文证据：保留requested_goal；已有具体任务原样覆盖，仅无具体任务时可选择一次具体问题，首轮接受后goal与checks冻结。checks列原目标必要事项field、evidence_kind（reading/actions），不预填未来原文或答案。已知来源写page；查阅新条目可用source_step_index关联首轮click，工程能唯一确认查阅动作时可省，不能猜未来URL。section只写真实章节标题，明确通读整节才用scope=section；普通问题scope=passage，目录标题不是正文。actions只声明原业务必需的click/back，required_step_indices用首轮零起始索引，普通实现路线不是新增义务。
 finish_when固定占位由工程补齐，真正完成用finish_reading提交reading_answer={answer,check_answers:[{check_index,answer,evidence_ids:[稳定编号]}]}。只选reading_check_progress对应事项的编号，不抄长引文、观察或动作身份；actions的operation_ids可省。已保存原帧正文累计保留，返回后仍可引用，完整回答原问题后立即申请。缺项只补读缺少内容，不改原问题，无新证据不重复重写引用。保持有效剩余路径，不每滚动一步重规划；允许滚动、链接、返回与续读自由组合，不固定点击次数/比例或往返模板。累计最多10有效动作，不补无用动作；stop不能声称完成。合法引用不证明答案语义正确，仍须独立QC。'''
 
 
 def bind_plan_wire(arguments,prompt):
-    if prompt.get(FIELD)!=VERSION:return arguments
+    if prompt.get(FIELD)!=WIKI_READING_COMPLETION:return arguments
     result=deepcopy(arguments)
-    from .banded_plan import V13_VERSION
-    if prompt.get('protocol')==V13_VERSION:
-        result.pop('finish_when',None)
-    elif 'finish_when' in result and result['finish_when']!=FINISH_WHEN:
-        raise ValueError('WIKI_READING_FINISH_PROTOCOL_CONFLICT')
     result['finish_when']=deepcopy(FINISH_WHEN)
     return result
 
 
 def bind_reply(response,prompt):
-    if prompt.get(FIELD)!=VERSION:return response
+    if prompt.get(FIELD)!=WIKI_READING_COMPLETION:return response
     result=deepcopy(response)
     if result.get('choice')=='finish_reading' and 'check_answers' in result:
         answers=result.pop('check_answers')

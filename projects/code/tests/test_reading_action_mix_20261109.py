@@ -17,8 +17,8 @@ from tempfile import TemporaryDirectory
 from test_direct_reading_baseline_20261108 import (
     ARTICLE, RELATED, DirectHarness, SUBJECT)
 from webcollect.action_stability import ACTION_SCOPED_VERSION
-from webcollect.banded_plan import V10_VERSION, V11_VERSION, system_for
-from webcollect.closing_policy import V2_VERSION as END_V2, VERSION as END_V3
+from webcollect.plan_protocol import PLAN_PROTOCOL as V11_VERSION, ENDING_POLICY as END_V3
+from webcollect.banded_plan import system_for
 from webcollect.goal_evidence import VERSION as EVIDENCE_VERSION
 from webcollect.planning import object_sha256
 from webcollect.react_session import ReactSession, build_url_task
@@ -58,12 +58,6 @@ class MixPromptTests(unittest.TestCase):
         self.assertIn('不强制跨页', prompt)
         self.assertNotIn('一至两次', prompt)
         self.assertNotIn('独立查阅目的', prompt)
-
-    def test_v10_reading_prompt_keeps_previous_wording(self):
-        prompt = system_for(prompt_task(V10_VERSION, END_V2, READING_CONTRACT))
-        self.assertIn('长阅读由多段滚动自然组成', prompt)
-        self.assertNotIn('一至两次有独立查阅目的的点击', prompt)
-        self.assertNotIn('滚动段落与一至两次目的性点击', prompt)
 
     def test_v11_computation_prompt_untouched(self):
         contract = {'version': EVIDENCE_VERSION, 'kind': 'computation',
@@ -360,9 +354,23 @@ class ActionScopedFeedbackTests(unittest.TestCase):
 
 class ReturnIdentityDeliveryTests(DirectHarness):
     """One mixed/derive chain plus counterfactual source checks; no network."""
+    def derive(self,evidence,name='candidate'):
+        destination=self.root/name/'samples'/self.ids['sample_id']
+        from webcollect.postprocess import process
+        result=process(evidence,destination,self.ids,self.manifest)
+        if result['status']!='derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'],'derived_saved',result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation=validate_client_sample(destination)
+        check=sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'],check['errors'])
+        self.assertEqual(annotation_errors(annotation),[])
+        return destination,annotation
     async def test_new_return_identity_preserves_citation_remaining_reading_and_natural_expectation(self):
         from types import SimpleNamespace
-        from test_closing_policy_v2 import EndingV2Tests
         from webcollect.agent_controller import exclusive
         from webcollect.batch_core import load_json
         from webcollect.goal_evidence import reading_evidence, contract_for
@@ -447,7 +455,7 @@ class ReturnIdentityDeliveryTests(DirectHarness):
         # Retained citation points at its actual old observation, never a newly
         # signed version of the returned document's passage.
         self.assertEqual(load_json(original_ob['evidence']['state']['path'])['url'],ARTICLE)
-        _,annotation = EndingV2Tests.derive(self,evidence,name='return-new-identity-derived')
+        _,annotation = self.derive(evidence,name='return-new-identity-derived')
         expected = annotation['steps'][3]['action']['expected_result']
         self.assertEqual(expected,'预期打开「日食」页面')
         self.assertNotIn('%',expected)

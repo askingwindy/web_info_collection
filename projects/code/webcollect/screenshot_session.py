@@ -14,11 +14,12 @@ import time
 
 from .batch_core import OutcomeUnknown, SessionGLMCallLimit, BudgetStop, load_json
 from .planning import object_sha256
-from .screenshot_plan import (VERSION, COMPLETION_VERSION, NORMALIZER_VERSION, SYSTEM_PROMPT,
+from . import collection_strategy as _cs
+from .screenshot_plan import (SYSTEM_PROMPT,
     FIRST_RULES, BRANCH_RULES, BUSINESS_MINIMUM, PREFERRED_MAXIMUM, NON_BUSINESS_ACTIONS,
-    DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, submit_plan_tools, decision_tools,
-    normalize_submit_plan, normalize_decision, first_plan_admission, business_actions,
-    region_registry, verify_completion)
+    DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, NO_PROGRESS_STALL_LIMIT, submit_plan_tools,
+    decision_tools, controls_projection, normalize_submit_plan, normalize_decision,
+    first_plan_admission, business_actions, region_registry, verify_completion)
 from .react_session import ReactSession, ReactStop
 
 
@@ -31,7 +32,6 @@ class ScreenshotPlanSession(ReactSession):
         self.frozen_goal = None
         self.requirements = []
         self.position = 0
-        self.plan_version = 0
         self.plan_event = None
         self.initial_feedback = None
         self.completion_feedback = None
@@ -41,12 +41,17 @@ class ScreenshotPlanSession(ReactSession):
         self.no_progress_keys = {}
         self.no_progress_dispatches = {}
         self.region_registries = {}
+        # Only observations whose image was carried by a successful request can
+        # support completion. The same set is rebuilt from sealed model intents.
+        self.provided_observations = set()
         self.latest_document_identity = None
         self._dialog_checkpointed = []
         self._granted_new_basis = None
         self.completion_endpoint_basis = None
         self.strategy_end_reason = None
         self.extra_ready_endings = (READY_ENDING,)
+        self._stall_marker = None
+        self._stall_count = 0
 
     # ------------------------------------------------------------------ run
 
@@ -77,14 +82,17 @@ class ScreenshotPlanSession(ReactSession):
                 self.unknown = self.unknown or error.unknown
             self.state = 'closed_by_host'
         except asyncio.CancelledError as error:
-            # 用户停止立即生效：不再派发动作或调用；原账由既有 UNKNOWN/取消规则收口。
-            self.strategy_end_reason = 'user_stopped'
-            self.stop_reason, self.stop_summary = 'blocked', '会话被用户停止，保留已执行内容'
+            # 用户停止立即生效；只有明确的内部硬截止可继续既有封存收尾。
+            internal_deadline = bool(error.args and error.args[0] == 'consumer_session_hard_deadline')
+            self.strategy_end_reason = 'unknown' if internal_deadline else 'user_stopped'
+            self.stop_reason, self.stop_summary = 'blocked', '会话被取消，保留已执行内容'
             self.unknown = True
             self.failure_class = 'interrupted'
             self.state = 'closed_by_host'
-            self._close()
-            raise
+            if not internal_deadline or not self.host_limits or time.monotonic() < (
+                    self.host_limits['started_monotonic'] + self.host_limits['hard_seconds']):
+                self._close()
+                raise
         except BaseException as error:
             stop = ReactStop('blocked', type(error).__name__ + ': ' + str(error), 'program')
             self.stop_reason, self.stop_summary = 'blocked', str(stop)
@@ -96,9 +104,9 @@ class ScreenshotPlanSession(ReactSession):
 
     def _strategy_summary(self, receipt):
         ending = getattr(self, 'collection_ending', None) or {}
-        return {'host_failure': self.host_failure, 'stop_reason': self.stop_reason,
+        summary = {'host_failure': self.host_failure, 'stop_reason': self.stop_reason,
                 'stop_summary': self.stop_summary,
-                'strategy': {'id': 'webcollect-collection-screenshot-plan-2', 'protocol': VERSION},
+                'strategy': {'id': _cs.STRATEGY_SCREENSHOT_PLAN},
                 'strategy_end_reason': (self.strategy_end_reason
                     or ('goal_completed' if ending.get('kind') == READY_ENDING
                         else 'unsuitable' if ending.get('kind') == 'UNSUITABLE_TASK'
@@ -116,11 +124,19 @@ class ScreenshotPlanSession(ReactSession):
                 'raw_receipt': receipt,
                 'terminal': {'path': str(self.root / 'terminal.json'),
                              'sha256': file_sha_of(self.root / 'terminal.json')}}
+        summary['strategy_result'] = _cs.strategy_result(self.task, summary=summary, raw_receipt=receipt)
+        return summary
 
     # ------------------------------------------------------------------ decide
 
     async def _decide(self, prompt):
         """One model call at a checkpoint; UNKNOWN and stop semantics shared."""
+        observation_ids = list(dict.fromkeys(prompt.get('screenshots') or []))
+        expected_images = [self.observation_records[oid]['evidence']['image']['path']
+                           for oid in observation_ids if oid in self.observation_records]
+        if (not observation_ids or len(expected_images) != len(observation_ids)
+                or list(prompt.get('_images') or []) != expected_images):
+            raise ReactStop('blocked', '截图观察编号与实际请求图片不一致', 'program')
         self._last_model_intent = self.event('model-intent', prompt=_stripped(prompt))
         self._consume('max_decisions')
         guard = getattr(self.choose, 'guard_unresolved', None)
@@ -145,23 +161,35 @@ class ScreenshotPlanSession(ReactSession):
                     self.used['max_model_calls'] = used
                 if self.glm_session_id:
                     self.glm_http_requests = used
+        self.provided_observations.update(observation_ids)
+        self.event('model-observations-provided', model_intent=self._last_model_intent,
+                   observation_ids=observation_ids)
         return response
 
     # ------------------------------------------------------------------ first plan
 
+    def _fixed_goal(self):
+        objective = ((self.task.get('fragment') or {}).get('session_objective') or {}).get('objective') or {}
+        return str(objective.get('description') or describe(self.requested_goal) or '').strip()
+
     def _first_prompt(self):
         state = load_json(self.current['evidence']['state']['path'])
-        if self.current['observation_id'] not in self.region_registries:
-            self.region_registries[self.current['observation_id']] = region_registry(state)
-            self.event('screenshot-regions', observation_id=self.current['observation_id'],
-                       regions=deepcopy(self.region_registries[self.current['observation_id']]))
-        goal = self.requested_goal
-        payload = {'protocol': VERSION, 'phase': 'first', 'attempt_id': self.attempt_id,
+        oid = self.current['observation_id']
+        if oid not in self.region_registries:
+            self.region_registries[oid] = region_registry(state)
+            self.event('screenshot-regions', observation_id=oid,
+                       regions=deepcopy(self.region_registries[oid]))
+        payload = {'phase': 'first', 'attempt_id': self.attempt_id,
                    'system': SYSTEM_PROMPT,
-                   'goal': goal, 'page': {'url': self.current['url'],
-                                          'title': (state.get('title') or '')[:120],
-                                          'visible_excerpt': (state.get('visible_text') or '')[:600]},
-                   'regions': self.region_registries[self.current['observation_id']],
+                   'goal': self._fixed_goal() or self.requested_goal,
+                   'requested_goal': deepcopy(self.requested_goal),
+                   'session_objective': deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
+                   'current_observation': oid, 'screenshots': [oid],
+                   'page': {'url': self.current['url'],
+                            'title': (state.get('title') or '')[:120],
+                            'visible_excerpt': (state.get('visible_text') or '')[:600]},
+                   'regions': self.region_registries[oid],
+                   'controls': controls_projection(self.current, self.task['fragment']['allowed_actions']),
                    'allowed_actions': [action for action in self.task['fragment']['allowed_actions']],
                    'rules': FIRST_RULES,
                    'planning_range': {'minimum': BUSINESS_MINIMUM,
@@ -181,9 +209,20 @@ class ScreenshotPlanSession(ReactSession):
         response = await self._decide(prompt)
         arguments = response.get('arguments') or {}
         plan, record = normalize_submit_plan(arguments, self.task['fragment']['allowed_actions'])
-        self.event('screenshot-plan-normalized', phase='first', version=NORMALIZER_VERSION,
+        self.event('screenshot-plan-normalized', phase='first',
                    normalization=record, plan=plan)
         ok, feedback = first_plan_admission(plan)
+        fixed_goal = self._fixed_goal()
+        if ok and feedback['kind'] == 'accepted':
+            if fixed_goal and plan.get('goal') != fixed_goal:
+                ok = False
+                feedback = {'kind': 'FIXED_GOAL_MISMATCH', 'field_paths': ['goal'], 'dispatched': False,
+                            'expected_goal': fixed_goal,
+                            'message': '固定requested_goal/session_objective必须原样继承，不得替换、缩小或改写'}
+            elif not fixed_goal and not str(plan.get('goal') or '').strip():
+                ok = False
+                feedback = {'kind': 'MISSING_GOAL', 'field_paths': ['goal'], 'dispatched': False,
+                            'message': '自由目标首轮必须依据首屏给出具体自然目标'}
         if not ok:
             if self.initial_feedback is None:
                 # 同一观察下的有界纠正：给精确反馈再请求一次，不派发任何动作。
@@ -204,17 +243,17 @@ class ScreenshotPlanSession(ReactSession):
                 'message': '缺少完成事项requirements；每项一条原目标必须看到的结果'}
             self.event('screenshot-plan-rejected', feedback=self.initial_feedback, dispatched=False)
             return
-        self.frozen_goal = plan.get('goal') or describe(self.requested_goal) or self.working_goal
+        self.frozen_goal = fixed_goal or plan['goal']
         if self.working_goal is None:
             self.working_goal = self.frozen_goal
         self.requirements = [{'id': row['id'], 'description': row['description']} for row in requirements]
         self.plan = {'steps': plan['steps']}
         self.position = 0
-        self.plan_version = 1
         self.initial_feedback = None
-        self.plan_event = self.event('screenshot-plan', phase='first', version=self.plan_version,
-            goal=self.frozen_goal, requirements=deepcopy(self.requirements),
-            steps=deepcopy(self.plan['steps']), admission=feedback)
+        self.plan_event = self.event('screenshot-plan', phase='first',
+            goal=self.frozen_goal, requested_goal=deepcopy(self.requested_goal),
+            session_objective=deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
+            requirements=deepcopy(self.requirements), steps=deepcopy(self.plan['steps']), admission=feedback)
 
     # ------------------------------------------------------------------ execution
 
@@ -226,6 +265,15 @@ class ScreenshotPlanSession(ReactSession):
         target = step.get('target')
         if not target:
             return None
+        cited = target.get('control')
+        if cited:
+            # Host-issued current-frame id from the controls list: the identity
+            # is unique by construction; visibility still binds against the
+            # same observation as a semantic target would.
+            control = (self.current.get('controls') or {}).get(cited) or {}
+            if (control.get('element') or {}).get('visible') is True:
+                return [cited]
+            return []
         return bind_target(self.current, target, self.observation_records)
 
     def _action_identity(self, step, control_ids, state):
@@ -235,16 +283,22 @@ class ScreenshotPlanSession(ReactSession):
             binding = control.get('binding') or {}
         return object_sha256({
             'action': step.get('action'),
-            'target': (step.get('target') or {}).get('text'),
+            'target': (step.get('target') or {}).get('text') or (step.get('target') or {}).get('control'),
             'form': binding.get('form_selector'),
             'document': state.get('document_identity'),
             'value': step.get('value'), 'keys': step.get('keys'),
             'direction': step.get('direction'),
-            'target_state': (state.get('document_identity'), (step.get('target') or {}).get('text'))})
+            'target_state': (state.get('document_identity'),
+                             (step.get('target') or {}).get('text') or (step.get('target') or {}).get('control'))})
 
     def _repeat_guard(self, step, control_ids, state, new_basis):
-        """同身份动作不重复派发；重试须有可对应实际变化的新依据。"""
+        """Only real submissions need a new basis; observation actions may repeat."""
         identity = self._action_identity(step, control_ids, state)
+        action = step.get('action')
+        submit = ((action == 'click' and self._submit_like(control_ids))
+                  or (action == 'hotkey' and 'enter' in str(step.get('keys') or []).lower()))
+        if not submit:
+            return None, identity
         previous = self.dispatch_identities.get(identity)
         if previous is None:
             return None, identity
@@ -253,7 +307,7 @@ class ScreenshotPlanSession(ReactSession):
         if not_dispatched or (new_basis and changed_state):
             return None, identity
         return {'kind': 'REPEAT_SUBMISSION_WITHOUT_NEW_BASIS',
-                'message': ('同一输入、同一页面状态下该动作已派发过；结果未进视口请先观察（滚动/等待），'
+                'message': ('同一输入、同一页面状态下该提交已派发过；结果未进视口请先观察（滚动/等待），'
                             '重试必须在new_basis说明修正了输入、重新定位了目标或页面明确反馈'),
                 'previous': {key: previous.get(key) for key in ('operation_id', 'outcome', 'at')},
                 'new_basis_required': True}, identity
@@ -339,8 +393,10 @@ class ScreenshotPlanSession(ReactSession):
         if advanced:
             self.position += 1
         if self._checkpoint_needed(step, matches or [], result, attempt):
+            # 成功动作已在上方推进游标；只有未建立效果的已派发动作在选择
+            # continue时才需要越过当前步，避免每个成功检查点跳过下一步。
             await self._checkpoint(self._checkpoint_reason(step, matches or [], attempt),
-                                   executed=new_attempt)
+                                   executed=new_attempt and not advanced)
 
     def _refresh_attempt_facts(self):
         """latest_attempt 与 last_effective_action 分开维护。"""
@@ -362,14 +418,11 @@ class ScreenshotPlanSession(ReactSession):
         self.last_effective = deepcopy(self.trajectory[-1]) if self.trajectory else None
 
     def _submit_like(self, control_ids):
-        import re
+        from .result_execution import is_submission
         if not control_ids:
             return False
         control = self.current['controls'].get(control_ids[0]) or {}
-        binding = control.get('binding') or {}
-        label = (control.get('element') or {}).get('text') or ''
-        return bool(binding.get('input_type') in ('submit', 'button') and (
-            binding.get('tag') == 'button' or re.search(r'计算|計算|提交|生成|转换|轉換|换算|求解|搜索|calculate|compute|submit|convert|solve|search', label, re.I)))
+        return is_submission('click', {}, control.get('binding') or {}, control.get('element') or {})
 
     def _checkpoint_needed(self, step, control_ids, result, attempt):
         if self.state != 'recording':
@@ -416,20 +469,31 @@ class ScreenshotPlanSession(ReactSession):
         choices = list(DECISIONS)
         if not remaining:
             choices.remove('continue')
-        payload = {'protocol': VERSION, 'phase': 'branch', 'attempt_id': self.attempt_id,
+        payload = {'phase': 'branch', 'attempt_id': self.attempt_id,
                    'system': SYSTEM_PROMPT,
                    'goal': self.frozen_goal, 'requirements': deepcopy(self.requirements),
+                   'requested_goal': deepcopy(self.requested_goal),
+                   'session_objective': deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
                    'current_observation': oid, 'screenshots': [oid],
+                   'visual_evidence': {'scope': 'current_viewport', 'observation': oid,
+                                       'image_sha256': self.current['evidence']['image']['sha256'],
+                                       'regions': deepcopy(self.region_registries[oid])},
                    'regions': self.region_registries[oid],
+                   'controls': controls_projection(self.current, self.task['fragment']['allowed_actions']),
+                   'allowed_actions': list(self.task['fragment']['allowed_actions']),
                    'latest_attempt': _public_attempt(self.latest_attempt),
                    'last_effective_action': _public_effective(self.last_effective),
+                   'current_actions': [_public_effective(row) for row in self.trajectory[-8:]],
                    'confirmed_progress': [row.get('goal') for row in self.trajectory[-6:]],
                    'missing_requirements': [row['id'] for row in self.requirements
                                             if row['id'] not in (getattr(self, 'verified_requirement_ids', None) or [])],
                    'remaining_plan': [{'action': row.get('action'), 'purpose': row.get('purpose'),
                                        'target': deepcopy(row.get('target'))} for row in remaining],
+                   'next_checkpoint': {'reason': reason, 'remaining_steps': len(remaining),
+                                       'allowed_decisions': list(choices)},
                    'reason': reason, 'choices': choices, 'rules': BRANCH_RULES,
-                   'tools': decision_tools(choices),
+                   'tools': decision_tools(choices, self.task['fragment']['allowed_actions'],
+                                           sorted(self.provided_observations | {oid})),
                    'progress': {'decisions_used': self.used['max_decisions'],
                                 'effective_steps': len(self.trajectory),
                                 'actual_dispatches': self.actual_dispatches}}
@@ -444,18 +508,37 @@ class ScreenshotPlanSession(ReactSession):
         prompt = self._branch_prompt(reason, feedback)
         response = await self._decide(prompt)
         arguments = response.get('arguments') or {}
-        decision, record = normalize_decision(arguments, prompt['choices'])
+        allowed_actions = self.task['fragment']['allowed_actions']
+        decision, record = normalize_decision(arguments, prompt['choices'], allowed_actions)
         self.event('screenshot-decision', reason=reason, decision=decision,
-                   normalization=record, position=self.position,
-                   plan_version=self.plan_version)
+                   normalization=record, position=self.position)
+        # A different answer, citation, new_basis or revised tail is new work,
+        # not a repeated no-progress decision. Only the whole identical decision
+        # on the same observation and feedback is bounded.
         key = object_sha256({'observation': self.current['observation_id'], 'reason': reason,
-                             'decision': decision.get('decision'),
-                             'remaining': self.plan['steps'][self.position:]})
+                             'decision': decision, 'remaining': self.plan['steps'][self.position:],
+                             'checkpoint_feedback': feedback,
+                             'completion_feedback': self.completion_feedback})
         self.no_progress_keys[key] = self.no_progress_keys.get(key, 0) + 1
         if self.no_progress_keys[key] >= 2 and self.actual_dispatches == self.no_progress_dispatches.get(key, self.actual_dispatches):
-            self._range_close('NO_PROGRESS_END', '同一事实与反馈下重复相同决策且无新证据，无进展结束')
+            self._range_close('NO_PROGRESS_END', '同一事实与反馈下重复相同完整决策且无新证据，无进展结束')
             return
         self.no_progress_dispatches[key] = self.actual_dispatches
+        # Independent bound: reworded revises or repeated completion attempts with
+        # neither a new dispatch nor plan-cursor progress are a stall, even when
+        # each decision's content differs.
+        stall_marker = (self.actual_dispatches, self.position)
+        if stall_marker == self._stall_marker:
+            self._stall_count += 1
+        else:
+            self._stall_marker = stall_marker
+            self._stall_count = 0
+        if self._stall_count >= NO_PROGRESS_STALL_LIMIT:
+            self.event('screenshot-no-progress-stall', dispatches=self.actual_dispatches,
+                       position=self.position, stall_count=self._stall_count)
+            self._range_close('NO_PROGRESS_END',
+                              '连续检查点无新派发且计划游标无进展，无进展结束')
+            return
         choice = decision.get('decision')
         if choice == 'continue':
             if not self.plan['steps'][self.position:]:
@@ -481,8 +564,8 @@ class ScreenshotPlanSession(ReactSession):
                 return await self._checkpoint(reason, {'kind': 'EMPTY_REVISION',
                     'message': 'revise必须给出未执行尾部；直接结束用complete或give_up'})
             self.plan['steps'] = self.plan['steps'][:self.position] + steps
-            self.plan_version += 1
-            self.event('screenshot-plan-revision', version=self.plan_version,
+            self.completion_feedback = None
+            self.event('screenshot-plan-revision',
                        position=self.position, steps=deepcopy(steps),
                        executed_preserved=self.position)
             return
@@ -491,23 +574,31 @@ class ScreenshotPlanSession(ReactSession):
             if gaps:
                 self.completion_feedback = {'kind': 'COMPLETION_EVIDENCE_GAPS', 'gaps': gaps,
                     'message': '完成申请缺证；在同一或历史观察中补引用，不重放已完成的输入与提交'}
-                self.event('screenshot-completion-rejected', gaps=gaps)
-                return
+                self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False)
+                # Stay at this checkpoint. Returning to the main loop could
+                # execute an obsolete remaining action before the supplement.
+                return await self._checkpoint(reason, self.completion_feedback)
+            self.completion_feedback = None
             self._complete(decision, checks, reason)
             return
         if choice == 'give_up':
             self._range_close('AGENT_GIVE_UP', 'give_up：' + str(decision.get('reason') or '当前无可行路径'))
             return
-        self.event('screenshot-decision-rejected', reason='unknown_decision')
+        self.event('screenshot-decision-rejected', reason='unknown_decision', dispatched=False)
+        return await self._checkpoint(reason, {'kind': 'UNKNOWN_DECISION',
+            'message': '请使用当前choices中的decision；缺证时complete补证或give_up，不执行旧剩余动作'})
 
     def _complete(self, application, checks, reason):
-        receipt = self.event('screenshot-completion', protocol=COMPLETION_VERSION,
+        receipt = self.event('screenshot-completion',
             application=deepcopy(application), checks=deepcopy(checks),
+            goal=self.frozen_goal, requested_goal=deepcopy(self.requested_goal),
+            session_objective=deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
             requirements=deepcopy(self.requirements), checkpoint_reason=reason)
         self.verified_requirement_ids = [row['id'] for row in self.requirements]
         self.goal_evidence = {'business_goal_status': 'VERIFIED', 'checks': checks,
-                              'screenshot_completion': receipt,
-                              'completion_protocol': COMPLETION_VERSION}
+                              'goal': self.frozen_goal, 'requested_goal': deepcopy(self.requested_goal),
+                              'session_objective': deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
+                              'screenshot_completion': receipt}
         self.completion_endpoint_basis = {'source': 'host_screenshot_completion',
             'completion': receipt, 'image': deepcopy(self.current['evidence']['image']),
             'finish_route': {'completion_origin': 'agent_complete',

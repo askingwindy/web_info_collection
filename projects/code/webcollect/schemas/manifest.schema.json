@@ -25,7 +25,8 @@
       "pattern": "\\S"
     },
     "rule_version": {
-      "enum": ["1.0.0", "m4-1"]
+      "type": "string",
+      "pattern": "\\S"
     },
     "samples": {
       "type": "array",
@@ -62,15 +63,5 @@
         }
       }
     }
-  },
-  "allOf": [
-    {
-      "if": {
-        "required": ["schema_version"],
-        "properties": {"schema_version": {"const": "webcollect-runtime-manifest-m4-1"}}
-      },
-      "then": {"properties": {"rule_version": {"const": "m4-1"}}},
-      "else": {"properties": {"rule_version": {"const": "1.0.0"}}}
-    }
-  ]
+  }
 }

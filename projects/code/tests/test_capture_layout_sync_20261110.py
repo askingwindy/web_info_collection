@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from test_dynamic_regions import state, png
-from webcollect.action_stability import ACTION_SCOPED_V3, post_action_document_scope
+from webcollect.action_stability import ACTION_SCOPED_VERSION, post_action_document_scope
 from webcollect.browser import capture, stability_pair, validate_capture_receipt
 
 
@@ -28,7 +28,7 @@ class CaptureLayoutSyncTests(unittest.IsolatedAsyncioTestCase):
         after = deepcopy(before)
         after['elements'][2]['bbox'] = [0, 36, 30, 56]
         proof = stability_pair(before, after, png(), png(), action_scope=
-                               post_action_document_scope(before, version=ACTION_SCOPED_V3))
+                               post_action_document_scope(before, version=ACTION_SCOPED_VERSION))
         self.assertTrue(proof['accepted'])
 
     def test_classified_announcement_changes_do_not_block_observation(self):

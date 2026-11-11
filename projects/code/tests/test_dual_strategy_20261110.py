@@ -20,13 +20,16 @@ from jsonschema import Draft202012Validator
 
 from test_react_session import ReactHarness
 from webcollect.batch_core import BatchLedger, file_sha, load_json, object_sha256
-from webcollect.closing_policy import COMPLETE_VERSION, completion_delivery_decision
+from webcollect.plan_protocol import ENDING_POLICY as COMPLETE_VERSION, PLAN_PROTOCOL
+from webcollect.closing_policy import completion_delivery_decision
 from webcollect.collection_strategy import (STRATEGY_SCREENSHOT_PLAN, freeze as freeze_strategy,
     save_eligibility, strategy_result, outcome_facts)
 from webcollect.model_gateway import ModelGateway
 from webcollect.postprocess import process
 from webcollect.react_session import ReactSession, build_url_task, validate_task
-from webcollect.screenshot_plan import (VERSION as SCREENSHOT_VERSION, NORMALIZER_VERSION,
+from webcollect.plan_protocol import RESULT_COMPLETION_PROTOCOL, RESULT_EXECUTION_POLICY
+from webcollect.collection_strategy import STRATEGY_SCREENSHOT_PLAN as SCREENSHOT_VERSION
+from webcollect.screenshot_plan import (
     first_plan_admission, normalize_submit_plan, submit_plan_tools)
 from webcollect.screenshot_session import ScreenshotPlanSession
 
@@ -70,6 +73,7 @@ class DualStrategyHTTPBoundary(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temp.name)
         from test_model_provider_protocols import CONFIG
         config = load_json(CONFIG)
+        config['schema_version'] = 'webcollect-batch-config-1'
         config['mode'] = 'real'
         config['budget'].update(currency='OFFLINE_TEST_UNITS', max_model_cost_micros=1_000_000,
                                 min_model_interval_seconds=0)
@@ -108,8 +112,7 @@ class DualStrategyHTTPBoundary(unittest.IsolatedAsyncioTestCase):
         response = await asyncio.to_thread(gateway.call_tool, job, SCREENSHOT_VERSION,
             json.dumps({'phase': 'first'}, ensure_ascii=False), submit_plan_tools(ALL_ACTIONS),
             system='策略2首轮', images=[self.root / 'first.png'], attempts=2,
-            attempt_id='w01-attempt', plan_normalizer=normalize_submit_plan,
-            plan_normalizer_version=NORMALIZER_VERSION)
+            attempt_id='w01-attempt', plan_normalizer=normalize_submit_plan)
         plan = response['arguments']
         normalization = response['plan_normalization']
         ok, feedback = first_plan_admission(plan)
@@ -142,8 +145,7 @@ class DualStrategyHTTPBoundary(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(gateway.call_tool, job, SCREENSHOT_VERSION,
                 json.dumps({'phase': 'first'}, ensure_ascii=False), submit_plan_tools(ALL_ACTIONS),
                 system='策略2首轮', images=[self.root / 'first.png'], attempts=2,
-                attempt_id='w02-attempt', plan_normalizer=normalize_submit_plan,
-                plan_normalizer_version=NORMALIZER_VERSION)
+                attempt_id='w02-attempt', plan_normalizer=normalize_submit_plan)
         except ValueError as failure:
             error = failure
         with ledger.connect() as con:
@@ -180,10 +182,10 @@ class StrategyOneFixes(ReactHarness, unittest.IsolatedAsyncioTestCase):
         super().setUp()
         self.task = build_url_task(url=self.page.url, task_version='dual-strategy-s1',
                                    ending_policy=COMPLETE_VERSION,
-                                   plan_protocol='webcollect-banded-conditional-plan-13')
+                                   plan_protocol=PLAN_PROTOCOL)
         for part in (self.task['fragment'], self.task['workflow_proposal']['spec']):
-            part['result_execution_policy'] = 'webcollect-result-execution-1'
-            part['result_completion_protocol'] = 'webcollect-result-completion-1'
+            part['result_execution_policy'] = RESULT_EXECUTION_POLICY
+            part['result_completion_protocol'] = RESULT_COMPLETION_PROTOCOL
         self.task['task_id'] = 'react-' + object_sha256(
             {'url': self.task['initial_url'], 'spec': self.task['workflow_proposal']['spec']})[:24]
         validate_task(self.task)
@@ -401,6 +403,160 @@ class ScreenshotSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             'submit_clicks': len(submit_clicks), 'derived': derived['status'],
             'delivery_eligible': decision['delivery_eligible'],
             'completion_delivery': decision})
+
+    async def test_fixed_goal_reading_supplement_and_sealed_replay(self):
+        """固定阅读目标经有界纠错、补证和完整保存回放，不把阅读当计算。"""
+        fixed = '阅读正文并回答文中介绍的计算方法'
+        spec = self.task['workflow_proposal']['spec']
+        spec['goal']['structured'] = {'description': fixed}
+        self.task['task_id'] = 'react-' + object_sha256(
+            {'url': self.task['initial_url'], 'spec': spec})[:24]
+        validate_task(self.task)
+        answer_text = '先计算成本，再除以收入'
+        self.surface.state['elements'][-1]['text'] = answer_text
+        steps = [{'action': 'scroll', 'direction': 'down',
+                  'purpose': f'阅读第{index}段正文', 'expected_result': '看到下一段正文'}
+                 for index in range(1, 6)]
+        self.prompts = []
+        supplements = []
+
+        def plan(goal):
+            return {'goal': goal,
+                    'requirements': [{'id': 'r1', 'description': '回答文中介绍的计算方法'}],
+                    'steps': deepcopy(steps)}
+
+        def response(name, arguments, call_id):
+            return {'name': name, 'arguments': arguments, 'tool_call_id': call_id,
+                    'request_id': 'mock'}
+
+        async def choose(prompt):
+            self.prompts.append(deepcopy(prompt))
+            if prompt.get('phase') == 'first':
+                wrong = not prompt.get('first_plan_feedback')
+                return response('submit_plan', plan('只浏览页面标题' if wrong else fixed), 'first')
+            if prompt.get('remaining_plan'):
+                return response('plan_decision', {
+                    'decision': 'continue', 'reason': '继续阅读下一段正文'}, 'continue')
+            if not (prompt.get('checkpoint_feedback') or {}).get('gaps'):
+                return response('plan_decision', {
+                    'decision': 'complete', 'reason': '第一次完成申请缺少有效区域',
+                    'answers': [{'requirement_id': 'r1', 'observed_result': answer_text,
+                                 'evidence': [{'observation': prompt['current_observation'],
+                                               'region': 'region_unknown'}]}]}, 'bad-complete')
+            region = next(row for row in prompt['regions'] if '成本' in row.get('quote', ''))
+            supplements.append(prompt['checkpoint_feedback']['kind'])
+            return response('plan_decision', {
+                'decision': 'complete', 'reason': '第二次补入实际提供的截图区域',
+                'answers': [{'requirement_id': 'r1', 'observed_result': answer_text,
+                             'evidence': [{'observation': prompt['current_observation'],
+                                           'region': region['region_id']}]}]}, 'verified-complete')
+
+        session, evidence = self._session('fixed-reading-complete', choose)
+        result = await session.run()
+        self.assertEqual(result['stop_reason'], 'ready', result)
+        self.assertEqual(result['effective_steps'], 5, result)
+        self.assertEqual(result['strategy_result']['end']['end_reason'], 'goal_completed')
+        self.assertNotIn('terminal', result['raw_receipt'])
+        self.assertEqual(len([row for row in self.surface.executed if row[0] == 'scroll']), 5)
+        first_prompts = [p for p in self.prompts if p.get('phase') == 'first']
+        self.assertEqual(len(first_prompts), 2)
+        self.assertEqual(first_prompts[1]['first_plan_feedback']['kind'], 'FIXED_GOAL_MISMATCH')
+        self.assertEqual(supplements, ['COMPLETION_EVIDENCE_GAPS'])
+        self.assertEqual(session.frozen_goal, fixed)
+
+        derived = process(evidence, self.root / 'fixed-reading-saved' / 'samples' / self.ids['sample_id'],
+                          self.ids, self.manifest)
+        self.assertEqual(derived['status'], 'derived_saved', derived)
+        annotation = load_json(self.root / 'fixed-reading-saved' / 'samples' / self.ids['sample_id'] / 'annotation.json')
+        self.assertEqual(annotation['completion_status'], 'success')
+        decision = save_eligibility(annotation, load_json(evidence / 'saved_sample.json')['raw_execution'])
+        self.assertTrue(decision['delivery_eligible'], decision)
+        from webcollect.closing_policy import validate_record
+        from webcollect.postprocess import session_record
+        record = session_record(evidence / 'raw')
+        validate_record(record)
+        self.assertEqual(record['terminal']['goal_evidence']['requested_goal'], {'description': fixed})
+        self.assertIsNone(record['terminal']['goal_evidence']['checks'][0]['evidence'][0]['result_execution_binding'])
+        record_outcome('s2-fixed-reading-complete', {
+            'effective_steps': result['effective_steps'], 'supplements': supplements,
+            'derived': derived['status'], 'delivery_eligible': decision['delivery_eligible'],
+            'sealed_replay': 'PASS'})
+
+    async def test_unrelated_form_input_preserves_delayed_result_causality(self):
+        """另一表单的后续输入不覆盖原表单提交与延迟结果的因果关系。"""
+        state = self.surface.state
+        other = deepcopy(state['elements'][0])
+        other.update(element_id='other-note', text='其他备注', bbox=[10, 330, 210, 370])
+        state['elements'].append(other)
+        binding = deepcopy(state['capture_controls'][0])
+        binding.update(element_id='other-note', selector='#other-note', form_selector='#other-form')
+        state['capture_controls'].append(binding)
+        value = deepcopy(state['values'][0])
+        value.update(element_id='other-note', value='', display_value='', focused=False,
+                     selection_start=0, selection_end=0)
+        state['values'].append(value)
+        executed = self.surface.execute_action
+
+        def hook(kind, arguments):
+            focused = [(value, value.get('focused')) for value in state['values']]
+            executed(kind, arguments)
+            if kind == 'click' and 200 <= arguments.get('y', 0) < 300:
+                # 与既有延迟结果夹具一致：提交按钮不窃取输入焦点。
+                for value, was_focused in focused:
+                    value['focused'] = was_focused
+            if kind == 'scroll':
+                next(row for row in state['elements'] if row['element_id'] == 'visible-result'
+                     )['text'] = '利润率：40%'
+
+        self.surface.execute_action = hook
+        other_steps = [
+            {'action': 'click', 'target': {'text': '其他备注'}, 'purpose': '聚焦另一表单备注',
+             'expected_result': '备注输入框获得焦点'},
+            {'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'text': '其他备注'},
+             'purpose': '全选另一表单备注原值', 'expected_result': '备注原值被选中'},
+            {'action': 'type', 'target': {'text': '其他备注'}, 'value': '不影响计算',
+             'purpose': '填写另一表单备注', 'expected_result': '备注显示新内容'},
+            {'action': 'scroll', 'direction': 'down', 'purpose': '查看原表单延迟结果',
+             'expected_result': '原表单结果区进入视口'}]
+        steps = self._steps_full()[:6] + other_steps
+
+        async def choose(prompt):
+            if prompt.get('phase') == 'first':
+                return {'name': 'submit_plan', 'arguments': self._plan(steps),
+                        'tool_call_id': 'first', 'request_id': 'mock'}
+            answer = self._complete_answer(prompt)
+            if answer is not None:
+                return {'name': 'plan_decision', 'arguments': answer,
+                        'tool_call_id': 'complete', 'request_id': 'mock'}
+            return {'name': 'plan_decision',
+                    'arguments': {'decision': 'continue', 'reason': '继续既定步骤'},
+                    'tool_call_id': 'continue', 'request_id': 'mock'}
+
+        session, evidence = self._session('unrelated-form-delayed-result', choose)
+        result = await session.run()
+        self.assertEqual(result['stop_reason'], 'ready', result)
+        self.assertEqual(result['actual_actions'], 10, result)
+        self.assertGreaterEqual(result['effective_steps'], 5, result)
+        other_operation = next(row['operation_id'] for row in session.trajectory
+                               if (row.get('target') or {}).get('control_id') == 'other-note'
+                               and row.get('action') == 'type')
+        proof = session.goal_evidence['checks'][0]['evidence'][0]
+        causality = proof.get('post_submit_causality')
+        self.assertIsNotNone(causality, proof)
+        self.assertNotIn(other_operation, causality['input_operation_ids'])
+        self.assertTrue(causality['same_form'])
+        derived = process(evidence, self.root / 'unrelated-form-saved' / 'samples' / self.ids['sample_id'],
+                          self.ids, self.manifest)
+        self.assertEqual(derived['status'], 'derived_saved', derived)
+        annotation = load_json(self.root / 'unrelated-form-saved' / 'samples' / self.ids['sample_id'] / 'annotation.json')
+        decision = save_eligibility(annotation, load_json(evidence / 'saved_sample.json')['raw_execution'])
+        self.assertTrue(decision['delivery_eligible'], decision)
+        from webcollect.closing_policy import validate_record
+        from webcollect.postprocess import session_record
+        validate_record(session_record(evidence / 'raw'))
+        record_outcome('s2-unrelated-form-delayed-result', {
+            'effective_steps': result['effective_steps'], 'derived': derived['status'],
+            'delivery_eligible': decision['delivery_eligible'], 'sealed_replay': 'PASS'})
 
     async def test_complete_below_five_records_completion_and_ineligibility(self):
         self._submit_sets_result_immediately()
@@ -652,6 +808,7 @@ def test_react_chooser_dispatches_the_frozen_strategy_protocol():
 
     with tempfile.TemporaryDirectory() as tmp:
         config = load_json(Path(__file__).resolve().parents[1] / 'config' / 'batch-synthetic.json')
+        config['schema_version'] = 'webcollect-batch-config-1'
         ledger = BatchLedger(Path(tmp) / 'chooser.sqlite3', config, initialize=True)
         strategy2 = build_url_task(url='https://example.org/s2', task_version='s2',
                                    ending_policy=COMPLETE_VERSION)
@@ -670,7 +827,7 @@ def test_react_chooser_dispatches_the_frozen_strategy_protocol():
             def call_tool(self, job, purpose, text, tools, **kwargs):
                 captured.update(protocol=purpose, tools=tools,
                                 normalizer=kwargs.get('plan_normalizer'),
-                                normalizer_version=kwargs.get('plan_normalizer_version'))
+                                kwargs=sorted(kwargs))
                 return {'name': 'submit_plan', 'arguments': {'goal': 'g', 'requirements': [
                     {'id': 'r1', 'description': '查看结果'}], 'steps': []}, 'tool_call_id': 't'}
 
@@ -681,16 +838,18 @@ def test_react_chooser_dispatches_the_frozen_strategy_protocol():
                                  'tools': submit_plan_tools(ALL_ACTIONS)}))
         assert captured['protocol'] == SCREENSHOT_VERSION
         assert captured['normalizer'] is normalize_submit_plan
-        assert captured['normalizer_version'] == NORMALIZER_VERSION
+        # The gateway no longer carries a normalizer version field; the chooser
+        # must not forward one.
+        assert 'plan_normalizer_version' not in captured['kwargs']
         # 策略1缺省任务不走screenshot chooser。
         strategy1 = build_url_task(url='https://example.org/s1', task_version='s1',
                                    ending_policy=COMPLETE_VERSION,
-                                   plan_protocol='webcollect-banded-conditional-plan-13')
+                                   plan_protocol=PLAN_PROTOCOL)
         choose1 = react_chooser(ledger, strategy1, 'attempt-s1')
         assert not hasattr(choose1, 'protocol_marker')
         assert hasattr(choose2, 'protocol_marker')
         record_outcome('chooser-dispatch', {'strategy2_protocol': captured['protocol'],
-                                            'normalizer_version': captured['normalizer_version']})
+                                            'normalizer': captured['normalizer'].__name__})
 
 
 if __name__ == '__main__':

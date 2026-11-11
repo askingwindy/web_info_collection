@@ -15,8 +15,10 @@ from pathlib import Path
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-VERSION = 'frozen-link-selection-2-source-config-provenance'
-RULE_SCHEMA = 'webcollect-candidate-selection-rules-1'
+VERSION = 'frozen-link-selection'
+RULE_SCHEMA = 'candidate-selection-rules'
+# Old rules files were stamped with the generational value; reads accept both.
+PREVIOUS_RULE_SCHEMA = 'webcollect-candidate-selection-rules-1'
 
 
 def default_rules():
@@ -115,7 +117,7 @@ class _Links(HTMLParser):
 
 def _validated_rules(value):
     value = deepcopy(value)
-    if value.get('schema_version') != RULE_SCHEMA:
+    if value.get('schema_version') not in (RULE_SCHEMA, PREVIOUS_RULE_SCHEMA):
         raise ValueError('versioned candidate selection rules required')
     for key in ('max_selected', 'max_selected_per_source'):
         if value.get(key) is not None and (type(value[key]) is not int or value[key] < 1):

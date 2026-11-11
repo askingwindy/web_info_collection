@@ -15,7 +15,7 @@ import time
 from .batch_core import BatchLedger, load_json, file_sha
 from .agent_feedback import reference
 from .planning import verify_evidence, object_sha256
-from .template_learning import TemplateLibrary, enabled, qc_binding, VERSION, SESSION_WIRING
+from .template_learning import TemplateLibrary, enabled, qc_binding, SESSION_WIRING
 
 
 def write_new(path, value):
@@ -91,7 +91,7 @@ async def capture(cohort_path, directory, worker):
     from . import candidate_consumer
     from site_planner.candidate_pool import CandidatePool
     cohort=load_json(cohort_path);rows=cohort['selected']
-    if cohort.get('learning_version')!=VERSION or not 1<=len(rows)<=3 or cohort['denominator']!=len(rows):raise ValueError('Bounded frozen learning cohort required')
+    if not 1<=len(rows)<=3 or cohort['denominator']!=len(rows):raise ValueError('Bounded frozen learning cohort required')
     if cohort.get('session_wiring')!=SESSION_WIRING:raise ValueError('Explicit frozen original four-tool ReAct wiring required')
     for key in ('scope','manifest','source_freeze','offline','initial_library','before'):verify_evidence([cohort[key]])
     if load_json(cohort['offline']['path'])['status']!='PASS':raise ValueError('Offline verification failed')

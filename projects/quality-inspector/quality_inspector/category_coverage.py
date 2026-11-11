@@ -22,7 +22,7 @@ REQUIRED_CATEGORIES = {
     '金融股票交易': '金融股票交易',
 }
 ALIASES = {**REQUIRED_CATEGORIES, '开发者站与API文档': '开发者站与 API 文档'}
-POLICY = {'version': 'formal-corpus-site-category-coverage-1',
+POLICY = {'version': 'formal-corpus-site-category-coverage',
           'required_categories': REQUIRED_CATEGORIES, 'aliases': ALIASES,
           'scope': 'release.kind == formal; explicit effective corpus only',
           'parent_distribution_policy': 'canonical-site-parent-shares-1',

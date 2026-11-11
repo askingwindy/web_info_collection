@@ -4,8 +4,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from jsonschema import Draft202012Validator
-from webcollect.banded_plan import (VERSION, V7_VERSION, Controller, bind_target,
+from webcollect.plan_protocol import PLAN_PROTOCOL as VERSION
+from webcollect.banded_plan import (Controller, bind_target,
     choice_schema, initial_projection, validate_plan, system_for)
+V7_VERSION = 'webcollect-banded-plan-7'  # historical value used only as a mismatched protocol in negative checks
 from webcollect.agent_controller import exclusive
 from webcollect.session_objective import bind
 from test_contracted_goal import ContractedGoal

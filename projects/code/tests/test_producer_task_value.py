@@ -6,7 +6,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 import test_producer_v10 as fixture
-from site_planner import producer_task_value as value
+from site_planner import producer_business_content as value
 from site_planner import page_purpose_v6 as old, producer_observation as observed
 from webcollect.batch_core import OutcomeUnknown, load_json
 
@@ -225,8 +225,8 @@ class TaskValue(unittest.TestCase):
              patch('site_planner.candidate_discovery.check_entry', side_effect=AssertionError('no publication GET')), \
              patch('site_planner.entry_access.check_entry', side_effect=AssertionError('no landing GET')), \
              patch.object(provider, 'open', side_effect=self.provider):
-            report = self.f.f.b.f.run_new(home, key='v11', target=1, sources=sources, model_protocol='entry-tools-11', batch_size=1)
-            replay = self.f.f.b.f.run_new(home, key='v11', target=1, sources=sources, model_protocol='entry-tools-11', batch_size=1)
+            report = self.f.f.b.f.run_new(home, key='v11', target=1, sources=sources, batch_size=1)
+            replay = self.f.f.b.f.run_new(home, key='v11', target=1, sources=sources, batch_size=1)
         self.assertEqual(report['listed_unique_candidates'], 1, report)
         self.assertEqual(replay['new_dispatches'], {'model': 0, 'GET': 0, 'search': 0})
         row = self.pool.rows(protocols=('webcollect-data-candidate-2',))[0]

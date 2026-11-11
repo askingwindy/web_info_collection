@@ -1,5 +1,4 @@
 {
-  "schema_version": "webcollect-batch-config-1",
   "run_id": "REPLACE_WITH_AUTHORIZED_RUN_ID",
   "mode": "real",
   "budget": {

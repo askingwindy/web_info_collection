@@ -154,7 +154,7 @@ def exhaustive_routes(rows):
     return routes
 
 
-CACHE_VERSION='qc-fingerprints-1'
+CACHE_VERSION='qc-fingerprints'
 
 
 def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, verify_exhaustive=False,

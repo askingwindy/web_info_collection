@@ -5,7 +5,7 @@ from PIL import Image
 from .batch_core import file_sha
 from .planning import object_sha256
 
-VERSION = 'webcollect-inference-image-1'
+VERSION = 'inference-image'
 
 
 def derive(source, directory, *, size=(960, 540), quality=85, crop=None, original=False):

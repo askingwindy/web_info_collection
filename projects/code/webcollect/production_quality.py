@@ -81,7 +81,7 @@ class ExactImageIndex:
         return self.receipt()
 
     def receipt(self):
-        return {'schema': 'webcollect-exact-index-1', 'scope': 'producer-exact-images-only',
+        return {'schema': 'exact-index', 'scope': 'producer-exact-images-only',
             'independent_final_qc_required': True, 'roots': [str(p) for p in self.roots],
             'image_count': len(self.files),
             'files_sha256': {str(p): digest for p, digest in sorted(self.files.items())}}
@@ -151,7 +151,7 @@ class ConcurrentExactImageIndex:
             for row in rows:
                 if sha(row['path']) != row['digest']:
                     raise ValueError('已登记精确图片发生变化：' + row['path'])
-        return {'schema': 'webcollect-exact-index-concurrent-1',
+        return {'schema': 'exact-index-concurrent',
             'scope': 'producer-exact-images-only', 'independent_final_qc_required': True,
             'atomic_capture_commit': True, 'registry_path': str(self.store.registry),
             'roots': [str(root) for root in self.roots], 'image_count': len(expected),
@@ -164,7 +164,7 @@ def contract_identity(repo):
     manifest = json.loads((root / 'contract-authority.json').read_text())
     rows = manifest.get('documents', [])
     roles = [row.get('role') for row in rows]
-    if (manifest.get('schema_version') != 'qc-installed-authority-1'
+    if (manifest.get('schema_version') not in ('installed-authority', 'qc-installed-authority-1')
             or len(roles) != len(set(roles)) or roles != manifest.get('source_precedence')
             or not {'clarification', 'requirement', 'annex_a', 'annex_b'} <= set(roles)):
         raise ValueError('Complete installed authority and precedence required')

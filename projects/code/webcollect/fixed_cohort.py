@@ -20,7 +20,8 @@ from urllib.parse import urlsplit
 from .batch_core import file_sha, load_json, save_json
 from .planning import canonical, object_sha256
 
-VERSION = 'webcollect-fixed-cohort-1'
+VERSION = 'fixed-cohort'
+LEGACY_VERSION = 'webcollect-fixed-cohort-1'
 TARGET = 1000
 SITES = 50
 PER_SITE = 20
@@ -108,7 +109,7 @@ def _state_write(path, value):
 
 def _state_read(path):
     value = load_json(path)
-    if (value.get('schema_version') != VERSION or value.get('state_sha256') !=
+    if (value.get('schema_version') not in (VERSION, LEGACY_VERSION) or value.get('state_sha256') !=
             object_sha256({k: v for k, v in value.items() if k != 'state_sha256'})
             or value.get('spec_sha256') != object_sha256(value.get('spec'))):
         raise ValueError('Cohort state/spec integrity differs')
@@ -159,8 +160,8 @@ def _history(spec):
     packages = {}
     for ref in spec['bindings']['history']:
         manifest = load_json(ref['path'])
-        if manifest.get('schema_version') != 'qc-cumulative-set-1':
-            raise ValueError('History must bind qc-cumulative-set-1 manifests')
+        if manifest.get('schema_version') not in ('qc-cumulative-set', 'qc-cumulative-set-1'):
+            raise ValueError('History must bind qc-cumulative-set manifests')
         for item in manifest.get('packages', []):
             path = Path(item['path'])
             if not path.is_absolute():
@@ -494,7 +495,7 @@ def _population_errors(state, dataset, successes):
         tasks = {task['task_id']: task for task in state['spec']['tasks']}
         frozen_sites = {task['site_id']: task for task in state['spec']['tasks']}
         listing = load_json(dataset / 'site-list.json')
-        if listing.get('schema_version') != 'webcollect-site-list-1':
+        if listing.get('schema_version') not in ('site-list', 'webcollect-site-list-1'):
             raise ValueError('A current actual site-list is required')
         sites = {row['site_id']: row for row in listing['sites']}
         assignments = {row['sample_id']: row['site_id'] for row in listing['samples']}
@@ -585,7 +586,7 @@ def _cumulative(state, path, dataset):
         return 'REVIEW_REQUIRED', [{'kind': 'MISSING_CUMULATIVE_QC'}], None
     try:
         report = load_json(path)
-        if report.get('schema_version') != 'qc-cumulative-report-1':
+        if report.get('schema_version') not in ('qc-cumulative-report', 'qc-cumulative-report-1'):
             raise ValueError('Unsupported cumulative QC evidence')
         declared = report.get('input_files_sha256')
         expected = {**state['history_packages'], str(dataset): _files(dataset)}
@@ -607,7 +608,7 @@ def _cumulative(state, path, dataset):
             if root in declared_manifest:
                 raise ValueError('Cumulative manifest repeats a package')
             declared_manifest[root] = item['package_files_sha256']
-        if (manifest.get('schema_version') != 'qc-cumulative-set-1' or declared_manifest != expected
+        if (manifest.get('schema_version') not in ('qc-cumulative-set', 'qc-cumulative-set-1') or declared_manifest != expected
                 or report.get('manifest_sha256') != object_sha256(manifest)):
             raise ValueError('Cumulative manifest does not bind exactly the frozen union')
         duplicate_status, duplicate_issues = _duplicate_evidence(report, cumulative=True, expected_ids=expected_ids)

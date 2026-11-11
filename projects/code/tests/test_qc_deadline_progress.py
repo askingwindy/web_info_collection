@@ -19,7 +19,7 @@ from make_fixture import fixture
 from webcollect.batch_core import BatchLedger, load_json
 from webcollect.model_gateway import ModelGateway, _read_qc_body
 from quality_inspector.ai_worker import (run, snapshot, difference_progress, do_difference,
-    POLICY_VERSION,PROMPT_VERSION,DIFFERENCE_PROTOCOL)
+    DIFFERENCE_PROTOCOL)
 
 
 class DeadlineProgressTests(unittest.TestCase):
@@ -98,8 +98,7 @@ class DeadlineProgressTests(unittest.TestCase):
                     image.putpixel((1,1),(i+1,20,30));image.save(path)
             (other/'annotation.json').write_text(json.dumps(annotation,ensure_ascii=False))
             others.append(snapshot(other))
-        payload={'candidate':snapshot(focal),'neighbors':others,'policy_version':POLICY_VERSION,
-                 'prompt_version':PROMPT_VERSION,'difference_protocol':DIFFERENCE_PROTOCOL,
+        payload={'candidate':snapshot(focal),'neighbors':others,'difference_protocol':DIFFERENCE_PROTOCOL,
                  'comparison_version':'LOCAL-FROZEN-COMPARISONS-1','pending_collection_checks':[]}
         return self.ledger.enqueue('ai-difference',payload)
 

@@ -96,69 +96,6 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
     return isolated
 
 
-async def first_observation(ledger, claim, root):
-    from playwright.async_api import async_playwright
-    from .browser import capture
-    from .navigation import BatchNavigation
-    from .site_failure_stop import SiteFailureStore
-    task={'site_uri':claim['snapshot']['entry_url']}
-    guard=ledger.config.get('site_failure_guard')
-    guard_candidate_dispatch(ledger, task['site_uri'], candidate_id=claim['candidate_id'])
-    jid=ledger.enqueue('candidate-observation',{'claim_id':claim['claim_id'],'site_uri':task['site_uri']})
-    old=ledger.get(jid)
-    if old['state']=='done':
-        verify_evidence(list(old['result'].values())); return old['result']
-    if old['state']!='queued' or old['attempts']: raise OutcomeUnknown('Original observation unresolved; reconcile original visits')
-    job=ledger.claim('candidate-observation',job_id=jid)
-    if not job: raise OutcomeUnknown('Original observation not claimable')
-    browser=None; context=None
-    try:
-        ledger.consume('probe_pages',jid,1)
-        async with async_playwright() as pw:
-            try:
-                browser=await pw.chromium.launch(channel='chrome',headless=True)
-                context=await browser.new_context(viewport={'width':1280,'height':720},locale='zh-CN',service_workers='block',accept_downloads=False)
-                page=await context.new_page()
-                await BatchNavigation(ledger,job).goto(page,task['site_uri'],purpose='candidate-first-observation')
-                from .preflight import _wait_visible_readiness, wait_hydration_stable
-                exclusive(root/'first-readiness.json',await _wait_visible_readiness(page))
-                # Same bounded hydration wait as the entry session: the frozen
-                # anchor must be the page this session will actually observe.
-                exclusive(root/'first-hydration.json',await wait_hydration_stable(page))
-                captured=await capture(page)
-                try:
-                    layouts=await asyncio.wait_for(page.evaluate('''() => [...document.querySelectorAll('input,textarea,select')].slice(0,32).map(e=>({
-                      tag:e.tagName,type:e.getAttribute('type'),name:e.getAttribute('name'),classes:e.className,
-                      parents:[e.parentElement,e.parentElement?.parentElement].filter(Boolean).map(p=>({tag:p.tagName,classes:p.className,
-                        children:[...p.children].slice(0,8).map(c=>({tag:c.tagName,classes:c.className,
-                          leaf_text:c.children.length?'':(c.textContent||'').trim().slice(0,100)}))}))}))'''),3)
-                    exclusive(root/'first-control-layouts.json',{'diagnostic_only':True,'layouts':layouts})
-                except Exception as diagnostic:
-                    exclusive(root/'first-control-layouts.json',{'diagnostic_only':True,'error_type':type(diagnostic).__name__})
-                with (root/'first.png').open('xb') as image:
-                    image.write(captured['png'])
-                anchor={'image':{'path':str(root/'first.png'),'sha256':file_sha(root/'first.png')},
-                    'state':exclusive(root/'first-state.json',captured['state']),
-                    'capture':exclusive(root/'first-capture.json',captured['capture'])}
-                ledger.finish(job,result=anchor)
-                return anchor
-            finally:
-                if context: await context.close()
-                if browser: await browser.close()
-    except BaseException as error:
-        failure={'error_type':type(error).__name__,'reason':str(error),'capture':getattr(error,'capture',None),
-                 'job_id':jid,'stage':'first_observation','accepted_as_formal_frame':False}
-        failure_ref=exclusive(root/'first-observation-failure.json',failure)
-        visits=[v for v in ledger.visits() if v['job_id']==jid]
-        if guard and visits and visits[-1]['state']=='succeeded':
-            from .site_failure_stop import execution_id
-            SiteFailureStore(guard).record(task,execution_id('candidate-observation',ledger.path,jid),
-                stage='observation',state='failed',real_execution=True,
-                reason=type(error).__name__+': '+str(error),evidence=[failure_ref],
-                usage_refs=[{'ledger':str(ledger.path),'job_id':jid,'visit_id':visits[-1]['id']}])
-        ledger.finish(job,'review_required',error=type(error).__name__); raise
-
-
 def _original_attempts(claim):
     binding=claim.get('binding') or {}
     registry=binding.get('registry')
@@ -315,7 +252,8 @@ def finish_or_reconcile(pool, claim, *, reconciliation=False):
                 pool.event(con,claim['candidate_id'],claim['claim_id'],'lease_expired',{})
             original=pool.get_claim(claim['claim_id'])
         return {'state':original['state'],'saved':False,'reason':'No committed complete save; inspect original model/visit/runtime ledgers; no resend'}
-    if research and descriptor.get('schema_version') in ('candidate-research-replay-2', 'candidate-research-replay-3'):
+    if research and descriptor.get('schema_version') in ('candidate-research-replay-1', 'candidate-research-replay-2',
+                                                         'candidate-research-replay-3', 'candidate-research-replay'):
         result = {**result, 'research_replay': descriptor, 'production_counted': False}
     with pool.transaction() as con:
         latest=con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1',(claim['candidate_id'],)).fetchone()
@@ -366,8 +304,8 @@ def planning_failure(ledger, pending):
 
 
 def _entry_hints(claim):
-    """Display hints for webcollect-data-candidate-2 entries: the body carries
-    only protocol/kind/URL/goal, so classification stays in frozen sources."""
+    """Display hints for candidate entries: the body carries only protocol/kind/
+    URL/goal, so classification stays in frozen sources."""
     from site_planner.site_pool import host_identity
     from site_planner.qualification import BUSINESS_CATEGORIES as CANONICAL_CATEGORIES
     snapshot = claim['snapshot']
@@ -735,49 +673,36 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         for source in claim.get('sources',[]):
             verify_evidence(source['references'])
         from .task_generation import generate, execute
-        session = None
-        if snapshot.get('schema_version') == 'webcollect-data-candidate-2':
-            session = await stack.enter_async_context(entry_session(ledger, pool, claim, root))
-            from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
-            route = first_frame_disposition(load_json(session['anchor']['state']['path']))
-            if route:
-                disposition, reason = route
-                from .consumer_page_policy import LOGIN_ENTRY_VERSION
-                route_policy = LOGIN_ENTRY_VERSION if reason in ('login_page', 'explicit_login_required_to_use') else ROUTING_VERSION
-                pool.record_disposition(claim, disposition=disposition, reason=reason, stage='first_frame',
-                    evidence=list(session['anchor'].values()), policy_version=route_policy)
-                return {'state':'failed', 'disposition':disposition, 'reason':reason, 'formal_attempts':0}
-            hints = _entry_hints(claim)
-            record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
-                category=hints['category'], name=hints['name'])
-            # Consumer evidence belongs to this claim/attempt. Table1's site
-            # identity, category, page inventory and availability are producer-owned.
-            catalog = root/'catalog.json'
-            exclusive(catalog, {'schema_version':'webcollect-capability-catalog-1','mode':ledger.config['mode'],'records':[record]})
-            from .single_record import identity
-            identities = root/'identities.json'
-            identity(catalog, identities, registry=registry, candidate_observation=True)
-            pool.stage(claim, 'planning', {'catalog':str(catalog)})
-            stage = 'planning'
-            generated = await asyncio.to_thread(generate, ledger, catalog, root/'planning',
-                generator='react-url', history_registry=registry, history_set=history_set,
-                react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
-                react_site_category=hints['category'], react_app_name=hints['name'],
-                react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles,'session_objective':objective_binding,
-                    **({'effort_profile':effort_profile} if effort_profile else {}),
-                    **({'collection_strategy':collection_strategy} if collection_strategy else {})})
-            catalog = root/'planning/catalog.json'
-        else:
-            anchor=await first_observation(ledger,claim,root)
-            record=capability(claim,anchor,claim_ref,ledger.config['mode'])
-            catalog=root/'catalog.json'; exclusive(catalog,{'schema_version':'webcollect-capability-catalog-1','mode':ledger.config['mode'],'records':[record]})
-            pool.stage(claim,'planning',{'catalog':str(catalog)}); stage='planning'
-            from .single_record import identity
-            identities=root/'identities.json'
-            identity(catalog,identities,registry=registry,candidate_observation=True)
-            generated=await asyncio.to_thread(generate,ledger,catalog,root/'planning',generator='agent-model',history_registry=registry,
-                history_set=history_set,page_identities=identities,max_tasks=1,
-                fragment_context={'candidate_consumption':record['candidate_observation']})
+        session = await stack.enter_async_context(entry_session(ledger, pool, claim, root))
+        from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
+        route = first_frame_disposition(load_json(session['anchor']['state']['path']))
+        if route:
+            disposition, reason = route
+            from .consumer_page_policy import LOGIN_ENTRY_VERSION
+            route_policy = LOGIN_ENTRY_VERSION if reason in ('login_page', 'explicit_login_required_to_use') else ROUTING_VERSION
+            pool.record_disposition(claim, disposition=disposition, reason=reason, stage='first_frame',
+                evidence=list(session['anchor'].values()), policy_version=route_policy)
+            return {'state':'failed', 'disposition':disposition, 'reason':reason, 'formal_attempts':0}
+        hints = _entry_hints(claim)
+        record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
+            category=hints['category'], name=hints['name'])
+        # Consumer evidence belongs to this claim/attempt. Table1's site
+        # identity, category, page inventory and availability are producer-owned.
+        catalog = root/'catalog.json'
+        exclusive(catalog, {'schema_version':'capability-catalog','mode':ledger.config['mode'],'records':[record]})
+        from .single_record import identity
+        identities = root/'identities.json'
+        identity(catalog, identities, registry=registry, candidate_observation=True)
+        pool.stage(claim, 'planning', {'catalog':str(catalog)})
+        stage = 'planning'
+        generated = await asyncio.to_thread(generate, ledger, catalog, root/'planning',
+            generator='react-url', history_registry=registry, history_set=history_set,
+            react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
+            react_site_category=hints['category'], react_app_name=hints['name'],
+            react_candidate={'claim':claim,'claim_reference':claim_ref,'skip_wechat_articles':skip_wechat_articles,'session_objective':objective_binding,
+                **({'effort_profile':effort_profile} if effort_profile else {}),
+                **({'collection_strategy':collection_strategy} if collection_strategy else {})})
+        catalog = root/'planning/catalog.json'
         exclusive(root/'planning/generation-result.json',generated)
         pool.stage(claim,'planned',{'planning_result':str(root/'planning/generation-result.json'),
             'planning_jobs':[r['job_id'] for r in generated.get('model_responses',[])]})
@@ -790,7 +715,7 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         plan=root/'planning/plan.json'; stage='execution'
         pool.stage(claim,stage,{'plan':str(plan),'queue_job_id':generated.get('queue_job_id')})
         execution=await execute(ledger,plan,catalog,root/'execution',registry,policy,qc_policy=qc_policy,site_pool=pool.path,
-            **({'entry_session':session} if session is not None else {}))
+            entry_session=session)
         pool.stage(claim,'save_reconciliation',{'execution_result':execution})
         result=finish_or_reconcile(pool,claim)
         if not result.get('saved'):
@@ -848,7 +773,7 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
 
 def _cohort_rows(path, pool, registry, batch):
     cohort = load_json(path)
-    multi=cohort.get('schema_version') == 'webcollect-consumer-multibatch-cohort-1'
+    multi=cohort.get('schema_version') == 'consumer-multibatch-cohort'
     if not multi and cohort.get('schema_version') != 'webcollect-validation-cohort-1':
         raise ValueError('Unsupported frozen validation cohort')
     scope_ref=cohort['scope'] if multi else cohort['source_scope']
@@ -871,16 +796,15 @@ def _cohort_rows(path, pool, registry, batch):
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              protocols=None, poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, **kwargs):
+              poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, **kwargs):
     if effort_profile is not None:
         from .react_session import validate_effort_profile
         effort_profile = validate_effort_profile(effort_profile)
     rows = None
     if cohort is not None:
-        if any((categories, application_id, recovery_version, target is not None, poll_seconds is not None)) or protocols not in (None, ('webcollect-data-candidate-2',)):
+        if any((categories, application_id, recovery_version, target is not None, poll_seconds is not None)):
             raise ValueError('Frozen cohort defines its own selection and fixed denominator')
         producer_batch, rows = _cohort_rows(cohort, pool, kwargs['registry'], producer_batch)
-        protocols = ('webcollect-data-candidate-2',)
     skipped = []
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError('Processing limit must be a positive integer')
@@ -930,7 +854,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             request_id = f'{request_prefix}/{poll}'
             def claim_next():
                 return pool.claim_next(worker_id,request_id,categories=categories,application_id=application_id,
-                    protocols=protocols, **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
+                    **({'candidate_id':selected['candidate_id'], 'frozen_row':selected} if selected else {}),
                     **({'producer_batch':row_batch} if row_batch else {}),
                     **({'recovery_version':recovery_version} if recovery_version else {}))
             if campaign:
@@ -1109,10 +1033,8 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('--pool',required=True)
     sub=p.add_subparsers(dest='command',required=True)
     listp=sub.add_parser('list')
-    listp.add_argument('--protocol',choices=['legacy','entry'])
     retry_p=sub.add_parser('retry'); retry_p.add_argument('--candidate-id',required=True); retry_p.add_argument('--reason',required=True)
     claim=sub.add_parser('claim'); claim.add_argument('--worker-id',required=True); claim.add_argument('--request-id',required=True)
-    claim.add_argument('--protocol',choices=['legacy','entry'],help='legacy=webcollect-data-candidate-1 only (default); entry declares webcollect-data-candidate-2')
     reconcile=sub.add_parser('reconcile'); reconcile.add_argument('--claim-id',required=True)
     runp=sub.add_parser('run')
     for name in ('config','ledger','output','registry','policy','history-set','worker-id','request-prefix'): runp.add_argument('--'+name,required=True)
@@ -1126,10 +1048,10 @@ def main(argv=None):
     runp.add_argument('--branch-effort',choices=('low','high','max'))
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
     runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default waits continuously (2 seconds between empty claims)')
-    runp.add_argument('--collection-strategy',choices=('banded-react','screenshot-plan'),default='banded-react',
-        help='Freeze the collection strategy for new tasks: banded-react (default, strategy 1) or screenshot-plan (strategy 2)')
-    runp.add_argument('--producer-batch',help='Consume only newly published V2 rows from this producer batch; wait when inventory is empty')
-    runp.add_argument('--protocol',choices=['legacy','entry'],help='legacy=webcollect-data-candidate-1 only (default); entry declares webcollect-data-candidate-2')
+    from .collection_strategy import STRATEGIES, STRATEGY_BANDED_REACT, STRATEGY_SCREENSHOT_PLAN
+    runp.add_argument('--collection-strategy',choices=STRATEGIES,default=STRATEGY_BANDED_REACT,
+        help='Freeze the collection strategy for new tasks: react (default, strategy 1) or screenshot_plan (strategy 2)')
+    runp.add_argument('--producer-batch',help='Consume only newly published rows from this producer batch; wait when inventory is empty')
     import sys
     argv = list(sys.argv[1:] if argv is None else argv)
     for i, value in enumerate(argv):
@@ -1144,23 +1066,21 @@ def main(argv=None):
         p.error('--first-plan-effort and --branch-effort must be specified together')
     pool=CandidatePool(a.pool)
     if a.command=='list':
-        records=pool.rows(protocols=('webcollect-data-candidate-2',) if a.protocol=='entry' else None)
-        if a.protocol=='entry':
-            from .current_chain import POOL_CHECKPOINT
-            marker=pool.pool.checkpoint(*POOL_CHECKPOINT)
-            if marker:
-                from .candidate_accounting import build_report
-                scope=load_json(Path(marker['path']).parent.parent/'scope.json')
-                if Path(scope['pool']).resolve()!=pool.path:
-                    raise ValueError('Candidate list scope belongs to a different pool')
-                details={r['candidate_id']:r for r in build_report(scope)['candidates']}
-                for r in records:
-                    detail=details[r['candidate_id']]
-                    r.update(discovery_tokens=detail['discovery_tokens'],consumer_result=detail['consumer_result'])
+        records=pool.rows()
+        from .current_chain import POOL_CHECKPOINT
+        marker=pool.pool.checkpoint(*POOL_CHECKPOINT)
+        if marker:
+            from .candidate_accounting import build_report
+            scope=load_json(Path(marker['path']).parent.parent/'scope.json')
+            if Path(scope['pool']).resolve()!=pool.path:
+                raise ValueError('Candidate list scope belongs to a different pool')
+            details={r['candidate_id']:r for r in build_report(scope)['candidates']}
+            for r in records:
+                detail=details[r['candidate_id']]
+                r.update(discovery_tokens=detail['discovery_tokens'],consumer_result=detail['consumer_result'])
         result={'records':records,'statistics':statistics(pool)}
     elif a.command=='retry': result=retry(pool,a.candidate_id,reason=a.reason)
-    elif a.command=='claim': result=pool.claim_next(a.worker_id,a.request_id,
-        protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None)
+    elif a.command=='claim': result=pool.claim_next(a.worker_id,a.request_id)
     elif a.command=='reconcile': result=finish_or_reconcile(pool,pool.get_claim(a.claim_id),reconciliation=True)
     else:
         config = load_json(a.config)
@@ -1178,8 +1098,7 @@ def main(argv=None):
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
-            collection_strategy={'banded-react':'webcollect-collection-banded-react-1','screenshot-plan':'webcollect-collection-screenshot-plan-2'}[a.collection_strategy],
-            protocols=('webcollect-data-candidate-2',) if getattr(a,'protocol',None)=='entry' else None))
+            collection_strategy=a.collection_strategy))
     print(json.dumps(result,ensure_ascii=False))
 
 

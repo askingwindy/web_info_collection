@@ -155,7 +155,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     if collection_checks is not None:
         assert_current_evidence(scope, collection_checks)
         checks = json.loads(Path(collection_checks['path']).read_text())
-        if (checks.get('schema_version') != 'webcollect-pending-quality-checks-1'
+        if (checks.get('schema_version') not in ('pending-quality-checks', 'webcollect-pending-quality-checks-1')
                 or checks.get('QC_approval') is not False or checks.get('requires_independent_QC') is not True
                 or not isinstance(checks.get('checks'), list)):
             raise ValueError('Collection checks must be an immutable pending independent-QC request')
@@ -185,7 +185,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
     if production_sampling:
         from .sampling_context import production_context as capture_context
         production_context = capture_context(scope, sample_ids)
-    manifest = {'schema_version': 'qc-cumulative-set-1',
+    manifest = {'schema_version': 'qc-cumulative-set',
                 'scope': 'Explicit current-chain candidate and indexed current results; zero legacy history',
                 'packages': [{'path': str(dataset), 'package_files_sha256': original}]}
     prior_roots = {}
@@ -213,7 +213,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
         # Prior indexed packages are comparison evidence, not new delivery
         # targets. Keep their original files and historical completion policy.
         manifest['delivery_sample_ids'] = sorted(sample_ids)
-        manifest['delivery_target'] = {'protocol': 'webcollect-qc-delivery-target-1',
+        manifest['delivery_target'] = {'protocol': 'qc-delivery-target',
             'package': str(dataset)}
         manifest['completion_bindings'] = completion_bindings
     request = {'dataset': str(dataset), 'history_scope': scope, 'attempts': attempts,
@@ -263,7 +263,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
                         'candidate_sample':{'sample_id':row['sample_id'],
                             'files_sha256':package_files(dataset/'samples'/row['sample_id'])}}
             save_json(staged / 'collection-checks.json', {
-                'schema_version': 'webcollect-qc-collection-checks-1', 'source': collection_checks,
+                'schema_version': 'qc-collection-checks', 'source': collection_checks,
                 **({'completion_only':True} if collection_checks is None else {}),
                 'sample_bindings': bindings, 'checks': checks['checks'],
                 'QC_approval': False, 'requires_independent_QC': True})
@@ -273,7 +273,7 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
             raise ValueError('Current candidate or chain changed during QC handoff')
         if collection_checks is not None:
             assert_current_evidence(scope, collection_checks)
-        receipt = {'schema_version': 'webcollect-qc-handoff-1', 'chain_id': scope['chain_id'],
+        receipt = {'schema_version': 'qc-handoff', 'chain_id': scope['chain_id'],
             'request': request, 'collection_checks': collection_checks,
             'bound_checks_sha256': file_sha(staged / 'collection-checks.json') if needs_checks else None,
             'history_scope': scope, 'dataset': str(dataset), 'attempts': attempts,

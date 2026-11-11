@@ -5,31 +5,54 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 from PIL import Image
-from webcollect.banded_plan import (VERSION, tools, validate_plan, bind_target, rendered_dom,
+from webcollect.banded_plan import (tools, validate_plan, bind_target, rendered_dom,
                                     proves, distribution)
-from webcollect.closing_policy import VERSION as END
+from webcollect.plan_protocol import PLAN_PROTOCOL, ENDING_POLICY
 from webcollect.react_session import ReactSession, build_url_task, validate_task, react_chooser
 from webcollect.batch_core import load_json, file_sha, OutcomeUnknown, SessionGLMCallLimit
 from webcollect.inference_image import derive
 from test_react_session import ReactHarness
-import test_closing_policy_v2 as closing_fixture
 import test_model_provider_protocols as provider_fixture
 
 
 def plan_for(prompt,n=5):
     return {'attempt_id':prompt['attempt_id'],'observation_id':prompt['observation']['observation_id'],
             'band':'five' if n==5 else 'long' if n>=6 else 'short','short_reason':'当前页面自然短流程' if n<5 else '',
-            'goal':'逐段核对当前页面相关信息','checks':[],'steps':[{'action':'scroll','direction':'down',
+            'goal':'逐段核对当前页面相关信息','checks':[],
+            'steps':[{'action':'scroll','direction':'down','rationale':f'原目标需要核对第{i+1}段信息',
+                'expected_result':f'滚动后第{i+1}段内容进入视口',
                 'purpose':f'核对第{i+1}段独立信息','expected':{'kind':'scroll_changed','text':'滚动后位置改变'}} for i in range(n)],
             'finish_when':{'kind':'visible_text','text':'当前终点内容'},'replan_when':'新文档或目标缺失'}
 
 
 class BandedSessionTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
-    derive=closing_fixture.EndingV2Tests.derive
-    fail_local=closing_fixture.EndingV2Tests.fail_local
+    def derive(self,evidence,name='candidate'):
+        destination=self.root/name/'samples'/self.ids['sample_id']
+        from webcollect.postprocess import process
+        result=process(evidence,destination,self.ids,self.manifest)
+        if result['status']!='derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'],'derived_saved',result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation=validate_client_sample(destination)
+        check=sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'],check['errors'])
+        self.assertEqual(annotation_errors(annotation),[])
+        return destination,annotation
+
+    def fail_local(self,n):
+        original=self.surface.execute_action
+        def execute(kind,args):
+            if len(self.surface.executed)==n-1:
+                self.surface.executed.append((kind,deepcopy(args))) # real dispatch, known local no movement
+            else:original(kind,args)
+        self.surface.execute_action=execute
+
     def setUp(self):
         ReactHarness.setUp(self)
-        self.task=build_url_task(url=self.page.url,task_version='plan',ending_policy=END,plan_protocol=VERSION)
+        self.task=build_url_task(url=self.page.url,task_version='plan',ending_policy=ENDING_POLICY,plan_protocol=PLAN_PROTOCOL)
         self.ids={'sample_id':'S000001_sample_000001','site_id':'S000001','batch_id':'B20261103_001','attempt_id':'offline-plan'}
         self.manifest={'batch_id':'B20261103_001','sample_kind':'real','program_version':'CONTROLLED',
             'rule_version':'1.0.0','sites':[{'site_id':'S000001','uri':self.page.url,'site_category':self.task['site_category']}],
@@ -155,7 +178,7 @@ class BandedPureTests(unittest.TestCase):
     def test_old_frozen_identity_and_extension_binding(self):
         old=build_url_task(url='https://example.org',task_version='old',ending_policy=END)
         self.assertNotIn('plan_protocol',old['fragment']);validate_task(old)
-        new=build_url_task(url='https://example.org',task_version='new',ending_policy=END,plan_protocol=VERSION)
+        new=build_url_task(url='https://example.org',task_version='new',ending_policy=ENDING_POLICY,plan_protocol=PLAN_PROTOCOL)
         self.assertNotEqual(old['task_id'],new['task_id'])
         new['fragment']['plan_protocol']='bad'
         with self.assertRaises(ValueError):validate_task(new)
@@ -280,76 +303,6 @@ class BandedSafetyTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
     setUp=BandedSessionTests.setUp
     recorded=BandedSessionTests.recorded
     derive=BandedSessionTests.derive
-    async def test_contracted_seven_step_proposal_leaves_one_slot_for_the_visible_result(self):
-        from webcollect.goal_evidence import VERSION as evidence_version
-        from webcollect.react_session import ReactStop
-        from webcollect.banded_plan import V10_VERSION
-        from webcollect.closing_policy import V2_VERSION as END_V2
-
-        # V10 keeps the historical eight-slot contracted flow; V11's twelve-slot
-        # long ceiling and its one-shot excess correction are covered by
-        # test_long_plan_20261107.py.
-        session, _ = self.recorded(7, name='contracted-seven',
-                                   task=build_url_task(url=self.page.url, task_version='plan',
-                                                       ending_policy=END_V2, plan_protocol=V10_VERSION))
-        session.task['fragment']['session_objective'] = {'objective':{
-            'kind':'calculation', 'description':'读出面积',
-            'evidence_contract':{'version':evidence_version, 'kind':'calculation',
-                'inputs':[{'label':'长','value':'12.5'}], 'result_label':'面积','unit':'平方英尺'}}}
-        await session._observe()
-        controller = session.plan_controller
-        await controller.request(session)
-        self.assertEqual(controller.check_page_urls['p0'], self.page.url)
-        self.assertEqual(len(controller.frozen_plan['steps']), 7)
-        self.assertEqual(controller.target_steps, 8)
-        controller.position = 7
-        session.trajectory = [{'effect_evidence':{'verified':True}} for _ in range(7)]
-        async def choose_last(prompt):
-            self.assertEqual(prompt['replan_contract']['remaining_effective_limit'], 1)
-            self.assertIn('replan', {option['choice'] for option in prompt['options']})
-            remaining = plan_for(prompt, 7)
-            remaining['steps'] = [{'action':'click','target':{'text':'计算面积'},
-                'purpose':'取得本次计算结果','expected':{'kind':'goal_evidence'}}]
-            remaining['finish_when'] = {'kind':'goal_evidence'}
-            return {'choice':'replan','plan':remaining}
-        session.choose = choose_last
-        with patch('webcollect.goal_evidence.progress', return_value={'status':'UNVERIFIED','kind':'calculation'}):
-            await controller.round(session)
-            self.assertEqual(controller.plan['steps'][0]['target']['text'], '计算面积')
-            session.trajectory.append({'effect_evidence':{'verified':True}})
-            # V10: the remaining allowance comes from the session's own budgets
-            # (closing-policy attempt ceiling here), not a new protocol cap;
-            # the graceful EIGHT_ATTEMPT_LIMIT range close stays the bound.
-            from webcollect.banded_plan import remaining_step_allowance
-            self.assertEqual(remaining_step_allowance(session), 0)
-            exhausted = plan_for(controller.prompt(session), 1)
-            async def refuse(prompt):
-                return {'attempt_id':session.attempt_id,'observation_id':session.current['observation_id'],
-                        'choice':'replan','plan':exhausted}
-            session.choose = refuse
-            with self.assertRaisesRegex(ValueError, 'REMAINING'):
-                await controller.request(session, [{'choice':'replan'}])
-        self.assertEqual(session.actual_dispatches, 0)
-
-    async def test_plain_replan_remaining_extends_to_session_ceiling_after_one(self):
-        # V10: the remaining path is bounded by the shared session ceiling,
-        # not by the original plan length minus executed steps. (V11's same-kind
-        # excess takes the one-shot budget_feedback correction instead of the
-        # hard raise; covered in test_long_plan_20261107.py.)
-        from webcollect.banded_plan import V10_VERSION
-        from webcollect.closing_policy import V2_VERSION as END_V2
-        for remaining,accepted in ((7,True),(8,False)):
-            s,_=self.recorded(name='remaining-'+str(remaining),task=build_url_task(
-                url=self.page.url,task_version='plan',ending_policy=END_V2,plan_protocol=V10_VERSION));await s._observe()
-            c=s.plan_controller;initial=c.prompt(s)
-            c.plan=plan_for(initial);c.submitted=True;c.frozen_band='five';c.target_steps=5
-            s.trajectory.append({'effect_evidence':{'verified':True}})
-            revised=plan_for(initial,8);revised['steps']=revised['steps'][:remaining]
-            async def choose(p):return {'attempt_id':s.attempt_id,'observation_id':s.current['observation_id'],'choice':'replan','plan':revised}
-            s.choose=choose
-            if accepted:await c.request(s,[{'choice':'replan'}]);self.assertEqual(len(c.plan['steps']),remaining)
-            else:
-                with self.assertRaisesRegex(ValueError,'REMAINING'):await c.request(s,[{'choice':'replan'}])
     async def test_long_proposal_can_ground_to_five_with_reason_before_dispatch(self):
         s,e=self.recorded(name='downgrade');s.context={'band_budget':{'assigned_band':'long'}}
         original=s.choose

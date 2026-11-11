@@ -6,8 +6,7 @@ from webcollect import consumer_page_policy as policy
 from webcollect.candidate_batch import first_frame_disposition
 from webcollect.batch_core import load_json
 from webcollect.react_session import ReactSession,build_url_task
-from webcollect.banded_plan import VERSION,V6_VERSION
-from webcollect.closing_policy import VERSION as END
+from webcollect.plan_protocol import PLAN_PROTOCOL as VERSION, ENDING_POLICY as END
 from test_react_session import ReactHarness
 import test_banded_plan as banded
 import test_candidate_entry_engineering as entry
@@ -121,7 +120,7 @@ class BoundarySessionTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
         banded.BandedSessionTests.setUp(self)
     async def run_boundary(self,kind,modal=False,old=False,no_exit=False):
         self.task=build_url_task(url=self.page.url,task_version=kind+str(modal),ending_policy=END,
-            plan_protocol=V6_VERSION if old else VERSION,
+            plan_protocol=VERSION,
             allowed_actions=[a for a in self.task['fragment']['allowed_actions'] if a!='back'] if no_exit else None)
         self.surface.state['values']=[]
         self.surface.state['elements']=self.surface.state['elements'][:1]
@@ -198,7 +197,3 @@ class BoundarySessionTests(ReactHarness,unittest.IsolatedAsyncioTestCase):
             'step':{'action':'type','control_id':'control-0','value':'credentials','goal':'登录','expected':'登录'}})
         self.assertEqual(result['status'],'rejected')
         self.assertEqual(self.surface.executed,[])
-    async def test_v6_task_does_not_enable_automatic_boundary_return(self):
-        s,e,r,p=await self.run_boundary('login',old=True)
-        self.assertEqual(r['actual_actions'],1)
-        self.assertNotEqual((r.get('collection_ending') or {}).get('kind'),'HOST_BOUNDARY_RETURN')

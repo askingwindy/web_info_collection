@@ -50,7 +50,7 @@ class NewSites(unittest.TestCase):
         with patch('webcollect.model_gateway.ModelGateway.call',side_effect=AssertionError('no paid planner when index availability is known')):
             result=produce_entries(self.f.f.cfg,pool_path=self.pool.path,ledger_path=self.f.root/'model.db',history_set=self.f.f.chain,
                 output=self.f.root/'output'/'cooling',batch_key='cooling',categories=['在线工具'],discovery_mode='new-sites',
-                target=1,max_batches=1,max_searches=1,model_protocol='entry-tools-9')
+                target=1,max_batches=1,max_searches=1)
         self.assertEqual(result['new_dispatches'],{'model':0,'GET':0,'search':0})
         self.assertEqual(result['stopped']['type'],'OutcomeUnknown')
         self.assertIn('cooling down',result['stopped']['reason'])
@@ -167,7 +167,7 @@ class NewSites(unittest.TestCase):
         html=''.join('<h3 class="res-title"><a data-mdurl="'+u+'">标题</a></h3>' for u in urls).encode()
         args=dict(pool_path=self.pool.path,ledger_path=self.f.root/'model.db',history_set=self.f.f.chain,
                     output=self.f.root/'output'/'cat',batch_key='new',categories=['在线工具'],discovery_mode='new-sites',
-                    target=1,max_batches=3,max_searches=1,model_protocol='entry-tools-4')
+                    target=1,max_batches=3,max_searches=1)
         with patch('site_planner.grounded_entries.search_channel_hold',return_value=None), \
              patch('site_planner.grounded_entries.glm_search',side_effect=AssertionError('public default cannot call paid API')), \
              patch('webcollect.model_gateway.ModelGateway.call',return_value={'queries':['公开中文计算工具']}) as planner, \

@@ -13,7 +13,7 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
         candidates = CandidatePool(path, readonly=True)
         # Callers that do not declare the entry protocol keep seeing only
         # webcollect-data-candidate-1 rows.
-        return {'schema_version':'webcollect-data-candidate-list-1',
+        return {'schema_version':'data-candidate-list',
                 'records':candidates.rows(categories=categories, protocols=protocols),
                 'statistics':candidates.stats(),'collection_dispatched':False,'sample_ids_allocated':0}
     if purpose not in ('candidates', 'capabilities'):
@@ -28,7 +28,7 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
             category(name)
         rows = [r for r in rows if r['category'] in categories]
     if purpose == 'candidates':
-        return {'schema_version': 'webcollect-shared-pool-handoff-1', 'purpose': purpose,
+        return {'schema_version': 'shared-pool-handoff', 'purpose': purpose,
                 'records': rows, 'execution_verified': 'NOT_RUN', 'collection_dispatched': False}
     allowed = {r['page_id']: r['uri'] for r in rows}
     records = {}
@@ -38,7 +38,7 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
                 continue
             ref = json.loads(row['reference']); verify_evidence([ref])
             catalog = load_json(ref['path'])
-            if catalog.get('schema_version') != 'webcollect-capability-catalog-1':
+            if catalog.get('schema_version') not in ('capability-catalog', 'webcollect-capability-catalog-1'):
                 raise ValueError('Capability catalog schema changed')
             for record in catalog['records']:
                 if page_uri(record['site_uri']) == allowed[row['page_id']]:
@@ -46,7 +46,7 @@ def read_site_pool(path, *, purpose='candidates', categories=None, include_unava
                         raise ValueError('Existing real qualification/review evidence required')
                     validate_capability(record, require_ready=True)
                     records[(record['capability_id'], record['version'])] = record
-    return {'schema_version': 'webcollect-capability-catalog-1', 'mode': 'real',
+    return {'schema_version': 'capability-catalog', 'mode': 'real',
             'records': list(records.values()), 'pool': str(pool.path),
             'collection_dispatched': False, 'sample_ids_allocated': 0}
 

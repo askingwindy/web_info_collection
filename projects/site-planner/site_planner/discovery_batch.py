@@ -9,13 +9,15 @@ from webcollect.model_gateway import ModelGateway
 from .site_pool import SitePool,host_identity,page_uri
 from .discovery_tools import DiscoveryBrowser,glm_search,reference
 
-VERSION='glm-discovery-interaction-3'
+VERSION='glm-discovery-interaction'
+# Old frozen runs and policy files carry the generational value; reads accept both.
+PREVIOUS_VERSION='glm-discovery-interaction-3'
 CONSTRAINTS='公开中文、无需账号、标准DOM输入/选择/按钮，自然5至8个必要操作。排除文件上传、APP下载介绍、文章、纯目录线索。只找可直接使用的目标功能页。'
 DEFAULT={'version':VERSION,'selection_batch_size':2,'page_batch_size':2,
          'output_limits':{'plan':2048,'selection':4096,'assessment':8192}}
 
 def policy(value):
-    if set(value)!=set(DEFAULT) or value['version']!=VERSION:raise ValueError('Versioned discovery policy required')
+    if set(value)!=set(DEFAULT) or value['version'] not in (VERSION,PREVIOUS_VERSION):raise ValueError('Versioned discovery policy required')
     for key in ('selection_batch_size','page_batch_size'):
         if type(value[key]) is not int or not 1<=value[key]<=4:raise ValueError('Batch size must be 1..4')
     if set(value['output_limits'])!=set(DEFAULT['output_limits']) or any(type(v)is not int or v<1 for v in value['output_limits'].values()):raise ValueError('Stage output limits required')
@@ -122,7 +124,7 @@ async def discover(config,*,pool_path,ledger_path,output,categories,target=10,pe
                 for category in categories:
                     if run_stats(pool,run_id,baseline)['confirmed_categories'].get(category,0)>=per_category:continue
                     key=f'{category}/{rnd}'
-                    plan=await asyncio.to_thread(model_decision,ledger,gateway,'ai-search-plan-v3',
+                    plan=await asyncio.to_thread(model_decision,ledger,gateway,'ai-search-plan',
                         {'version':VERSION,'instruction':CONSTRAINTS+' 仅输出1至2个功能搜索词，不要网址。','category':category,'round':rnd},PLAN_SCHEMA,
                         output_limit=p['output_limits']['plan'])
                     bundles=[];seen=set()

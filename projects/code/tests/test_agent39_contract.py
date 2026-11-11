@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from jsonschema import validate, ValidationError
-from webcollect.react_protocol import native_tools, VERSION, LEGACY_VERSION
+from webcollect.react_protocol import native_tools, VERSION
 from webcollect.react_session import ALLOWED_TOOL_ACTIONS
 from webcollect.react_context import project
 from webcollect.batch_core import BatchLedger, load_json, validate_config
@@ -61,7 +61,6 @@ class AgentContract(unittest.TestCase):
         from webcollect.candidate_contract import same_application
         task=build_url_task(url='https://example.org/',task_version='navigation')
         self.assertEqual(task['site_category'],'UNKNOWN')
-        self.assertEqual(build_url_task(url='https://example.org/',task_version='legacy',decision_protocol=LEGACY_VERSION)['site_category'],'综合')
         task['candidate_binding']={'candidate':{'entry_url':'https://example.org/'}}
         home={'url':'https://example.org/','capture_controls':[{'href':'https://external.example/details'}]}
         pages=extend(task,['https://example.org/'],home)
@@ -94,10 +93,6 @@ class AgentContract(unittest.TestCase):
         validate(args,tools['act'])
         args['goal_update']['description']+='中'
         with self.assertRaises(ValidationError):validate(args,tools['act'])
-        old={t['function']['name']:t['function']['parameters'] for t in native_tools(ALLOWED_TOOL_ACTIONS,LEGACY_VERSION)}
-        validate(args,old['act'])
-        args.pop('goal_update')
-        with self.assertRaises(ValidationError):validate(args,old['act'])
         with self.assertRaises(ValidationError):validate({**args,'rogue':True},tools['act'])
 
     def test_context_window_preserves_facts_and_pairs_at_25_rounds(self):

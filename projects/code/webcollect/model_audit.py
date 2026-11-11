@@ -128,7 +128,7 @@ def read_snapshot(ledger):
 
 def fingerprint(ledger):
     snapshot = read_snapshot(ledger)
-    return {'schema_version': 'webcollect-model-ledger-binding-1', **snapshot['binding'],
+    return {'schema_version': 'model-ledger-binding', **snapshot['binding'],
             'fingerprint_scope': list(TABLES),
             'model_requests': len(snapshot['tables']['model_requests']['rows'])}
 
@@ -145,7 +145,7 @@ def validate_manifest(manifest, snapshot):
     required = {'schema_version', 'ledger_binding', 'jobs'}
     if (not isinstance(manifest, dict) or not required <= set(manifest)
             or set(manifest) - required - {'request_classifications'}
-            or manifest['schema_version'] != 'webcollect-model-attribution-1'):
+            or manifest['schema_version'] not in ('model-attribution', 'webcollect-model-attribution-1')):
         raise ValueError('Invalid attribution manifest schema')
     if manifest['ledger_binding'] != snapshot['binding']:
         raise ValueError('Attribution ledger/config binding drift')
@@ -361,8 +361,10 @@ def build_audit(snapshot, manifest):
                'reserved_cost_micros': reserved, 'reserved_tokens': _required_int(request['reserved_tokens'], 'reserved tokens'),
                'uncertain_reserved_cost_micros': reserved if known == UNKNOWN else 0,
                'exceeded_request_reservation': _int(known) and known > reserved,
-               'currency': currency, 'rate_version': _declared_text(rates.get('version')),
+               'currency': currency, 'rate_unit': _declared_text(rates.get('unit')),
+               'rate_basis': _declared_text(rates.get('basis')),
                'rate_source': _declared_text(rates.get('source')),
+               'rate_time': _declared_text(rates.get('time')),
                'rates_micros_per_million_tokens': {k: rates[k] if _int(rates.get(k)) else UNKNOWN for k in ('input', 'cached_input', 'output')},
                'scope': binding['scope'], 'scope_id': binding['scope_id'],
                'classification': override.get('classification', binding['classification']),
@@ -404,11 +406,11 @@ def build_audit(snapshot, manifest):
                'unattributed': _aggregate(r for r in rows if r['scope'] == 'UNATTRIBUTED'),
                'retained_non_sample_scopes': _aggregate(retained), 'conservation': conserved,
                'currency': currency, 'cash_deducted_micros': UNKNOWN,
-               'cost_basis': 'Versioned configured-rate estimate from recorded token usage; pricing source is retained, not independently verified; not a provider bill or cash deduction',
+               'cost_basis': 'Configured-rate estimate from recorded token usage; the actual prices and their unit/basis/source/time are retained, not independently verified; not a provider bill or cash deduction',
                'aggregation_scope': 'One frozen ledger/model/billing currency; no cross-currency summation',
                'attribution_basis': 'Explicit manifest declaration; semantic job/sample relationships are not inferred or automatically verified',
                'allocation_warning': 'Shared reference counts are not new API calls; allocated costs/tokens and request equivalents are estimates. Never add shared scope totals to allocated sample totals.'}
-    return {'schema_version': 'webcollect-model-audit-1', 'requests': rows, 'sample_summaries': views['samples'],
+    return {'schema_version': 'model-audit', 'requests': rows, 'sample_summaries': views['samples'],
             'stages': views['stages'], 'scopes': views['scopes'],
             'summary': summary}
 
@@ -481,7 +483,7 @@ def _same(actual, expected, name):
 def validate_exported_audit(audit):
     """Validate the exported arithmetic, not the unavailable original database."""
     _keys(audit, ('schema_version', 'source', 'requests', 'sample_summaries', 'stages', 'scopes', 'summary'), 'audit')
-    if audit['schema_version'] != 'webcollect-model-audit-1':
+    if audit['schema_version'] not in ('model-audit', 'webcollect-model-audit-1'):
         raise ValueError('Unsupported audit schema')
     source, summary = audit['source'], audit['summary']
     _keys(source, ('logical_sha256', 'config_sha256', 'attribution_sha256', 'execution_mode', 'fingerprint_scope'), 'source')
@@ -671,7 +673,7 @@ def query_audit(path, sample_id=None):
                         'shared_reference_job_states': dict(Counter(r['job_state'] for r in shared)),
                         'unsuccessful_or_pending_requests': attention,
                         'allocated_tokens_are_provider_sample_measurements': False})
-    return {'schema_version': 'webcollect-model-audit-query-1', 'audit_sha256': _sha(payload),
+    return {'schema_version': 'model-audit-query', 'audit_sha256': _sha(payload),
             'execution_mode': audit['summary']['execution_mode'], 'currency': currency,
             'cost_control': audit['summary'].get('cost_control', 'capped'),
             'budget_max_model_cost_micros': audit['summary'].get('budget_max_model_cost_micros', UNKNOWN),
@@ -749,7 +751,7 @@ def token_audit(ledger):
                 'cached_input_tokens':sum(row.get('cached_input_tokens',0) for row in known),
                 'reasoning_tokens_known':sum(row.get('reasoning_tokens') or 0 for row in known),
                 'reasoning_usage_unknown_requests':sum(row.get('reasoning_tokens') is None for row in known)}
-    return {'schema_version':'webcollect-token-audit-1','requests':rows,'totals':total(rows),
+    return {'schema_version':'token-audit','requests':rows,'totals':total(rows),
             'stages':{stage:total([row for row in rows if row['stage']==stage]) for stage in sorted({row['stage'] for row in rows})},
             'subsets':'cache is included in input; reasoning is included in output; do not add twice'}
 

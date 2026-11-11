@@ -34,7 +34,7 @@ class Producer14Integration(unittest.TestCase):
     def test_new_entrypoint_freezes_v14_without_breaking_old_v4(self):
         f=self.fixture();_,home=f.site()
         with patch('site_planner.producer_observation.screen',return_value=([],[])):
-            report=f.run_new(home,key='v14',target=1,model_protocol='entry-tools-14',discovery_mode='expand',site_expansion=True,allowed_hosts=['tools.example.org'],search_engine='public',producer_optimization='observation-feedback-1',max_batches=1)
+            report=f.run_new(home,key='v14',target=1,discovery_mode='expand',site_expansion=True,allowed_hosts=['tools.example.org'],search_engine='public',producer_optimization='observation-feedback-1',max_batches=1)
         with f.pool.pool.connect() as con:
             frozen=json.loads(con.execute('select config from runs where id=?',(report['batch_scope'],)).fetchone()[0])
         self.assertEqual(frozen['site_protocol'],'producer-site-classification-6')

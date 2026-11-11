@@ -19,7 +19,7 @@ ROOT_FILES = {'README.md', 'metadata.csv', 'qc_report.md', 'SHA256SUMS', 'site-l
               '附件A-字段说明.md', '附件B-动作空间与坐标系.md', '合成方式说明.md',
               '来源与合规说明.md', '动作空间与系统提示.md'}
 EXECUTION_FILE = 'actual-execution.json'
-EXECUTION_VERSION = 'webcollect-actual-execution-1'
+EXECUTION_VERSION = 'actual-execution'
 CHECKS = {'visual_alignment', 'terminal_semantics', 'language', 'privacy', 'substantive_difference'}
 PARAMS = {'click': {'x', 'y'}, 'double_click': {'x', 'y'}, 'right_click': {'x', 'y'},
           'type': {'text'}, 'hotkey': {'keys'}, 'scroll': {'x', 'y', 'direction'},
@@ -311,7 +311,7 @@ def validate_execution_attachment(root):
     """Validate the public minimal receipt without reading private raw logs."""
     root = Path(root); document = read_json(root / EXECUTION_FILE)
     if (set(document) != {'schema_version', 'keyboard_policy', 'samples'} or
-            document['schema_version'] != EXECUTION_VERSION or
+            document['schema_version'] not in (EXECUTION_VERSION, 'webcollect-actual-execution-1') or
             document['keyboard_policy'] != ACTUAL_KEYBOARD_VERSION or
             not isinstance(document['samples'], list)):
         raise ValueError('Invalid actual execution attachment version')
@@ -497,8 +497,8 @@ def _review_records(path, records, approved_only, baseline_sha256=None):
             raise ValueError('--approved-only requires --reviews')
         return {}, None
     export = read_json(path)
-    if export.get('schema_version') != 'qc-review-1' or not isinstance(export.get('records'), list):
-        raise ValueError('Review export must be qc-review-1')
+    if export.get('schema_version') not in ('qc-review-1', 'qc-review-2', 'qc-review') or not isinstance(export.get('records'), list):
+        raise ValueError('Review export must be qc-review-1, qc-review-2 or qc-review')
     byid = {}; samples = {r['sample_id']: r for r in records}
     for review in export['records']:
         sid = review.get('sample_id')
@@ -595,7 +595,7 @@ def validate_client_layout(root):
     if (root / EXECUTION_FILE).exists():
         validate_execution_attachment(root)
     site_list = read_json(root / 'site-list.json')
-    if site_list.get('schema_version') != 'webcollect-site-list-1':
+    if site_list.get('schema_version') not in ('site-list', 'webcollect-site-list-1'):
         raise ValueError('Unknown site-list schema')
     sample_map = {r['sample_id']: r['site_id'] for r in site_list['samples']}
     sites = {r['site_id']: r for r in site_list['sites']}
@@ -685,7 +685,7 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
             for name in ('samples', 'ground_truth'):
                 (output / name).mkdir(exist_ok=True)
             current = read_json(output / 'site-list.json') if (output / 'site-list.json').exists() else {
-                'schema_version':'webcollect-site-list-1', 'sites':[], 'samples':[]}
+                'schema_version':'site-list', 'sites':[], 'samples':[]}
             if (output / EXECUTION_FILE).exists():
                 validate_execution_attachment(output)
             elif any(step['action']['action_type'] == 'hotkey'
@@ -720,7 +720,7 @@ def append_client_package(repo, source, output, *, files_sha256, staging_root):
                 members[sid] = site_id
             for site_id, row in sites.items():
                 row['sample_ids'] = [sid for sid, owner in members.items() if owner == site_id]
-            write_json(stage / 'site-list.json', {'schema_version':'webcollect-site-list-1',
+            write_json(stage / 'site-list.json', {'schema_version':'site-list',
                 'sites':list(sites.values()),
                 'samples':[{'sample_id':sid,'site_id':owner} for sid,owner in members.items()]})
             metadata = {}
@@ -849,7 +849,7 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
     # Export never repairs historical keys implicitly. Actual dispatch mismatch
     # is rejected by the execution evidence binding below.
     execution_plan = read_json(execution_evidence) if isinstance(execution_evidence, (str, Path)) else execution_evidence
-    if execution_plan is not None and execution_plan.get('schema_version') != EXECUTION_VERSION:
+    if execution_plan is not None and execution_plan.get('schema_version') not in (EXECUTION_VERSION, 'webcollect-actual-execution-1'):
         raise ValueError('Unknown actual execution evidence version')
     execution_inputs = {row['sample_id']: row for row in execution_plan['samples']} if execution_plan else {}
     if set(execution_inputs) - {record['sample_id'] for record in selected}:
@@ -886,7 +886,7 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
             if key in site_map and any(site_map[key][k] != site[k] for k in ('uri', 'site_category')):
                 raise ValueError('Conflicting source site mapping')
             site_map.setdefault(key, {**site, 'sample_ids': []})['sample_ids'].append(r['sample_id'])
-        write_json(staged / 'site-list.json', {'schema_version': 'webcollect-site-list-1', 'sites': list(site_map.values()), 'samples': [dict(sample_id=r['sample_id'], site_id=r['site']['site_id']) for r in selected]})
+        write_json(staged / 'site-list.json', {'schema_version': 'site-list', 'sites': list(site_map.values()), 'samples': [dict(sample_id=r['sample_id'], site_id=r['site']['site_id']) for r in selected]})
         with (staged / 'metadata.csv').open('x', newline='', encoding='utf-8') as stream:
             writer = csv.DictWriter(stream, fieldnames=COLUMNS); writer.writeheader()
             for r in exported:
@@ -903,7 +903,7 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
         for r in records:
             sidecar_samples.append(dict(sample_id=r['sample_id'], selected=r in selected, source_sample_path=str(r['sample']), source_batch_path=str(r['batch']), annotation_sha256=r['hashes']['annotation.json'], evidence_sha256={k: v for k, v in r['hashes'].items() if k != 'annotation.json'}, ground_truth_sha256=r['truth_sha256'], source_ground_truth_path=str(r['truth']), source_manifest_path=str(r['manifest_path']) if r['manifest_path'] else None, source_manifest_sha256=sha(r['manifest_path']) if r['manifest_path'] else None, raw_evidence_files_sha256=r['raw_hashes'], source_files_sha256=r['source_files'], machine_evidence_status='AVAILABLE' if r['manifest_path'] and r['raw_hashes'] else 'UNAVAILABLE'))
         selected_sidecar = [r for r in sidecar_samples if r['selected']]
-        evidence = dict(delivery_policy=delivery_policy, completion_delivery_decisions=delivery_decisions, schema_version='webcollect-client-evidence-1', created_at=datetime.now(timezone.utc).isoformat(), client_root=str(output), source_root=str(source), samples=selected_sidecar, source_population=dict(total_samples=len(records), selected_count=len(selected), excluded_count=len(excluded)), source_samples=sidecar_samples, excluded_samples=excluded, source_review_export=dict(path=str(Path(reviews).resolve()), sha256=sha(reviews)) if reviews else None, source_review_records=review_export['records'] if review_export else None, source_review_document=review_export, source_package_review_applied=False, selected_review_output=str(review_output.resolve()) if reviews else None, independent_qc_status='NOT_RUN', customer_acceptance='UNKNOWN')
+        evidence = dict(delivery_policy=delivery_policy, completion_delivery_decisions=delivery_decisions, schema_version='client-evidence', created_at=datetime.now(timezone.utc).isoformat(), client_root=str(output), source_root=str(source), samples=selected_sidecar, source_population=dict(total_samples=len(records), selected_count=len(selected), excluded_count=len(excluded)), source_samples=sidecar_samples, excluded_samples=excluded, source_review_export=dict(path=str(Path(reviews).resolve()), sha256=sha(reviews)) if reviews else None, source_review_records=review_export['records'] if review_export else None, source_review_document=review_export, source_package_review_applied=False, selected_review_output=str(review_output.resolve()) if reviews else None, independent_qc_status='NOT_RUN', customer_acceptance='UNKNOWN')
         evidence['actual_execution_attachment'] = {'file': EXECUTION_FILE,
             'sha256': sha(staged / EXECUTION_FILE), 'schema_version': EXECUTION_VERSION,
             'keyboard_policy': ACTUAL_KEYBOARD_VERSION}
@@ -935,7 +935,7 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
                 row['source_capture_evidence_status'] = row.pop('machine_evidence_status')
                 row['capture_binding_status'] = 'NOT_A_CAPTURE_BINDING'
                 row['narrative_revision_applied'] = row['sample_id'] in revision_map
-            evidence.update(schema_version='webcollect-narrative-provenance-1',
+            evidence.update(schema_version='narrative-provenance',
                             capture_binding=False,
                             provenance_scope='Source-to-export annotation revisions; not proof that revised prose was captured or human-approved',
                             revision_plan={'path': str(revision_path), 'sha256': revision_sha256,
@@ -957,7 +957,7 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
             path.parent.mkdir(parents=True, exist_ok=True)
         if reviews:
             with review_output.open('x', encoding='utf-8') as stream:
-                json.dump({'schema_version': review_export['schema_version'], 'records': [review_map[r['sample_id']] for r in selected if r['sample_id'] in review_map]}, stream, ensure_ascii=False, indent=2); stream.write('\n')
+                json.dump({'schema_version': 'qc-review', 'records': [review_map[r['sample_id']] for r in selected if r['sample_id'] in review_map]}, stream, ensure_ascii=False, indent=2); stream.write('\n')
         with evidence_output.open('x', encoding='utf-8') as stream:
             json.dump(evidence, stream, ensure_ascii=False, indent=2); stream.write('\n')
         if output.exists():

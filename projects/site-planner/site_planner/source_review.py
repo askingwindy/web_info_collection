@@ -6,7 +6,9 @@ from webcollect.batch_core import load_json,save_json,file_sha
 from webcollect.planning import object_sha256,verify_evidence
 from .qualification import CANONICAL_SCHEMA,qualification_status,validate_access
 
-VERSION='site-source-review-2'
+VERSION='site-source-review'
+# Saved receipts carry the generational value; reads accept both.
+PREVIOUS_VERSION='site-source-review-2'
 ACCESS={'kind':'public','source':'No account or credentials used'}
 
 def schema():
@@ -14,7 +16,7 @@ def schema():
     return {'type':'object','properties':{'screen':SCREEN_SCHEMA,'qualification':CANONICAL_SCHEMA},
             'required':['screen','qualification'],'additionalProperties':False}
 
-def payload(pages,capabilities):
+def payload(pages,capabilities,*,version=VERSION):
     return {'version':VERSION,'instruction':
         '逐张检查全部page_id及image_id；一次同时给出screen与正式qualification。可见中文至少70%，中文导航控件，公开无账号，'
         '无登录/遮挡；动态广告不确定则REVIEW_REQUIRED。依据实际功能选择给定父类，检查合规、访问、语言及分类。'
@@ -42,8 +44,11 @@ def verify(record,ledger):
     if (job['kind']!='site-probe' or job['state']!='done' or job['result']!=record or
         ledger.config['mode']!=record['mode'] or record['mode']=='real' and ledger.config['model']['provider']=='synthetic'):
         raise ValueError('Source review must match the completed original source job')
-    body=payload(record['representative_pages'],record['capabilities'])
-    if (receipt['version']!=VERSION or receipt['rules_sha256']!=object_sha256({'payload':body,'schema':schema()}) or
+    version=receipt.get('version')
+    if version not in (VERSION,PREVIOUS_VERSION):
+        raise ValueError('Source review version changed')
+    body=payload(record['representative_pages'],record['capabilities'],version=version)
+    if (receipt['rules_sha256']!=object_sha256({'payload':body,'schema':schema()}) or
         receipt['model_sha256']!=object_sha256(ledger.config['model']) or receipt['ledger']!=str(ledger.path)):
         raise ValueError('Source review rules/model/scope changed')
     verify_evidence(record['evidence']);verify_evidence(receipt['images'])
@@ -64,7 +69,7 @@ def verify(record,ledger):
             system+='\nReturn exactly one JSON object, without Markdown, code fences, explanations or surrounding text.'
             system+='\nReturn JSON matching this complete JSON Schema exactly:\n'+json.dumps(schema(),ensure_ascii=False,sort_keys=True)
         if request.get('system')!=system:continue
-        expected_purpose=VERSION+':output-'+str(min(8192,ledger.config['model']['max_completion_tokens']))+':'+object_sha256({'system':request['system'],'text':json.dumps(body,ensure_ascii=False,sort_keys=True),
+        expected_purpose=version+':output-'+str(min(8192,ledger.config['model']['max_completion_tokens']))+':'+object_sha256({'system':request['system'],'text':json.dumps(body,ensure_ascii=False,sort_keys=True),
             'schema':schema(),'images':[im['sha256'] for im in receipt['images']],'model':ledger.config['model']})
         matched |= (request.get('text')==json.dumps(body,ensure_ascii=False,sort_keys=True) and request.get('schema')==schema() and
             request.get('images')==receipt['images'] and request.get('model')==ledger.config['model']['model'] and

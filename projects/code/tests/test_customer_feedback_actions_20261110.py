@@ -4,10 +4,13 @@ No live requests or production ledger are opened by these cases.
 """
 from copy import deepcopy
 import pytest
+from webcollect.plan_protocol import PLAN_PROTOCOL
 from webcollect.banded_plan import (
-    V12_VERSION, V13_VERSION, bind_reply_scope, plan_schema,
+    bind_reply_scope, plan_schema,
     strip_v13_wire, validate_plan,
 )
+V12_VERSION = 'webcollect-conditional-plan-12'  # historical literal used only as a mismatched protocol
+V13_VERSION = PLAN_PROTOCOL
 from webcollect.agent_controller import compile_step
 from webcollect.react_protocol import atomic_effect
 

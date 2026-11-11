@@ -5,7 +5,7 @@ from importlib.resources import files
 from pathlib import Path
 import re
 
-ALGORITHM_VERSION = "visible-content-preparation-3"
+ALGORITHM_VERSION = "visible-content-preparation"
 CONTENT_JS = files("webcollect").joinpath("content_preparation.js").read_text(encoding="utf-8")
 OBSERVER_SHA256 = hashlib.sha256(CONTENT_JS.encode()).hexdigest()
 

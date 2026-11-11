@@ -104,8 +104,8 @@ class ProducerV10(unittest.TestCase):
    return images.screen(pool,ledger,links,root)
   sources=[{**home,'context_only':True,'excluded_entry_identities':['https://tools.example.org/already-seen']}]
   with patch.object(observed,'screen',side_effect=screen),patch.object(purpose,'homepage_document',side_effect=AssertionError('no target GET')),patch('site_planner.candidate_discovery.check_entry',side_effect=AssertionError('no publication GET')),patch('site_planner.entry_access.check_entry',side_effect=AssertionError('no historical landing GET')),patch.object(provider,'open',side_effect=self.provider):
-   report=self.f.b.f.run_new(home,key='v10',target=1,sources=sources,model_protocol='entry-tools-10',batch_size=1)
-   replay=self.f.b.f.run_new(home,key='v10',target=1,sources=sources,model_protocol='entry-tools-10',batch_size=1)
+   report=self.f.b.f.run_new(home,key='v10',target=1,sources=sources,batch_size=1)
+   replay=self.f.b.f.run_new(home,key='v10',target=1,sources=sources,batch_size=1)
   self.assertEqual(report['listed_unique_candidates'],1,report);self.assertEqual(replay['new_dispatches'],{'model':0,'GET':0,'search':0})
   with self.ledger.connect() as con:self.assertEqual(con.execute('SELECT COUNT(*) FROM top_level_visits').fetchone()[0],1)
   row=self.pool.rows(protocols=('webcollect-data-candidate-2',))[0]

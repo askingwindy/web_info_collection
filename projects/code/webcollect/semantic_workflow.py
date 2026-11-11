@@ -8,7 +8,7 @@ from importlib.resources import files
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
 
-VERSION = 'webcollect-semantic-workflow-2'
+VERSION = 'semantic-workflow'
 TEXT = {'type': 'string', 'minLength': 1}
 def obj(properties):
     return {'type':'object', 'properties':properties, 'required':list(properties), 'additionalProperties':False}

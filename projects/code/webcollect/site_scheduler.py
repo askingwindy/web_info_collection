@@ -20,7 +20,8 @@ from .production_quality import sha
 from .runtime import domain_key, validate_policy
 from .storage import write_json
 
-VERSION = 'webcollect-site-schedule-1'
+VERSION = 'site-schedule'
+LEGACY_VERSION = 'webcollect-site-schedule-1'
 
 
 def _absolute(value, label):
@@ -34,7 +35,7 @@ def validate_schedule(value):
     if not isinstance(config, dict) or set(config) - {
             'schema_version', 'registry', 'max_parallel_sites', 'max_schedule_seconds', 'sites'}:
         raise ValueError('Unknown site schedule fields')
-    if config.get('schema_version') != VERSION:
+    if config.get('schema_version') not in (None, VERSION, LEGACY_VERSION):
         raise ValueError('Unsupported site schedule version')
     maximum = config.get('max_parallel_sites')
     if type(maximum) is not int or maximum < 1:

@@ -17,7 +17,21 @@ from .batch_core import file_sha
 from .planning import object_sha256
 from .site_failure_stop import application_key
 
-VERSION = 'webcollect-machine-batch-1'
+VERSION = 'machine-batch'
+LEGACY_VERSION = 'webcollect-machine-batch-1'
+POLICY = 'evidence-aliases'
+LEGACY_POLICY = 'evidence-aliases-1'
+PLAN_SHARD = 'plan-shard'
+LEGACY_PLAN_SHARD = 'webcollect-plan-shard-1'
+SHARD_RESULT = 'shard-result'
+LEGACY_SHARD_RESULT = 'webcollect-shard-result-1'
+MERGE = 'batch-merge'
+LEGACY_MERGE = 'webcollect-batch-merge-1'
+FACTS = 'site-execution-facts'
+LEGACY_FACTS_1 = 'webcollect-site-execution-facts-1'
+LEGACY_FACTS_2 = 'webcollect-site-execution-facts-2'
+CAPACITY = 'site-capacity'
+LEGACY_CAPACITY = 'webcollect-site-capacity-1'
 MARKER = 'batch_shard_meta'
 
 
@@ -32,7 +46,7 @@ def site_key(uri, registry=None, *, strict=False):
 
 def manifest_site_key(manifest, uri):
     return site_key(uri, manifest.get('application_registry'),
-                    strict=manifest.get('site_identity_policy') == 'evidence-aliases-1')
+                    strict=manifest.get('site_identity_policy') in (POLICY, LEGACY_POLICY))
 
 
 def _seal(value, field):
@@ -66,7 +80,7 @@ def _capacity(record, base, registry=None, *, strict=False):
     if type(count) is not int or count < 1:
         raise ValueError('Capacity must be an explicit positive integer or unknown')
     proof, path = _read_ref(ref, base)
-    if (proof.get('schema_version') != 'webcollect-site-capacity-1' or proof.get('status') != 'verified'
+    if (proof.get('schema_version') not in (CAPACITY, LEGACY_CAPACITY) or proof.get('status') != 'verified'
             or proof.get('capacity') != count
             or site_key(proof.get('site_uri', ''), registry, strict=strict) != site_key(record['site_uri'], registry, strict=strict)
             or not isinstance(proof.get('evidence'), list) or not proof['evidence']):
@@ -85,7 +99,8 @@ def facts_state(refs, run_id, registry=None, *, strict=False):
         keys = ('schema_version', 'campaign_id', 'formal_since', 'failure_limit', 'executions', 'successes')
         core = {key: value.get(key) for key in keys}
         rules = (core['schema_version'], core['failure_limit'])
-        if (rules not in (('webcollect-site-execution-facts-1',3), ('webcollect-site-execution-facts-2',None))
+        if (rules not in ((FACTS, 3), (FACTS, None),
+                          (LEGACY_FACTS_1, 3), (LEGACY_FACTS_2, None))
                 or 'failure_limit' not in value or core['campaign_id'] != run_id
                 or object_sha256(core) != value.get('facts_sha256')):
             raise ValueError('Batch facts must bind this run, original limit and exact portable facts')
@@ -192,14 +207,15 @@ def plan_shards(catalog, *, run_id, target, shard_ids=None, worker_count=None, f
     return _seal({'schema_version': VERSION, 'run_id': run_id, 'round_index': 0, 'target': target,
                   'catalog_sha256': object_sha256(catalog), 'raw_candidate_count': len(records),
                   'sites': sites, 'shards': shards, 'facts': state, 'ancestor_sha256': [],
-                  'site_identity_policy': 'evidence-aliases-1', 'application_registry': registry,
+                  'site_identity_policy': POLICY, 'application_registry': registry,
                   'production_started': False}, 'manifest_sha256')
 
 
 def verify_manifest(manifest):
-    if manifest.get('schema_version') != VERSION or _seal(manifest, 'manifest_sha256') != manifest:
+    if (manifest.get('schema_version') not in (VERSION, LEGACY_VERSION)
+            or _seal(manifest, 'manifest_sha256') != manifest):
         raise ValueError('Changed or unsupported static batch manifest')
-    if manifest.get('site_identity_policy') not in (None, 'evidence-aliases-1'):
+    if manifest.get('site_identity_policy') not in (None, POLICY, LEGACY_POLICY):
         raise ValueError('Unsupported static application ownership policy')
     ids = [row['site_id'] for row in manifest['sites']]; keys = [row['application_key'] for row in manifest['sites']]
     if len(ids) != len(set(ids)) or len(keys) != len(set(keys)):
@@ -312,9 +328,9 @@ def verify_plan_shard(plan, registry):
             raise ValueError('A sharded plan requires its explicitly seeded registry')
         return
     manifest = verify_manifest(marker['manifest'])
-    expected = {'schema_version': 'webcollect-plan-shard-1', 'run_id': manifest['run_id'],
+    expected = {'schema_version': PLAN_SHARD, 'run_id': manifest['run_id'],
                 'shard_id': marker['shard_id'], 'manifest_sha256': manifest['manifest_sha256']}
-    if binding != expected:
+    if binding != expected and binding != {**expected, 'schema_version': LEGACY_PLAN_SHARD}:
         raise ValueError('Worker plan and seeded shard binding differ')
     for task in plan['tasks']:
         guard_shard_task(manifest, marker['shard_id'], task)
@@ -395,7 +411,7 @@ def freeze_result(registry, qc_report, dataset):
                             'evidence_sha256': sample['evidence_sha256']})
     if file_sha(qc_report) != report_hash:
         raise ValueError('QC report changed during result freezing')
-    return _seal({'schema_version': 'webcollect-shard-result-1', 'run_id': manifest['run_id'],
+    return _seal({'schema_version': SHARD_RESULT, 'run_id': manifest['run_id'],
                   'shard_id': marker['shard_id'], 'manifest_sha256': manifest['manifest_sha256'],
                   'report_sha256': report_hash, 'source_dataset': str(dataset),
                   'dataset_files_sha256': files, 'samples': samples, 'QC_approval_created': False}, 'result_sha256')
@@ -417,11 +433,11 @@ def merge_qualified(manifest, inputs, *, facts=(), global_reviews=(), global_sam
     global_reviews = list(global_reviews)
     verify_manifest(manifest)
     state = facts_state(facts, manifest['run_id'], manifest.get('application_registry'),
-                        strict=manifest.get('site_identity_policy') == 'evidence-aliases-1')
+                        strict=manifest.get('site_identity_policy') in (POLICY, LEGACY_POLICY))
     sites = {row['site_id']: row for row in manifest['sites']}; versions = {}; sources = []; copies = []; shard_results = {}
     for item in inputs:
         result, _ = _read_ref(item['result_ref']); report, _ = _read_ref(item['report_ref'])
-        if (result.get('schema_version') != 'webcollect-shard-result-1' or _seal(result, 'result_sha256') != result
+        if (result.get('schema_version') not in (SHARD_RESULT, LEGACY_SHARD_RESULT) or _seal(result, 'result_sha256') != result
                 or result.get('run_id') != manifest['run_id'] or result.get('manifest_sha256') not in
                 [manifest['manifest_sha256'], *manifest['ancestor_sha256']]
                 or result.get('report_sha256') != item['report_ref']['sha256']):
@@ -510,7 +526,7 @@ def merge_qualified(manifest, inputs, *, facts=(), global_reviews=(), global_sam
     missing = [shard['shard_id'] for shard in manifest['shards'] if shard['active_site_ids']
                and (manifest['manifest_sha256'], shard['shard_id']) not in shard_results
                and any(sites[sid]['application_key'] not in state['excluded_sites'] for sid in shard['active_site_ids'])]
-    return _seal({'schema_version': 'webcollect-batch-merge-1', 'run_id': manifest['run_id'],
+    return _seal({'schema_version': MERGE, 'run_id': manifest['run_id'],
                   'manifest_sha256': manifest['manifest_sha256'], 'target': manifest['target'],
                   'mechanical_unique_count': len(effective), 'globally_qualified_count': globally_qualified,
                   'qualified_unique_count': globally_qualified, 'deficit': max(0, manifest['target'] - globally_qualified),
@@ -528,7 +544,7 @@ def merge_qualified(manifest, inputs, *, facts=(), global_reviews=(), global_sam
 
 def next_round(manifest, merged, *, new_catalog=None, base=None):
     verify_manifest(manifest)
-    if (merged.get('schema_version') != 'webcollect-batch-merge-1' or _seal(merged, 'merge_sha256') != merged
+    if (merged.get('schema_version') not in (MERGE, LEGACY_MERGE) or _seal(merged, 'merge_sha256') != merged
             or merged.get('manifest_sha256') != manifest['manifest_sha256'] or merged.get('run_id') != manifest['run_id']):
         raise ValueError('Next round needs the exact bound qualified merge result')
     current = merge_qualified(manifest, [{'result_ref': row['result'], 'report_ref': row['report'], 'dataset': row['dataset']}

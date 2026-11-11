@@ -20,8 +20,8 @@ from .profiles import DEFAULT_DELIVERY_PROFILE, package_files
 from .reporting import write_outputs
 from webcollect.batch_core import BatchLedger
 
-VERSION='delivery-qc-pipeline-1'
-PIPELINE_RULES_VERSION='frozen-sample-slots-human-escalation-final-seal-1'
+VERSION='delivery-qc-pipeline'
+
 KINDS=('ai-visual','ai-difference','ai-documents')
 
 
@@ -163,7 +163,7 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
         raise ValueError('Versioned sampled production QC requires original captured handoff')
     scope=verify_delivery_scope(effective_set,cross_package_report,dataset=dataset,phase='payload')
     manifest=_read(effective_set)
-    if manifest.get('schema_version')!='qc-cumulative-set-1':raise ValueError('An explicit frozen cumulative set is required')
+    if manifest.get('schema_version') not in ('qc-cumulative-set','qc-cumulative-set-1'):raise ValueError('An explicit frozen cumulative set is required')
     roots=[]
     for item in manifest['packages']:
         root=Path(item['path']);root=(Path(effective_set).resolve().parent/root).resolve() if not root.is_absolute() else root.resolve()
@@ -177,7 +177,7 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
     output.mkdir(parents=True,exist_ok=False)
     implementation=_implementation();candidate=package_files(dataset)
     binding={'version':VERSION,'plan':_ref(plan_path),'plan_sha256':plan['plan_sha256'],
-             'pipeline_rules_version':PIPELINE_RULES_VERSION,'mode':mode}
+             'mode':mode}
     proxy=_BoundLedger(ledger,binding)
     selected={slot['current']['sample_id'] for slot in plan['slots'] if slot['ai_selected']}
     try:
@@ -205,7 +205,6 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
                **({'production_handoff':production_handoff} if production_handoff is not None else {}),
                'supporting_files':[_ref(path) for path in supporting_files],
                'implementation_sha256':implementation,'queue':_ref(queued['queue_file']),
-               'pipeline_rules_version':PIPELINE_RULES_VERSION,
                'jobs':jobs,'document_job':document_job,'ai_selected_sample_ids':sorted(selected),
                'document_review_mode':document_review_mode,'document_template':document_template,
                'original_denominator':plan['original_denominator'],
@@ -262,8 +261,6 @@ def verify(receipt_path,ledger=None):
     unsigned={key:value for key,value in receipt.items() if key!='receipt_sha256'}
     if receipt.get('schema_version')!=VERSION or receipt.get('receipt_sha256')!=_digest(unsigned):
         raise ValueError('Pipeline receipt was changed')
-    if 'pipeline_rules_version' in receipt:
-        if receipt['pipeline_rules_version']!=PIPELINE_RULES_VERSION:raise ValueError('Pipeline rules changed; prepare a new version')
     elif receipt['implementation_sha256']!=_implementation():
         raise ValueError('Legacy pipeline implementation changed; prepare a new version')
     for ref in [receipt['plan'],receipt['queue'],receipt['effective_set'],receipt['profile'],*receipt['supporting_files']]:_check_ref(ref)
@@ -466,8 +463,7 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
     if receipt['mode']=='real':
         try:
             failed=delivery_sampling.export_failures(receipt['plan']['path'],ledger.path,output/'all-current-ledger-failures.json')
-            from .semantic_runtime import failure_jobs
-            failure_scope=failure_jobs(ledger,receipt['jobs'])
+            failure_scope=set(receipt['jobs'])
             failed['rows']=[row for row in failed['rows'] if row['job_id'] in failure_scope]
             if failed['rows']:
                 delivery_sampling.write(output/'ai-failures.json',failed);failure_paths=[output/'ai-failures.json']

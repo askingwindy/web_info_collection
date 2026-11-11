@@ -94,7 +94,7 @@ class BatchAcceptance(PipelineAcceptance):
                     'summary':'已修改当前一组并查看输入','short_flow':False,'short_flow_reason':None}))
             await original_goto(page,url,**kwargs)
         with self.boundaries(), patch.object(FakePage, 'goto', goto):
-            produced = await asyncio.to_thread(self.invoke,producer_cli,producer + ['--goals',str(goals),'--target','5','--model-protocol','entry-tools-1'])
+            produced = await asyncio.to_thread(self.invoke,producer_cli,producer + ['--goals',str(goals),'--target','5'])
             self.assertEqual(produced['row_results'], {'NEW':5}, produced)
             batch = produced['batch_scope']
             self.pool = CandidatePool(scope['pool'])
@@ -272,7 +272,7 @@ class BatchAcceptance(PipelineAcceptance):
         actions=self.decisions[:-1]
         self.decisions=[inspect]*25 + actions + [inspect]*(25-len(actions))
         with self.boundaries():
-            produced=await asyncio.to_thread(self.invoke,producer_cli,producer+['--target','2','--goals',str(goals),'--model-protocol','entry-tools-1'])
+            produced=await asyncio.to_thread(self.invoke,producer_cli,producer+['--target','2','--goals',str(goals)])
             self.assertEqual(produced['row_results'],{'NEW':2},produced)
             first,second=await asyncio.to_thread(self.invoke,consumer_cli,consumer+[
                 '--producer-batch',produced['batch_scope'],'--request-prefix','session25','--limit','2'])

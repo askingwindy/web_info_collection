@@ -6,7 +6,7 @@ from unittest.mock import patch
 import unittest
 
 import test_grounded_producer as fixture
-from site_planner import page_purpose as p
+from site_planner import page_purpose_v5 as p
 from site_planner import grounded_entries as g
 from site_planner.producer_evidence import business_signature
 from webcollect.batch_core import BatchLedger,OutcomeUnknown,save_json
@@ -70,8 +70,8 @@ class Purpose(unittest.TestCase):
             ledger.finish(job,result=ref)
             return body,ref
         with patch.object(p,'homepage_document',side_effect=get),patch.object(self.f.f.provider.opener,'open',side_effect=self.answer):
-            report=self.f.run_new(home,key='v6',target=2,model_protocol='entry-tools-6')
-            replay=self.f.run_new(home,key='v6',target=2,model_protocol='entry-tools-6')
+            report=self.f.run_new(home,key='v6',target=2)
+            replay=self.f.run_new(home,key='v6',target=2)
         self.assertEqual(report['listed_unique_candidates'],2,report);self.assertEqual(report['new_dispatches']['model'],1)
         self.assertEqual(replay['new_dispatches'],{'model':0,'GET':0,'search':0})
         for row in self.f.pool.rows(protocols=('webcollect-data-candidate-2',)):
@@ -88,7 +88,7 @@ class Purpose(unittest.TestCase):
         job=self.ledger.claim('candidate-entry-http',job_id=jid)
         self.ledger.finish(job,'review_required',error='SiteStopped')
         with patch.object(p,'homepage_document',side_effect=ValueError('缺目标原件')) as get,patch.object(self.f.f.provider.opener,'open',side_effect=self.answer):
-            report=self.f.run_new(home,key='preflight',target=1,model_protocol='entry-tools-6')
+            report=self.f.run_new(home,key='preflight',target=1)
         self.assertEqual(report['listed_unique_candidates'],1,report)
         self.assertTrue(all(call.args[2]!='https://tools.example.org/a' for call in get.call_args_list))
         self.assertEqual(self.ledger.get(jid)['state'],'review_required')
@@ -113,8 +113,8 @@ class Purpose(unittest.TestCase):
             raw['choices'][0]['finish_reason']='stop'
             return io.BytesIO(json.dumps(raw).encode())
         with patch.object(p,'homepage_document',side_effect=ValueError('缺目标原件')),patch.object(self.f.f.provider.opener,'open',side_effect=plain):
-            report=self.f.run_new(home,key='paid-json',target=2,model_protocol='entry-tools-6')
-            replay=self.f.run_new(home,key='paid-json',target=2,model_protocol='entry-tools-6')
+            report=self.f.run_new(home,key='paid-json',target=2)
+            replay=self.f.run_new(home,key='paid-json',target=2)
         self.assertEqual(report['listed_unique_candidates'],2,report)
         self.assertEqual(report['new_dispatches']['model'],1)
         self.assertEqual(replay['new_dispatches'],{'model':0,'GET':0,'search':0})

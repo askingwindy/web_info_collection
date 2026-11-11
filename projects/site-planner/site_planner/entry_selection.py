@@ -10,7 +10,6 @@ from .qualification import CANONICAL_CATEGORIES, CATEGORY_TAXONOMY_VERSION, taxo
 from .site_pool import host_identity
 
 VERSION = 'entry-selection-2'
-TOOL_PROTOCOL = 'entry-tools-2'
 SOURCE_URL_IDENTITY = 'source-url-hostname-1'
 THIRD_PARTY = '第三方介绍或下载'
 PAGE_TYPES = ('功能页', '检索或列表', '内容详情', THIRD_PARTY, 'UNKNOWN')

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from test_react_session import ReactHarness, Script, decide, act_step
 from webcollect.batch_core import load_json, file_sha, OutcomeUnknown
 from webcollect.react_session import (ReactSession, build_url_task, validate_task, struct_goal,
-                                     GOAL_BUDGETS, LEGACY_BUDGETS, REACT_VERSION, react_chooser)
+                                     GOAL_BUDGETS, REACT_VERSION, react_chooser)
 from webcollect.react_protocol import VERSION, SYSTEM, native_tools, native_decision, atomic_effect
 from webcollect.postprocess import session_record, effective_trajectory, process, terminal_outcome
 
@@ -441,8 +441,7 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
 
     def test_observed_same_application_links_beyond_64_keep_their_identity(self):
         from webcollect.candidate_navigation import extend
-        from webcollect.react_protocol import LEGACY_VERSION
-        task = build_url_task(url=self.task['initial_url'], task_version='old-native', decision_protocol=LEGACY_VERSION)
+        task = self.task
         uri = task['initial_url']
         task['candidate_binding'] = {'candidate':{'entry_url':uri}}
         links=[uri+'?page='+str(n) for n in range(90)]
@@ -450,9 +449,6 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extend(task,[uri],state),[uri,*links])
         with self.assertRaisesRegex(ValueError,'left evidence-backed application'):
             extend(task,[uri],{'url':'https://outside.example/'},{'action_type':'click'})
-        old = build_url_task(url=uri, task_version='archived', decision_protocol=REACT_VERSION)
-        old['candidate_binding']=task['candidate_binding']
-        self.assertEqual(len(extend(old,[uri],state)),64)
 
     async def test_new_native_task_continues_past_former_12_and_24_rounds(self):
         def inspect(offset):
@@ -473,7 +469,7 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         frozen, _, _ = self.recorded([inspect(0) for _ in range(7)],'frozen-repeat')
         self.assertIn('无进展',(await frozen.run())['stop_summary'])
 
-    async def test_lower_frozen_decision_budget_and_legacy_budget(self):
+    async def test_lower_frozen_decision_budget(self):
         self.assertEqual(self.task['fragment']['glm_http_call_limit'],25)
         self.assertEqual(self.task['workflow_proposal']['spec']['glm_http_call_limit'],25)
         self.assertTrue(all(limit is None for limit in GOAL_BUDGETS.values()))
@@ -483,10 +479,6 @@ class NativeSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['stop_reason'], 'budget')
         self.assertEqual(len(script.prompts), 1)
         self.assertEqual(load_json(evidence / 'raw/terminal.json')['used']['max_decisions'], 1)
-        old = build_url_task(url=self.page.url, task_version='old', decision_protocol=REACT_VERSION)
-        self.assertEqual(old['fragment']['budgets'], LEGACY_BUDGETS)
-        self.assertNotIn('decision_protocol', old['fragment'])
-        validate_task(old)
 
     async def test_real_chooser_interface_synthetic_wire_history_and_settled_original_cache(self):
         from webcollect.batch_core import BatchLedger

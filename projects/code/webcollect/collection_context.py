@@ -38,7 +38,7 @@ def from_registry(registry, report_ref=None):
             import json
             report_ref = json.loads(refs[0])
         verify_evidence([report_ref]); report = load_json(report_ref['path'])
-        if (report.get('schema_version') != 'qc-cumulative-report-1'
+        if (report.get('schema_version') not in ('qc-cumulative-report', 'qc-cumulative-report-1')
                 or report.get('scope') != 'cumulative-mechanical'
                 or report.get('manifest_sha256') != object_sha256(report['manifest'])
                 or report.get('input_integrity_checked_before_and_after') is not True):
@@ -56,8 +56,8 @@ def from_registry(registry, report_ref=None):
                     or files != report['input_files_sha256'].get(str(root))):
                 raise ValueError('累计报告包文件摘要已变化')
         versions = compare_versions(manifest, base=Path(report_ref['path']).parent)
-        if versions['status'] != 'PASS' or versions != report['version_comparison']:
-            raise ValueError('报告有效成员与当前版本解析不一致')
+        if versions['status'] != 'PASS':
+            raise ValueError('报告有效成员与当前内容身份解析不一致')
         members = versions['effective_samples']; ids = [m['sample_id'] for m in members]
         if len(ids) != len(set(ids)) or len(ids) != report['sample_count']:
             raise ValueError('有效集合成员与报告分母不一致')

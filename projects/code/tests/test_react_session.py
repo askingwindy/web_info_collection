@@ -22,7 +22,7 @@ from PIL import Image
 from test_planner_repair import SemanticFixture
 from webcollect.batch_core import load_json, file_sha
 from webcollect.react_session import (ReactSession, ReactStop, SYSTEM_PROMPT, GOAL_BUDGETS,
-    build_url_task, validate_task, tool_definitions, REACT_VERSION)
+    build_url_task, validate_task, tool_definitions)
 import webcollect.browser
 import webcollect.collect
 
@@ -185,6 +185,29 @@ class Script:
         decision = build(prompt)
         if self.after:
             self.after(self.n, prompt)
+        # The current decision protocol is the native tool-call wire; synthetic
+        # replies get a fresh call id like the real provider does.
+        if isinstance(decision, dict) and 'tool_call' in decision and 'tool_call_id' not in decision:
+            tool_call = decision['tool_call']
+            extra = {k: v for k, v in tool_call['arguments'].items()
+                     if k not in ('short_flow', 'short_flow_reason') and v is not None}
+            tool_call = {**tool_call, 'arguments': extra}
+            arguments = {**{'goal_update': decision.get('goal_update'),
+                            'decision_summary': decision.get('decision_summary'),
+                            'task_intent': {'status': 'UNKNOWN', 'task_types': [],
+                                            'basis_observation_id': prompt['observation']['observation_id'],
+                                            'visible_end_condition': '页面当前状态', 'basis': '当前观察'},
+                            **({'evidence_refs': [prompt['observation']['observation_id']]}
+                               if tool_call['name'] == 'finish' else {})},
+                         **tool_call['arguments']}
+            decision = {**decision, 'tool_call_id': 'call-%03d' % self.n,
+                        'assistant_message': {'role': 'assistant',
+                                              'tool_calls': [{'id': 'call-%03d' % self.n, 'type': 'function',
+                                                              'function': {'name': tool_call['name'],
+                                                                           'arguments': json.dumps(arguments, ensure_ascii=False)}}]},
+                        'user_message': {'role': 'user', 'content': 'tool result'},
+                        'name': tool_call['name'],
+                        'arguments': arguments}
         return decision
 
 
@@ -203,7 +226,7 @@ class ReactHarness(SemanticFixture):
         self.surface = ReactSurface(state)
         self.page = FakePage(self.surface)
         self.task = build_url_task(url=self.surface.state['url'], task_version='fixture',
-                                   decision_protocol=REACT_VERSION)
+                                   )
         for name, target in (('webcollect.browser.capture', self.surface.capture),):
             p = patch(target if False else name, side_effect=target)
             p.start()
@@ -254,6 +277,9 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             decide(tool='finish', arguments=lambda p: {
                 'observation_id': p['observation']['observation_id'], 'stop_reason': 'ready',
                 'summary': '已完成数量修改并查看状态', 'short_flow': False, 'short_flow_reason': None}),
+            decide(tool='finish', arguments=lambda p: {
+                'observation_id': p['observation']['observation_id'], 'stop_reason': 'no_path',
+                'summary': '如实结束', 'short_flow': False, 'short_flow_reason': None}),
         ])
         session = self.session(script)
         summary = await session.run()
@@ -263,7 +289,9 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
                      if Path(e['path']).name.split('-', 1)[1].startswith('tool-result')][0]
         self.assertEqual(first_act['result']['status'], 'rejected')
         self.assertIn('工作目标', first_act['result']['summary'])
-        self.assertEqual(summary['stop_reason'], 'ready')
+        # A 1-4 step ready claim is internal-only under the goal-completion rule;
+        # the honest close then ends the session.
+        self.assertIn(summary['stop_reason'], ('blocked', 'no_path'))
         self.assertEqual(summary['effective_steps'], 3)  # click + select-all + type
 
     async def test_a04_a12_tool_definitions_in_prompt_and_fabricated_result_rejected(self):
@@ -271,8 +299,8 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             lambda p: {'goal_update': None, 'decision_summary': 'x',
                        'tool_call': {'name': 'inspect', 'arguments': {
                            'kind': 'html', 'observation_id': p['observation']['observation_id'],
-                           'target_id': None, 'query': None, 'offset': 0, 'limit_chars': 200},
-                           'fabricated_observation': {'observation_id': 'fake'}}},
+                           'target_id': None, 'query': None, 'offset': 0, 'limit_chars': 200,
+                           'fabricated_observation': {'observation_id': 'fake'}}}},
             lambda p: {'goal_update': None, 'decision_summary': 'x',
                        'tool_call': {'name': 'dream', 'arguments': {}}},
             decide(tool='finish', arguments=lambda p: {
@@ -282,9 +310,10 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         session = self.session(script)
         summary = await session.run()
         prompt = script.prompts[0]
-        self.assertIn('observe', prompt['tools'])
-        self.assertEqual(set(prompt['tools']), {'observe', 'inspect', 'act', 'finish'})
-        self.assertIn('GOAL', prompt['system'])
+        tool_names = {t['function']['name'] for t in prompt['tools']}
+        self.assertIn('observe', tool_names)
+        self.assertEqual(tool_names, {'observe', 'inspect', 'act', 'finish'})
+        self.assertIn('working_goal', prompt['system'])
         self.assertEqual(prompt['requested_goal'], None)
         events = [load_json(e['path']) for e in session.events]
         rejected = [e for e in events if e['kind'] == 'decision-rejected']
@@ -350,9 +379,9 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             controller_compile(self.task, ['https://example.org/'],
                                act_step('back', page_id='p0'), observation, 1)
 
-    async def test_a05_five_steps_finish_and_twelve_steps_single_sample(self):
-        """5 effective actions can finish; 12 actions are not cut at 8/10 and
-        derive into exactly one delivery sample."""
+    async def test_a05_five_steps_finish_without_goal_proof_is_not_formal_sample(self):
+        """Six and nine effective actions are not cut at 8/10, but length alone
+        cannot create a formal sample without original-goal completion proof."""
         # 2026-10-31 user cap: a react run is bounded at ten model/tool rounds;
         # nine effective actions still proves no artificial stop at 8.
         for total, label in ((6, 'five'), (9, 'nine')):
@@ -403,29 +432,19 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
             derived = process(evidence, self.root / name / 'samples' / 'S000001_sample_000001',
                               {'sample_id': 'S000001_sample_000001', 'site_id': 'S000001', 'batch_id': 'B20261031_001',
                                'attempt_id': 'attempt-fixture'}, manifest)
-            self.assertEqual(derived['status'], 'derived_saved', label + ' :: ' + str(load_json(derived['record_ref']['path']) if 'record_ref' in derived else derived)[:300])
-            annotation = load_json(self.root / name / 'samples' / 'S000001_sample_000001' / 'annotation.json')
-            self.assertEqual(len([s for s in annotation['steps'] if s['action']['action_type'] != 'complete']),
-                             total, label)
-            self.assertTrue(annotation['steps'][-1]['action']['action_type'] == 'complete')
-            # Real-run v18 lesson: the delivery audit must accept the react
-            # terminal receipt and a ground-truth manifest written by the
-            # derivation itself.
-            from webcollect.evidence import audit_capture
-            audit = audit_capture(self.root / name, 'S000001_sample_000001')
-            self.assertTrue(audit['capture_evidence_pass'], audit['issues'])
-            ground = load_json(evidence / 'ground_truth.json')
-            # Hotkey primitives carry no target element; both the manifest and
-            # the audit re-derivation skip exactly those.
-            self.assertTrue(all(set(row) == {'step_id', 'element_id', 'text', 'bbox'} for row in ground))
-            self.assertEqual([row['step_id'] for row in ground], sorted(row['step_id'] for row in ground))
+            self.assertEqual(derived['status'], 'completion_unqualified', label + ' :: ' + str(derived)[:300])
+            self.assertEqual(derived['effective_steps'], total, label)
+            destination = self.root / name / 'samples' / 'S000001_sample_000001'
+            self.assertFalse((destination / 'annotation.json').exists())
+            self.assertFalse((evidence / 'saved_sample.json').exists())
+            self.assertEqual(summary['strategy_result']['goal']['goal_status'], 'unconfirmed')
 
     async def test_a10_short_flow_rules(self):
         def finish_call(reason=None, short=False):
             return lambda p: {'observation_id': p['observation']['observation_id'],
                               'stop_reason': 'ready', 'summary': '短路径结束',
                               'short_flow': short, 'short_flow_reason': reason}
-        # <5 without short_flow: finish allowed, but derivation is length-unqualified.
+        # <5 with a ready claim: rejected; a 1-4 step trajectory is internal-only.
         script = Script([decide(goal='短路径', tool='observe', arguments={'focus_control_id': 'control-0'}),
                          lambda p: {'goal_update': {'description': '短路径',
                                                      'basis_observation_id': p['observation']['observation_id'],
@@ -434,12 +453,18 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
                                     'tool_call': {'name': 'act', 'arguments': {
                                         'observation_id': p['observation']['observation_id'],
                                         'step': act_step('set_value', control_id='control-0', value='20')}}},
-                         decide(tool='finish', arguments=finish_call())])
+                         decide(tool='finish', arguments=finish_call()),
+                         decide(tool='finish', arguments=lambda p: {
+                             'observation_id': p['observation']['observation_id'],
+                             'stop_reason': 'no_path', 'summary': '路径不足，如实结束',
+                             'short_flow': False, 'short_flow_reason': None})])
         evidence = self.root / 'sf1' / 'evidence'
         session = ReactSession(self.task, evidence / 'raw', script, self.page,
                                steps_directory=evidence)
         summary = await session.run()
-        self.assertEqual(summary['stop_reason'], 'ready')
+        # The 1-4 step ready finish was rejected (internal-only), then the model
+        # closed honestly; the trajectory itself carries the rejection receipt.
+        self.assertIn(summary['stop_reason'], ('blocked', 'no_path'))
         from webcollect.postprocess import process
         manifest = {'batch_id': 'B20261031_001', 'sample_kind': 'real', 'program_version': 't',
                     'rule_version': '1.0.0',
@@ -448,8 +473,11 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         derived = process(evidence, self.root / 'sf1' / 'S000001_sample_000001',
                           {'sample_id': 'S000001_sample_000001', 'site_id': 'S000001', 'batch_id': 'B20261031_001',
                            'attempt_id': 'attempt-fixture'}, manifest)
-        self.assertEqual(derived['status'], 'length_unqualified')
-        # short_flow without reason is rejected at the tool level.
+        # A 1-4 step honest close stays internal: flagged/raw-only, no formal sample.
+        self.assertIn(derived['status'], ('processing_failed', 'raw_only'))
+        # Model-declared short_flow fields are ignored; the host derives both
+        # the flag and optional reason from actual effective actions. Zero
+        # actions are not a sample and therefore are not labelled short_flow.
         script2 = Script([decide(goal='短路径', tool='finish', arguments=finish_call(None, True)),
                           decide(tool='finish', arguments=lambda p: {
                               'observation_id': p['observation']['observation_id'],
@@ -458,8 +486,15 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         session2 = ReactSession(self.task, self.root / 'sf2', script2, self.page)
         summary2 = await session2.run()
         results = [load_json(e['path'])['result'] for e in session2.events if load_json(e['path'])['kind'] == 'tool-result']
-        self.assertTrue(any(r['tool'] == 'finish' and r['status'] == 'rejected'
-                            and '原因' in r['summary'] for r in results))
+        finish_results = [r for r in results if r['tool'] == 'finish']
+        # A zero-action ready claim is rejected under the goal-completion rule;
+        # the honest blocked close then succeeds and keeps no short_flow label.
+        self.assertEqual(len(finish_results), 2)
+        self.assertEqual(finish_results[0]['status'], 'rejected')
+        self.assertEqual(finish_results[1]['status'], 'ok')
+        self.assertEqual(summary2['effective_steps'], 0)
+        self.assertFalse(summary2['short_flow'])
+        self.assertIsNone(summary2['short_flow_reason'])
 
     async def test_a07_pre_dispatch_stale_is_zero_dispatch(self):
         script = Script([
@@ -564,8 +599,9 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
                 'summary': '完成修改', 'short_flow': True, 'short_flow_reason': '受控页面路径有限'})])
         session = ReactSession(self.task, self.root / 'hint', script, self.page, frame_guard=guard)
         summary = await session.run()
-        self.assertEqual(summary['effective_steps'], 3)
-        self.assertEqual(summary['stop_reason'], 'ready')
+        # The common start-frame hint stays non-fatal; the 1-4 step ready claim
+        # is rejected by the goal-completion rule and the honest close follows.
+        self.assertIn(summary['stop_reason'], ('blocked', 'no_path'))
         self.assertEqual(session.current.get('duplicate_hint'), conflicts)
 
     async def test_repeated_focus_is_rejected_and_action_reasons_reach_the_model(self):
@@ -626,10 +662,14 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
                     'step': act_step('set_value', control_id='control-0', value='20')}),
                 decide(tool='finish', arguments=lambda p: {
                     'observation_id': p['observation']['observation_id'], 'stop_reason': 'ready',
-                    'summary': '完成修改', 'short_flow': False, 'short_flow_reason': None})])
+                    'summary': '完成修改', 'short_flow': False, 'short_flow_reason': None}),
+                decide(tool='finish', arguments=lambda p: {
+                    'observation_id': p['observation']['observation_id'], 'stop_reason': 'no_path',
+                    'summary': '如实结束', 'short_flow': False, 'short_flow_reason': None})])
             session = self.session(script, name='nav-retry')
             summary = await session.run()
-        self.assertEqual(summary['stop_reason'], 'ready')
+        # The 1-4 step ready claim is internal-only; the honest close then ends.
+        self.assertIn(summary['stop_reason'], ('blocked', 'no_path'))
         self.assertEqual(summary['effective_steps'], 3)  # click + select-all + type
         self.assertGreaterEqual(len(calls), 5)  # failed effect capture plus retry
         # The navigation retry re-observed; it never re-dispatched the action.
@@ -657,31 +697,38 @@ class ReactSessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
         session = ReactSession(self.task, evidence / 'raw', script, self.page,
                                steps_directory=evidence)
         await session.run()
-        raw_receipt = evidence / 'raw' / 'raw-receipt.json'
         before = file_sha(evidence / 'raw' / 'boundary.json')
         manifest = {'batch_id': 'B20261031_001', 'sample_kind': 'real', 'program_version': 't',
                     'rule_version': '1.0.0',
                     'sites': [{'site_id': 'S000001', 'uri': self.task['site_uri'],
                                'site_category': self.task['site_category']}], 'samples': ['S000001_sample_000001']}
         ids = {'sample_id': 'S000001_sample_000001', 'site_id': 'S000001', 'batch_id': 'B20261031_001', 'attempt_id': 'a1'}
-        # First derivation fails via a deterministic validator.
+        validator_calls = []
         def failing(delivery_root):
+            validator_calls.append(str(delivery_root))
             return ['fixture validator failure']
-        first = process(evidence, self.root / 'rp' / 'S000001_sample_000001', ids, manifest,
-                        validators=(failing,))
-        self.assertEqual(first['status'], 'delivery_rejected', str(load_json(first['record_ref']['path']) if 'record_ref' in first else first)[:300])
+        destination = self.root / 'rp' / 'S000001_sample_000001'
+        first = process(evidence, destination, ids, manifest, validators=(failing,))
+        self.assertEqual(first['status'], 'completion_unqualified', first)
         self.assertEqual(first['browser_calls'], 0)
         self.assertEqual(first['model_calls'], 0)
+        self.assertEqual(validator_calls, [])  # completion gate precedes formal validators
         self.assertEqual(before, file_sha(evidence / 'raw' / 'boundary.json'))
-        # Reprocessing derives a new version from the same raw, zero browser calls.
-        second = process(evidence, self.root / 'rp' / 'S000001_sample_000001', ids, manifest, derivation=2)
-        self.assertEqual(second['status'], 'derived_saved', str(load_json(second['record_ref']['path']) if 'record_ref' in second else second.get('error'))[:300])
+        # Reprocessing appends another honest negative derivation from the same
+        # sealed raw; it never manufactures goal proof or invokes a browser.
+        second = process(evidence, destination, ids, manifest, derivation=2)
+        self.assertEqual(second['status'], 'completion_unqualified', second)
         self.assertEqual(second['derivation'], 2)
         self.assertEqual(second['browser_calls'], 0)
+        self.assertEqual(second['model_calls'], 0)
         self.assertEqual(before, file_sha(evidence / 'raw' / 'boundary.json'))
-        # A third successful derivation is refused: one effective delivery per raw.
-        with self.assertRaises(ValueError):
-            process(evidence, self.root / 'rp' / 'S000001_sample_000002', ids, manifest, derivation=3)
+        third = process(evidence, destination, ids, manifest, derivation=3)
+        self.assertEqual(third['status'], 'completion_unqualified', third)
+        self.assertEqual(third['derivation'], 3)
+        rows = [json.loads(line) for line in (evidence / 'derivations.jsonl').read_text(encoding='utf-8').splitlines() if line]
+        self.assertEqual([row['status'] for row in rows], ['completion_unqualified'] * 3)
+        self.assertFalse((destination / 'annotation.json').exists())
+        self.assertFalse((evidence / 'saved_sample.json').exists())
 
     async def test_a13_validate_task_rejects_tampering(self):
         broken = deepcopy(self.task)

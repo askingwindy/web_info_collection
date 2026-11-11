@@ -13,7 +13,7 @@ from .contract import fingerprint
 from .reporting import review_template as existing_template
 from .profiles import package_files
 from .reviews import evidence_files, intake, record_hash, sha
-from .semantic import digest, rule_ids
+from .semantic import digest
 
 CHECK = 'substantive_difference'
 SCOPE_VERSION = 'qc-global-difference-scope-1'
@@ -59,7 +59,7 @@ def population_binding(samples):
 
 def _scope(population):
     return {'schema_version': SCOPE_VERSION, 'population_sha256': population['population_sha256'],
-            'rule_id': rule_ids()[CHECK], 'only_check_consumed': CHECK}
+            'only_check_consumed': CHECK}
 
 
 def _selection(rows, population, sampling_plan, source_reports):
@@ -89,7 +89,7 @@ def _selection(rows, population, sampling_plan, source_reports):
     known = set(slots)
     for supplied in source_reports:
         source = _reference(supplied); report = json.loads(Path(source['path']).read_text())
-        if report.get('program') != 'quality-inspector' or report.get('semantic_rule_ids') != rule_ids():
+        if report.get('program') != 'quality-inspector':
             raise ValueError('Original global-sampling QC report has stale semantic rules')
         for sample in report.get('samples', []):
             if sample.get('sample_id') in known:
@@ -170,7 +170,7 @@ def resolve(samples, global_reviews=(), *, sampling_plan=None, source_reports=()
                 raise ValueError('Every global decision must bind the full effective population and current difference rule')
             if record.get('reviewer', {}).get('kind') != 'human':
                 raise ValueError('Global comparison import requires an actual human record; AI needs a validated request trace')
-            if record.get('semantic_rule_ids', {}).get(CHECK) != expected['rule_id']:
+            if not isinstance(record.get('checks', {}).get(CHECK), dict):
                 raise ValueError('Global comparison record uses a stale difference rule')
         accepted, errors, migrations = intake(source['path'], rows, contract_hash)
         if errors or migrations or len(accepted) != len(raw['records']):

@@ -6,8 +6,8 @@ from PIL import Image,ImageDraw
 from webcollect import dynamic_regions as dynamic
 from webcollect.browser import stability_pair
 from webcollect.reading_progress import same_view,lines
-from webcollect.react_protocol import atomic_effect,RULE_VERSION,V3_EFFECT_RULE
-from webcollect.action_stability import POST_VERSION,projection as input_projection
+from webcollect.react_protocol import atomic_effect,RULE_VERSION
+from webcollect.action_stability import post_action_document_scope
 
 
 def state():
@@ -38,7 +38,6 @@ class DynamicRegions(unittest.TestCase):
         a=state();b=deepcopy(a);b['elements'][1]['text']='Announcement two';b['visible_text']='Operate\nAnnouncement two'
         proof=stability_pair(a,b,png(),png('blue'));self.assertTrue(proof['accepted']);self.assertTrue(same_view(a,b));self.assertEqual(lines(a),lines(b))
         self.assertFalse(atomic_effect(a,b,'click',{},'go',rule_version=RULE_VERSION)['verified'])
-        self.assertTrue(atomic_effect(a,b,'click',{},'go',rule_version=V3_EFFECT_RULE)['verified'])
         self.assertFalse(stability_pair(a,b,png(),png('blue',outside=True))['accepted'])
     def test_actual_business_result_is_not_an_allowed_announcement(self):
         a=state();b=deepcopy(a)
@@ -53,15 +52,12 @@ class DynamicRegions(unittest.TestCase):
         self.assertFalse(stability_pair(a,b,png(),png('blue'))['accepted'])
         a=state();b=deepcopy(a);a['target']={'element_id':'go','hit_valid':True};b['target']={'element_id':'go','hit_valid':False}
         self.assertFalse(stability_pair(a,b,png(),png('blue'))['accepted'])
-        a=state();b=deepcopy(a);scope={'schema_version':POST_VERSION,'action':'observe','purpose':'post_primary_content','source_url':a['url'],'source_document':{'nonce':999},'allow_navigation':False}
-        proof=stability_pair(a,b,png(),png('blue'),action_scope=scope);self.assertFalse(proof['accepted']);self.assertIn('document',proof['scope_error'])
-    def test_equal_wrong_input_does_not_satisfy_dispatched_expected_value(self):
-        a=state();e=a['elements'][2];e.update(native_role='input',inputable=True,clickable=True,text='Search')
-        a['capture_controls'][1].update(tag='input',input_type='search',index=0)
-        a['values']=[{'element_id':'go','value':'wrong','focused':True,'value_visible':True,'input_type':'search','readonly':False}]
-        a['visible_text']='Search\nwrong\nAnnouncement one';a['dynamic_region_contract']['visible_text_outside']='Search\nwrong'
-        source=input_projection(a,'go',action='type');scope={'schema_version':POST_VERSION,'action':'observe','purpose':'post_search_input','source':source,'expected_value':'wanted'}
-        proof=stability_pair(a,deepcopy(a),png(),png('blue'),action_scope=scope);self.assertFalse(proof['accepted']);self.assertIn('expected value',proof['scope_error'])
+        a=state();b=deepcopy(a)
+        scope=post_action_document_scope(a)
+        proof=stability_pair(a,b,png(),png('blue'),action_scope=scope)
+        self.assertTrue(proof['accepted'])
+        b['document_identity']={'nonce':999}
+        self.assertFalse(stability_pair(a,b,png(),png('blue'),action_scope=post_action_document_scope(a))['accepted'])
     def test_labels_or_model_data_attributes_cannot_create_an_allowed_region(self):
         s=state();r=s['dynamic_region_contract']['regions'][0];r['attributes']['id']='plain';r['attributes']['role']=None
         self.assertEqual(dynamic.regions(s),[])

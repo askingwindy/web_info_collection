@@ -17,13 +17,15 @@ from unittest.mock import patch
 
 from test_react_session import ReactHarness, FakePage, make_png
 from test_banded_plan import plan_for
-from test_closing_policy_v2 import EndingV2Tests
 from webcollect.batch_core import load_json
+from webcollect.plan_protocol import PLAN_PROTOCOL as V11_VERSION, ENDING_POLICY as END_V3
+V10_VERSION = 'webcollect-conditional-plan-10'  # historical literal for negative checks only
+END_V2 = 'webcollect-attempt-ending-2'
 from webcollect.banded_plan import (
-    V10_VERSION, V11_VERSION, bind_reply_scope, bind_target, binding_diagnosis,
+    bind_reply_scope, bind_target, binding_diagnosis,
     roles_equivalent, REPEATED_BINDING_MISS_LIMIT,
 )
-from webcollect.closing_policy import V2_VERSION as END_V2, VERSION as END_V3, annotation_errors
+from webcollect.closing_policy import annotation_errors
 from webcollect.goal_evidence import VERSION as EVIDENCE_VERSION
 from webcollect.react_session import ReactSession, build_url_task
 
@@ -276,7 +278,7 @@ class ReadingHarness(ReactHarness):
         from webcollect.planning import object_sha256
         task = build_url_task(url=HOME, task_version='reading', ending_policy=ending_policy,
                               plan_protocol=plan_protocol,
-                              action_stability_protocol='webcollect-post-action-observation-stability-4')
+                              action_stability_protocol='action-scoped-evidence')
         spec = task['workflow_proposal']['spec']
         spec['goal'] = {'instruction': self.OBJECTIVE['description'],
                         'structured': deepcopy(self.OBJECTIVE)}
@@ -348,7 +350,21 @@ class SemanticRebindTests(ReadingHarness, unittest.IsolatedAsyncioTestCase):
 
 
 class ReadingChainTests(ReadingHarness, unittest.IsolatedAsyncioTestCase):
-    derive = EndingV2Tests.derive
+    def derive(self,evidence,name='candidate'):
+        destination=self.root/name/'samples'/self.ids['sample_id']
+        from webcollect.postprocess import process
+        result=process(evidence,destination,self.ids,self.manifest)
+        if result['status']!='derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'],'derived_saved',result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation=validate_client_sample(destination)
+        check=sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'],check['errors'])
+        self.assertEqual(annotation_errors(annotation),[])
+        return destination,annotation
 
     def scripted(self, name, plan, branches, task=None):
         self.prompts = []
@@ -495,7 +511,7 @@ class BoundedMissStopTests(ReadingHarness, unittest.IsolatedAsyncioTestCase):
         return session
 
     async def test_repeated_same_miss_stops_bounded_with_diagnosis_feedback(self):
-        for protocol, ending in ((V11_VERSION, END_V3), (V10_VERSION, END_V2)):
+        for protocol, ending in ((V11_VERSION, END_V3),):
             with self.subTest(protocol=protocol):
                 self.surface.__init__()
                 session = self.scripted(f'stop-{protocol[-2:]}', self.reading_task(protocol, ending))
@@ -511,39 +527,25 @@ class BoundedMissStopTests(ReadingHarness, unittest.IsolatedAsyncioTestCase):
                 # The bounded stop is a host receipt, not a model-visible field.
                 self.assertNotIn('remaining_effective_limit', feedback)
 
-    async def test_v10_branch_bytes_keep_remaining_field_and_v11_drops_it(self):
-        for protocol, ending, keeps in ((V10_VERSION, END_V2, True), (V11_VERSION, END_V3, False)):
-            with self.subTest(protocol=protocol):
-                self.surface.__init__()
-                task = self.reading_task(protocol, ending)
-                session = ReactSession(task, self.root / f'bytes-{protocol[-2:]}' / 'raw', None, self.page)
-                await session._observe()
-                controller = session.plan_controller
-                initial = controller.prompt(session)
-                controller.plan = plan_for(initial, 5)
-                controller.submitted = True
-                controller.frozen_band = 'five'
-                branch = controller.prompt(session)
-                contract = branch['replan_contract']
-                self.assertEqual(contract['attempt_limit'], 8)
-                if keeps:
-                    self.assertIn('remaining_effective_limit', contract)
-                    self.assertIn('只剩1步', contract['budget_instruction'])
-                    self.assertNotIn('role须与rendered_dom行的role原值一致',
-                                     branch['target_references']['usage'])
-                    self.assertIn('只剩1步', json.dumps(branch, ensure_ascii=False))
-                else:
-                    self.assertNotIn('remaining_effective_limit', contract)
-                    self.assertNotIn('只剩1步', json.dumps(branch, ensure_ascii=False))
-                    self.assertIn('role须与rendered_dom行的role原值一致',
-                                  branch['target_references']['usage'])
-
-
 class MixedActionTests(ReadingHarness, unittest.IsolatedAsyncioTestCase):
     """Task D: the planner composes the full allowed action space (type, hotkey
     submit, click open, back return, scroll reading) in one legal trajectory."""
 
-    derive = EndingV2Tests.derive
+    def derive(self,evidence,name='candidate'):
+        destination=self.root/name/'samples'/self.ids['sample_id']
+        from webcollect.postprocess import process
+        result=process(evidence,destination,self.ids,self.manifest)
+        if result['status']!='derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'],'derived_saved',result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation=validate_client_sample(destination)
+        check=sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'],check['errors'])
+        self.assertEqual(annotation_errors(annotation),[])
+        return destination,annotation
 
     def mixed_plan(self, prompt):
         return {'attempt_id': prompt['attempt_id'], 'observation_id': prompt['observation']['observation_id'],

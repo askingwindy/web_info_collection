@@ -169,7 +169,7 @@ class OptimizationBatch(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Frozen producer_optimization'):
                 f.run_overlap(home,key='legacy',producer_optimization='observation-feedback-1',**options)
             with self.assertRaisesRegex(ValueError,'requires entry-tools-13'):
-                f.run_overlap(home,key='wrong',producer_optimization='observation-feedback-1',model_protocol='entry-tools-12',**options)
+                f.run_overlap(home,key='wrong',producer_optimization='observation-feedback-1',**options)
 
 
 if __name__=='__main__':unittest.main()

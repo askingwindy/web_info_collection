@@ -4,7 +4,7 @@ from unittest.mock import patch
 from copy import deepcopy
 import test_producer_business_value as fixtures
 from site_planner import producer_business_content as value
-from site_planner import producer_business_value as old, producer_observation as observed
+from site_planner import producer_business_content as old, producer_observation as observed
 from webcollect.batch_core import load_json,OutcomeUnknown
 
 
@@ -142,8 +142,8 @@ class BusinessContent(unittest.TestCase):
              patch('site_planner.candidate_discovery.check_entry',side_effect=AssertionError('no extra GET')), \
              patch('site_planner.entry_access.check_entry',side_effect=AssertionError('no landing GET')), \
              patch.object(self.f.f.b.f.f.provider.opener,'open',side_effect=self.provider):
-            report=self.f.f.b.f.run_new(home,key='v13',target=1,sources=sources,model_protocol='entry-tools-13',batch_size=1)
-            replay=self.f.f.b.f.run_new(home,key='v13',target=1,sources=sources,model_protocol='entry-tools-13',batch_size=1)
+            report=self.f.f.b.f.run_new(home,key='v13',target=1,sources=sources,batch_size=1)
+            replay=self.f.f.b.f.run_new(home,key='v13',target=1,sources=sources,batch_size=1)
         self.assertEqual(report['listed_unique_candidates'],1,report)
         self.assertEqual(replay['new_dispatches'],{'model':0,'GET':0,'search':0})
         row=self.pool.rows(protocols=('webcollect-data-candidate-2',))[0]

@@ -12,7 +12,7 @@ from pathlib import Path
 import time
 
 from .batch_core import BatchLedger, load_json, file_sha
-from .consumer_templates import enabled, VERSION, GOAL_RULE
+from .consumer_templates import enabled, GOAL_RULE
 from .planning import verify_evidence
 
 
@@ -26,7 +26,7 @@ async def capture(cohort_path, directory, worker):
     from . import candidate_consumer
     from site_planner.candidate_pool import CandidatePool
     cohort=load_json(cohort_path)
-    if cohort.get('template_protocol') != VERSION or cohort.get('goal_rule') != GOAL_RULE:
+    if cohort.get('goal_rule') != GOAL_RULE:
         raise ValueError('Explicit frozen template contract required')
     rows=cohort['selected']
     if len(rows)!=8 or cohort['denominator']!=8 or len({r['candidate_id'] for r in rows})!=8:

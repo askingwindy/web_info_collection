@@ -6,8 +6,9 @@ import unittest
 import test_wiki_reading_completion_20261110 as wiki_fixtures
 from test_wiki_reading_completion_20261110 import URL, P1
 from webcollect.agent_controller import exclusive
-from webcollect.wiki_reading import (FIELD, VERSION, LEGACY_VERSION, progress,
+from webcollect.wiki_reading import (FIELD, VERSION, progress,
     resolve_source, evidence_payload, bind_plan_wire, FINISH_WHEN)
+LEGACY_VERSION = 'wiki-reading-completion-legacy-1'  # historical literal for the negative check only
 from webcollect.direct_completion import bind_answer
 from webcollect.plan_evidence import bind_check_pages
 

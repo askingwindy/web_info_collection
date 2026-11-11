@@ -7,7 +7,7 @@ from .layout import discover, sample_root
 def review_template(report):
     """Return an untouched, evidence-bound blank review, never an acceptance."""
     template = {
-        'schema_version': 'qc-review-2' if report.get('scope')=='delivery' else 'qc-review-1',
+        'schema_version': 'qc-review',
         'records': [{
             'sample_id': sample['sample_id'],
             'baseline_sha256': report['baseline']['config_sha256'],
@@ -19,9 +19,7 @@ def review_template(report):
         } for sample in report['samples']],
     }
     if report.get('scope')=='delivery':
-        from .semantic import rule_ids
         for record in template['records']:
-            record['semantic_rule_ids']=rule_ids()
             record['provenance']['frames_viewed']=[]
             record['step_observations']=[]
             for check in record['checks'].values():check['evidence_steps']=[]

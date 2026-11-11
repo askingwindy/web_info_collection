@@ -77,7 +77,7 @@ def collection_facts(report=None):
     """
     unknown = {'status': 'UNKNOWN', 'numerator': None, 'denominator': None,
                'reason': '没有绑定当前工程显式有效集合及已完成判重的汇总报告'}
-    result = {'schema_version': 'consumer-collection-facts-1',
+    result = {'schema_version': 'consumer-collection-facts',
               'short_flow': deepcopy(unknown), 'near_duplicate_unique_samples': deepcopy(unknown),
               'in_progress_saved': {'status': 'UNKNOWN', 'reason': '待审保存数不是正式有效集合分母'}}
     if not report or not all(report.get(k) for k in ('scope', 'source', 'rules', 'effective_set')):

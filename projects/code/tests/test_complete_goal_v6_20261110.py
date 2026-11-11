@@ -10,12 +10,12 @@ from unittest.mock import patch
 from jsonschema import Draft202012Validator
 
 from test_react_session import ReactHarness
-from webcollect.banded_plan import Controller, V13_VERSION
+from webcollect.banded_plan import Controller
 from webcollect.batch_core import file_sha, load_json, object_sha256
 from webcollect.closing_policy import (
-    COMPLETE_GOAL_V6_DELIVERY, COMPLETE_VERSION, annotation_errors,
-    completion_delivery_decision,
+    COMPLETED_GOAL_DELIVERY, annotation_errors, completion_delivery_decision,
 )
+from webcollect.plan_protocol import ENDING_POLICY, PLAN_PROTOCOL, WIKI_READING_COMPLETION
 from webcollect.postprocess import process, derive
 from webcollect.react_session import ReactSession, build_url_task
 
@@ -25,7 +25,7 @@ def completed(count=5):
         {'action': {'action_type': 'scroll'}} for _ in range(count)
     ] + [{'action': {'action_type': 'complete'}}]}
     raw = {'stop_reason': 'ready', 'collection_ending': {
-        'protocol': COMPLETE_VERSION, 'kind': 'HOST_PLAN_ENDPOINT',
+        'protocol': ENDING_POLICY, 'kind': 'HOST_PLAN_ENDPOINT',
         'safe_for_pending_sample': True, 'flagged': False,
         'external_effect_unknown': False,
         'endpoint_evidence': {'image': {'sha256': 'sealed'}},
@@ -37,7 +37,7 @@ def test_v6_delivery_has_minimum_but_no_cumulative_maximum():
     for count, eligible in ((0, False), (4, False), (5, True), (12, True)):
         annotation, raw = completed(count)
         decision = completion_delivery_decision(annotation, raw)
-        assert decision['delivery_policy'] == COMPLETE_GOAL_V6_DELIVERY
+        assert decision['delivery_policy'] == COMPLETED_GOAL_DELIVERY
         assert decision['delivery_eligible'] is eligible
     annotation, raw = completed(5)
     annotation['completion_status'] = 'controlled_exception'
@@ -73,7 +73,7 @@ class CompleteGoalV6SessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase)
         super().setUp()
         self.task = build_url_task(
             url=self.page.url, task_version='complete-v6-fixture',
-            ending_policy=COMPLETE_VERSION, plan_protocol=V13_VERSION,
+            ending_policy=ENDING_POLICY, plan_protocol=PLAN_PROTOCOL,
         )
         self.ids = {
             'sample_id': 'S000001_sample_000001', 'site_id': 'S000001',
@@ -147,9 +147,9 @@ class CompleteGoalV6SessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase)
 
         task = deepcopy(self.task)
         if wiki:
-            task['fragment']['wiki_reading_completion_protocol'] = 'webcollect-wiki-reading-completion-2'
+            task['fragment']['wiki_reading_completion_protocol'] = WIKI_READING_COMPLETION
             spec = task['workflow_proposal']['spec']
-            spec['wiki_reading_completion_protocol'] = 'webcollect-wiki-reading-completion-2'
+            spec['wiki_reading_completion_protocol'] = WIKI_READING_COMPLETION
             task['task_id'] = 'react-' + object_sha256({'url': spec['entry_url'], 'spec': spec})[:24]
         evidence = self.root / f'v6-{count}-{trailing_wait}-{wiki}' / 'evidence' / self.ids['sample_id']
         session = ReactSession(
@@ -228,7 +228,7 @@ class CompleteGoalV6SessionTests(ReactHarness, unittest.IsolatedAsyncioTestCase)
 
 def test_zero_and_four_effective_rows_do_not_create_formal_projection(tmp_path):
     task = build_url_task(url='https://example.org', task_version='short-fixture',
-                          ending_policy=COMPLETE_VERSION, plan_protocol=V13_VERSION)
+                          ending_policy=ENDING_POLICY, plan_protocol=PLAN_PROTOCOL)
     for count in (0, 4):
         destination = tmp_path / str(count)
         with patch('webcollect.postprocess.effective_trajectory', return_value=[{'action': 'scroll'}] * count):
@@ -242,6 +242,3 @@ def test_unsettled_and_prefix_never_qualify():
         annotation, raw = completed(12)
         raw[key] = True
         assert not completion_delivery_decision(annotation, raw)['delivery_eligible']
-    annotation, raw = completed(12)
-    raw['collection_ending']['protocol'] = 'webcollect-five-ten-effective-ending-5'
-    assert completion_delivery_decision(annotation, raw)['delivery_eligible']

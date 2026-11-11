@@ -7,9 +7,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock
 from webcollect.plan_evidence import facts, expected_navigation, verify_popup
-from webcollect.banded_plan import bind_target, Controller, VERSION, LEGACY_VERSION
+from webcollect.plan_protocol import PLAN_PROTOCOL as VERSION, ENDING_POLICY as END
+from webcollect.banded_plan import bind_target, Controller
 from webcollect.react_session import build_url_task, validate_task
-from webcollect.closing_policy import VERSION as END
 from PIL import Image
 
 class EvidenceTests(unittest.IsolatedAsyncioTestCase):
@@ -94,8 +94,6 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         p=c.prompt(s);self.assertTrue(p['observation']['image_ref'].endswith('.png'))
         s.current=self.observation('b','https://a.test/next','内容')
         self.assertTrue(c.prompt(s)['observation']['image_ref'].endswith('.jpg'))
-        task=build_url_task(url='https://a.test',task_version='old',ending_policy=END,plan_protocol=LEGACY_VERSION)
-        validate_task(task)
 
 class FormalFactsTests(unittest.IsolatedAsyncioTestCase):
     async def test_goal_evidence_survives_save_and_independent_qc_snapshot(self):

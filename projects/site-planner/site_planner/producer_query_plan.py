@@ -32,13 +32,13 @@ def next_query(pool, ledger, run, key, categories, state, failures, root, *, ind
                                               'reason':receipt['reason'],'reference':ref})
             elif check['state']!='queued':
                 previous_failures.append({'job_id':check['id'],'state':check['state'],'reason':check['error']})
-        payload={'version':'producer-category-query-1','scope':run+'/category-query-plan','goal':'发现目标类目中可产出第一方候选的新应用',
+        payload={'version':'producer-category-query','scope':run+'/category-query-plan','goal':'发现目标类目中可产出第一方候选的新应用',
                  'instruction':PROMPT,'categories':list(categories),'history_queries':history,
                  'query_outcomes':state,'page_failures':failures,'previous_page_failures':previous_failures,
                  'publication_outcomes':publication_outcomes}
         if independent:
             # Only query terms are model output. No URL or site classification is supplied by the planner.
-            payload = {'version':'producer-category-query-2','scope':run+'/'+checkpoint,
+            payload = {'version':'producer-category-query','scope':run+'/'+checkpoint,
                 'categories':list(categories),'goal':'发现主营符合目标类目的独立中文应用，能浏览多个公开栏目。',
                 'instruction':PROMPT+' 搜索引擎使用短且自然的检索语。给两种不同角度，优先实际可打开、免登录的站点首页或目录。'
                     '用户要电商时找有商品分类和详情的零售商城，小游戏找可直接游玩的网页，'
@@ -51,21 +51,11 @@ def next_query(pool, ledger, run, key, categories, state, failures, root, *, ind
             payload['instruction']+=(' 目标是无需登录即可浏览具体功能的开源演示。考虑组件交互示例、可视化示例库、'
                 '工作流或管理界面功能展示等不同领域，避免反复搜索泛称后台管理系统。')
         if purpose_grounded:
-            if purpose_protocol in ('entry-tools-13','entry-tools-14'):from .producer_business_content import QUERY_SYSTEM as SYSTEM,VERSION
-            elif purpose_protocol=='entry-tools-12':from .producer_business_value import QUERY_SYSTEM as SYSTEM,VERSION
-            elif purpose_protocol=='entry-tools-11':from .producer_task_value import QUERY_SYSTEM as SYSTEM,VERSION
-            elif purpose_protocol=='entry-tools-10':from .page_purpose_v6 import QUERY_SYSTEM as SYSTEM,VERSION
-            elif purpose_protocol in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):from .page_purpose_v5 import QUERY_SYSTEM as SYSTEM,VERSION
-            elif purpose_protocol=='entry-tools-7':from .page_purpose_v4 import QUERY_SYSTEM as SYSTEM,VERSION
-            else:from .page_purpose import SYSTEM,VERSION
+            # The purpose protocol value is caller data; the supply policy is single-current.
+            from .producer_business_content import QUERY_SYSTEM as SYSTEM,VERSION
             payload['purpose_policy']=VERSION
-            payload['goal']='寻找有第一方证据的公开业务入口和不同操作；网页库存数量与业务场景分别验收。'
+            payload['goal']='寻找有第一方证据、基本公开业务内容且与目标站点主类一致的入口。'
             payload['instruction']+=' '+SYSTEM
-            if purpose_protocol in ('entry-tools-12','entry-tools-13','entry-tools-14'):
-                payload['goal']='寻找有第一方证据、基本公开业务内容且与目标站点主类一致的入口。'
-            elif '企业后台与开源演示站' in categories:
-                payload['goal']='寻找一个新应用的三种不同匿名后台业务入口：表格交互、表单编辑、仪表盘筛选；三个URI或产品说明不算通过。'
-                payload['instruction']+=' 优先具体公开实例画廊、匿名表格/表单/仪表盘；遇产品营销、帮助文档、登录墙应换检索方向。第一站不通过就记录缺额，不扩第二站。'
         # Freeze before model dispatch; interruption resumes this exact input.
         original=pool.checkpoint(run,checkpoint+'/input')
         if original is None and page_feedback:

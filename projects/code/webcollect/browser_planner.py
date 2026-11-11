@@ -20,7 +20,7 @@ from .navigation import BatchNavigation
 from .planning import object_sha256, validate_capability
 from .task_instruction import validate_task_instruction
 
-VERSION = 'webcollect-browser-observation-planner-1'
+VERSION = 'browser-observation-planner'
 SCHEMA = {'type': 'object', 'additionalProperties': False,
           'required': ['status', 'reason', 'action_type', 'target_element_id', 'arguments', 'goal', 'rationale', 'expected', 'final_assertions'],
           'properties': {
@@ -207,7 +207,7 @@ def validate_observation_intent(intent):
     checks. created_at must already be a finite numeric timestamp; a missing
     value or a display-only created_at_utc field cannot be repaired at dispatch.
     """
-    if (not isinstance(intent, dict) or intent.get('schema_version') != 'webcollect-observed-workflow-intent-1'
+    if (not isinstance(intent, dict) or intent.get('schema_version') != 'observed-workflow-intent'
             or intent.get('mode') != 'real'):
         raise ValueError('Explicit frozen real observation intent schema/mode required')
     for field in ('site_uri', 'site_category', 'app_name', 'instruction', 'initial_url'):
@@ -323,7 +323,7 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                         actual = await assert_state(page, assertions, final['state'], final['png'])
                         if not all(row['passed'] for row in actual):
                             raise ValueError('Model completion is not supported by actual final frame')
-                        trace = {'schema_version': 'webcollect-observed-workflow-trace-1', 'mode': 'real',
+                        trace = {'schema_version': 'observed-workflow-trace', 'mode': 'real',
                                  'intent': intent_ref, 'transitions': transitions, 'final_assertions': assertions,
                                  'final_observation': final_ref, 'source_identity': source_identity(),
                                  'QC_approval': False, 'sample_ids_allocated': 0}
@@ -344,7 +344,7 @@ async def observe_task(ledger, intent_path, capability_path, output, *, max_acti
                     started = time.time(); await execute(page, operation['action_type'], parameters, operation.get('execution'))
                     after = await capture(page); ended = time.time()
                     after_ref = save_frame(output, number * 3 + 2, after)
-                    execution = {'schema_version': 'webcollect-observed-workflow-transition-1', 'mode': 'real',
+                    execution = {'schema_version': 'observed-workflow-transition', 'mode': 'real',
                                  'operation': operation, 'before_frame_sha256': object_sha256(before_ref),
                                  'after_frame_sha256': object_sha256(after_ref), 'started_at': started, 'ended_at': ended,
                                  'status': 'success', 'state_preflight': preflight, 'arguments': parameters,

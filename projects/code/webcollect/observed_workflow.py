@@ -16,12 +16,12 @@ from .batch_core import file_sha, load_json, save_json
 from .planning import object_sha256, timestamp, validate_capability
 from .task_admission import _frame, _read, _review_source, reference
 
-VERSION = 'observed-workflow-1'
-TRACE_SCHEMA = 'webcollect-observed-workflow-trace-1'
-INTENT_SCHEMA = 'webcollect-observed-workflow-intent-1'
-TRANSITION_SCHEMA = 'webcollect-observed-workflow-transition-1'
-SCHEMAS = {'real': ('webcollect-observed-workflow-packet-1', 'webcollect-observed-workflow-review-1'),
-           'synthetic': ('webcollect-controlled-observed-workflow-packet-1', 'webcollect-controlled-observed-workflow-review-1')}
+VERSION = 'observed-workflow'
+TRACE_SCHEMA = 'observed-workflow-trace'
+INTENT_SCHEMA = 'observed-workflow-intent'
+TRANSITION_SCHEMA = 'observed-workflow-transition'
+SCHEMAS = {'real': ('observed-workflow-packet', 'observed-workflow-review'),
+           'synthetic': ('controlled-observed-workflow-packet', 'controlled-observed-workflow-review')}
 CHECKS = ('observed_controls', 'necessary_actions', 'visible_terminal', 'trajectory_continuity',
           'business_novelty', 'not_parameter_variant')
 DIFFERENCES = ('task_goal', 'operation_path', 'page_states', 'result_judgement')
@@ -323,7 +323,7 @@ def derive_capability(parent_qualified_ref, trace_ref):
     observed_at = max(timestamp(load_json(_read(row['execution']))['ended_at']) for row in trace['transitions'])
     _require(observed_at < timestamp(parent['expires_at']), 'workflow observation occurred after parent capability expiry')
     rejected = any(row['chinese_ratio'] < .7 for row in representatives)
-    return {'schema_version': 'webcollect-site-capability-1', 'mode': trace['mode'],
+    return {'schema_version': 'site-capability', 'mode': trace['mode'],
         'capability_id': parent['capability_id'] + '-workflow-' + trace_ref['sha256'][:12],
         'version': object_sha256({'parent': parent_qualified_ref, 'trace': trace_ref, 'compiler': VERSION})[:24],
         'site_uri': parent['site_uri'], 'site_category': parent['site_category'],

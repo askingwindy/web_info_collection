@@ -17,10 +17,11 @@ from urllib.parse import urlsplit
 from .batch_core import file_sha, load_json
 from .planning import object_sha256, verify_evidence
 from .agent_controller import exclusive
+from .plan_protocol import (ACTION_STABILITY_PROTOCOL, EFFECTIVE_ACTION_RULE, ENDING_POLICY,
+                            NAVIGATION_PROTOCOL, PLAN_PROTOCOL, REACT_PROTOCOL, RESULT_EXECUTION_POLICY,
+                            WIKI_READING_COMPLETION)
 from .react_session import REACT_VERSION, is_react_task, struct_goal, describe_goal, validate_task
-from .react_protocol import VERSION as NATIVE_VERSION, NATIVE_VERSIONS, atomic_effect, RULE_VERSION
-
-VERSION = 'webcollect-postprocess-4'
+from .react_protocol import atomic_effect
 
 
 def _observation_state(record, observation_id):
@@ -77,7 +78,7 @@ def session_record(raw_root, *, allow_unknown_for_prefix=False, _verification=No
         # separate reference exactly as at capture time.
         canonical = {k: evidence[k] for k in ('image', 'state', 'capture')}
         projected = project(state, canonical, extended_actions=(
-            task['fragment'].get('plan_protocol') == 'webcollect-banded-conditional-plan-13'))
+            task['fragment'].get('plan_protocol') == PLAN_PROTOCOL))
         if _verification is not None:
             projected_observations[projected['observation_id']] = projected
         observations[projected['observation_id']] = {
@@ -219,8 +220,8 @@ def _delayed_bridge(record, previous, before_id, after_id):
 
 def _scoped_continuity(record, previous, row, raw):
     """Explain only adjacent same-document drift using the next action's receipt."""
-    from .action_stability import FOLLOWUP_VERSION, POST_VERSION, ACTION_SCOPED_VERSIONS, pair
-    if record['task']['fragment'].get('action_stability_protocol') not in (FOLLOWUP_VERSION,POST_VERSION,*ACTION_SCOPED_VERSIONS):return False
+    from .action_stability import pair
+    if record['task']['fragment'].get('action_stability_protocol') != ACTION_STABILITY_PROTOCOL:return False
     capture=raw.get('capture') or {}
     accepted=[a for a in capture.get('attempts',[]) if (a.get('stability') or {}).get('accepted') and (a.get('final_stability') or {}).get('accepted')]
     pair_receipt=accepted[-1] if accepted else capture
@@ -248,21 +249,13 @@ def flow_classification(effective):
     return short, (f'最终保存轨迹包含 {effective} 个有效业务操作，少于 5 步，自动标记为短流程。' if short else None)
 
 
-def validate_effective_limit(task, count):
-    """V5 freezes a ten-effective-action ceiling, including derived prefixes."""
-    from .closing_policy import effective_limit
-    limit=effective_limit(task)
-    if limit is not None and count>limit:
-        raise ValueError('V5 saved interval exceeds ten effective business actions')
-
-
 def required_result_checks(terminal, task=None):
     """The same evidence gate as the online conditional-plan finish."""
     from .plan_evidence import unverified_required_checks
-    if ((task or {}).get('fragment', {}).get('result_execution_policy') == 'webcollect-result-execution-1'
+    if ((task or {}).get('fragment', {}).get('result_execution_policy') == RESULT_EXECUTION_POLICY
             and (terminal.get('goal_evidence') or {}).get('result_execution_status') == 'UNVERIFIED'):
         return [{'field': '本次输入、提交与实际结果的执行绑定', 'status': 'UNVERIFIED'}]
-    if (task or {}).get('fragment', {}).get('wiki_reading_completion_protocol') == 'webcollect-wiki-reading-completion-2':
+    if (task or {}).get('fragment', {}).get('wiki_reading_completion_protocol') == WIKI_READING_COMPLETION:
         ending = terminal.get('collection_ending') or {}
         basis = ending.get('endpoint_evidence') or {}
         objective = basis.get('session_objective_evidence') or {}
@@ -270,15 +263,14 @@ def required_result_checks(terminal, task=None):
                 and ending.get('safe_for_pending_sample') is True
                 and objective.get('status') == 'VERIFIED'
                 and objective == (terminal.get('goal_evidence') or {}).get('session_objective')):
-            # completion-2 owns cumulative original checks and source binding;
-            # its sealed replay remains mandatory in validate_record.
+            # The current wiki reading completion owns cumulative original checks
+            # and source binding; its sealed replay remains mandatory in validate_record.
             return []
     return unverified_required_checks(terminal.get('goal_evidence') or {})
 
 
 def ready_requires_prefix(task, terminal):
-    from .closing_policy import EFFECTIVE_VERSION
-    return (task.get('fragment',{}).get('ending_policy')==EFFECTIVE_VERSION
+    return (task.get('fragment',{}).get('ending_policy')==ENDING_POLICY
             and terminal.get('stop_reason')=='ready' and bool(required_result_checks(terminal, task)))
 
 
@@ -290,7 +282,7 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
     """
     from .page_language import validate_range
     validate_range(record)
-    if record['task']['fragment'].get('decision_protocol') not in NATIVE_VERSIONS:
+    if record['task']['fragment'].get('decision_protocol') != REACT_PROTOCOL:
         return [r for r in record['trajectory'] if r['action'] not in ('observe','inspect','wait','finish','complete')]
     rows, seen = [], {}
     for row_index,row in enumerate(record['trajectory']):
@@ -327,13 +319,13 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
         effect = atomic_effect(before, after, row['action'], row['arguments'],
                                operation.get('evidence', {}).get('anchor_element_id') or
                                operation.get('evidence', {}).get('focused_element_id'),
-                               rule_version=record['task']['fragment'].get('effective_action_rule', RULE_VERSION))
+                               rule_version=record['task']['fragment'].get('effective_action_rule', EFFECTIVE_ACTION_RULE))
         if not effect['verified']:
             raise ValueError('动作对应效果不可核验：' + row['operation_id'])
         if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before) and not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],row['before_observation_id']) and not _scoped_continuity(record,rows[-1],row,raw):
             raise ValueError('连续轨迹存在未解释的状态缺口')
         if rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
-            navigation_return = (record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2'
+            navigation_return = (record['task']['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL
                 and row['action'] == 'back' and rows[-1]['action'] in ('click','double_click','open_url','hotkey','type','select')
                 and before['url'] != after['url'])
             useful_return=False
@@ -349,7 +341,7 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
             if not navigation_return and not useful_return and not boundary_return:
                 raise ValueError('存在两步后回到原样的无效往返')
         rows.append(row)
-    if rows and record['task']['fragment'].get('navigation_protocol') == 'observed-navigation-2':
+    if rows and record['task']['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL:
         from .candidate_navigation import verify_path
         states,operations = [],[]
         previous_id=None;previous_row=None
@@ -385,7 +377,6 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
     verify_record(record, _verified=_verified)
     from .wiki_reading import verify_record as verify_wiki
     verify_wiki(record, _verified=_verified)
-    validate_effective_limit(record['task'],len(rows))
     return rows
 
 
@@ -433,69 +424,6 @@ def cancelled_dispatch_audit(raw_root):
             'final_observation_id':terminal['final_observation_id'],
             'source_unknown_retained':True, 'operation_unknown':False,
             'deliverable':False, 'goal_completion':'NOT_CLAIMED'}
-
-
-def rejected_focus_dispatch_audit(raw_root):
-    """Account one focus click from sealed rejected PNG/DOM pairs, never deliver.
-
-    This is deliberately separate from an accepted capture or cancellation:
-    the original capture rejection and UNKNOWN remain unchanged.
-    """
-    import base64
-    from .action_stability import post_observation_scope, pair, projection, searchable
-    raw_root=Path(raw_root).resolve();record=session_record(raw_root,allow_unknown_for_prefix=True)
-    terminal=record['terminal'];ending=terminal.get('collection_ending') or {}
-    if (terminal.get('unknown') is not True or terminal.get('failure_class')!='interrupted'
-            or terminal.get('actual_actions')!=1 or terminal.get('effective_steps')!=0
-            or record['trajectory'] or not ending.get('reason','').startswith('CAPTURE_AFTER_ACTION_UNVERIFIED:')):
-        raise ValueError('Only one originally rejected focus dispatch is auditable')
-    actual={p.relative_to(raw_root).as_posix() for p in raw_root.rglob('*') if p.is_file()}
-    if actual!=set(record['receipt']['files_sha256'])|{'raw-receipt.json'}:
-        raise ValueError('Rejected raw contains unsealed files')
-    intents=list(raw_root.glob('*-dispatch-intent.json'));steps=list((raw_root.parent/'action-attempts').glob('*.json'))
-    businesses=list(raw_root.glob('*-business-attempt.json'));rejections=list(raw_root.glob('*-capture-rejected.json'))
-    if any(len(rows)!=1 for rows in (intents,steps,businesses,rejections)):
-        raise ValueError('Rejected focus audit requires exactly one complete original dispatch')
-    def ref(path):return {'path':str(path),'sha256':file_sha(path)}
-    intent=load_json(intents[0]);step=load_json(steps[0]);business=load_json(businesses[0]);rejection=load_json(rejections[0])
-    if (business.get('raw_steps')!=[ref(steps[0])] or business.get('outcome')!='EFFECT_UNKNOWN'
-            or business.get('actual_dispatches_delta')!=1 or business.get('effective_steps_delta')!=0
-            or step.get('controller_dispatch')!=ref(intents[0]) or step.get('operation')!=intent['operation']
-            or step.get('dispatched') is not True or step.get('action_executed') is not True
-            or step.get('phase')!='post_dispatch' or step.get('execution_error')
-            or rejection.get('after_dispatch') is not True):
-        raise ValueError('Original dispatch accounting differs')
-    operation=intent['operation'];source=step['state'];node=operation.get('evidence',{}).get('anchor_element_id')
-    before_id=step.get('react',{}).get('before_observation_id')
-    if (operation.get('action_type')!='click' or before_id not in record['observations']
-            or source!=_observation_state(record,before_id)
-            or projection(source,node)['value'].get('focused') is not False
-            or not searchable(projection(source,node))):
-        raise ValueError('Rejected audit is only an originally observed unfocused search input')
-    verify_evidence([rejection['evidence'],intent['formal_frame']])
-    if Path(rejection['evidence']['path']).parent!=raw_root:
-        raise ValueError('Rejected diagnostic must belong to this sealed raw')
-    scope=post_observation_scope(source,operation);proofs=[]
-    for attempt in load_json(rejection['evidence']['path']).get('diagnostic',{}).get('attempts',[]):
-        try:
-            states=[attempt[k] for k in ('snapshot_before','snapshot_after','snapshot_final')]
-            png=base64.b64decode(attempt['original_png_base64'],validate=True)
-            other=base64.b64decode(attempt['comparison_png_base64'],validate=True)
-            checks=[pair(states[0],state,png,other,scope) for state in states[1:]]
-            if all(check['accepted'] for check in checks):
-                proofs.append({'attempt':attempt['attempt'],'pairs':checks})
-        except (ValueError,KeyError,TypeError):continue
-    if not proofs:raise ValueError('No sealed synchronous pair proves the actual focus effect')
-    failure_path=raw_root.parent/'failure.json';failure=load_json(failure_path)
-    if (not failure.get('attempt_id') or record['boundary'].get('attempt_id',failure['attempt_id'])!=failure['attempt_id']
-            or failure.get('failure_class')!='interrupted' or 'CAPTURE_AFTER_ACTION_UNVERIFIED:' not in failure.get('error','')):
-        raise ValueError('Rejected focus primary failure identity differs')
-    return {'schema_version':'webcollect-rejected-focus-dispatch-audit-1','attempt_id':failure['attempt_id'],
-            'raw_receipt':ref(raw_root/'raw-receipt.json'),'original_failure':ref(failure_path),
-            'dispatch':ref(intents[0]),'raw_step':ref(steps[0]),'rejected_capture':rejection['evidence'],
-            'proofs':proofs,'accounted_dispatches':1,'operation_unknown':False,
-            'original_capture_accepted':False,'source_unknown_retained':True,
-            'deliverable':False,'goal_completion':'NOT_CLAIMED'}
 
 
 def terminal_outcome(task, record, final_state):
@@ -707,11 +635,10 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     from .browser import POINTER
     from .validate import CONTROL
     delivery = Path(delivery)
-    native = task['fragment'].get('decision_protocol') in NATIVE_VERSIONS
+    native = task['fragment'].get('decision_protocol') == REACT_PROTOCOL
     if not trajectory:
         return {'status': 'no_actions', 'effective_steps': 0}
     effective = len(trajectory)
-    validate_effective_limit(task,effective)
     short, reason = flow_classification(effective)
     complete_only = True
     length_qualified = effective >= 5 if complete_only else effective > 0
@@ -812,7 +739,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                 'tool_call': {'tool_name': row['action'], 'call_id': f'{ids["sample_id"]}_{index:03}',
                               'arguments': deepcopy(arguments),
                               'timestamp': raw_step.get('started_at') or datetime.now().isoformat(),
-                              'context': 'Web / ' + (urlsplit(before['url']).hostname if task['fragment'].get('navigation_protocol') == 'observed-navigation-2' else task['app_name'])},
+                              'context': 'Web / ' + (urlsplit(before['url']).hostname if task['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL else task['app_name'])},
                 'tool_result': {'status': 'success', 'return_value': {}, 'error': ''},
                 'next_step_rationale': row.get('semantic_goal') or row['goal'],
                 'step_result': observed_result, 'exception_evidence': []}
@@ -866,7 +793,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                   'tool_call': {'tool_name': 'complete', 'call_id': f'{ids["sample_id"]}_{effective + 1:03}',
                                 'arguments': {'status': 'success'},
                                 'timestamp': final_timestamp,
-                                'context': 'Web / ' + (urlsplit(final_state['url']).hostname if task['fragment'].get('navigation_protocol') == 'observed-navigation-2' else task['app_name'])},
+                                'context': 'Web / ' + (urlsplit(final_state['url']).hostname if task['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL else task['app_name'])},
                   'tool_result': {'status': 'success', 'return_value': {}, 'error': ''},
                   'next_step_rationale': final_description,
                   'step_result': '最终页面已确认，' + final_goal,
@@ -927,7 +854,6 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                   source_mapping=narrative_rows,
                   instruction=instruction, final_result=final_result)
     if new_narration:
-        result['annotation_rule_version'] = 'webcollect-annotation-corrections-1'
         result['terminal_narrative_basis'] = terminal_narrative
     return result
 
@@ -978,12 +904,10 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
     if record['terminal'].get('unknown') and prefix_end_step is None:
         raise ValueError('UNKNOWN 原始终态不能进入交付加工；先按原账核对')
     if prefix_end_step is not None:
-        from .trusted_prefix import project_prefix, VERSION as PREFIX_RULE_V1
+        from .trusted_prefix import project_prefix
         record = project_prefix(record, raw_root, prefix_end_step, ids,
-                                rule=prefix_rule or PREFIX_RULE_V1, _verified=verified)
+                                rule=prefix_rule, _verified=verified)
     task = record['task']
-    if prefix_end_step is not None:
-        validate_effective_limit(task,len(record['trajectory']))
     derivations_path = evidence_root / 'derivations.jsonl'
     prior = []
     if derivations_path.is_file():
@@ -996,7 +920,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         if (binding != record['trusted_prefix'] or saved.get('sample_id') != ids['sample_id']
                 or actual != saved.get('sample_files_sha256') or captures!=saved.get('capture_files_sha256')):
             raise ValueError('Existing prefix differs from immutable interval or saved sample')
-        return {'schema_version': VERSION, 'status': 'derived_saved', 'idempotent_reuse': True,
+        return {'status': 'derived_saved', 'idempotent_reuse': True,
                 'effective_steps': prefix_end_step, 'saved_sample': str((evidence_root/'saved_sample.json').resolve()),
                 'trusted_prefix': binding, 'browser_calls': 0, 'model_calls': 0}
     if any(row.get('status') == 'derived_saved' for row in prior):
@@ -1021,7 +945,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         record = {**record, 'trajectory': trajectory}
         derived = _derive_verified(task, record, trajectory, delivery_root, ids, manifest, resume=bool(prior))
     except Exception as error:  # noqa: BLE001 - recorded verbatim, raw stays intact
-        failure = {'schema_version': VERSION, 'derivation': version, 'status': 'processing_failed',
+        failure = {'status': 'processing_failed', 'derivation': version,
                    'error_type': type(error).__name__, 'error': str(error),
                    'browser_calls': browser_calls, 'model_calls': model_calls}
         exclusive(evidence_root / f'derived-failed-{version:02}.json', failure)
@@ -1030,7 +954,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                          'sha256': file_sha(evidence_root / f'derived-failed-{version:02}.json')}})
         return failure
     if derived['status'] != 'derived':
-        row = {'schema_version': VERSION, 'derivation': version, 'status': derived['status'],
+        row = {'status': derived['status'], 'derivation': version,
                'effective_steps': derived.get('effective_steps'),
                'short_flow': derived.get('short_flow'), 'browser_calls': 0, 'model_calls': 0}
         if derived['status'] == 'processing_failed':
@@ -1074,7 +998,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         for validate in validators:
             validation_errors.extend(validate(delivery_root) or [])
         if validation_errors:
-            row = {'schema_version': VERSION, 'derivation': version, 'status': 'delivery_rejected',
+            row = {'status': 'delivery_rejected',
                    'effective_steps': derived['effective_steps'],
                    'errors': validation_errors, 'browser_calls': 0, 'model_calls': 0}
             exclusive(evidence_root / f'derived-failed-{version:02}.json', row)
@@ -1097,7 +1021,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
              **language,
              'human_review': 'pending', 'agent_visual_review': 'pending',
              'task_id': task['task_id'], 'protocol': REACT_VERSION,
-             'preparation_policy': 'content-preparation-v1', 'preparation_actions': 0,
+             'preparation_policy': 'content-preparation', 'preparation_actions': 0,
              'preparation_scrolls': 0})
         write_json_file(evidence_root / 'task_contract.json',
             {'schema_version': 'webcollect-task-contract-evidence-1',
@@ -1112,7 +1036,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
             write_json_file(evidence_root / 'pilot_identity.json',
                             {**actual_proof(task, raws),
                              'annotation_sha256': file_sha(delivery_root / 'annotation.json')})
-        derived_record = {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
+        derived_record = {'status': 'derived_saved',
             **language,
             'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
             'short_flow_reason': derived.get('short_flow_reason'),
@@ -1145,17 +1069,17 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                                    'unknown': record['terminal'].get('unknown', False),
                                    'effective_steps': derived['effective_steps'],
                                    'not_a_delivery_sample_by_itself': True},
-                 'derivation': {'version': version, 'record': derived_ref,
+                 'derivation': {'record': derived_ref,
                                 **({'prefix_projection':prefix_projection} if prefix_projection else {}),
                                 'source_mapping_sha256': object_sha256(derived['source_mapping'])}}
         verified.check(raw_root)
         write_json_file(evidence_root / 'saved_sample.json', saved)
-        _append_derivation(derivations_path, {'schema_version': VERSION, 'derivation': version,
-            'status': 'derived_saved', 'effective_steps': derived['effective_steps'],
+        _append_derivation(derivations_path, {'status': 'derived_saved',
+            'effective_steps': derived['effective_steps'],
             'saved_sample': {'path': str((evidence_root / 'saved_sample.json').resolve()),
                              'sha256': file_sha(evidence_root / 'saved_sample.json')},
             'record_ref': derived_ref})
-        return {'schema_version': VERSION, 'derivation': version, 'status': 'derived_saved',
+        return {'status': 'derived_saved',
                 **language,
                 'effective_steps': derived['effective_steps'], 'short_flow': derived.get('short_flow'),
                 'stop_reason': record['terminal'].get('stop_reason'),
@@ -1167,7 +1091,7 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
         # engineering processing stage: its failures append a derivation row
         # instead of escaping, so the attempt settles recoverably and the
         # sealed raw keeps every original byte.
-        failure = {'schema_version': VERSION, 'derivation': version, 'status': 'processing_failed',
+        failure = {'status': 'processing_failed',
                    'error_type': type(error).__name__, 'error': str(error), 'stage': 'seal',
                    'effective_steps': derived['effective_steps'],
                    'browser_calls': 0, 'model_calls': 0}
@@ -1241,7 +1165,7 @@ def revise(evidence_root, revision_root, ids, manifest, *, reason, fix_version):
     delivery = revision_root / 'samples' / ids['sample_id']
     derived = derive(record['task'], record, delivery, ids, manifest)
     completion_ref = exclusive(revision_root / 'completion-evidence.json', completion_evidence(record))
-    receipt = {'schema_version': VERSION, 'status': 'revision_pending_review' if derived['status'] == 'derived' else derived['status'],
+    receipt = {'status': 'revision_pending_review' if derived['status'] == 'derived' else derived['status'],
                'reason': reason, 'fix_version': fix_version, 'original_save_receipt': original_ref,
                'raw_receipt': {'path': str(evidence_root / 'raw/raw-receipt.json'), 'sha256': file_sha(evidence_root / 'raw/raw-receipt.json')},
                'sample_id': ids['sample_id'], 'attempt_id': ids.get('attempt_id'), 'manifest': manifest,
@@ -1249,3 +1173,14 @@ def revise(evidence_root, revision_root, ids, manifest, *, reason, fix_version):
                'browser_calls': 0, 'model_calls': 0, 'completion_evidence': completion_ref,
                'derived': derived, 'revision_files_sha256': {p.relative_to(revision_root).as_posix(): file_sha(p) for p in sorted(revision_root.rglob('*')) if p.is_file()}}
     return {**receipt, 'receipt': exclusive(revision_root / 'revision.json', receipt)}
+
+
+def rejected_focus_dispatch_audit(raw_root):
+    """Historical rejected-focus audits are no longer interpreted.
+
+    No such event exists in the current production ledger; a request carrying
+    this legacy shape is reported with its specific gap instead of being
+    silently recomputed by a retired focus-evidence interpreter.
+    """
+    raise ValueError('LEGACY_REJECTED_FOCUS_AUDIT_UNSUPPORTED: '
+                     '此历史形状的拒绝审计不再解释，保留原证据并列明缺项')

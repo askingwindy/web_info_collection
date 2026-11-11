@@ -7,22 +7,20 @@ from copy import deepcopy
 
 from .planning import object_sha256, verify_evidence
 
-SCHEMA = 'webcollect-workflow-proposals-1'
+SCHEMA = 'workflow-proposals'
 
 
 def compile_workflow(capability, spec, version):
     from .agent_controller import FRAGMENT_VERSION as CONTROLLED_VERSION, compile_goal
     if spec.get('schema_version') == CONTROLLED_VERSION:
+        if 'budgets' not in spec:
+            # A static fragment proposal shares the stable fragment name but is
+            # not a frozen controller boundary; reject instead of misrouting it.
+            raise ValueError('Fragment proposal is not a controlled boundary specification')
         return compile_goal(capability, spec, version)
-    from .fragment_workflow import VERSION as FRAGMENT_VERSION, compile_fragment
-    if spec.get('schema_version') == FRAGMENT_VERSION:
-        return compile_fragment(capability, spec, version)
     from .workflow_normalization import VERSION as NORMALIZED_VERSION, compile_normalized
     if spec.get('schema_version') == NORMALIZED_VERSION:
         return compile_normalized(capability, spec, version)
-    from .semantic_workflow import VERSION as SEMANTIC_VERSION, compile_semantic
-    if spec.get('schema_version') == SEMANTIC_VERSION:
-        return compile_semantic(capability, spec, version)
     return _compile_explicit(capability, spec, version)
 
 

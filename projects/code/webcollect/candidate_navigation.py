@@ -47,7 +47,8 @@ def extend(task, urls, state, previous=None):
     if previous and excluded_article(task, url):
         raise ValueError('ARTICLE_OUTSIDE_RUN_SCOPE')
     verify_public_url(url)
-    observed_navigation = task['fragment'].get('navigation_protocol') == 'observed-navigation-2'
+    from .plan_protocol import NAVIGATION_PROTOCOL
+    observed_navigation = task['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL
     if not observed_navigation and not same_application(task,url): raise ValueError('Candidate navigation left evidence-backed application')
     if url not in urls:
         if not previous or previous['action_type'] not in NAV_ACTIONS:

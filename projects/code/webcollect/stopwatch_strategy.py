@@ -94,7 +94,7 @@ def stopwatch_proposal(capability, page, widget, strategy_version):
               ('resume-second-stage','#startStopwatch','休息后继续第二段计时'),
               ('record-second-stage','#startCount','结束并保留第二条分段计时'),
               ('pause-final','#startStopwatch','暂停并核对总计时和已结束的两条分段记录')]
-    return {'schema_version':'webcollect-stopwatch-development-proposal-1',
+    return {'schema_version':'stopwatch-development-proposal',
         'status':'FUNCTIONAL_VALIDATION_REQUIRED', 'executable_production_task':False,
         'page_uri':URI, 'widget_adapter':ADAPTER_ID,
         'goal':'用在线秒表记录两段练习：第一段结束计次并暂停休息，休息后继续第二段，结束后再次计次并暂停，核对已结束的两条分段记录、当前段余量和总计时。',

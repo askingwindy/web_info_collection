@@ -32,6 +32,6 @@ def terminal_proof(task, records, final_binding):
             raise ValueError('Dispatch state changed')
         require_action(raw['state'], raw['operation'])
         seen.add(raw['operation']['operation_id'])
-    return {'schema_version':'webcollect-controlled-fragment-evidence-1','machine_status':'PASS',
+    return {'schema_version':'controlled-fragment-evidence','machine_status':'PASS',
         'business_completion':'NOT_CLAIMED','effective_steps':len(actions),'ending_frame':final_binding,
         'executed_operation_ids':sorted(seen),'semantic_status':'REVIEW_REQUIRED'}

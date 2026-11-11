@@ -12,7 +12,7 @@ from .duplicates import analyze_inputs, analysis_error, summarize
 from .format_checks import run as format_run
 from .layout import discover
 from .profiles import load as load_profile, package_files, DEFAULT_DELIVERY_PROFILE
-from .version_compare import compare_versions, POLICY
+from .version_compare import compare_versions
 
 
 QUALITY_BATCH_SIZE = 5000
@@ -25,14 +25,14 @@ def _quality_batch_ids(value):
     return sorted(value)
 
 
-def build_set_manifest(package_paths, *, supersedes=(), quality_batch_ids=None, application_registry=None, application_capacity_policy=None):
+def build_set_manifest(package_paths, *, quality_batch_ids=None, application_registry=None, application_capacity_policy=None):
     """Return facts, not approval. Caller persists this versioned manifest explicitly."""
     paths = [Path(path).resolve() for path in package_paths]
     if not paths or len(paths) != len(set(paths)):
         raise ValueError('Cumulative set needs unique package paths')
     if any(a != b and (a.is_relative_to(b) or b.is_relative_to(a)) for a in paths for b in paths):
         raise ValueError('Cumulative package roots must not overlap')
-    result = {'schema_version': 'qc-cumulative-set-1',
+    result = {'schema_version': 'qc-cumulative-set',
             'packages': [{'path': str(path), 'package_files_sha256': package_files(path)} for path in paths],
             'scope': 'explicit effective delivery versions only; excludes superseded copies',
             'not_an_acceptance': True}
@@ -94,7 +94,7 @@ def inspect_set(manifest, profile=None, *, cache=None, verify_exhaustive=False):
             raise ValueError('Cache must not overwrite the frozen manifest')
     else:
         raw = manifest; base = Path.cwd()
-    if not isinstance(raw, dict) or raw.get('schema_version') != 'qc-cumulative-set-1' or not isinstance(raw.get('packages'), list) or not raw['packages']:
+    if not isinstance(raw, dict) or raw.get('schema_version') not in ('qc-cumulative-set','qc-cumulative-set-1') or not isinstance(raw.get('packages'), list) or not raw['packages']:
         raise ValueError('Expected a nonempty qc-cumulative-set-1 manifest')
     versions = compare_versions(raw, base=base)
     effective_paths = {Path(row['sample_path']) for row in versions['effective_samples']}

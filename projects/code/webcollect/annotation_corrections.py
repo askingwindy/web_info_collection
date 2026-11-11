@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import shutil
 
-VERSION = 'webcollect-annotation-corrections-1'
+VERSION = 'annotation-corrections'
 FIELDS = frozenset({'hotkey', 'expected_result', 'next_step_rationale',
                     'short_flow_reason', 'final_result', 'completion_judgement',
                     'completion_status', 'narrative_language'})
@@ -159,12 +159,12 @@ def correct_annotations(source, output, *, source_index, sample_ids=None, fields
     if len(selected) != len(set(selected)) or any(s not in available for s in selected):
         raise ValueError('Unknown or duplicate selected sample')
     output.mkdir(parents=True)
-    report = {'schema_version': VERSION, 'mode': 'apply' if apply else 'inspect',
+    report = {'mode': 'apply' if apply else 'inspect',
               'purpose': 'optional_delivery_annotation_repair', 'source': str(source),
               'status': 'revision_pending_review' if apply else 'inspection_only',
               'model_calls': 0, 'browser_actions': 0, 'business_completion_rejudged': False,
               'quality_review': 'NOT_RUN', 'published': False, 'samples': []}
-    execution = {'schema_version': 'webcollect-actual-execution-1', 'samples': []}
+    execution = {'schema_version': 'actual-execution', 'samples': []}
     source_sites = json.loads((source / 'site-list.json').read_text()) if (source / 'site-list.json').is_file() else None
     for sid in selected:
         sample = available[sid]; annotation_path = sample / 'annotation.json'

@@ -298,7 +298,7 @@ class SitePool:
     def bind_capability(self, reference):
         from webcollect.planning import validate_capability
         verify_evidence([reference]); catalog = load_json(reference['path'])
-        if catalog.get('schema_version') != 'webcollect-capability-catalog-1':
+        if catalog.get('schema_version') not in ('capability-catalog','webcollect-capability-catalog-1'):
             raise ValueError('Validated capability catalog required')
         for r in catalog['records']:
             if r.get('mode') != 'real':

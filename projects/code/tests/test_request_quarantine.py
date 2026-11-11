@@ -164,7 +164,8 @@ class RequestQuarantineTests(unittest.TestCase):
             guard_request_scope(BatchLedger(self.ledger.path,self.ledger.config),'https://other.example.org/')
 
     def test_worker_keeps_original_claim_in_reconciliation_and_processes_next_page(self):
-        from site_planner.candidate_pool import CandidatePool, VERSION
+        from site_planner.candidate_pool import CandidatePool
+        VERSION = 'webcollect-data-candidate-1'  # historical v1 body, kept only as fixture data
         from webcollect.agent_feedback import reference
         from webcollect.candidate_consumer import run
         pool = CandidatePool(self.scope['pool'])

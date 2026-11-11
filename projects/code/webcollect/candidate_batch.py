@@ -6,7 +6,7 @@ from pathlib import Path
 from .batch_core import load_json, BudgetStop, SessionGLMCallLimit
 from .planning import verify_evidence
 
-VERSION = 'candidate-batch-routing-2'
+VERSION = 'candidate-batch-routing'
 
 
 def batch_ids(pool, producer_batch):

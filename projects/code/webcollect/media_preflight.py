@@ -6,11 +6,11 @@ from importlib.resources import files
 import math
 from urllib.parse import urldefrag
 
-from .browser import STABILITY_RULES, _native_animation_window
+from .browser import STABILITY_VERSION as BROWSER_STABILITY_RULE, _native_animation_window
 
 MEDIA_JS=files('webcollect').joinpath('media_preflight.js').read_text(encoding='utf-8')
 OBSERVER_SHA256=hashlib.sha256(MEDIA_JS.encode()).hexdigest()
-ALGORITHM_VERSION='media-preflight-4-dynamic-regions'
+ALGORITHM_VERSION='media-preflight-dynamic-regions'
 ROUTES={'NORMAL_M1','PREPARE_RECHECK','DYNAMIC_CONTENT_TRACK','REVIEW_REQUIRED'}
 
 
@@ -63,7 +63,7 @@ def _overlap(first,second):
 def _accepted_image_only_proof(proof):
     # Later capture rules can also accept border or repaint differences. Those
     # pixels cannot be attributed to a background image by this preflight.
-    return (isinstance(proof,dict) and proof.get('schema_version') in STABILITY_RULES
+    return (isinstance(proof,dict) and proof.get('schema_version') == BROWSER_STABILITY_RULE
             and proof.get('accepted') is True and proof.get('related_dom_stable') is True
             and proof.get('loading_complete') is True
             and not proof.get('border_proof') and not proof.get('paint_noise_proof'))
@@ -217,7 +217,7 @@ def summarize_preflight(probes,assessments,pixel_changes=None):
     elif dynamic:routing='DYNAMIC_CONTENT_TRACK';reasons+=dynamic
     else:
         routing='NORMAL_M1';reasons.append('No observed condition requires a different route in this limited probe window; normal capture/QC still required.')
-    return {'schema_version':'media-preflight-summary-1','algorithm_version':ALGORITHM_VERSION,'routing':routing,
+    return {'schema_version':'media-preflight-summary','algorithm_version':ALGORITHM_VERSION,'routing':routing,
             'reasons':list(dict.fromkeys(reasons)),'media_evidence':evidence,'native_window_advice':native_advice,
             'advertising_marker_evidence':[{'probe_index':index,**marker} for index,p in enumerate(probes) for marker in p.get('explicit_ad_markers',[])],
             'critical_regions':regions,'pixel_change_clues':pixel_clues,'other_dynamic_reasons':list(dict.fromkeys(dynamic)),

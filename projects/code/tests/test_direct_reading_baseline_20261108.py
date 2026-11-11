@@ -33,10 +33,9 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from test_react_session import FakePage
-from test_closing_policy_v2 import EndingV2Tests
 from webcollect.batch_core import load_json, save_json
-from webcollect.banded_plan import V11_VERSION, system_for
-from webcollect.closing_policy import VERSION as END_V3
+from webcollect.plan_protocol import PLAN_PROTOCOL as V11_VERSION, ENDING_POLICY as END_V3
+from webcollect.banded_plan import system_for
 from webcollect.goal_evidence import VERSION as EVIDENCE_VERSION, progress as evidence_progress
 from webcollect.react_session import ReactSession, build_url_task
 from webcollect.browser import stability_pair, fingerprint
@@ -569,7 +568,21 @@ class ActionScopedEvidenceTests(DirectHarness):
 
 
 class DirectReadingPathTests(DirectHarness):
-    derive = EndingV2Tests.derive
+    def derive(self,evidence,name='candidate'):
+        destination=self.root/name/'samples'/self.ids['sample_id']
+        from webcollect.postprocess import process
+        result=process(evidence,destination,self.ids,self.manifest)
+        if result['status']!='derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'],'derived_saved',result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation=validate_client_sample(destination)
+        check=sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'],check['errors'])
+        self.assertEqual(annotation_errors(annotation),[])
+        return destination,annotation
 
     async def _run(self, name, steps, branches, *, band='long', task=None):
         session, evidence = self.scripted(name, lambda p: self.plan_with(p, steps, band=band),
@@ -822,7 +835,7 @@ class ObjectiveBindingTests(unittest.TestCase):
         binding = self._binding(deepcopy(DIRECT_OBJECTIVE))
         task = build_url_task(url=ARTICLE, task_version='t', ending_policy=END_V3,
                               plan_protocol=V11_VERSION,
-                              action_stability_protocol='webcollect-post-action-observation-stability-4')
+                              action_stability_protocol=ACTION_SCOPED_VERSION)
         before_id = task['task_id']
         apply(task, binding)
         self.assertEqual(task['fragment']['action_stability_protocol'], ACTION_SCOPED_VERSION)
@@ -837,10 +850,10 @@ class ObjectiveBindingTests(unittest.TestCase):
         binding = self._binding(plain)
         task = build_url_task(url=ARTICLE, task_version='t', ending_policy=END_V3,
                               plan_protocol=V11_VERSION,
-                              action_stability_protocol='webcollect-post-action-observation-stability-4')
+                              action_stability_protocol=ACTION_SCOPED_VERSION)
         apply(task, binding)
         self.assertEqual(task['fragment']['action_stability_protocol'],
-                         'webcollect-post-action-observation-stability-4')
+                         ACTION_SCOPED_VERSION)
 
     def test_unknown_policy_rejected_and_direct_entry_validated(self):
         from webcollect.session_objective import bind

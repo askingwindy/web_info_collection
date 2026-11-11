@@ -22,11 +22,19 @@ from PIL import Image
 from .batch_core import file_sha, load_json, save_json
 from .planning import object_sha256, timestamp, validate_capability
 
-VERSION = 'observed-form-task-admission-1'
-SCHEMAS = {'real': ('webcollect-task-admission-packet-1', 'webcollect-task-admission-review-1'),
-           'synthetic': ('webcollect-controlled-task-admission-packet-1', 'webcollect-controlled-task-admission-review-1')}
+VERSION = 'observed-form-task-admission'
+LEGACY_VERSION = 'observed-form-task-admission-1'
+SCHEMAS = {'real': ('task-admission-packet', 'task-admission-review'),
+           'synthetic': ('controlled-task-admission-packet', 'controlled-task-admission-review')}
+LEGACY_SCHEMAS = {'real': ('webcollect-task-admission-packet-1', 'webcollect-task-admission-review-1'),
+                  'synthetic': ('webcollect-controlled-task-admission-packet-1', 'webcollect-controlled-task-admission-review-1')}
+MEANING = 'observed-parameterless-form-meaning'
+LEGACY_MEANING = 'observed-parameterless-form-meaning-1'
+REVIEW_SOURCE = {'real': 'independent-task-review-source', 'synthetic': 'controlled-task-review-source'}
+LEGACY_REVIEW_SOURCE = {'real': 'webcollect-independent-task-review-source-1',
+                        'synthetic': 'webcollect-controlled-task-review-source-1'}
 CHECKS = ('observed_controls', 'necessary_actions', 'visible_terminal', 'business_novelty', 'not_parameter_variant')
-_FRAME_VALIDATION_RULE = 'task-admission-frame-validation-1'
+_FRAME_VALIDATION_RULE = 'task-admission-frame-validation'
 _FRAME_VALIDATIONS = ContextVar('task_admission_frame_validations', default=None)
 
 
@@ -190,7 +198,7 @@ def descriptor(packet):
     # prose cannot manufacture a new identity. Ambiguous same-role forms stay
     # the same class; only an actual independent review may resolve aliases.
     inputs = sorted(meaning(row['label']) for row in packet['roles'] if row['kind'] == 'input')
-    return {'schema_version': 'observed-parameterless-form-meaning-1',
+    return {'schema_version': MEANING,
             'input_roles': inputs,
             'submit_role': next(meaning(row['label']) for row in packet['roles'] if row['kind'] == 'submit'),
             'result_role': next(meaning(row['label']) for row in packet['roles'] if row['kind'] == 'result'),
@@ -258,7 +266,7 @@ def _review_source(packet, review):
              and _text(reviewer['id']) and _text(reviewer['context_id'])
              and reviewer['context_id'] != packet['producer_context_id'], 'named independent reviewer required; do not impersonate a human/model')
     provenance = review['provenance']; path = _read(provenance); source = load_json(path)
-    _require(source.get('schema_version') == ('webcollect-independent-task-review-source-1' if mode == 'real' else 'webcollect-controlled-task-review-source-1')
+    _require(source.get('schema_version') in (REVIEW_SOURCE[mode], LEGACY_REVIEW_SOURCE[mode])
              and source.get('reviewer') == reviewer and source.get('packet_sha256') == review['packet_sha256']
              and source.get('completed') is True and source.get('reviewed_at') == review['reviewed_at']
              and source.get('review_body_sha256') == object_sha256({k: v for k, v in review.items() if k != 'provenance'}), 'independent review source/body binding mismatch')
@@ -293,8 +301,9 @@ def _validate(packet_ref, review_ref, task, *, current=None, live=False, mode=No
     packet_path, review_path = _read(packet_ref), _read(review_ref)
     packet, review = load_json(packet_path), load_json(review_path)
     actual_mode = packet.get('mode'); _require(actual_mode in SCHEMAS and (mode is None or actual_mode == mode), 'real/controlled mode mismatch')
-    _require(packet.get('schema_version') == SCHEMAS[actual_mode][0] and review.get('schema_version') == SCHEMAS[actual_mode][1]
-             and packet.get('version') == VERSION and packet.get('QC_approval') is False, 'schema/version mismatch')
+    _require(packet.get('schema_version') in (SCHEMAS[actual_mode][0], LEGACY_SCHEMAS[actual_mode][0])
+             and review.get('schema_version') in (SCHEMAS[actual_mode][1], LEGACY_SCHEMAS[actual_mode][1])
+             and packet.get('version') in (VERSION, LEGACY_VERSION) and packet.get('QC_approval') is False, 'schema/version mismatch')
     allowed = {'schema_version', 'packet_sha256', 'completed', 'reviewer', 'reviewed_at', 'expires_at', 'checks', 'reason',
                'registered_business_id', 'role_observations', 'history_comparisons', 'provenance'}
     _require(set(review) == allowed and review.get('completed') is True and review['packet_sha256'] == packet_ref['sha256'], 'unreviewed, extra self-declared identity, or changed packet')
@@ -309,10 +318,12 @@ def _validate(packet_ref, review_ref, task, *, current=None, live=False, mode=No
              'bound packet observer identity missing or malformed')
     # Historical meaning is recompiled against its own SHA-bound observation.
     # Live entry still compiles with the current observer and checks all sources.
+    meaning = descriptor(packet)
     _require(packet['task'] == _base(task) and packet['roles'] == _native_roles(
                  packet['capability'], packet['spec'], task,
                  _observer_sha256=None if live else observer)
-             and packet.get('meaning') == descriptor(packet), 'compiled proposal/roles/meaning changed')
+             and packet.get('meaning') in (meaning, {**meaning, 'schema_version': LEGACY_MEANING}),
+             'compiled proposal/roles/meaning changed')
     pairs = [_frame(frame, actual_mode) for frame in packet['frames']]
     _require(all(capture.get('observer_sha256') == observer for _, capture in pairs),
              'observation used a different frozen observer')
@@ -360,7 +371,7 @@ def attach(task, packet_ref, review_ref, live_context, *, mode, now=None):
 def static_identity(task):
     binding = task.get('task_admission', {})
     _require(set(binding) == {'version', 'packet', 'review', 'semantic_signature', 'mode', 'QC_approval'}
-             and binding.get('version') == VERSION and binding.get('QC_approval') is False, 'admission binding malformed')
+             and binding.get('version') in (VERSION, LEGACY_VERSION) and binding.get('QC_approval') is False, 'admission binding malformed')
     _, _, signature = _validate(binding['packet'], binding['review'], task, mode=binding['mode'])
     _require(binding['semantic_signature'] == signature, 'admission semantic signature changed')
     return signature
@@ -418,7 +429,7 @@ def load_reviews(paths):
     result = {}
     for path in paths or []:
         manifest = load_json(path)
-        _require(manifest.get('schema_version') == 'webcollect-task-admission-references-1', 'review reference manifest schema invalid')
+        _require(manifest.get('schema_version') in ('task-admission-references', 'webcollect-task-admission-references-1'), 'review reference manifest schema invalid')
         for row in manifest.get('reviews', []):
             packet = load_json(_read(row['packet']))
             key = object_sha256({'capability': packet['capability'], 'spec': packet['spec']})
@@ -467,17 +478,18 @@ def _terminal_target(state, selector):
 def _flow_record(spec, mode):
     view = spec.get('completion_view')
     _require(isinstance(view, dict) and set(view) == {'schema_version', 'record'}
-             and view['schema_version'] == 'webcollect-bound-completion-view-1', 'unbound completion scroll is forbidden')
+             and view['schema_version'] in ('bound-completion-view', 'webcollect-bound-completion-view-1'), 'unbound completion scroll is forbidden')
     record = load_json(_read(view['record']))
-    expected = 'webcollect-observed-form-functional-flow-1' if mode == 'real' else 'webcollect-controlled-form-functional-flow-1'
-    _require(record.get('schema_version') == expected and record.get('mode') == mode
+    expected = (('observed-form-functional-flow', 'webcollect-observed-form-functional-flow-1') if mode == 'real'
+                else ('controlled-form-functional-flow', 'webcollect-controlled-form-functional-flow-1'))
+    _require(record.get('schema_version') in expected and record.get('mode') == mode
              and record.get('initial_url') == spec['page_uri'], 'completion-view source/mode/exact URI mismatch')
     return record
 
 
 def completion_scroll(capability, spec, operations, assertions, *, _observer_sha256=None):
     """Compile one observed necessary view action, never an arbitrary step pad."""
-    if spec.get('completion_view', {}).get('schema_version') == 'webcollect-live-completion-view-1':
+    if spec.get('completion_view', {}).get('schema_version') in ('live-completion-view', 'webcollect-live-completion-view-1'):
         view = spec['completion_view']
         _require(set(view) == {'schema_version', 'distance'} and type(view['distance']) is int
                  and 1 <= view['distance'] <= 480, 'live result view needs one bounded scroll distance')
@@ -564,7 +576,7 @@ def completion_scroll(capability, spec, operations, assertions, *, _observer_sha
 def validate_live_completion_scroll(task, operation, state):
     """The collector calls this on the synchronized pre-action original frame."""
     if (not task.get('task_admission') and operation.get('completion_view', {}).get('schema_version')
-            == 'webcollect-live-completion-view-1'):
+            in ('live-completion-view', 'webcollect-live-completion-view-1')):
         view = operation['completion_view']; distance = view.get('distance')
         _require(set(view) == {'schema_version', 'distance'} and type(distance) is int and 1 <= distance <= 480,
                  'live view distance is invalid')

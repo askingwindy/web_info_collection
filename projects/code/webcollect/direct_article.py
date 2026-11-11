@@ -11,7 +11,7 @@ import re
 from .batch_core import load_json
 from .planning import verify_evidence
 
-VERSION='webcollect-direct-article-reading-1'
+from .plan_protocol import DIRECT_ARTICLE_PROTOCOL as VERSION
 INLINE_BODY_TAGS={'a','span','text','strong','em','b','i','u','s','small','sup','sub','abbr','cite','q','code','kbd','samp','var','mark','del','ins','time','ruby','rt','rp','bdi','bdo','br','wbr','img'}
 SCROLL_KEYS={'pagedown','pageup','arrowdown','arrowup','home','end','space'}
 
@@ -320,7 +320,7 @@ def planning_pair(task,before,after,png_before,png_after):
     from PIL import Image,ImageChops
     from io import BytesIO
     contract=contract_for(task)
-    result={'schema_version':'webcollect-direct-article-planning-observation-1',
+    result={'schema_version':'direct-article-planning-observation',
             'accepted':False,'observation_only':True,'dispatch_permission':False,
             'full_page_accepted':False,'original_viewport_preserved':True}
     if not enabled(task):return {**result,'reason':'Explicit direct-article contract required'}

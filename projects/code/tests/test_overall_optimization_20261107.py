@@ -18,9 +18,9 @@ from webcollect.planning import object_sha256
 
 from test_react_session import ReactHarness
 from webcollect.react_session import ReactSession, build_url_task, dedupe_history_images
-from webcollect.banded_plan import (VERSION as PLAN_VERSION, FIRST_GOAL_SEMANTICS,
+from webcollect.plan_protocol import PLAN_PROTOCOL as PLAN_VERSION, ENDING_POLICY as END
+from webcollect.banded_plan import (FIRST_GOAL_SEMANTICS,
                                     BRANCH_GOAL_SEMANTICS)
-from webcollect.closing_policy import VERSION as END
 
 
 def plan_for(prompt, n=5, endpoint='当前终点内容'):
@@ -39,7 +39,7 @@ class FirstFrameEndpointTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         ReactHarness.setUp(self)
         self.task = build_url_task(url=self.page.url, task_version='plan',
-                                   ending_policy=END, plan_protocol=PLAN_VERSION)
+                                   ending_policy=ENDING_POLICY, plan_protocol=PLAN_VERSION)
         self.prompts = []
 
     def scripted(self, plans, mark_endpoint_after=None, initial_endpoint=False):
@@ -450,7 +450,7 @@ class ContentPlanParseTests(unittest.TestCase):
 class PhaseMeteringTests(ReactHarness, unittest.IsolatedAsyncioTestCase):
     async def test_session_phases_recorded_with_ledger(self):
         self.task = build_url_task(url=self.page.url, task_version='plan',
-                                   ending_policy=END, plan_protocol=PLAN_VERSION)
+                                   ending_policy=ENDING_POLICY, plan_protocol=PLAN_VERSION)
         ledger_path = self.root / 'phases.jsonl'
         original = self.surface.execute_action
 

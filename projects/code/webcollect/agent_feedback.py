@@ -6,8 +6,9 @@ import sqlite3
 from .batch_core import load_json, file_sha
 from .planning import verify_evidence, object_sha256
 from .agent_controller import exclusive
+from .plan_protocol import TRUSTED_PREFIX_POLICY
 
-VERSION = 'webcollect-site-agent-feedback-1'
+VERSION = 'site-agent-feedback'
 # Every decision request carries only the current observation image plus at
 # most this many most-recent context images; older evidence stays on disk and
 # is reachable through the session's inspect tool instead of growing prompts.
@@ -31,7 +32,7 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
     step_root=evidence
     if projection is not None and outcome=='collected_pending_review':
         binding=load_json(projection)
-        if binding.get('protocol') not in ('webcollect-trusted-prefix-1','webcollect-trusted-prefix-2') or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',binding.get('directory','')):
+        if binding.get('protocol') != TRUSTED_PREFIX_POLICY or not __import__('re').fullmatch(r'trusted-prefix-[0-9]{2}',binding.get('directory','')):
             raise ValueError('Unrecognized prefix feedback projection')
         step_root=evidence/binding['directory']
     for path in sorted(step_root.glob('step_*.json')):
@@ -150,7 +151,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                     for ref in refs:
                         try: value = load_json(ref['path'])
                         except (ValueError, UnicodeError): continue
-                        if value.get('schema_version') == VERSION:
+                        if value.get('schema_version') in (VERSION, 'webcollect-site-agent-feedback-1'):
                             step_refs = [s['raw'] for s in value['steps']] + [s['image'] for s in value['steps']]
                             if step_refs: _verify_feedback_evidence(step_refs)
                             for step in value['steps']:
@@ -160,7 +161,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                                 _verify_feedback_evidence([dispatch]);formal=load_json(dispatch['path']).get('formal_frame')
                                 if formal and not Path(formal['path']).exists():
                                     result.setdefault('frame_relocations',[]).append({
-                                        'schema_version':'webcollect-rejected-frame-relocation-1',
+                                        'schema_version':'rejected-frame-relocation',
                                         'original_path':formal['path'],'original_sha256':formal['sha256'],
                                         'current':step['image'],'dispatch':dispatch})
                             diagnostic_refs = [d['reference'] for d in value['diagnostics']] + [d['image'] for d in value['diagnostics'] if 'image' in d]

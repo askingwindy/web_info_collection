@@ -18,7 +18,8 @@ from urllib.parse import urlsplit
 
 from .planning import canonical, object_sha256, verify_evidence
 
-VERSION = 'webcollect-site-progress-1'
+VERSION = 'site-progress'
+LEGACY_VERSION = 'webcollect-site-progress-1'
 
 
 def _now():
@@ -125,7 +126,7 @@ class SiteProgress:
         if self.path.is_symlink():
             raise ValueError('Progress state cannot be a symlink')
         state = json.loads(self.path.read_text(encoding='utf-8'))
-        if (state.get('schema_version') != VERSION or state.get('registry') != str(self.registry)
+        if (state.get('schema_version') not in (VERSION, LEGACY_VERSION) or state.get('registry') != str(self.registry)
                 or state.get('state_sha256') != _state_hash(state)):
             raise ValueError('Progress state integrity or registry identity differs')
         previous = state['spec_sha256']

@@ -10,8 +10,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 import test_grounded_producer as fixture
-from site_planner import page_purpose_v4 as p
-from site_planner import page_purpose as old
+from site_planner import page_purpose_v5 as p
 from site_planner.candidate_pool import CandidatePool
 from site_planner.discovery_tools import reference
 from webcollect.batch_core import BatchLedger,load_json,save_json,OutcomeUnknown
@@ -65,13 +64,13 @@ class Business(unittest.TestCase):
         self.target_html={'https://tools.example.org/legal':'<main><h1>免责声明</h1><p>'+('本网站法律声明正文。'*12)+'</p></main>'}
         self.inputs=[];self.inspect=list(inspect);self.plain=plain
         with patch.object(p,'homepage_document',side_effect=self.get),patch.object(self.f.f.provider.opener,'open',side_effect=self.provider):
-            report=self.f.run_new(home,key='v7',target=2,sources=[{**home,'context_only':True}],model_protocol='entry-tools-7')
-            replay=self.f.run_new(home,key='v7',target=2,sources=[{**home,'context_only':True}],model_protocol='entry-tools-7')
+            report=self.f.run_new(home,key='v7',target=2,sources=[{**home,'context_only':True}])
+            replay=self.f.run_new(home,key='v7',target=2,sources=[{**home,'context_only':True}])
         return report,replay
     def test_has_sidebar_does_not_hide_main_and_inline_paragraph_joined(self):
         doc=self.document('<div class="VPContent has-sidebar"><div class="VPContentDoc has-aside has-sidebar"><main><h1>Vue中文文档</h1><p>'+('内联<span>文字</span>与<a href="/ref">引用</a>组成完整段落，'*8)+'</p></main></div></div>')
-        before=old.material(doc);after=p.material(doc)
-        self.assertFalse(before['main_region_found']);self.assertTrue(after['main_region_found'])
+        after=p.material(doc)
+        self.assertTrue(after['main_region_found'])
         self.assertTrue(p.supports('内容详情',after['units']))
         self.assertEqual(sum(u['tag']=='p' and u['kind']=='body' for u in after['units']),1)
     def test_compound_content_containers_preserved_but_css_utilities_not_main(self):

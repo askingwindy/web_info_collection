@@ -44,7 +44,7 @@ def verify_delivery_scope(effective_set_path, cross_package_report_path, *, data
     manifest_ref = _ref(effective_set_path); report_ref = _ref(cross_package_report_path)
     manifest = json.loads(Path(manifest_ref['path']).read_text())
     report = json.loads(Path(report_ref['path']).read_text())
-    if (report.get('schema_version') != 'qc-cumulative-report-1'
+    if (report.get('schema_version') not in ('qc-cumulative-report','qc-cumulative-report-1')
             or any(report.get(key) != 'PASS' for key in ('status', 'mechanical_status', 'cross_package_status'))
             or report.get('manifest') != manifest or report.get('manifest_sha256') != digest(manifest)):
         raise ValueError('A PASS cross-package report bound to the exact effective-set is required')
@@ -80,7 +80,7 @@ def verify_delivery_scope(effective_set_path, cross_package_report_path, *, data
         explicit_target = 'delivery_sample_ids' in manifest or 'delivery_target' in manifest
         if explicit_target:
             target = manifest.get('delivery_target', {})
-            if target.get('protocol') != 'webcollect-qc-delivery-target-1':
+            if target.get('protocol') not in ('qc-delivery-target', 'webcollect-qc-delivery-target-1'):
                 raise ValueError('Unknown explicit QC delivery target protocol')
             root = _path(target.get('package', ''))
             if str(root) not in current['input_files_sha256']:

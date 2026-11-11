@@ -12,8 +12,9 @@ import time
 import unittest
 from unittest.mock import patch
 from site_planner.site_pool import SitePool
-from site_planner.candidate_pool import CandidatePool, CandidatePool as _Pool, VERSION, VERSION2, DDL as V1_DDL
-from site_planner.candidate_discovery import produce, QueryPolicy
+from site_planner.candidate_pool import CandidatePool, CandidatePool as _Pool, VERSION2, DDL as V1_DDL
+VERSION = 'webcollect-data-candidate-1'  # historical v1 body, kept only as fixture data
+from site_planner.candidate_discovery import produce_entries as produce, QueryPolicy
 from producer_legacy_fixture import produce_entries
 from site_planner.discovery_tools import reference
 from webcollect.batch_core import load_json, save_json, OutcomeUnknown, BatchLedger

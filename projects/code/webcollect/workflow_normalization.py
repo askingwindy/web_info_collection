@@ -8,7 +8,7 @@ from .semantic_workflow import (TASK_SCHEMA as V2_TASK_SCHEMA, VERSION as V2_VER
 from .observed_actions import VERSION as ACTION_VERSION, EXECUTABLE, control_actions, replacement_actions
 from .planning import object_sha256
 
-VERSION = 'webcollect-semantic-workflow-3'
+VERSION = 'semantic-workflow'
 TASK_SCHEMA = deepcopy(V2_TASK_SCHEMA)
 TASK_SCHEMA['properties']['schema_version'] = {'const': VERSION}
 TASK_SCHEMA['properties']['conditions'] = {'type': 'array', 'minItems': 1, 'maxItems': 8,

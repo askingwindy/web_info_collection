@@ -24,6 +24,7 @@ from jsonschema import Draft202012Validator
 
 from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, BudgetStop, CONSUMER_KINDS, _integer, validate_config, file_sha, save_json
 from .planning import object_sha256
+from .plan_protocol import WIKI_READING_COMPLETION
 
 
 QC_TRANSPORT_POLICY = 'qc-wall-deadline-1'
@@ -301,10 +302,10 @@ def executable_plan(plan):
 def parse_decision_content(content, envelope):
     """Keep one complete decision; prose is not executable decision data."""
     normalized=False
-    if envelope in ('single-json-fence-1','single-json-commentary-1'):
+    if envelope in ('single-json-fence','single-json-commentary'):
         match=re.fullmatch(r'\s*```json[ \t]*\r?\n(.*?)\r?\n```\s*',content,re.DOTALL)
         if match and '```' not in match.group(1):content=match.group(1);normalized=True
-    if envelope=='single-json-commentary-1':
+    if envelope=='single-json-commentary':
         value,end=json.JSONDecoder().raw_decode(content.lstrip())
         original_value=value
         value=normalize_structured_fields(value)
@@ -328,7 +329,7 @@ def parse_decision_content(content, envelope):
             # the selected decision's one-sentence summary is protocol data.
             used={'attempt_id','observation_id','choice','decision_summary'}|{
                 'replan':{'plan','citations'},'continue_plan':{'citations'},'finish_reading':{'reading_answer'},
-                'visual_yes':{'visual_evidence'}}.get(value['choice'],set())
+                'finish_result':{'result_answer'},'visual_yes':{'visual_evidence'}}.get(value['choice'],set())
             kept={k:v for k,v in value.items() if k in used}
             normalized=normalized or kept!=value;value=kept
         plan=value.get('plan')
@@ -348,7 +349,7 @@ def branch_wire_schema(schema, prompt):
     protocol already defines, so both dispatch paths offer the same field and
     the same rules generate what the model sees and what the host validates.
     """
-    if prompt.get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+    if prompt.get('wiki_reading_completion_protocol')==WIKI_READING_COMPLETION:
         from .wiki_reading import schema as wiki_schema
         schema=wiki_schema(schema,max_steps=10,evidence_ids=True)
     value=deepcopy(schema.get('oneOf',[schema])[0])
@@ -373,7 +374,7 @@ def branch_wire_schema(schema, prompt):
 def normalize_branch(value, prompt):
     """Resolve only exact source references and an inherited non-action end marker."""
     value=deepcopy(value)
-    if prompt.get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+    if prompt.get('wiki_reading_completion_protocol')==WIKI_READING_COMPLETION:
         from .wiki_reading import bind_reply
         value=bind_reply(value,prompt)
     if not value.get('choice') and 'action' in value:
@@ -497,8 +498,8 @@ class ModelGateway:
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
                   max_requests=None, synthetic_response=None, inference=False, content_plan_protocol=None,
                   timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None,
-                  plan_normalizer=None, plan_normalizer_version=None):
-        """Versioned native-tool protocol. Synthetic fixtures are assistant message
+                  plan_normalizer=None):
+        """Native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
         Returned assistant/user messages are copied verbatim into attempt history;
         reasoning_content belongs only in controlled protocol storage.
@@ -529,11 +530,11 @@ class ModelGateway:
             if not isinstance(schema, dict) or schema.get('type') != 'object':
                 raise ValueError('Function parameters must declare an object Schema')
             declared[name] = schema
-        if content_plan_protocol not in (None,'strict-plan-content-1'):
+        if content_plan_protocol not in (None,'strict-plan-content'):
             raise ValueError('Unknown content plan protocol')
         if timeout_seconds is not None and (type(timeout_seconds) is not int or not 1<=timeout_seconds<=600):
             raise ValueError('Explicit bounded request timeout required')
-        if patient_first_plan and (not timeout_seconds or content_plan_protocol != 'strict-plan-content-1'
+        if patient_first_plan and (not timeout_seconds or content_plan_protocol != 'strict-plan-content'
                                    or job['kind'] != 'react-native-decision'):
             raise ValueError('Patient wait requires the original first-plan decision')
         if not patient_first_plan and timeout_seconds is not None and timeout_seconds+5>=self.config['budget']['lease_seconds']:
@@ -541,9 +542,8 @@ class ModelGateway:
         if content_plan_protocol and (set(declared)!={'submit_plan'} or history):
             raise ValueError('Content plan only supports a first sole submit_plan request')
         if plan_normalizer is not None and (not callable(plan_normalizer)
-                or not isinstance(plan_normalizer_version, str) or not plan_normalizer_version
-                or 'submit_plan' not in declared):
-            raise ValueError('A plan normalizer requires its version and the submit_plan tool')
+                or not ({'submit_plan', 'plan_decision'} & set(declared))):
+            raise ValueError('A plan normalizer requires a declared plan tool')
         history = deepcopy(list(history))
         seen, pending = set(), None
         for message in history:
@@ -574,23 +574,22 @@ class ModelGateway:
                 raise ValueError('History accepts only user/assistant/tool, with matched tool results')
         if pending is not None:
             raise ValueError('Missing final tool result in history')
-        context = {'version': 'native-tool-1', 'system': system, 'history': history,
+        context = {'version': 'native-tools', 'system': system, 'history': history,
                    'reasoning_effort': reasoning_effort, 'seen_ids': seen,
                    'attempt_id': attempt_id, 'max_requests': max_requests, 'declared': declared,
                    'inference_images': inference,'content_plan_protocol':content_plan_protocol,
                    'timeout_seconds':timeout_seconds, 'dispatch_deadline':dispatch_deadline,
-                   'dispatch_policy':'patient-first-plan-1' if patient_first_plan else None,
-                   'plan_normalizer':plan_normalizer,
-                   'plan_normalizer_version':plan_normalizer_version}
-        return self._call(job, purpose + ':native-tool-1', text, {'type': 'object'},
+                   'dispatch_policy':'patient-first-plan' if patient_first_plan else None,
+                   'plan_normalizer':plan_normalizer}
+        return self._call(job, purpose + ':native-tools', text, {'type': 'object'},
                           images=images, attempts=attempts, output_limit=output_limit,
                           tools=deepcopy(list(tools)), tool_choice='auto',
                           synthetic_response=synthetic_response, native_context=context)
 
     def call_message(self, job, purpose, text, schema, *, system, images=(), attempts=1,
                      output_limit=None, reasoning_effort=None, attempt_id=None, max_requests=None,
-                     synthetic_response=None, content_envelope=None, grounded_choice=False, dispatch_deadline=None):
-        """Versioned inference-only text JSON. No tools or native history on wire.
+                         synthetic_response=None, content_envelope=None, grounded_choice=False, dispatch_deadline=None):
+        """Inference-only text JSON. No tools or native history on wire.
 
         The same native dispatch context binds account, attempt, UNKNOWN and cap.
         Customer/QC call() still requires original PNGs.
@@ -602,22 +601,22 @@ class ModelGateway:
         if (attempts not in ((1,2) if grounded_choice else (1,))
                 or not isinstance(system,str) or not system.strip()):
             raise ValueError('Text decision has one strict parse attempt')
-        if content_envelope not in (None,'single-json-fence-1','single-json-commentary-1'):raise ValueError('Unknown text envelope protocol')
+        if content_envelope not in (None,'single-json-fence','single-json-commentary'):raise ValueError('Unknown text envelope protocol')
         if grounded_choice:
             prompt=json.loads(text)
             wire=branch_wire_schema(schema,prompt)
             system += '\n本轮输出协议（字段只在这里定义一次）：\n'+json.dumps(wire,ensure_ascii=False,separators=(',',':'))
             system += '\n只返回一个choice对象的JSON，或直接返回剩余步骤计划（宿主按replan处理）；不输出解释或第二个结构。'
             system += '\nchoice只能取本轮options中列出的值；只执行 current_step 及原剩余计划时选相应继续项，更改下一动作必须 replan。replan的每个业务步骤必须给 action、purpose、expected 及动作参数。decision_summary 一句话概括本轮决定，不输出推理过程。'
-            if prompt.get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+            if prompt.get('wiki_reading_completion_protocol')==WIKI_READING_COMPLETION:
                 system += '\nfinish_reading 用 reading_answer={answer,check_answers}，每项包含 check_index、answer、evidence_ids；只选本轮允许的稳定证据编号，不重抄原文元数据。'
             elif 'citations' in json.dumps(wire):
                 system += '\ncitations 可直接使用原文字符串，或 {"observation_id":"原观察","nodes":["已读节点"]}；finish_reading 是含 reading_answer 的分支决定，不是业务步骤。'
-        adapter_version=('banded-plain-json-3' if content_envelope=='single-json-commentary-1' else 'banded-plain-json-2') if content_envelope else 'banded-plain-json-1'
+        adapter_version='banded-plain-json'
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
                    'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,
                    'max_requests':max_requests,'declared':{},'plain_json':True,'inference_images':True,
-                   'dispatch_policy':'branch-choice-1' if grounded_choice else None, 'dispatch_deadline':dispatch_deadline}
+                   'dispatch_policy':'branch-choice' if grounded_choice else None, 'dispatch_deadline':dispatch_deadline}
         return self._call(job,purpose+':'+adapter_version,text,schema,images=images,
                           attempts=attempts,output_limit=output_limit,native_context=context,
                           synthetic_response=synthetic_response)
@@ -685,8 +684,6 @@ class ModelGateway:
                 identity['request_timeout_seconds']=native_context['timeout_seconds']
             if native_context.get('dispatch_policy'):
                 identity['dispatch_policy'] = native_context['dispatch_policy']
-            if native_context.get('plan_normalizer_version'):
-                identity['plan_normalizer_version'] = native_context['plan_normalizer_version']
         purpose = purpose + ':' + object_sha256(identity)
         native_tools = tools and (model['provider'] == 'glm' or native_context)
         user_message = {'role': 'user', 'content': parts}
@@ -782,9 +779,9 @@ class ModelGateway:
                         raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
                     if qc_transport:
                         self.ledger.heartbeat(job)
-                    elif dispatch_policy == 'patient-first-plan-1':
+                    elif dispatch_policy == 'patient-first-plan':
                         self.ledger.heartbeat(job, request_timeout=native_context['timeout_seconds'])
-                    elif dispatch_policy == 'branch-choice-1':
+                    elif dispatch_policy == 'branch-choice':
                         self.ledger.heartbeat(job)
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
                         'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
@@ -881,7 +878,7 @@ class ModelGateway:
                             'name': 'webcollect_result', 'strict': True, 'schema': schema}},
                             max_completion_tokens=output_limit or model['max_completion_tokens'], store=False)
                     trace_first_plan = (model['provider'] == 'glm' and native_context
-                                        and native_context.get('content_plan_protocol') == 'strict-plan-content-1')
+                                        and native_context.get('content_plan_protocol') == 'strict-plan-content')
                     if trace_first_plan:
                         # BigModel accepts a caller-provided request_id in the JSON body.
                         # Bind this HTTP attempt, including a timeout, to its existing ledger ID.
@@ -926,9 +923,9 @@ class ModelGateway:
                 tool_calls = choice['message'].get('tool_calls') or []
                 tool_name = None
                 if native_context and not native_context.get('plain_json'):
-                    if not tool_calls and native_context.get('content_plan_protocol')=='strict-plan-content-1':
+                    if not tool_calls and native_context.get('content_plan_protocol')=='strict-plan-content':
                         arguments=strict_plan_content(choice['message'],native_context['declared'])
-                        parsed={'response_kind':'strict_plan_content','content_plan_protocol':'strict-plan-content-1',
+                        parsed={'response_kind':'strict_plan_content','content_plan_protocol':'strict-plan-content',
                                 'arguments':arguments,'request_id':rid,'source':'provider_content',
                                 'assistant_message':{**deepcopy(choice['message']),'role':'assistant'}}
                         normalized=arguments!=json.loads(choice['message'].get('content') or '')
@@ -950,7 +947,7 @@ class ModelGateway:
                         declared=native_context['declared'][name]
                         if name=='submit_plan' and 'evidence_kind' in declared.get('properties',{}).get('checks',{}).get('items',{}).get('properties',{}):
                             arguments=executable_plan(arguments)
-                        if native_context.get('plan_normalizer') and name=='submit_plan':
+                        if native_context.get('plan_normalizer') and name in ('submit_plan', 'plan_decision'):
                             # 策略 2: deterministic equivalence整理 runs before the
                             # strict schema; the raw reply and this transform record
                             # are both retained, and missing fields stay precise.
@@ -966,12 +963,12 @@ class ModelGateway:
                     if tool_calls:
                         raise ValueError('Plain decision must not contain provider tool calls')
                     parsed,normalized=parse_decision_content(choice['message']['content'],native_context.get('content_envelope'))
-                    if native_context.get('dispatch_policy')=='branch-choice-1':
+                    if native_context.get('dispatch_policy')=='branch-choice':
                         original_parsed=parsed
                         parsed=normalize_branch(parsed,json.loads(text))
                         normalized=normalized or parsed!=original_parsed
                         branch_schema=schema
-                        if json.loads(text).get('wiki_reading_completion_protocol')=='webcollect-wiki-reading-completion-2':
+                        if json.loads(text).get('wiki_reading_completion_protocol')==WIKI_READING_COMPLETION:
                             from .wiki_reading import schema as wiki_schema
                             branch_schema=wiki_schema(schema,max_steps=10,evidence_ids=True)
                         validate_branch(parsed,branch_schema)

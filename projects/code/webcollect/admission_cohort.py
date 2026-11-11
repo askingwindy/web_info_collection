@@ -13,7 +13,8 @@ import time
 
 from .planning import canonical, object_sha256
 
-VERSION = 'webcollect-admission-cohort-1'
+VERSION = 'admission-cohort'
+LEGACY_VERSION = 'webcollect-admission-cohort-1'
 SCHEMA = (
     '''CREATE TABLE IF NOT EXISTS m4_admission_cohorts (
        cohort_id TEXT PRIMARY KEY, binding_json TEXT NOT NULL, created_at REAL NOT NULL)''',
@@ -199,7 +200,7 @@ def _load_cohort(con, scope_id, plan, registry, *, capture_output=None):
         return None
     cohort_id, raw = row
     binding = json.loads(raw)
-    _require(object_sha256(binding) == cohort_id and binding.get('schema_version') == VERSION,
+    _require(object_sha256(binding) == cohort_id and binding.get('schema_version') in (VERSION, LEGACY_VERSION),
              'reservation binding changed')
     _require(binding['registry'] == str(Path(registry).resolve()), 'reservation original ledger changed')
     members = [member for member in binding['members'] if member['scope_id'] == scope_id]

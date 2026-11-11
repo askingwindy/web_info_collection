@@ -28,11 +28,9 @@ from .html_table_strategy import ADAPTER_ID as HTML_TABLE_ADAPTER_ID, html_table
 from .qr_strategy import ADAPTER_ID as QR_ADAPTER_ID, qr_spec, compile_qr
 from .placeholder_strategy import ADAPTER_ID as PLACEHOLDER_ADAPTER_ID, placeholder_spec, compile_placeholder
 
-VERSION = 'observed-task-compiler-20-normalized-conditions'
-STRATEGY_VERSION = 'deterministic-business-widgets-9-business-identity'
-BUSINESS_IDENTITY_VERSION = 'webcollect-business-identity-1'
+VERSION = 'observed-task-compiler'
+STRATEGY_VERSION = 'deterministic-business-widgets'
 FORM_EXECUTION_ID = 'observed-form-result-v1'
-FORM_EXECUTION_VERSION = 'observed-form-result-1'
 FORMAL_LATEST_PATH = Path(__file__).resolve().parents[3] / 'results/delivery/LATEST.md'
 
 
@@ -118,7 +116,7 @@ def _form_business_definition(strategy):
 
 
 def _form_identity(task, strategy):
-    return {'schema_version': BUSINESS_IDENTITY_VERSION, 'business_id': strategy['id'],
+    return {'business_id': strategy['id'],
             'execution_capability_id': FORM_EXECUTION_ID,
             'definition': _form_business_definition(strategy),
             'observation_binding': {'capability_id': task['capability_id'],
@@ -150,7 +148,7 @@ def validated_business_identity(task):
     if len(matches) == 1:
         strategy = matches[0]
         try:
-            if (execution != {'id': FORM_EXECUTION_ID, 'version': FORM_EXECUTION_VERSION}
+            if (execution.get('id') != FORM_EXECUTION_ID
                     or identity != _form_identity(task, strategy)):
                 return None
             if any(not isinstance(task.get(key), str) or not task[key].strip()
@@ -158,7 +156,7 @@ def validated_business_identity(task):
                 return None
             operations = task['operations']
             if (operations and operations[-1].get('completion_view', {}).get('schema_version')
-                    == 'webcollect-live-completion-view-1'):
+                    in ('live-completion-view', 'webcollect-live-completion-view-1')):
                 reveal = operations[-1]
                 if reveal.get('postconditions') != task.get('final_assertions'):
                     return None
@@ -603,7 +601,7 @@ def check_live_m4_history(plan, registry, output):
             bound = list(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=?', (own_scope,)))
             original_plan = {k:v for k,v in plan.items() if k!='media_preflight'}
             bootstrap_plan = bootstrap.get('plan', {})
-            if (bootstrap.get('schema_version') != 'webcollect-bootstrap-m4-1'
+            if (bootstrap.get('schema_version') not in ('runtime-bootstrap', 'webcollect-bootstrap-m4-1')
                     or bootstrap.get('output_path') != str(capture)
                     or bootstrap.get('registry_path') != str(registry)
                     or bootstrap.get('manifest', {}).get('runtime_scope_id') != own_scope
@@ -782,7 +780,7 @@ def compile_form(capability, spec, *, _observer_sha256=None):
         strategies = [strategy for strategy in STRATEGIES
                       if strategy['id'] == spec.get('deterministic_strategy', {}).get('id')]
         if len(strategies) == 1:
-            task['execution_capability'] = {'id': FORM_EXECUTION_ID, 'version': FORM_EXECUTION_VERSION}
+            task['execution_capability'] = {'id': FORM_EXECUTION_ID}
             task['business_identity'] = _form_identity(task, strategies[0])
             if validated_business_identity(task) is None:
                 raise ValueError('Registered form business is not corroborated by necessary operations')
@@ -824,15 +822,15 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     history = [task for _, task in scoped_history]
     history_hash = object_sha256({'m4_tasks': history, 'customer_history': history_scope,
                                   'replan_closures': []})
-    identities = {'schema_version': 'webcollect-page-identities-1', 'pages': {}}
+    identities = {'schema_version': 'page-identities', 'pages': {}}
     if page_identities is not None:
         identities = load_json(page_identities)
-        if not isinstance(identities, dict) or identities.get('schema_version') != 'webcollect-page-identities-1':
+        if not isinstance(identities, dict) or identities.get('schema_version') != 'page-identities':
             raise ValueError('Explicit original-frame page identities required')
     supplied = None
     if catalog_path is not None:
         supplied_catalog = load_json(catalog_path)
-        if supplied_catalog.get('schema_version') != 'webcollect-capability-catalog-1':
+        if supplied_catalog.get('schema_version') != 'capability-catalog':
             raise ValueError('react-url capability catalog must use the versioned catalog schema')
         ready = [record for record in supplied_catalog.get('records', [])
                  if record.get('site_uri') == url and (record.get('status') == 'ready' or
@@ -841,14 +839,15 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         if len(ready) > 1:
             raise ValueError('Multiple ready capabilities for the react entry URL')
         supplied = ready[0] if ready else None
-    task_version = VERSION + '/react-' + str(react_task_version)
+    # Task identity carries no version salt; the sanctioned re-registration
+    # version stays in the spec via the registration parameter only.
+    task_version = 'react-url'
     if supplied is not None and not supplied.get('candidate_observation'):
         task = build_capability_task(supplied, identities['pages'].get(url), task_version,
                                      registration=react_task_version)
     else:
-        from .closing_policy import COMPLETE_VERSION as CLOSE_POLICY
-        from .banded_plan import V13_VERSION as PLAN_PROTOCOL
-        from .action_stability import ACTION_SCOPED_VERSION as FOCUS_PROTOCOL
+        from .plan_protocol import (ENDING_POLICY as CLOSE_POLICY, PLAN_PROTOCOL,
+                                    ACTION_STABILITY_PROTOCOL as FOCUS_PROTOCOL)
         from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
         banded_candidate = react_candidate is not None and \
             (react_candidate or {}).get('collection_strategy') != STRATEGY_SCREENSHOT_PLAN
@@ -872,9 +871,10 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         from .react_session import validate_task as validate_react
         validate_react(task)
     if react_candidate is not None:
+        from .candidate_contract import VERSION as CANDIDATE_CONSUMPTION_VERSION
         bound_claim = react_candidate['claim']
         task['candidate_binding'] = {
-            'schema_version': 'webcollect-candidate-consumption-1',
+            'schema_version': CANDIDATE_CONSUMPTION_VERSION,
             'candidate_id': bound_claim['candidate_id'], 'claim_id': bound_claim['claim_id'],
             'version': bound_claim['version'], 'candidate': deepcopy(bound_claim['snapshot']),
             'sources': deepcopy(bound_claim.get('sources', [])),
@@ -890,20 +890,24 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         # The claim identity joins the frozen spec: a sanctioned retry of the
         # same entry under a new claim is a new transparent task version.
         task['workflow_proposal']['spec']['candidate_claim'] = bound_claim['claim_id']
-        task['workflow_proposal']['spec']['consumer_projection'] = (
-            'table2-entry-2' if bound_claim['snapshot'].get('schema_version') == 'webcollect-data-candidate-2'
-            else 'candidate-entry-1')
+        task['workflow_proposal']['spec']['consumer_projection'] = 'table2-entry'
         from .react_session import configure_candidate_protocols
-        from .banded_plan import V12_VERSION, V13_VERSION
-        from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, freeze as freeze_strategy
+        from .plan_protocol import (PLAN_PROTOCOL, RESULT_EXECUTION_POLICY,
+                                    RESULT_COMPLETION_PROTOCOL)
+        from .collection_strategy import (STRATEGY_SCREENSHOT_PLAN, STRATEGY_BANDED_REACT,
+                                          freeze as freeze_strategy)
         if (react_candidate or {}).get('collection_strategy') == STRATEGY_SCREENSHOT_PLAN:
             # 显式选择策略2：冻结策略ID，不挂条件计划协议，策略2会话自带循环。
             freeze_strategy(task, STRATEGY_SCREENSHOT_PLAN)
         else:
             for part in (task['fragment'],task['workflow_proposal']['spec']):
-                part['plan_protocol']=V13_VERSION
-                part['result_execution_policy']='webcollect-result-execution-1'
+                part['plan_protocol']=PLAN_PROTOCOL
+                part['result_execution_policy']=RESULT_EXECUTION_POLICY
+                part['result_completion_protocol']=RESULT_COMPLETION_PROTOCOL
             configure_candidate_protocols(task)
+            # New strategy-1 tasks freeze their result-completion route before
+            # the task-id hash; historical unmarked tasks keep their old reading.
+            freeze_strategy(task, STRATEGY_BANDED_REACT)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
         from .react_session import validate_task as validate_react
@@ -911,7 +915,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         validate_task_binding(task)
     now_iso = datetime.now(timezone.utc).isoformat()
     natives = [action for action in task['fragment']['allowed_actions'] if action != 'set_value']
-    record = supplied or {'schema_version': 'webcollect-site-capability-1',
+    record = supplied or {'schema_version': 'site-capability',
         'capability_id': task['capability_id'], 'version': REACT_VERSION,
         'site_uri': task['site_uri'], 'site_category': site_category,
         'mode': ledger.config['mode'], 'status': 'review_required',
@@ -925,13 +929,13 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         'evidence': [deepcopy(react_candidate['claim_reference'])] if react_candidate is not None else [],
         'capabilities': []}
     validate_capability(record, require_ready=False)
-    catalog = {'schema_version': 'webcollect-capability-catalog-1',
+    catalog = {'schema_version': 'capability-catalog',
                'mode': ledger.config['mode'], 'records': [record]}
     # The working catalog is always a fresh copy in the generation output; a
     # supplied qualification catalog is an immutable source artifact.
     catalog_file = output / 'catalog.json'
     save_json(catalog_file, catalog)
-    plan = {'schema_version': 'webcollect-plan-m4-1', 'tasks': [task],
+    plan = {'schema_version': 'plan-m4', 'tasks': [task],
         'generation': {'version': VERSION, 'generator': 'react-url', 'source_identity': sources,
             'replan_closures': [], 'strategy_version': None,
             'catalog_sha256': file_sha(catalog_file), 'history_sha256': history_hash,
@@ -957,8 +961,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     queue_id = ledger.enqueue('frozen-plan', {'plan': str(output / 'plan.json'),
         'plan_sha256': file_sha(output / 'plan.json'), 'history_sha256': history_hash,
         'mode': ledger.config['mode']})
-    result = {'schema_version': 'webcollect-task-generation-summary-1',
-        'catalog_candidates': 1, 'strategy_form_candidates': 0, 'strategy_widget_candidates': 0,
+    result = {'catalog_candidates': 1, 'strategy_form_candidates': 0, 'strategy_widget_candidates': 0,
         'model_responses': [], 'generated_task_details': [task], 'generated_tasks': 1,
         'queue_job_id': queue_id, 'rejected': [], 'pending': [], 'empty_results': [],
         'sample_ids_allocated': 0, 'plan_file': str(output / 'plan.json'),
@@ -1001,11 +1004,11 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     if (not isinstance(proposals, dict) or set(proposals) != {'schema_version', 'tasks'}
             or proposals['schema_version'] != WORKFLOW_SCHEMA or not isinstance(proposals['tasks'], list)):
         raise ValueError('Explicit workflow proposal manifest required')
-    identities = load_json(page_identities) if page_identities else {'schema_version': 'webcollect-page-identities-1', 'pages': {}}
+    identities = load_json(page_identities) if page_identities else {'schema_version': 'page-identities', 'pages': {}}
     if (not isinstance(identities, dict) or set(identities) != {'schema_version', 'pages'}
-            or identities['schema_version'] != 'webcollect-page-identities-1' or not isinstance(identities['pages'], dict)):
+            or identities['schema_version'] != 'page-identities' or not isinstance(identities['pages'], dict)):
         raise ValueError('Explicit original-frame page identities required')
-    if catalog.get('schema_version')!='webcollect-capability-catalog-1' or catalog.get('mode')!=ledger.config['mode']:
+    if catalog.get('schema_version')!='capability-catalog' or catalog.get('mode')!=ledger.config['mode']:
         raise ValueError('Capability catalog schema/mode mismatch')
     if ledger.config['mode']=='real' and history_registry is None:
         raise ValueError('Real generation must consult the existing production registry')
@@ -1162,7 +1165,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
             if max_tasks is not None and len(tasks) >= max_tasks:
                 break
             try:
-                if 'anchors' in spec or spec.get('schema_version') in ('webcollect-semantic-workflow-2','webcollect-semantic-workflow-3','webcollect-fragment-workflow-1','webcollect-fragment-workflow-2'):
+                if 'anchors' in spec or spec.get('schema_version') in ('semantic-workflow','webcollect-fragment-workflow-1','webcollect-fragment-workflow-2'):
                     from .workflow_proposal import compile_workflow
                     task = compile_workflow(record, spec, VERSION)
                 else:
@@ -1224,7 +1227,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
     if generator == 'reviewed':
         planning_stage = {'mode': 'template', 'template_version': task_admission.VERSION,
                           'description': '复用普通控件编译器，消费实际独立准入review；未调用GLM，不授最终QC通过。'}
-    plan = {'schema_version':'webcollect-plan-m4-1','tasks':tasks,
+    plan = {'schema_version':'plan-m4','tasks':tasks,
         'generation':{'version':VERSION,'generator':generator,'source_identity':sources,'replan_closures':repair_refs,'strategy_version':STRATEGY_VERSION if generator=='deterministic' else None,
                       'catalog_sha256':file_sha(catalog_path),'history_sha256':history_hash,'history_scope':history_scope,
                       'mode':ledger.config['mode'],'synthetic_results_are_production':False,
@@ -1250,7 +1253,7 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         # retains dispatch/idempotency and original campaign gates at execution.
         queue_id=ledger.enqueue('frozen-plan',{'plan':str(output/'plan.json'),
             'plan_sha256':file_sha(output/'plan.json'),'history_sha256':history_hash,'mode':ledger.config['mode']})
-    result={'schema_version':'webcollect-task-generation-summary-1','catalog_candidates':len(catalog['records']),
+    result={'catalog_candidates':len(catalog['records']),
         'strategy_form_candidates':sum(len(page.get('forms',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
         'strategy_widget_candidates':sum(len(page.get('widgets',[])) for record in catalog['records'] for page in record.get('capabilities',[])),
         'model_responses':model_responses,'generated_task_details':tasks,
@@ -1301,7 +1304,7 @@ def _without_own_saved_results(plan, registry, output, records):
     from .runtime import RuntimeStore
     bootstrap = load_json(bootstrap_path)
     original = {k: v for k, v in plan.items() if k != 'media_preflight'}
-    if (bootstrap.get('schema_version') != 'webcollect-bootstrap-m4-1'
+    if (bootstrap.get('schema_version') not in ('runtime-bootstrap', 'webcollect-bootstrap-m4-1')
             or bootstrap.get('output_path') != str(capture)
             or bootstrap.get('registry_path') != str(Path(registry).resolve())
             or {k: v for k, v in bootstrap.get('plan', {}).items() if k != 'media_preflight'} != original):
@@ -1377,11 +1380,11 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     sampling = _qc_policy(qc_policy)
     plan = load_json(plan_path); catalog = load_json(catalog_path)
     validate_plan(plan)
-    from .banded_plan import V12_VERSION, V13_VERSION
+    from .plan_protocol import PLAN_PROTOCOL
     from .closing_policy import COMPLETED_GOAL_DELIVERY
     from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
     delivery_policy=(COMPLETED_GOAL_DELIVERY if any(
-        task.get('fragment',{}).get('plan_protocol') in (V12_VERSION,V13_VERSION)
+        task.get('fragment',{}).get('plan_protocol') == PLAN_PROTOCOL
         or (task.get('fragment',{}).get('collection_strategy') or {}).get('id') == STRATEGY_SCREENSHOT_PLAN
         for task in plan['tasks']) else None)
     from .site_pool_sync import pool_for_catalog, guard_plan

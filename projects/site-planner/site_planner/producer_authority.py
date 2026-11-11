@@ -65,10 +65,11 @@ def disjoint_requests(ledger, *, scope=None, urls=(), categories=(), independent
                 if row['error']!='TimeoutError' and code not in ('1113','1301','1302','1305'):
                     continue
                 original=json.loads(row['payload']).get('input',{})
-                if row['kind']=='ai-search-plan' and original.get('version') in ('producer-category-query-2','producer-category-query-4'):
+                # New plans stamp the stable name; old rows keep their generational values.
+                if row['kind']=='ai-search-plan' and original.get('version') in ('producer-category-query','producer-category-query-2','producer-category-query-4'):
                     if not set(categories).intersection(original['categories']):
                         allowed.add(row['id'])
-                elif row['kind']=='ai-application-site-classification-1' and original.get('protocol') in ('producer-site-classification-3','producer-site-classification-4'):
+                elif row['kind']=='ai-application-site-classification-1' and original.get('protocol') in ('producer-site-classification','producer-site-classification-3','producer-site-classification-4'):
                     if isolation_host(original['homepage_uri'],registry) not in hosts:
                         allowed.add(row['id'])
                 elif row['kind']=='ai-target-page-purpose-1' and original.get('source_uris'):
@@ -141,6 +142,7 @@ def authorize_concurrency(scope_path, maximum, reason):
     if config['run_id'] != chain['chain_id'] + '-producer':
         raise ValueError('The original project producer is required')
     ledger = BatchLedger(scope['producer_db'], config)
+    # webcollect/batch_core.py pins this schema_version on resume; it stays a cross-package literal.
     record = {'schema_version':'webcollect-producer-concurrency-1',
               'run_id':config['run_id'], 'ledger':str(ledger.path),
               'config_sha256':object_sha256(config), 'manifest':chain['manifest'],

@@ -6,7 +6,7 @@ from pathlib import Path
 from webcollect import planning
 from webcollect.batch_core import file_sha, load_json, save_json
 
-VERSION = 'capability-review-1'
+VERSION = 'capability-review'
 RULES = planning.CAPABILITY_REVIEW_RULES
 CHECKS = tuple(RULES['checks'])
 
@@ -20,7 +20,7 @@ def reference(path):
 def _packet(catalog_path, selected_ids=None, *, now=None):
     catalog_path = Path(catalog_path).resolve()
     catalog = load_json(catalog_path)
-    if catalog.get('schema_version') != 'webcollect-capability-catalog-1':
+    if catalog.get('schema_version') not in ('capability-catalog','webcollect-capability-catalog-1'):
         raise ValueError('Expected original capability catalog')
     records = catalog.get('records')
     if not isinstance(records, list):
@@ -66,7 +66,7 @@ def _packet(catalog_path, selected_ids=None, *, now=None):
             'task_families': r['task_families'],
             'pages': [{'uri': r['site_uri'], 'images': images,
                        'mechanical_preflight': deepcopy(r['representative_pages'][0])}]})
-    return {'schema_version': 'webcollect-capability-review-packet-1',
+    return {'schema_version': 'capability-review-packet',
             'catalog': reference(catalog_path), 'rules': RULES,
             'implementation': {'importer': reference(__file__), 'validator': reference(planning.__file__)},
             'records': items, 'QC_approval': False}
@@ -79,7 +79,7 @@ def prepare_review(catalog, output, *, capability_ids=None, now=None):
         raise ValueError('Review output must be outside the original catalog directory')
     packet_path = output / 'review-packet.json'
     save_json(packet_path, packet)
-    template = {'schema_version': 'webcollect-capability-review-1', 'packet_sha256': file_sha(packet_path),
+    template = {'schema_version': 'capability-review', 'packet_sha256': file_sha(packet_path),
         'reviewer': {'id': '', 'kind': ''}, 'reviewed_at': None, 'completed': False,
         'records': [{'binding': item['binding'], 'status': None, 'reason': '', 'expires_at': None,
             'pages': [{'uri': p['uri'], 'reviewed_image_sha256': sorted({e['sha256'] for e in p['images']}),
@@ -93,7 +93,7 @@ def prepare_review(catalog, output, *, capability_ids=None, now=None):
 
 def _validate_review(packet, packet_path, review, *, now=None):
     current = planning.timestamp(now)
-    if review.get('schema_version') != 'webcollect-capability-review-1' or review.get('packet_sha256') != file_sha(packet_path):
+    if review.get('schema_version') != 'capability-review' or review.get('packet_sha256') != file_sha(packet_path):
         raise ValueError('Review schema or frozen packet SHA mismatch')
     if review.get('completed') is not True:
         raise ValueError('Review has not been completed')
@@ -147,7 +147,7 @@ def _validate_review(packet, packet_path, review, *, now=None):
 def import_review(packet_path, review_path, output, *, now=None):
     packet_path, review_path, output = Path(packet_path).resolve(), Path(review_path).resolve(), Path(output).resolve()
     packet, review = load_json(packet_path), load_json(review_path)
-    if packet.get('schema_version') != 'webcollect-capability-review-packet-1':
+    if packet.get('schema_version') != 'capability-review-packet':
         raise ValueError('Invalid review packet schema')
     planning.verify_evidence([packet['catalog'], *packet['implementation'].values()])
     expected = _packet(packet['catalog']['path'], [i['binding']['capability_id'] for i in packet['records']], now=now)
@@ -175,7 +175,7 @@ def import_review(packet_path, review_path, output, *, now=None):
             'page_observations': [p['observations'] for p in row['pages']],
             'review_source': review['reviewer']['kind'], 'reviewer': review['reviewer'],
             'reviewed_at': review['reviewed_at']}
-        record['review_provenance'] = {'schema_version': 'webcollect-capability-review-provenance-1',
+        record['review_provenance'] = {'schema_version': 'capability-review-provenance-1',
             'parent_version': original_version, 'catalog': packet['catalog'],
             'packet': packet_ref, 'review': review_ref}
         record['version'] = planning.object_sha256({'parent_version': original_version,

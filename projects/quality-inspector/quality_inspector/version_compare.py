@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .contract import digest
 
-POLICY = 'qc-sample-versions-1'
+
 
 
 def compare_versions(manifest, *, base=None):
@@ -49,44 +49,20 @@ def compare_versions(manifest, *, base=None):
     grouped = defaultdict(lambda: defaultdict(list))
     for row in occurrences:
         grouped[row['sample_id']][row['version_id']].append(row)
-    policy = manifest.get('version_policy', {'schema_version': POLICY, 'supersedes': []})
-    if (not isinstance(policy, dict) or set(policy) != {'schema_version', 'supersedes'}
-            or policy.get('schema_version') != POLICY or not isinstance(policy.get('supersedes'), list)):
-        raise ValueError('Explicit qc-sample-versions-1 supersedes policy required')
-    links = defaultdict(dict)
-    for link in policy['supersedes']:
-        if (not isinstance(link, dict) or set(link) != {'sample_id', 'previous', 'current', 'reason'}
-                or any(not isinstance(link.get(key), str) or not link[key].strip() for key in link)):
-            raise ValueError('A supersedes relation needs sample_id, previous, current and reason')
-        sid, old, new = link['sample_id'], link['previous'], link['current']
-        if old == new or old not in grouped.get(sid, {}) or new not in grouped.get(sid, {}):
-            errors.append({'sample_id': sid, 'reason': 'supersedes references missing or identical content versions'})
-        elif old in links[sid]:
-            errors.append({'sample_id': sid, 'reason': 'ambiguous/duplicate supersedes successor'})
-        else:
-            links[sid][old] = new
+    # No supersedes chains: one content identity is the effective sample and its
+    # identical copies count once; different content under the same sample_id is
+    # an explicit-input error, never auto-resolved by package order or mtime.
     effective = []; copies = []; superseded = []
     for sid, versions in sorted(grouped.items()):
-        heads = set(versions) - set(links[sid])
-        valid = len(heads) == 1
-        head = next(iter(heads)) if valid else None
-        for version in versions:
-            visited = set(); cursor = version
-            while cursor in links[sid] and cursor not in visited:
-                visited.add(cursor); cursor = links[sid][cursor]
-            if cursor in visited or cursor != head:
-                valid = False
-        if not valid:
-            errors.append({'sample_id': sid, 'reason': 'conflicting repeated sample_id versions need a unique acyclic explicit supersedes chain'})
+        if len(versions) > 1:
+            errors.append({'sample_id': sid,
+                           'reason': 'same sample_id carries different content; explicitly choose which package to supply'})
             continue
         for version, rows in sorted(versions.items()):
             ordered = sorted(rows, key=lambda row: (row['package'], row['sample_path']))
-            if version == head:
-                effective.append(ordered[0])
-                copies.extend({**row, 'same_as': ordered[0]['sample_path']} for row in ordered[1:])
-            else:
-                superseded.extend({**row, 'superseded_by_version': head} for row in ordered)
-    return {'schema_version': 'qc-version-comparison-1', 'status': 'FAIL' if errors else 'PASS',
+            effective.append(ordered[0])
+            copies.extend({**row, 'same_as': ordered[0]['sample_path']} for row in ordered[1:])
+    return {'schema_version': 'sample-identity-comparison', 'status': 'FAIL' if errors else 'PASS',
             'occurrence_count': len(occurrences), 'effective_samples': effective,
             'identical_copies': copies, 'superseded': superseded, 'errors': errors,
-            'policy': policy, 'QC_approval': False, 'selection_uses_mtime': False}
+            'policy': 'explicit-content-identity', 'QC_approval': False, 'selection_uses_mtime': False}

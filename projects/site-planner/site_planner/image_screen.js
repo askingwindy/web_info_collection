@@ -16,6 +16,6 @@
     if(!exposed)continue;
     elements.push({element_type:'image',visible:true,bbox:[r.left,r.top,r.right,r.bottom]});
   }
-  return {schema_version:'producer-image-viewport-observation-2',url:location.href,
+  return {schema_version:'producer-image-viewport-observation',url:location.href,
     screen_resolution:[width,height],elements,inventory_complete:true};
 }

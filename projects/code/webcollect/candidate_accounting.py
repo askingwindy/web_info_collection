@@ -197,7 +197,7 @@ def build_report(scope, *, batches=(), since=None, until=None):
              for field in ('input_tokens','output_tokens','total_tokens')}
     for values in balance.values():values['balanced']=values['allocated']+values['unallocated']==values['role_total']
     search_tools=rows(pool,"SELECT state,COUNT(*) AS count FROM tool_requests WHERE kind='search' GROUP BY state")
-    return {'schema_version':'candidate-role-accounting-1','project':chain['chain_id'],'batch_filter':list(batches),
+    return {'schema_version':'candidate-role-accounting','project':chain['chain_id'],'batch_filter':list(batches),
             'selected_candidate_known_allocations':allocation_totals,
             'project_producer_allocation_balance':balance,
             'search_tools_without_token_usage':{'states':search_tools,'token_usage':'UNKNOWN; not included in GLM totals'},

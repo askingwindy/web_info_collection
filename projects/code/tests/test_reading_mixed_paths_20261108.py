@@ -28,15 +28,13 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from test_react_session import FakePage
-from test_closing_policy_v2 import EndingV2Tests
 from webcollect.batch_core import load_json, save_json
-from webcollect.banded_plan import V11_VERSION, system_for
-from webcollect.closing_policy import VERSION as END_V3
+from webcollect.banded_plan import system_for
+from webcollect.plan_protocol import PLAN_PROTOCOL, ENDING_POLICY, ACTION_STABILITY_PROTOCOL
 from webcollect.goal_evidence import VERSION as EVIDENCE_VERSION, result_links
 from webcollect.react_session import ReactSession, build_url_task
 from webcollect.browser import stability_pair, fingerprint
 from webcollect import dynamic_regions
-from webcollect.action_stability import scope_for, TYPING_VERSION
 
 HOME = 'https://local.test/home'
 RESULTS = 'https://local.test/search'
@@ -450,10 +448,9 @@ class PathHarness(unittest.IsolatedAsyncioTestCase):
 
     def reading_task(self, *, url=HOME, stability=True):
         from webcollect.planning import object_sha256
-        task = build_url_task(url=url, task_version='reading', ending_policy=END_V3,
-                              plan_protocol=V11_VERSION,
-                              **({'action_stability_protocol':
-                                  'webcollect-post-action-observation-stability-4'} if stability else {}))
+        task = build_url_task(url=url, task_version='reading', ending_policy=ENDING_POLICY,
+                              plan_protocol=PLAN_PROTOCOL,
+                              **({'action_stability_protocol': ACTION_STABILITY_PROTOCOL} if stability else {}))
         spec = task['workflow_proposal']['spec']
         spec['goal'] = {'instruction': self.OBJECTIVE['description'],
                         'structured': deepcopy(self.OBJECTIVE)}
@@ -508,10 +505,15 @@ class PathHarness(unittest.IsolatedAsyncioTestCase):
                           'choice': choice, **extra}
 
     def plan_with(self, prompt, steps, *, band='long', goal=None):
+        def with_narratives(step):
+            step = deepcopy(step)
+            step.setdefault('rationale', '原目标需要该动作推进当前阅读链路')
+            step.setdefault('expected_result', '页面按该动作产生可见业务变化')
+            return step
         return {'attempt_id': prompt['attempt_id'], 'observation_id': prompt['observation']['observation_id'],
                 'band': band, 'band_reason': '自然多段阅读链路',
                 'goal': goal or '站内检索月食，跨页核对后继续阅读，说明月球与地球的位置关系',
-                'checks': [{'field': '月球与地球的位置关系'}], 'steps': [deepcopy(s) for s in steps],
+                'checks': [{'field': '月球与地球的位置关系'}], 'steps': [with_narratives(s) for s in steps],
                 'finish_when': {'kind': 'goal_evidence'}, 'replan_when': '检索无结果或正文缺失'}
 
 
@@ -539,25 +541,6 @@ class SuggestionOverlayEvidenceTests(PathHarness):
         self.assertEqual(len(suggestion), 1)
         announcement = [r for r in dynamic_regions.regions(before) if r['category'] == 'announcement']
         self.assertEqual(len(announcement), 1)
-
-    def test_scoped_typing_proof_survives_churn_but_rejects_state_changes(self):
-        before, after, png_before, png_after = self._churn_pair()
-        scope = scope_for(before, 'e_q', Q_SELECTOR, 0, action='type', version=TYPING_VERSION)
-        self.assertEqual(scope['purpose'], 'focused_search_type')
-        proof = stability_pair(before, after, png_before, png_after, action_scope=scope)
-        self.assertTrue(proof['accepted'], proof.get('scope_error'))
-        tampered = deepcopy(after)
-        tampered['values'][0]['value'] = '月'  # externally changed value
-        self.assertFalse(stability_pair(before, tampered, png_before, png_after,
-                                        action_scope=deepcopy(scope))['accepted'])
-        tampered = deepcopy(after)
-        tampered['values'][0]['focused'] = False  # lost unique keyboard focus
-        self.assertFalse(stability_pair(before, tampered, png_before, png_after,
-                                        action_scope=deepcopy(scope))['accepted'])
-        tampered = deepcopy(after)
-        tampered['target']['hit_valid'] = False  # obstructed centre hit
-        self.assertFalse(stability_pair(before, tampered, png_before, png_after,
-                                        action_scope=deepcopy(scope))['accepted'])
 
     async def test_suggestion_links_are_not_search_results(self):
         from webcollect.agent_observation import project
@@ -614,6 +597,9 @@ class DownwardReadingMappingTests(PathHarness):
              'purpose': '提交站内检索', 'expected': {'kind': 'document_changed', 'text': SUBJECT}},
         ] + [{'action': 'scroll', 'direction': 'down', 'purpose': '向下阅读正文',
               'expected': {'kind': 'scroll_changed'}} for _ in range(scrolls)]
+        for step in steps:
+            step.setdefault('rationale', '原目标需要该动作推进检索与阅读')
+            step.setdefault('expected_result', '页面按该动作产生可见业务变化')
         return {'attempt_id': prompt['attempt_id'], 'observation_id': prompt['observation']['observation_id'],
                 'band': 'long' if scrolls else 'five', 'band_reason': '检索直达并向下阅读',
                 'goal': '站内检索月食并向下阅读正文，说明月球与地球的位置关系',
@@ -650,7 +636,21 @@ class DownwardReadingMappingTests(PathHarness):
 
 
 class PathFamilyTests(PathHarness):
-    derive = EndingV2Tests.derive
+    def derive(self, evidence, name='candidate'):
+        destination = self.root / name / 'samples' / self.ids['sample_id']
+        from webcollect.postprocess import process
+        result = process(evidence, destination, self.ids, self.manifest)
+        if result['status'] != 'derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'], 'derived_saved', result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation = validate_client_sample(destination)
+        check = sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'], check['errors'])
+        self.assertEqual(annotation_errors(annotation), [])
+        return destination, annotation
 
     async def _run(self, name, steps, branches, *, entry='home', band='long'):
         session, evidence = self.scripted(name, lambda p: self.plan_with(p, steps, band=band),
@@ -946,7 +946,7 @@ class RealChromiumLocalSite(unittest.IsolatedAsyncioTestCase):
     async def test_type_step_pre_dispatch_evidence_survives_churning_overlay(self):
         from webcollect import browser
         from webcollect.collect import capture_before_action
-        from webcollect.action_stability import scope_for, TYPING_VERSION
+        from webcollect.action_stability import action_scoped_scope
         from webcollect.dynamic_regions import regions as allowed_regions
         await self.page.goto('https://local.test/home', wait_until='domcontentloaded')
         await self.page.wait_for_timeout(400)
@@ -958,8 +958,7 @@ class RealChromiumLocalSite(unittest.IsolatedAsyncioTestCase):
                       if r.get('eligible') is True]
         self.assertIn('search_suggestions', categories, probe['dynamic_region_contract']['regions'])
         self.assertIn('announcement', categories)
-        scope = scope_for(probe, probe['target']['element_id'], self.INPUT_SELECTOR,
-                          0, action='type', version=TYPING_VERSION)
+        scope = action_scoped_scope(probe, probe['target']['element_id'], 'type')
         with TemporaryDirectory() as tmp:
             observation = await capture_before_action(self.page, Path(tmp), self.INPUT_SELECTOR,
                                                       timeout=30, action_scope=scope)

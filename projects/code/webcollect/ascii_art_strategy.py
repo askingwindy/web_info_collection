@@ -202,7 +202,7 @@ def ascii_art_spec(capability,page,widget,strategy_version):
        'assurance':'Independent Python full-layout rendering from source-linked Standard font glyphs; fixed HELLO/100/default/full/full/no only; original-frame review still required'}}
 
 
-def compile_ascii_art(capability,spec,task_version='observed-ascii-art-compiler-1'):
+def compile_ascii_art(capability,spec,task_version=ADAPTER_ID + '-compiler'):
     """Compile exact observed controls with two necessary view-changing scrolls."""
     from .planning import object_sha256
     from .collect import validate_plan

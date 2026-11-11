@@ -23,7 +23,7 @@ from .discovery_tools import reference, glm_search, search_channel_hold
 from .entry_selection import PAGE_TYPES, distribution, existing_candidate, order_sources
 from .entry_access import wire_uri
 
-PROTOCOL = 'entry-tools-3'
+PROTOCOL = 'entry-tools'
 VERSION = 'first-party-entries-1'
 GOAL = '选择有第一方证据、可直达、面向中文用户并有可观察操作的入口；站点阶段判断主营，页面阶段判断用户可做什么，工作目标由消费者结合首帧形成。'
 SYSTEM = ('站点主营已经由独立 submit_site_classification 核定，本阶段禁止重判站点。'
@@ -491,7 +491,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     for value in categories: category(value)
     if 'UNKNOWN' in categories: raise ValueError('A concrete target category is required')
     PROTOCOL = model_protocol
-    VERSION = 'first-party-entries-3' if model_protocol in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else 'first-party-entries-2' if model_protocol in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else 'first-party-entries-1'
+    VERSION = 'first-party-entries'
     from .candidate_discovery import (_publish_entry, QueryPolicy, fold_query_state, record_query_outcome,
                                       normalize_query, application_pending_remaining)
     from webcollect.current_chain import (read_chain_scope,check_project_pool,check_project_guard,
@@ -526,8 +526,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         prefer_simplified_chinese=previous.get('prefer_simplified_chinese',False)
     if prefer_simplified_chinese and not site_expansion:
         raise ValueError('Simplified Chinese priority requires site expansion')
-    if site_expansion and (not allowed_hosts or model_protocol not in ('entry-tools-13','entry-tools-14')):
-        raise ValueError('Site expansion requires exact allowed_hosts and entry-tools-13')
+    if site_expansion and not allowed_hosts:
+        raise ValueError('Site expansion requires exact allowed_hosts')
     if previous:
         if application_new_target is not None and application_new_target!=previous.get('application_new_target'):
             raise ValueError('Application cumulative NEW target requires a new batch')
@@ -539,8 +539,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         if producer_optimization is not None and producer_optimization!=original_optimization:
             raise ValueError('Frozen producer_optimization cannot change; start a new batch')
         producer_optimization=original_optimization
-    if producer_optimization and PROTOCOL not in ('entry-tools-13','entry-tools-14'):
-        raise ValueError('producer_optimization requires entry-tools-13')
+    if producer_optimization and False:
+        raise ValueError('producer_optimization requires the current producer protocol')
     if producer_pipeline is not None and producer_pipeline not in ('serial','overlap-1'):
         raise ValueError('producer_pipeline must be serial or overlap-1')
     if previous:
@@ -569,13 +569,13 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         from webcollect.candidate_feedback import summarize_scope
         feedback=previous.get('feedback') if previous else summarize_scope(feedback_input)
     else:feedback=previous.get('feedback')
-    if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and not previous:
+    if True and not previous:
         from .producer_evidence import consumer_feedback
         feedback=consumer_feedback(pool,feedback)
     goals_ref=reference(goals_path) if goals_path else None
     frozen={'version':VERSION,'model_protocol':PROTOCOL,'table_policy':POLICY,'goal':GOAL,'system':SYSTEM,'tools':TOOLS,
         'site_protocol':'producer-site-classification-2',
-        **({'id_system':ID_SYSTEM,'directory_limit_per_site':4} if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else {}),
+        **({'id_system':ID_SYSTEM,'directory_limit_per_site':4} if True else {}),
         'config_sha256':object_sha256(config),'sources':list(sources),'directions':list(directions),'queries':list(queries),
         'target':target,'max_searches':max_searches,'max_batches':max_batches,'batch_size':batch_size,'search_engine':search_engine,
         'stall_threshold':stall_threshold,'per_direction_cap':per_direction_cap,'entry_selection':entry_selection,
@@ -602,39 +602,30 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         plan_version = 'producer-category-query-4' if producer_optimization else 'producer-category-query-3' if public_business else 'producer-category-query-2' if independent else 'producer-category-query-1'
         frozen['category_query_plan']={'version':plan_version,
                                        'categories':list(categories)}
-    if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+    if True:
         from .producer_evidence import SELECTION_SYSTEM
-        frozen['site_protocol']='producer-site-classification-5' if PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else 'producer-site-classification-4'
+        frozen['site_protocol']='producer-site-classification-5' if True else 'producer-site-classification-4'
         frozen['id_system']=SELECTION_SYSTEM
         frozen['ranking_policy']='business-diversity-unknown-fifth-1'
-        if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
-            if PROTOCOL in ('entry-tools-13','entry-tools-14'):from . import producer_business_content as purpose
-            elif PROTOCOL=='entry-tools-12':from . import producer_business_value as purpose
-            elif PROTOCOL=='entry-tools-11':from . import producer_task_value as purpose
-            elif PROTOCOL=='entry-tools-10':from . import page_purpose_v6 as purpose
-            elif PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):from . import page_purpose_v5 as purpose
-            elif PROTOCOL=='entry-tools-7':from . import page_purpose_v4 as purpose
-            else:from . import page_purpose as purpose
-            PURPOSE_SYSTEM,PURPOSE_VERSION=(purpose.SYSTEM_V3,purpose.VERSION_V3) if PROTOCOL=='entry-tools-14' else (purpose.SYSTEM,purpose.VERSION)
-            if (PROTOCOL=='entry-tools-13' and previous
-                    and previous.get('purpose_system')==purpose.LEGACY_SYSTEM):
-                PURPOSE_SYSTEM=previous['purpose_system']
+        if True:
+            from . import producer_business_content as purpose
+            PURPOSE_SYSTEM,PURPOSE_VERSION=purpose.SYSTEM_V3,purpose.VERSION_V3
             frozen.update(purpose_version=PURPOSE_VERSION,purpose_system=PURPOSE_SYSTEM,purpose_path='rule_then_model')
-            if PROTOCOL in ('entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
-                frozen.update(purpose_path='business_value_once' if PROTOCOL in ('entry-tools-12','entry-tools-13','entry-tools-14') else 'business_natural_task_once',purpose_is_advisory=True,
+            if True:
+                frozen.update(purpose_path='business_value_once',purpose_is_advisory=True,
                               classification_reinspection=False)
             if previous and previous.get('purpose_version')!=PURPOSE_VERSION:
                 raise ValueError('Restore original frozen purpose protocol; no replacement of prior batch')
-    if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+    if True:
         from .page_consumption import VERSION as consumption_policy
         frozen['page_consumption_policy']=consumption_policy
         frozen['page_consumption_scope']='entry_and_target'
-        if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):frozen['page_observation_policy']='producer-shared-observation-1'
+        if True:frozen['page_observation_policy']='producer-shared-observation-1'
     if independent:
-        frozen['site_protocol']='producer-site-classification-5' if PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else 'producer-site-classification-4' if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else 'producer-site-classification-3'
+        frozen['site_protocol']='producer-site-classification-5' if True else 'producer-site-classification-4' if True else 'producer-site-classification-3'
         frozen['probe_search_hold'] = probe_search_hold
         frozen['dispatch_holds'] = reference(dispatch_holds) if dispatch_holds else None
-    if PROTOCOL=='entry-tools-14':
+    if True:
         frozen.update(site_protocol='producer-site-classification-6', page_eligibility_policy='producer-page-eligibility-2',frame_capture_policy='producer-frame-sync-1',redirect_policy='producer-redirect-boundary-2')
     rechecks = {}
     for source in sources:
@@ -654,7 +645,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         if chain:assert_current_evidence(chain,[goals_ref])
     with pool.pool.connect() as con:
         session_row=con.execute('SELECT config FROM runs WHERE id=?',(session,)).fetchone()
-    if session_row and PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+    if session_row and True:
         original_session=json.loads(session_row[0])
         if original_session.get('config_sha256')!=object_sha256(config) or original_session.get('ledger')!=str(Path(ledger_path).resolve()):
             raise ValueError('Original producer session config/ledger binding differs')
@@ -682,9 +673,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     isolated=(ledger.producer_policy or {}).get('deferred',{}) if per_task else {}
     excluded={isolation_host(u,aliases) for u in excluded_applications}
     excluded.update(isolation_host(u,aliases) for item in isolated.values() for u in item['source_urls'])
-    historical={u for h in sources for u in h.get('excluded_entry_identities',[])} if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else set()
+    historical={u for h in sources for u in h.get('excluded_entry_identities',[])} if True else set()
     held_entries=set()
-    if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+    if True:
         with ledger.connect() as con:
             # Read original jobs, including pre-visit failures absent from the
             # visit table. Their states/counters are never reset.
@@ -719,28 +710,25 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             else:
                 refs=[hit['reference'],selection_ref]+([hit['raw_html']] if hit.get('raw_html') else [])
                 site=sites.get(aid)
-                source={'origin':'glm_agent' if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') or entry_selection=='model' or independent else 'codex_session','run_id':session,
+                source={'origin':'glm_agent' if True or entry_selection=='model' or independent else 'codex_session','run_id':session,
                     'protocol':'candidate-producer-3','model_protocol':PROTOCOL,'source_pipeline':VERSION,'table_policy':POLICY,
-                    'expected_site_decision_id':hit.get('site_decision_id') if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else (site or {}).get('decision_id'),
+                    'expected_site_decision_id':hit.get('site_decision_id') if True else (site or {}).get('decision_id'),
                     'page_type':row['page_type'],'page_evidence':{**row,'reference':hit['reference'],
                         'raw_html':hit.get('raw_html'),'href':hit.get('href'),'anchor':hit.get('anchor'),'heading':hit.get('heading'),
                         'observed_on':hit.get('observed_on'),'base_uri':hit.get('base_uri'),'language_hint':hit.get('language_hint','UNKNOWN')},
                     'site_origin':item['site_origin'],'page_origin':hit['page_origin'],
                     'selection_method':'caller_list' if hit['page_origin']=='caller_list' else entry_selection,
                     'ranking_reason':hit.get('ranking_reason'),'references':refs}
-                if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                if True:
                     source['business_diagnostic']={k:hit.get(k) for k in ('business_role_hint','template_identity')}
                     source['business_diagnostic']['acceptance']='UNKNOWN: operation differences require consumer evidence'
                 if independent:
                     source['required_supply_kind']='project_first_discovery_output'
-                if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                if True:
                     decision_receipt=load_json(selection_ref['path'])
                     record=next(r for r in decision_receipt['records'] if r['link_id']==hit['link_id'])
                     source['purpose_evidence']=record
-                    if PROTOCOL=='entry-tools-11':
-                        source['task_diagnostic']={k:record.get(k) for k in ('task_value','task_hint','priority','task_qualification')}
-                        source['purpose_is_advisory']=True
-                    if PROTOCOL in ('entry-tools-12','entry-tools-13','entry-tools-14'):
+                    if True:
                         source['purpose_is_advisory']=True
                         source['business_qualification']=record['business_qualification']
                     source['selection_method']=record['method']
@@ -763,10 +751,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     if historical:
                         from .entry_access import check_entry
                         shared=None
-                        if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and not recheck:
+                        if True and not recheck:
                             from .producer_observation import entry_receipt
                             shared=entry_receipt(pool,ledger,candidate['entry_url'],root)
-                            if PROTOCOL in ('entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and shared is None:
+                            if True and shared is None:
                                 raise OutcomeUnknown('Original supply observation missing; no replacement GET')
                         access,access_ref=shared if shared else check_entry(ledger,run,candidate['entry_url'],root,recheck=recheck)
                     if historical and access.get('result')=='PASS' and entry_identity(access['landed_uri']) in historical:
@@ -775,7 +763,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         proof_error=None
                         if public_business and site['category']=='企业后台与开源演示站':
                             try:
-                                proof=public_demo_proof(ledger,run,hit,root,strict='v5' if PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else 'v4' if PROTOCOL=='entry-tools-7' else PROTOCOL=='entry-tools-6')
+                                proof=public_demo_proof(ledger,run,hit,root,strict='v5')
                             except (ValueError,OSError) as error:
                                 proof_error=str(error) or type(error).__name__
                             else:
@@ -786,7 +774,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         else:
                             try:outcome=_publish_entry(pool,ledger,run,root,header,candidate,source,row,application_id=aid)
                             except OutcomeUnknown as error:
-                                if PROTOCOL not in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):raise
                                 outcome=pool.record_row_conclusion(header,result='HELD',reason=str(error),original_row=row)
             sites.conclude(scopes[aid],item,outcome)
             chunk_outcomes.append(outcome.get('result') if isinstance(outcome,dict) else str(outcome))
@@ -814,12 +801,12 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         """Observation prep only; call-time imports keep the original patch points.
         Each call owns its asyncio.Runner/browser, so it is safe from the
         single prefetch worker; no Page/browser/connection is shared."""
-        if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
-            if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+        if True:
+            if True:
                 from .producer_observation import screen
             else:
                 from .page_consumption import screen
-            return screen(pool,ledger,links,root,**({'eligibility_policy':'producer-page-eligibility-2'} if PROTOCOL=='entry-tools-14' else {}),**({'read_policy':READ_POLICY} if producer_optimization else {}))
+            return screen(pool,ledger,links,root,**({'eligibility_policy':'producer-page-eligibility-2'} if True else {}),**({'read_policy':READ_POLICY} if producer_optimization else {}))
         return links,None
 
     def timed_screen_stage(links):
@@ -864,7 +851,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
 
     def content_refusal_hold(chunk_key, links):
         """Seal only original HTTP 400/code 1301; no result or completion."""
-        if not site_expansion or PROTOCOL not in ('entry-tools-13','entry-tools-14'):return None
+        if not site_expansion: return None
         checkpoint=chunk_key+'/content-refusal-1301'
         saved=pool.pool.checkpoint(run,checkpoint)
         if saved:
@@ -902,7 +889,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         for that chunk; later chunks re-read the real database headroom."""
         nonlocal prefetch_executor,pending_prefetch
         if not overlap:return
-        if PROTOCOL not in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):return
         next_start=start+batch_size
         if next_start>=len(prepared['links']):return
         if max_batches is not None and batches+1>=max_batches:return
@@ -951,7 +937,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 seeds=[next(h for h in expansion['queue'] if (application_pending_remaining(pool,run,(pool.pool.application(h['uri']) or {}).get('id')) or {'remaining':1})['remaining'] > 0)];search_request_id=query=direction=None
                 pool.pool.checkpoint(run,key+'/input',{'seeds':seeds})
             else:
-                if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and not queries and not directions and not target_categories:
+                if True and not queries and not directions and not target_categories:
                     exhausted=True;break
                 hold=search_channel_hold(pool.pool,session)
                 if hold and not independent:
@@ -973,7 +959,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         decision=next_query(pool.pool,ledger,run,key,target_categories,state,failures,root,
                                             **({'page_feedback':True} if producer_optimization else {}),
                                             **({'independent':True,'public_business':public_business} if independent else {}),
-                                            **({'purpose_grounded':True,**({'purpose_protocol':PROTOCOL} if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else {})} if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else {}))
+                                            **({'purpose_grounded':True,**({'purpose_protocol':PROTOCOL} if True else {})} if True else {}))
                     else:decision=policy.next_query(state)
                     if decision is None:exhausted=True;break
                     engine=search_engine;probe=None
@@ -1050,7 +1036,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         eligible.append(h)
                     return eligible
                 eligible=eligible_seeds(seeds)
-                context,errors=site_context(pool,ledger,run,eligible,root,**({'redirect_policy':'producer-redirect-boundary-2'} if PROTOCOL=='entry-tools-14' else {}),**({'isolate_homepages':True} if independent or site_expansion else {}), **({'use_seed_uri':bool(unit==0 and seed_sources),'allowed_hosts':allowed_hosts} if site_expansion else {}))
+                context,errors=site_context(pool,ledger,run,eligible,root,**({'redirect_policy':'producer-redirect-boundary-2'} if True else {}),**({'isolate_homepages':True} if independent or site_expansion else {}), **({'use_seed_uri':bool(unit==0 and seed_sources),'allowed_hosts':allowed_hosts} if site_expansion else {}))
                 failures.extend(errors)
                 if independent and '企业后台与开源演示站' in target_categories:
                     lead_docs=list(context)
@@ -1105,7 +1091,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         failures.append({'application_id':aid,'reason':'homepage_outside_allowed_hosts'});continue
                     documents[aid]={**verify_document(homepage),'reference':homepage['reference']}
                     categories[urlsplit(h['uri']).hostname]=site['category']
-                if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                if True:
                     documents, directory_errors=(documents,[]) if site_expansion else bounded_directories(pool,ledger,run,documents,eligible,root,aliases,excluded,held_entries)
                     failures.extend(directory_errors)
                 if site_expansion:
@@ -1118,7 +1104,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         visited.add(identity)
                         if any(entry_identity(d['uri'])==identity for d in documents.values()):continue
                         try:
-                            doc,ref=homepage_document(ledger,run,h['uri'],root,allowed_hosts=allowed_hosts,**({'redirect_policy':'producer-redirect-boundary-2'} if PROTOCOL=='entry-tools-14' else {}))
+                            doc,ref=homepage_document(ledger,run,h['uri'],root,allowed_hosts=allowed_hosts,**({'redirect_policy':'producer-redirect-boundary-2'} if True else {}))
                             if not host_allowed(doc['uri']):
                                 raise ValueError('Expansion redirect outside allowed_hosts')
                             aid=pool.pool.application(h['uri'])['id']
@@ -1145,14 +1131,14 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 links=[]; link_seen=set()
                 for document_key,document in documents.items():
                     aid=document.get('application_id',document_key)
-                    for h in extract_links(document,aliases,strict=PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14')):
+                    for h in extract_links(document,aliases,strict=True):
                         if allowed_hosts and not host_allowed(h['uri']):
                             failures.append({'uri':h['uri'],'reason':'outside_allowed_hosts'});continue
                         if pool.consumption(h['uri'],kind='target' if goals else 'entry'):
                             failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
                         if entry_identity(h['uri']) in historical:continue
                         if site_expansion and entry_identity(h['uri']) in offered:continue
-                        if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') and entry_identity(h['uri']) in held_entries:
+                        if True and entry_identity(h['uri']) in held_entries:
                             failures.append({'uri':h['uri'],'stage':'target_preflight','reason':'original_unsettled_page_job_no_dispatch'})
                             continue
                         if entry_identity(h['uri']) in link_seen:continue
@@ -1176,9 +1162,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         else:filtered.append(h)
                     links=filtered
                 links=rank_links(links,categories,counts,feedback)
-                if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                if True:
                     from .producer_evidence import diverse_order
-                    links=diverse_order(links,version='2') if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else diverse_order(links)
+                    links=diverse_order(links,version='2') if True else diverse_order(links)
                 links=[h for h in links if not language_or_login(h)]
                 # Caller seeds are also legitimate first-party entries. Their page
                 # role remains UNKNOWN unless original HTML provides evidence.
@@ -1221,8 +1207,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     failures.append({'stage':'content_refusal','chunk':chunk_key,**refusal});continue
                 chunk=[h for h in chunk if not pool.consumption(h['uri'],kind='target' if goals else 'entry')]
                 if not chunk:continue
-                if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):chunk=chunk[:max(0,target-new_count())]
-                if PROTOCOL in ('entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                if True:chunk=chunk[:max(0,target-new_count())]
+                if True:
                     chunk=[{**h,'site_category':sites.get(h['application_id'])['category'],
                             'site_decision_id':sites.get(h['application_id'])['decision_id']} for h in chunk]
                 saved_selection=pool.pool.checkpoint(run,chunk_key+'/selection')
@@ -1238,16 +1224,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         fresh_metrics={'schema_version':'webcollect-producer-pipeline-metrics-1','pipeline':producer_pipeline,
                                        'unit':unit,'chunk_key':chunk_key,'input_links':len(chunk)}
                     preflight_skips=[];preflight_reference=None
-                    if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
-                        if PROTOCOL in ('entry-tools-13','entry-tools-14'):from .producer_business_content import classify
-                        elif PROTOCOL=='entry-tools-12':from .producer_business_value import classify
-                        elif PROTOCOL=='entry-tools-11':from .producer_task_value import classify
-                        elif PROTOCOL=='entry-tools-10':from .page_purpose_v6 import classify
-                        elif PROTOCOL in ('entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):from .page_purpose_v5 import classify
-                        elif PROTOCOL=='entry-tools-7':from .page_purpose_v4 import classify
-                        else:from .page_purpose import classify
+                    if True:
+                        from .producer_business_content import classify
                         classify_links=chunk;screen_records=None
-                        if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                        if True:
                             screen_input=chunk
                             if prefetched is not None:
                                 # Consume the dispatch-time preflight decisions and
@@ -1285,7 +1265,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         dispatch_prefetch(chunk,start,key)
                         classify_t0=time.monotonic() if overlap else None
                         try:
-                            rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'policy':'producer-business-value-3'} if PROTOCOL=='entry-tools-14' else {}),**({'pool':pool} if PROTOCOL in ('entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else {})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                            rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'policy':'producer-business-value-3'} if True else {}),**({'pool':pool} if True else {})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
                         except OutcomeUnknown:
                             refusal=content_refusal_hold(chunk_key,prepared['links'][start:start+batch_size])
                             if not refusal:raise
@@ -1293,16 +1273,16 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                             continue
                         if fresh_metrics is not None and classify_t0 is not None:
                             fresh_metrics['classify_seconds']=round(time.monotonic()-classify_t0,3)
-                        if PROTOCOL in ('entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                        if True:
                             selection_body['page_consumption']=screen_records
                         job_id=selection_body['calls'][0]['job_id'] if selection_body['calls'] else 'purpose-entries/'+object_sha256([run,chunk_key])
-                    elif entry_selection=='model' and PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                    elif entry_selection=='model' and True:
                         original_jobs={h.get('settled_selection_job_id') for h in seeds if h.get('settled_selection_job_id')}
                         if len(original_jobs)>1:raise ValueError('One settled recovery job per unit required')
                         from .discovery_agent import SettledSelectionRejected
                         try:rows,selection_body=select_entries(ledger,chunk,run+'/'+chunk_key,next(iter(original_jobs),None),
                                                                 **({'categories':target_categories} if independent else {}),
-                                                                **({'protocol':PROTOCOL} if PROTOCOL in ('entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14') else {}))
+                                                                **({'protocol':PROTOCOL} if True else {}))
                         except SettledSelectionRejected as error:
                             rows=[];selection_body={'job_id':error.receipt['job_id'],'arguments':{'entries':[]},'settled_rejection':error.receipt}
                         job_id=selection_body['job_id']
@@ -1317,8 +1297,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         rows=[rule_decision(h) for h in chunk if h['anchor'] or h['heading']]
                         job_id='caller-entries/'+object_sha256([run,chunk_key,rows])
                         selection_body={'version':VERSION,'method':'rule','arguments':{'entries':rows}}
-                    if PROTOCOL in ('entry-tools-4','entry-tools-5','entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
-                        if PROTOCOL in ('entry-tools-6','entry-tools-7','entry-tools-8','entry-tools-9','entry-tools-10','entry-tools-11','entry-tools-12','entry-tools-13','entry-tools-14'):
+                    if True:
+                        if True:
                             # Source binding and target purpose are separate evidence layers.
                             verified,rejected=isolate_decisions([{**r,'page_type':'UNKNOWN'} for r in rows],chunk)
                             lookup={r['link_id']:r for r in rows}
@@ -1336,49 +1316,6 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     saved_selection={'items':items,'reference':reference(path),'job_id':job_id,
                         **({'preflight_skips':preflight_skips,'preflight_reference':preflight_reference} if overlap else {})}
                     pool.pool.checkpoint(run,chunk_key+'/selection',saved_selection)
-                if PROTOCOL=='entry-tools-13':
-                    # Compatibility recovery has its own append-only receipt and
-                    # scopes; original NOT_SELECTED conclusions stay immutable.
-                    from .producer_business_content import recover_reason_record, REASON_REVISION
-                    from .page_purpose_v6 import decision_row
-                    revision_key=chunk_key+'/'+REASON_REVISION
-                    revision=pool.pool.checkpoint(run,revision_key+'/selection')
-                    if revision is None:
-                        verify_evidence([saved_selection['reference']])
-                        original_body=load_json(saved_selection['reference']['path'])
-                        recovered=[];recovered_records=[]
-                        link_lookup={h['link_id']:h for h in chunk}
-                        for original_record in original_body.get('records',[]):
-                            h=link_lookup.get(original_record.get('link_id'))
-                            if h is None:continue
-                            repaired=recover_reason_record(pool,ledger,original_record)
-                            if not repaired or not repaired['selected']:continue
-                            r=decision_row(h,repaired)
-                            verified,_=isolate_decisions([{**r,'page_type':'UNKNOWN'}],[h])
-                            if not verified:continue
-                            recovered_records.append(repaired)
-                            recovered.extend({'candidate':{'schema_version':VERSION2,'candidate_kind':'target' if g else 'entry',
-                                'entry_url':h['uri'],'requested_goal':g['requested_goal'] if g else None},
-                                'application_id':h['application_id'],'hit':h,'decision':r,
-                                'site_origin':prepared['site_origins'][h['application_id']]}
-                                for g in ([g for g in goals if g['uri']==h['uri']] if goals else [None]))
-                        if recovered:
-                            body={**original_body,'records':recovered_records,'revision':REASON_REVISION,
-                                  'original_selection':saved_selection['reference'],'recovery_model_dispatches':0}
-                            path=root/('entry-links-revision-'+object_sha256([run,revision_key])+'.json')
-                            save_json(path,body)
-                            revision={'items':recovered,'reference':reference(path),'job_id':saved_selection['job_id']}
-                            pool.pool.checkpoint(run,revision_key+'/selection',revision)
-                    if revision:
-                        allocations_before=dict(site_allocation_scopes)
-                        for aid in {i['application_id'] for i in revision['items']}:
-                            aid_items=[i for i in revision['items'] if i['application_id']==aid]
-                            scopes[aid]=sites.freeze_scope(aid,run+'/'+revision_key,aid_items,[revision['reference']])
-                            site_allocation_scopes[aid]=sites.freeze_scope(aid,run+'/'+revision_key+'/site-input',
-                                [{'uri':i['candidate']['entry_url'],'goal':i['candidate']['requested_goal']} for i in aid_items],
-                                [revision['reference']])
-                        publish_items(revision['items'],revision['reference'],revision['job_id'],revision_key)
-                        site_allocation_scopes=allocations_before
                 items=saved_selection['items']
                 selected={i['hit']['link_id'] for i in items}
                 # Preflight-skipped links never reached the model; they conclude

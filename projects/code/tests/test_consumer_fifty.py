@@ -4,7 +4,7 @@ from io import BytesIO
 import json
 import unittest
 from PIL import Image, ImageDraw
-from webcollect.browser import stability_pair, STABILITY_V5
+from webcollect.browser import stability_pair
 from webcollect.candidate_navigation import delayed_landing
 import test_related_capture_stability as related
 import test_react_native as native_tests
@@ -37,7 +37,6 @@ class GeometryTests(unittest.TestCase):
                 self.assertTrue(proof['accepted'],proof)
                 self.assertEqual(proof['geometry_pixel_proof'][0]['translation_image'],[dx,0])
                 self.assertEqual(proof['geometry_proof'][0]['physical_edge_offsets'][0],dx*dpr)
-                self.assertFalse(stability_pair(a,b,p,q,rule_version=STABILITY_V5)['accepted'])
 
     def test_five_inclusive_greater_rejected_and_semantics_never_noise(self):
         a,p=frame();b,q=frame(5)

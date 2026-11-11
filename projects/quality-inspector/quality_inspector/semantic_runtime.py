@@ -68,60 +68,6 @@ def guard(ledger, job):
             fcntl.flock(stream, fcntl.LOCK_UN)
 
 
-def lookup(ledger, job):
-    kind = job['kind']; payload = job['payload']; expected = subject(kind, payload)
-    current_rules = rules(kind, payload); cached = {}; sources = {}; blocked = set(); observations = None
-    with ledger.connect() as con:
-        rows = con.execute('SELECT id,payload,result,state FROM jobs WHERE kind=? AND id<>? ORDER BY created,id',
-                           (kind, job['id'])).fetchall()
-        bound = {value['job_id']:value['result_sha256'] for (raw,) in con.execute(
-            "SELECT detail FROM batch_events WHERE event='semantic_result_bound'") for value in [json.loads(raw)]}
-    for row in rows:
-        old = json.loads(row['payload'])
-        same_prompt=old.get('prompt_version')==payload.get('prompt_version')
-        compatible_unaffected={old.get('prompt_version'),payload.get('prompt_version')}=={'independent-all-frame-review-4-whole-sample-length','independent-all-frame-review-5-dynamic-regions'}
-        if (old.get('model') != payload.get('model') or old.get('mode') != payload.get('mode')
-                or not (same_prompt or compatible_unaffected)):
-            continue
-        try:
-            if subject(kind, old) != expected:
-                continue
-        except (KeyError, TypeError):
-            continue  # Legacy jobs lack explicit sample/rule identity.
-        matches = [name for name in names(kind) if name in current_rules
-                   and rules(kind, old).get(name) == current_rules[name]
-                   and (same_prompt or name in ('language','privacy'))]
-        if not matches:
-            continue
-        if row['id'] != digest({'kind': kind, 'payload': old}):
-            raise ValueError('Semantic source job payload identity changed')
-        if row['state'] in ('running', 'review_required', 'failed'):
-            blocked.add(row['id']); continue
-        if row['state'] != 'done' or not row['result']:
-            continue
-        result = json.loads(row['result'])
-        if bound.get(row['id'])!=digest(result):
-            raise ValueError('Completed semantic source result has changed or lacks its original binding')
-        for name in matches:
-            value = result.get('checks', {}).get(name) if kind == 'ai-visual' else result
-            if not isinstance(value, dict) or value.get('status') not in ('PASS', 'FAIL', 'REVIEW_REQUIRED'):
-                # Documentary results are a complete bound review, not a status.
-                if kind != 'ai-documents' or not isinstance(value, dict) or 'checks' not in value:
-                    raise ValueError('Malformed completed semantic source result')
-            if name not in cached:
-                cached[name] = deepcopy(value); sources[name] = row['id']
-                observations = observations or deepcopy(result.get('step_observations'))
-    return cached, sources, sorted(blocked), observations
-
-
-def record(ledger, job, sources, *, blocked=False):
-    if not sources:
-        return
-    with ledger.transaction() as con:
-        ledger.event(con, 'semantic_reuse_blocked' if blocked else 'semantic_reused', {
-            'job_id': job['id'], 'source_jobs': sorted(set(sources)),
-            'reason': 'prior_exact_attempt_unresolved_no_resend' if blocked else 'same_sample_evidence_and_relevant_rules'})
-
 
 def bind_result(ledger,job,result):
     with ledger.transaction() as con:
@@ -129,17 +75,4 @@ def bind_result(ledger,job,result):
             'subject_sha256':digest(subject(job['kind'],job['payload']))})
 
 
-def failure_jobs(ledger, current_jobs):
-    """Trace alias failures to the actual original billed/unknown request rows."""
-    result = set(current_jobs)
-    with ledger.connect() as con:
-        events = [json.loads(row[0]) for row in con.execute(
-            "SELECT detail FROM batch_events WHERE event='semantic_reuse_blocked'")]
-    changed = True
-    while changed:
-        before = len(result)
-        for event in events:
-            if event.get('job_id') in result:
-                result.update(event.get('source_jobs', []))
-        changed = len(result) != before
-    return result
+

@@ -57,7 +57,7 @@ def business_role(link, *, version='1'):
     return 'UNKNOWN'
 
 
-def diverse_order(links, *, version='1'):
+def diverse_order(links, *, version='2'):
     """Prefer new operations/templates; reserve every fifth slot for UNKNOWN."""
     pending=list(links);out=[];roles=set();templates=set()
     def feedback(h):
@@ -67,11 +67,11 @@ def diverse_order(links, *, version='1'):
         unknown=[i for i,h in enumerate(pending) if h.get('page_type','UNKNOWN')=='UNKNOWN']
         options=unknown if len(out)%5==4 and unknown else range(len(pending))
         i=min(options,key=lambda i:(feedback(pending[i]).get('deprioritized',False),
-            (urlsplit(pending[i]['uri']).hostname,business_role(pending[i],version=version)) in roles,
+            (urlsplit(pending[i]['uri']).hostname,business_role(pending[i],version='2')) in roles,
             -feedback(pending[i]).get('saved_evidence_count',0),
-            business_signature(pending[i],version=version) in templates,i))
-        h=pending.pop(i);roles.add((urlsplit(h['uri']).hostname,business_role(h,version=version)));templates.add(business_signature(h,version=version))
-        out.append({**h,'business_role_hint':business_role(h,version=version),'template_identity':business_signature(h,version=version)})
+            business_signature(pending[i],version='2') in templates,i))
+        h=pending.pop(i);roles.add((urlsplit(h['uri']).hostname,business_role(h,version='2')));templates.add(business_signature(h,version='2'))
+        out.append({**h,'business_role_hint':business_role(h,version='2'),'template_identity':business_signature(h,version='2')})
     return out
 
 

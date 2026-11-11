@@ -338,7 +338,7 @@ def apply(report, profile, reviews=None):
                     source_sites[entry['site_id']].add((entry['uri'], entry['site_category']))
                 if manifest.name == 'site-list.json' and layout.kind == 'customer-flat':
                     assignments = source.get('samples')
-                    if source.get('schema_version') != 'webcollect-site-list-1' or not isinstance(assignments, list):
+                    if source.get('schema_version') not in ('site-list','webcollect-site-list-1') or not isinstance(assignments, list):
                         raise ValueError('Customer site list must declare its schema and sample/site mappings')
                     expected_ids = {sample['sample_id'] for sample in report['samples']}
                     assigned_ids = []

@@ -11,7 +11,6 @@ def main(argv=None):
     p=sub.add_parser('check');p.add_argument('--baseline',type=Path,help='Optional engineering/reference audit; excluded from the delivery gate');p.add_argument('--samples',type=Path);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--reviews',type=Path,help='Actual evidence-bound AI or human inspection decisions');p.add_argument('--ai-evidence',type=Path);p.add_argument('--evidence',type=Path,help='Optional engineering capture audit; excluded from the delivery gate');p.add_argument('--profile',type=Path,default=DEFAULT_DELIVERY_PROFILE,help='Delivery contract by default; an explicit pilot profile retains pilot compatibility')
     b=sub.add_parser('baseline');b.add_argument('--baseline',type=Path,required=True)
     p.add_argument('--stage',choices=['payload','final'],default='final',help='payload checks immutable content before QC summary attachment; final checks the complete sealed report too')
-    p.add_argument('--review-migration',type=Path,help='Explicit impact assessment referencing immutable legacy reviews; never a new visual approval')
     p.add_argument('--delivery-sampling-plan',type=Path,help='Explicit frozen delivery sampling contract; default remains full semantic review')
     p.add_argument('--human-reviews',type=Path,action='append',default=[],help='Actual human escalation/random/replacement decisions for an explicit delivery sampling plan')
     p.add_argument('--ai-failures',type=Path,action='append',default=[],help='Read-only model-ledger-bound failed/unknown/invalid request receipts')
@@ -21,12 +20,8 @@ def main(argv=None):
     cumulative.add_argument('--verify-exhaustive',action='store_true')
     manifest=sub.add_parser('set-manifest',help='Freeze current package file hashes without approving them')
     manifest.add_argument('--input',type=Path,action='append',required=True);manifest.add_argument('--output',type=Path,required=True)
-    manifest.add_argument('--version-policy',type=Path,help='Explicit qc-sample-versions-1 supersedes relations; no automatic newest selection')
     manifest.add_argument('--quality-batch-ids',type=Path,help='JSON array of current formal batch sample IDs; check-set verifies these 5000 and the cumulative set')
     manifest.add_argument('--application-registry',type=Path,help='Frozen site-pool snapshot resolving application aliases for the 500-sample limit')
-    migration=sub.add_parser('migration-plan',help='Create pending legacy-review impact assessments only')
-    migration.add_argument('--input',type=Path,required=True);migration.add_argument('--source-reviews',type=Path,required=True)
-    migration.add_argument('--output',type=Path,required=True)
     review=sub.add_parser('review',help='Create a separate evidence-bound blind human workspace; never imports decisions')
     review.add_argument('--report',type=Path,required=True)
     review.add_argument('--output',type=Path,required=True)
@@ -42,27 +37,16 @@ def main(argv=None):
             from .blind import write_workspace
             result=write_workspace(args.report,args.output,context_path=args.context,receipt_path=args.receipt,reviewer_name=args.reviewer)
             print(json.dumps({'mode':'blind','samples':result['sample_count'],'frames':result['frame_count'],'entry':str(args.output/'review.html'),'decisions_prefilled':False,'human_reviews_created':0},ensure_ascii=False));return 0
-        if args.cmd in ('set-manifest','migration-plan'):
+        if args.cmd=='set-manifest':
             from .cumulative import build_set_manifest
-            from .reviews import migration_template
             from .contract import fingerprint
             from .format_checks import run
             roots=args.input if isinstance(args.input,list) else [args.input]
             if any(args.output.resolve().is_relative_to(root.resolve()) for root in roots):raise ValueError('Output must be outside inspected packages')
-            supersedes=[]
-            if args.cmd=='set-manifest' and args.version_policy:
-                policy=json.loads(args.version_policy.read_text())
-                if (not isinstance(policy,dict) or set(policy)!={'schema_version','supersedes'}
-                        or policy['schema_version']!='qc-sample-versions-1' or not isinstance(policy['supersedes'],list)):
-                    raise ValueError('Explicit qc-sample-versions-1 policy required')
-                supersedes=policy['supersedes']
-            if args.cmd == 'set-manifest':
-                members = json.loads(args.quality_batch_ids.read_text()) if args.quality_batch_ids else None
-                if args.quality_batch_ids and members is None:
-                    raise ValueError('Quality batch file must contain an array of sample IDs')
-                value = build_set_manifest(roots, supersedes=supersedes, quality_batch_ids=members,application_registry=args.application_registry)
-            else:
-                value = migration_template(args.source_reviews,run(None,args.input)['samples'],fingerprint()[1])
+            members = json.loads(args.quality_batch_ids.read_text()) if args.quality_batch_ids else None
+            if args.quality_batch_ids and members is None:
+                raise ValueError('Quality batch file must contain an array of sample IDs')
+            value = build_set_manifest(roots, quality_batch_ids=members,application_registry=args.application_registry)
             args.output.parent.mkdir(parents=True,exist_ok=True)
             with args.output.open('x',encoding='utf-8') as stream:json.dump(value,stream,ensure_ascii=False,indent=2);stream.write('\n')
             print(json.dumps({'output':str(args.output),'not_an_acceptance':True},ensure_ascii=False));return 0

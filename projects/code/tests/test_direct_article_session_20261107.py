@@ -15,10 +15,8 @@ import unittest
 from unittest.mock import patch
 
 from test_react_session import ReactHarness, FakePage, make_png
-from test_closing_policy_v2 import EndingV2Tests
 from webcollect.batch_core import load_json
-from webcollect.banded_plan import V11_VERSION
-from webcollect.closing_policy import VERSION as END_V3
+from webcollect.plan_protocol import PLAN_PROTOCOL, ENDING_POLICY
 from webcollect.direct_article import VERSION as DIRECT_VERSION, transition, body
 from webcollect.direct_completion import VERSION as COMPLETION_VERSION
 from webcollect.react_session import ReactSession, build_url_task
@@ -193,8 +191,8 @@ class DirectArticleHarness(ReactHarness):
 
     def direct_task(self):
         from webcollect.planning import object_sha256
-        task = build_url_task(url=ARTICLE, task_version='direct', ending_policy=END_V3,
-                              plan_protocol=V11_VERSION)
+        task = build_url_task(url=ARTICLE, task_version='direct', ending_policy=ENDING_POLICY,
+                              plan_protocol=PLAN_PROTOCOL)
         spec = task['workflow_proposal']['spec']
         spec['goal'] = {'instruction': '在已打开的月食词条内定位并阅读轨道关系正文',
                         'structured': {'kind': 'reading', 'preferred_band': 'five',
@@ -228,7 +226,21 @@ class DirectArticleHarness(ReactHarness):
 
 
 class DirectArticleSessionTests(DirectArticleHarness, unittest.IsolatedAsyncioTestCase):
-    derive = EndingV2Tests.derive
+    def derive(self, evidence, name='candidate'):
+        destination = self.root / name / 'samples' / self.ids['sample_id']
+        from webcollect.postprocess import process
+        result = process(evidence, destination, self.ids, self.manifest)
+        if result['status'] != 'derived_saved' and result.get('record_ref'):
+            self.fail(str(load_json(result['record_ref']['path'])))
+        self.assertEqual(result['status'], 'derived_saved', result)
+        from webcollect.client_package import validate_client_sample
+        from quality_inspector.format_checks import sample_check
+        from webcollect.closing_policy import annotation_errors
+        annotation = validate_client_sample(destination)
+        check = sample_check(destination)
+        self.assertTrue(check['confirmed_format_pass'], check['errors'])
+        self.assertEqual(annotation_errors(annotation), [])
+        return destination, annotation
 
     @staticmethod
     def reading_plan(prompt):

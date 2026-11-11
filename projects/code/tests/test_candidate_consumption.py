@@ -18,7 +18,8 @@ from webcollect.batch_core import BatchLedger, load_json, save_json, file_sha, O
 from webcollect.planning import object_sha256
 from webcollect.runtime import RuntimeStore
 from site_planner.site_pool import SitePool
-from site_planner.candidate_pool import CandidatePool, VERSION
+from site_planner.candidate_pool import CandidatePool
+VERSION = 'webcollect-data-candidate-1'  # historical v1 body, kept only as fixture data
 from site_planner.discovery_tools import reference
 
 
@@ -38,7 +39,11 @@ class Consumption(SemanticFixture, unittest.IsolatedAsyncioTestCase):
         proof=self.root/'source.json';save_json(proof,{'CONTROLLED':'simulated search'})
         self.candidate={'schema_version':VERSION,'entry_url':self.uri,'name':'受控离线页面','parent_category':'在线工具',
             'business_kind':'输入操作','description':'修改数量和单价并查看输入状态','target':{'kind':'edit','entity':'fields','parameters':{'quantity':20,'price':30}}}
-        self.cid=self.pool.put(self.candidate,{'origin':'codex_session','run_id':'offline','references':[reference(proof)]})
+        # The pool only accepts the current v2 body; the rich v1-shaped dict
+        # above stays test-side for instruction()/fragment_ending() helpers.
+        pool_body={'schema_version':'webcollect-data-candidate-2','candidate_kind':'target',
+            'entry_url':self.uri,'requested_goal':{'kind':'edit','entity':'fields','parameters':{'quantity':20,'price':30}}}
+        self.cid=self.pool.put(pool_body,{'origin':'codex_session','run_id':'offline','references':[reference(proof)]})
         self.claim=self.pool.claim_next('worker','first')
         cfg=load_json(Path(__file__).parents[1]/'config/batch-synthetic.json');cfg['mode']='real'
         cfg['model'].update(provider='chat-completions',endpoint='https://model.invalid',api_key_env='CONTROLLED_UNUSED_KEY')

@@ -6,8 +6,8 @@ import tempfile
 import unittest
 
 from webcollect.batch_core import file_sha
-from webcollect.closing_policy import (EFFECTIVE_VERSION, VERSION, attempt_limit,
-    effective_limit, no_effect_proven, validate_record)
+from webcollect.plan_protocol import ENDING_POLICY as EFFECTIVE_VERSION
+from webcollect.closing_policy import (attempt_limit, no_effect_proven, validate_record)
 from webcollect.production_identity import content_anchor_corroborated
 
 
@@ -56,7 +56,7 @@ class IdentityClosureEffectiveTests(unittest.TestCase):
                 if i==1:trajectory.append({'raw_step':ref,'after_observation_id':'final'})
                 attempts.append(save(f'attempt-{i}.json',{'kind':'business-attempt','number':i,'raw_steps':[ref],
                     'actual_dispatches_delta':1,'effective_steps_delta':int(i==1),'outcome':'VERIFIED' if i==1 else 'EFFECT_NOT_VERIFIED'}))
-            marker={'protocol':EFFECTIVE_VERSION,'attempt_limit':10,'attempt_band':None,'kind':'VISIBLE_GOAL_REPORTED',
+            marker={'protocol':EFFECTIVE_VERSION,'attempt_limit':None,'attempt_band':None,'kind':'VISIBLE_GOAL_REPORTED',
                     'attempt_refs':attempts,'business_attempts':12,'actual_atomic_dispatches':12,
                     'verified_effective_steps':1,'unverified_tail_dispatches':11,'safe_for_pending_sample':True}
             record={'task':{'fragment':{'ending_policy':EFFECTIVE_VERSION}},'trajectory':trajectory,
@@ -71,9 +71,3 @@ class IdentityClosureEffectiveTests(unittest.TestCase):
             raw=json.loads(Path(rawref['path']).read_text());raw['state']['values']['input']='999'
             attempt['raw_steps']=[save('changed.json',raw)];attempts[-1]=save('changed-attempt.json',attempt)
             with self.assertRaises(ValueError):validate_record(record)
-
-    def test_new_effective_ceiling_does_not_reinterpret_continuous_v4(self):
-        self.assertEqual(attempt_limit({'fragment':{'ending_policy':EFFECTIVE_VERSION}}),10)
-        self.assertEqual(effective_limit({'fragment':{'ending_policy':EFFECTIVE_VERSION}}),10)
-        self.assertIsNone(attempt_limit({'fragment':{'ending_policy':VERSION}}))
-        self.assertIsNone(effective_limit({'fragment':{'ending_policy':VERSION}}))

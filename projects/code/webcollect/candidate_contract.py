@@ -6,18 +6,21 @@ from pathlib import Path
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence, validate_capability
 
-VERSION = 'webcollect-candidate-consumption-1'
-RESEARCH_V2 = 'candidate-research-replay-2'
-RESEARCH_V3 = 'candidate-research-replay-3'
+VERSION = 'candidate-consumption'
+# The single research descriptor name. Historical descriptors stored with
+# '-1'/'-2'/'-3' suffixes keep their bytes as data and stay readable.
+RESEARCH = 'candidate-research-replay'
+RESEARCH_V1_DATA = 'candidate-research-replay-1'
+RESEARCH_DATA_SCHEMAS = (RESEARCH_V1_DATA, 'candidate-research-replay-2', 'candidate-research-replay-3', RESEARCH)
 
 
 def research_v2_inputs(descriptor):
     """Frozen development inputs, never historical page/action evidence."""
     required = {'schema_version', 'original_claim_id', 'objective', 'authorization',
                 'comparisons', 'production_counted'}
-    if (set(descriptor) != required or descriptor['schema_version'] not in (RESEARCH_V2, RESEARCH_V3)
+    if (set(descriptor) != required or descriptor['schema_version'] not in RESEARCH_DATA_SCHEMAS
             or not descriptor['original_claim_id'] or descriptor['production_counted'] is not False):
-        raise ValueError('Invalid research v2 input metadata')
+        raise ValueError('Invalid research replay input metadata')
     verify_evidence([descriptor['objective'], descriptor['authorization']])
     objective = load_json(descriptor['objective']['path'])
     authorization = load_json(descriptor['authorization']['path'])
@@ -32,13 +35,13 @@ def research_v2_inputs(descriptor):
             or authorization.get('production_counted') is not False
             or not authorization.get('pool') or not authorization.get('registry')
             or not isinstance(comparisons, list)):
-        raise ValueError('Research v2 authorization and original objective differ')
+        raise ValueError('Research replay authorization and original objective differ')
     seen = set()
     for item in comparisons:
         if (set(item) != {'role', 'claim_id', 'sample_id', 'save_receipt'}
                 or item['role'] != 'comparison' or not item['claim_id'] or not item['sample_id']
                 or item['sample_id'] in seen):
-            raise ValueError('Research v2 requires uniquely named comparison samples')
+            raise ValueError('Research replay requires uniquely named comparison samples')
         verify_evidence([item['save_receipt']])
         if load_json(item['save_receipt']['path']).get('sample_id') != item['sample_id']:
             raise ValueError('Research comparison save receipt differs')
@@ -47,18 +50,16 @@ def research_v2_inputs(descriptor):
 
 
 def validate_research_v2(descriptor, pool, original, registry=None):
-    """V2 keeps failed sources; V3 also accepts settled nonproduction saves."""
+    """One replay rule: settled failed sources and settled nonproduction saves."""
     authorization = research_v2_inputs(descriptor)
-    saved_replay = descriptor['schema_version'] == RESEARCH_V3
     old = original.get('binding') or {}
     objective = load_json(descriptor['objective']['path'])
     if (original['claim_id'] != descriptor['original_claim_id']
-            or original['state'] not in (('failed', 'succeeded') if saved_replay else ('failed',))
+            or original['state'] not in ('failed', 'succeeded')
             or (original['candidate_id'], original['version']) !=
                (objective.get('candidate_id'), objective.get('version'))
             or any(not old.get(k) for k in ('output', 'registry', 'ledger', 'history_set'))):
-        raise ValueError('Research v3 requires a settled failed or saved research execution' if saved_replay
-                         else 'Research v2 requires the settled failed original execution')
+        raise ValueError('Research replay requires a settled failed or saved nonproduction original execution')
     from .batch_core import file_sha
     original_objective = Path(old['output']) / 'session-objective.json'
     if file_sha(original_objective) != descriptor['objective']['sha256']:
@@ -70,7 +71,7 @@ def validate_research_v2(descriptor, pool, original, registry=None):
     def nonproduction_save(row, saved, binding):
         replay = binding.get('research_replay') or {}
         return (row['effective'] == 0
-                and replay.get('schema_version') in ('candidate-research-replay-1', RESEARCH_V2, RESEARCH_V3)
+                and replay.get('schema_version') in RESEARCH_DATA_SCHEMAS
                 and replay.get('production_counted') is False
                 and saved.get('production_counted', False) is False
                 and saved.get('research_replay', replay) == replay)
@@ -83,7 +84,7 @@ def validate_research_v2(descriptor, pool, original, registry=None):
                     or saved.get('sample_id') != row['sample_id']
                     or Path(saved.get('registry', '')).resolve() != Path(old['registry']).resolve()
                     or not saved.get('save_receipt')):
-                raise ValueError('Research v3 requires the original saved nonproduction result')
+                raise ValueError('Research replay requires the original saved nonproduction result')
             verify_evidence([saved['save_receipt']])
             if load_json(saved['save_receipt']['path']).get('sample_id') != row['sample_id']:
                 raise ValueError('Research source save receipt differs')
@@ -95,7 +96,7 @@ def validate_research_v2(descriptor, pool, original, registry=None):
             saved = json.loads(row['record']) if row else {}
             binding = json.loads(row['binding'] or '{}') if row else {}
             if (not row or row['state'] != 'succeeded'
-                    or not (row['effective'] == 1 or saved_replay and nonproduction_save(row, saved, binding))
+                    or not (row['effective'] == 1 or nonproduction_save(row, saved, binding))
                     or saved.get('sample_id') != comparison['sample_id']
                     or saved.get('save_receipt') != comparison['save_receipt']
                     or Path(saved.get('registry', '')).resolve() != Path(old['registry']).resolve()
@@ -141,10 +142,10 @@ def research_duplicate_basis(task, registry):
         result = con.execute('SELECT * FROM candidate_results WHERE claim_id=? AND effective=1',
             (descriptor['original_claim_id'],)).fetchone()
         events = [json.loads(r[0]) for r in con.execute("SELECT record FROM candidate_events WHERE claim_id=? AND kind='research_claimed'", (binding['claim_id'],))]
-    if descriptor.get('schema_version') in (RESEARCH_V2, RESEARCH_V3):
+    if descriptor.get('schema_version') != RESEARCH_V1_DATA:
         if (not original or not any(all(event.get(k) == v for k, v in descriptor.items()) for event in events)
                 or Path(live['binding']['registry']).resolve() != Path(registry).resolve()):
-            raise ValueError('Research v2 lacks frozen/live original authorization')
+            raise ValueError('Research replay lacks frozen/live original authorization')
         validate_research_v2(descriptor, pool, pool._claim(original), registry)
         return {'schema_version': 'candidate-research-duplicate-2', 'research_claim_id': binding['claim_id'],
                 'original_claim_id': descriptor['original_claim_id'], 'comparisons': descriptor['comparisons'],
@@ -259,7 +260,7 @@ def validate_observation(record):
 def capability(claim, anchor, claim_reference, mode, *, category=None, name=None):
     state=load_json(anchor['state']['path']); now=datetime.now(timezone.utc)
     candidate=claim['snapshot']
-    result={'schema_version':'webcollect-site-capability-1','capability_id':'candidate-observation-'+claim['claim_id'],
+    result={'schema_version':'site-capability','capability_id':'candidate-observation-'+claim['claim_id'],
         'version':VERSION,'site_uri':state['url'],'site_category':candidate.get('parent_category') or category or 'UNKNOWN','mode':mode,
         'status':'review_required','reason':'Consumer first observation; qualification NOT_RUN',
         'observed_at':now.isoformat(),'expires_at':(now+timedelta(hours=4)).isoformat(),
@@ -271,8 +272,7 @@ def capability(claim, anchor, claim_reference, mode, *, category=None, name=None
             'application_registry':claim.get('application_registry'),
             **({'site_id_version':'table1-rowid-site-id-1','site_id':claim['site_id']}
                if claim.get('site_id') else {})}}
-    if candidate.get('schema_version') == 'webcollect-data-candidate-2':
-        result['candidate_observation']['sources'] = deepcopy(claim.get('sources', []))
+    result['candidate_observation']['sources'] = deepcopy(claim.get('sources', []))
     result['classification'] = {'status': 'pending' if result['site_category'] == 'UNKNOWN' else 'source_provided',
                                 'value': None if result['site_category'] == 'UNKNOWN' else result['site_category'],
                                 'sources': deepcopy(claim.get('sources', []))}
@@ -301,10 +301,9 @@ def validate_task_binding(task, record=None):
     from .react_session import is_react_task
     if is_react_task(task):
         candidate = binding['candidate']
-        if candidate.get('schema_version') == 'webcollect-data-candidate-2':
-            expected = candidate['requested_goal'] if candidate['candidate_kind'] == 'target' else None
-            if task['workflow_proposal']['spec']['goal']['structured'] != expected:
-                raise ValueError('Frozen V2 requested goal differs from original claim')
+        expected = candidate['requested_goal'] if candidate.get('candidate_kind') == 'target' else None
+        if task['workflow_proposal']['spec']['goal']['structured'] != expected:
+            raise ValueError('Frozen requested goal differs from original claim')
         if record is not None and binding!=validate_observation(record):
             raise ValueError('Task and first observation refer to different candidates')
         return binding

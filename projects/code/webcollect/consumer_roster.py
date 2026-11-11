@@ -19,7 +19,7 @@ def build_roster(scope, count, prefix, *, job_limit, campaign_limit):
         raise ValueError('complete original consumer scope required')
     # Output is shared intentionally: candidate claims own unique subdirectories.
     # Never create a replacement pool/registry to evade an unresolved claim.
-    return {'schema_version': 'webcollect-consumer-roster-1', 'authorized_job_limit': job_limit, 'authorized_campaign_limit': campaign_limit,
+    return {'schema_version': 'consumer-roster', 'authorized_job_limit': job_limit, 'authorized_campaign_limit': campaign_limit,
             'count': count, 'prefix': prefix, 'launch_state': 'NOT_STARTED',
             'workers': [{'number': i, 'scope_file': f'scope-w{i}.json',
                          'scope': {**scope, 'consumer_worker': f'{prefix}-w{i}',

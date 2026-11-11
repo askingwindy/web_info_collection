@@ -13,10 +13,9 @@ from urllib.parse import unquote, urlsplit
 from .batch_core import load_json
 from .react_session import ReactSession
 
-VERSION = 'webcollect-consumer-templates-4'
-GOAL_RULE = 'trusted-first-frame-common-goal-2'
-CALCULATOR = 'calculator-fill-2'
-READING = 'encyclopedia-directed-reading-2'
+GOAL_RULE = 'trusted-first-frame-common-goal'
+CALCULATOR = 'calculator-fill'
+READING = 'encyclopedia-directed-reading'
 
 
 class Inapplicable(ValueError):
@@ -242,7 +241,7 @@ class TemplateSession(ReactSession):
         self.filled = set(); self.calculated = False; self.baseline = None
         self.read_positions = []; self.read_quotes = []; self.read_heading_seen = False
         self.target_body_ids = set()
-        self.event('template-experiment', version=VERSION, goal_rule=GOAL_RULE,
+        self.event('template-experiment', goal_rule=GOAL_RULE,
                    assignment=self.experiment, model_calls_simulated=False)
 
     def state_now(self):

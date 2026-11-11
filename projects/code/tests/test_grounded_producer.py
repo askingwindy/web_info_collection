@@ -50,7 +50,7 @@ class Grounded(unittest.TestCase):
 
     def run_new(self,home,key='new',target=4,**kwargs):
         args=dict(pool_path=self.pool.path,ledger_path=self.root/'model.db',history_set=self.f.chain,
-                  output=self.root/'output'/key,model_protocol='entry-tools-4',sources=[home],batch_key=key,target=target,batch_size=10,max_batches=2)
+                  output=self.root/'output'/key,sources=[home],batch_key=key,target=target,batch_size=10,max_batches=2)
         args.update(kwargs)
         return produce_entries(self.f.cfg,**args)
 
@@ -59,7 +59,7 @@ class Grounded(unittest.TestCase):
         sources=self.root/'sources.json';save_json(sources,[home])
         command=['produce-entries','--config',str(config),'--pool',str(self.pool.path),'--ledger',str(self.root/'model.db'),
                  '--history-set',str(self.f.chain),'--output',str(self.root/'output/new'),'--sources',str(sources),
-                 '--target','4','--batch-size','10','--max-batches','2','--model-protocol','entry-tools-4']
+                 '--target','4','--batch-size','10','--max-batches','2']
         def invoke():
             stream=io.StringIO()
             with redirect_stdout(stream):main(command)
@@ -95,8 +95,8 @@ class Grounded(unittest.TestCase):
                 'tool_calls':[{'id':'offline-'+name,'type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}}]
             return io.BytesIO(json.dumps(raw).encode())
         with patch.object(self.f.provider.opener,'open',side_effect=response):
-            report=self.run_new(home,target=1,entry_selection='model',model_protocol='entry-tools-3')
-            replay=self.run_new(home,target=1,entry_selection='model',model_protocol='entry-tools-3')
+            report=self.run_new(home,target=1,entry_selection='model')
+            replay=self.run_new(home,target=1,entry_selection='model')
         self.assertEqual(report['listed_unique_candidates'],1,report)
         self.assertEqual(calls,['submit_site_classification','submit_entry_links'])
         self.assertEqual(replay['new_dispatches'],{'model':0,'GET':0,'search':0})
@@ -237,7 +237,7 @@ class Grounded(unittest.TestCase):
             out=io.StringIO()
             with redirect_stdout(out):main(['produce-entries','--config',str(config),'--pool',str(self.pool.path),
                 '--ledger',str(self.root/'model.db'),'--history-set',str(self.f.chain),'--output',str(self.root/'output/local'),
-                '--model-protocol','entry-tools-3','--query','中文工具','--target','2','--max-batches','1','--max-searches','1'])
+                '--query','中文工具','--target','2','--max-batches','1','--max-searches','1'])
             report=json.loads(out.getvalue())
         self.assertEqual(report['listed_unique_candidates'],2,report)
         self.assertEqual(report['source_counts']['site_origin'],{'search':2})
@@ -296,26 +296,26 @@ class RowIsolation(Grounded):
         aid,home=self.site()
         env={'request_id':'paid','tool_call_id':'tool','arguments':{'entries':[{'row':0,'type':0,'quote':0}]}}
         with patch.object(g,'model_tool_decision',return_value=('job',env)) as dispatch:
-            first=self.run_new(home,target=1,entry_selection='model',model_protocol='entry-tools-4')
-            again=self.run_new(home,target=1,entry_selection='model',model_protocol='entry-tools-4')
+            first=self.run_new(home,target=1,entry_selection='model')
+            again=self.run_new(home,target=1,entry_selection='model')
         self.assertEqual(first['listed_unique_candidates'],1,first)
         self.assertEqual(dispatch.call_count,1)
         self.assertEqual(again['new_dispatches'],{'model':0,'GET':0,'search':0})
 
     def test_v4_batch_reuses_original_v3_session_binding(self):
         aid,home=self.site()
-        first=self.run_new(home,target=1,model_protocol='entry-tools-3')
-        second=self.run_new(home,target=2,model_protocol='entry-tools-4',batch_key='next')
+        first=self.run_new(home,target=1)
+        second=self.run_new(home,target=2,batch_key='next')
         self.assertEqual(second['listed_unique_candidates'],2,second)
         with self.pool.pool.connect() as c:
             frozen=json.loads(c.execute('select config from runs where id=?',(self.f.cfg['run_id'],)).fetchone()[0])
-        self.assertEqual(frozen['model_protocol'],'entry-tools-3')
+        self.assertEqual(frozen['model_protocol'],'entry-tools')
 
     def test_archived_unadmitted_entry_is_held_before_directory_or_candidate_GET(self):
         aid,home=self.site()
         hold=self.root/'holds.json';save_json(hold,{'hosts':[],'entry_identities':[g.entry_identity('https://tools.example.org/index')]})
         source={**home,'dispatch_holds':{'reference':reference(hold)}}
-        first=self.run_new(source,target=10,model_protocol='entry-tools-4')
+        first=self.run_new(source,target=10)
         self.assertIsNone(first['stopped'],first)
         with self.pool.pool.connect() as c:
             held=c.execute("select count(*) from candidate_batch_rows where result='HELD'").fetchone()[0]

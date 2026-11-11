@@ -9,8 +9,7 @@ def load_plan(path):
     if path is None:
         return None
     plan = json.loads(Path(path).read_text(encoding='utf-8'))
-    if (plan.get('schema_version') != 'webcollect-narrative-revisions-1' or
-            not all(isinstance(plan.get(k), str) and plan[k].strip() for k in ('prompt', 'author')) or
+    if (not all(isinstance(plan.get(k), str) and plan[k].strip() for k in ('prompt', 'author')) or
             not isinstance(plan.get('samples'), list)):
         raise ValueError('Invalid evidence-cited narrative revision plan')
     ids = [r.get('sample_id') for r in plan['samples']]

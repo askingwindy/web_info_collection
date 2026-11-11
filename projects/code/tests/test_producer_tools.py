@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import test_candidate_inventory as inventory
 import test_model_provider_protocols as providers
-from site_planner.candidate_discovery import ENTRY_TOOL_PROTOCOL
 from producer_legacy_fixture import produce_entries
 from site_planner.candidate_pool import VERSION2
 from site_planner.discovery_tools import reference
@@ -42,8 +41,7 @@ class ProducerToolTests(unittest.TestCase):
     def run_producer(self, sources, **kwargs):
         f = self.inv
         return produce_entries(self.cfg, history_set=self.chain, pool_path=f.pool.path, ledger_path=f.root/'model.db',
-            output=f.root/'output', sources=sources, target=5, max_batches=1, batch_size=5,
-            model_protocol=ENTRY_TOOL_PROTOCOL, **kwargs)
+            output=f.root/'output', sources=sources, target=5, max_batches=1, batch_size=5, **kwargs)
 
     def test_mixed_rows_bind_ids_source_and_actual_host_tool_result_without_ack_completion(self):
         f = self.inv
@@ -110,7 +108,7 @@ class ProducerToolTests(unittest.TestCase):
         # Frozen failed model jobs are not replaced on resume.
         self.run_producer(hits)
         self.assertEqual(len(self.provider.opener.calls), 1)
-        with self.assertRaises(ValueError):
+        with self.assertRaises((TypeError, ValueError)):  # deleted protocol kwargs are rejected outright
             produce_entries(self.cfg, history_set=self.chain, pool_path=f.pool.path, ledger_path=f.root/'model.db',
                 output=f.root/'output', sources=hits, target=5, max_batches=1, batch_size=5,
                 model_protocol='entry-content-1')
@@ -123,18 +121,6 @@ class ProducerToolTests(unittest.TestCase):
         self.assertEqual(report['listed_unique_candidates'], 1)
         self.assertEqual(json.loads(self.provider.opener.calls[0].data)['tool_choice'], 'auto')
         self.assertTrue((f.root/'output/batch-0000-tool-result.json').is_file())
-
-    def test_unflagged_resume_preserves_frozen_content_session_without_http(self):
-        f = self.inv
-        self.provider.opener.raw['choices'] = [{'finish_reason': 'stop', 'message': {
-            'content': json.dumps({'candidates': [{'source_index': 0}]})}}]
-        args = dict(history_set=self.chain,pool_path=f.pool.path, ledger_path=f.root/'model.db', output=f.root/'output',
-                    sources=[f.hit(1)], target=1, max_batches=1)
-        first = produce_entries(self.cfg, model_protocol='entry-content-1', **args)
-        resumed = produce_entries(self.cfg, **args)
-        self.assertEqual((first['listed_unique_candidates'], resumed['listed_unique_candidates']), (1, 1))
-        self.assertEqual(len(self.provider.opener.calls), 1)
-        self.assertNotIn('tools', json.loads(self.provider.opener.calls[0].data))
 
     def test_source_search_request_and_model_request_are_distinct(self):
         f = self.inv

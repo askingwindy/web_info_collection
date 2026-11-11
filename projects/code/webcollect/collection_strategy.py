@@ -1,33 +1,26 @@
 """Frozen collection strategies, one result contract and one shared save gate.
 
-策略 1 keeps the existing banded/react chain (ReactSession + conditional-plan
+策略 1 keeps the banded/react chain (ReactSession + conditional-plan
 controller). 策略 2 (screenshot_plan) plans from the entry screenshot and
 revises only the remaining tail at business checkpoints. Both produce the same
 internal StrategyResult facts and go through the same eligibility function and
-save entry; neither can relax the other's protocol.
+save entry; neither can relax the other's checks.
 
 A strategy ID is frozen into the task fragment before the first dispatch and
-never changes mid-attempt. Old tasks without the marker keep their historical
-(策略 1) interpretation byte-for-byte.
+never changes mid-attempt.
 """
 from copy import deepcopy
 
-# 策略 1: existing banded conditional-plan chain over ReactSession.
-STRATEGY_BANDED_REACT = 'webcollect-collection-banded-react-1'
+# 策略 1: banded conditional-plan chain over ReactSession.
+STRATEGY_BANDED_REACT = 'react'
 # 策略 2: screenshot understanding + remaining-plan revision loop.
-STRATEGY_SCREENSHOT_PLAN = 'webcollect-collection-screenshot-plan-2'
+STRATEGY_SCREENSHOT_PLAN = 'screenshot_plan'
 DEFAULT_STRATEGY = STRATEGY_BANDED_REACT
 STRATEGIES = (STRATEGY_BANDED_REACT, STRATEGY_SCREENSHOT_PLAN)
 
 # Internal result contract shared by both strategies.
-RESULT_VERSION = 'webcollect-strategy-result-1'
-
-# Per-strategy protocol versions frozen together with the task.
-STRATEGY_PROTOCOLS = {
-    STRATEGY_BANDED_REACT: {'result_contract': RESULT_VERSION},
-    STRATEGY_SCREENSHOT_PLAN: {'result_contract': RESULT_VERSION,
-                               'plan_protocol': 'webcollect-screenshot-plan-2'},
-}
+RESULT_CONTRACT = 'strategy-result'
+RESULT_VERSION = RESULT_CONTRACT
 
 FIELD = 'collection_strategy'
 
@@ -36,14 +29,11 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
     """Stamp a new task with its frozen strategy identity before first dispatch.
 
     Must run before the task id hash is finalized (same place the other
-    fragment protocol extensions are applied); never called on replay.
+    fragment extensions are applied); never called on replay.
     """
     if strategy not in STRATEGIES:
         raise ValueError('Unknown collection strategy: ' + str(strategy))
-    if strategy == STRATEGY_SCREENSHOT_PLAN:
-        from .screenshot_plan import VERSION
-        STRATEGY_PROTOCOLS[STRATEGY_SCREENSHOT_PLAN]['plan_protocol'] = VERSION
-    record = {'id': strategy, **deepcopy(STRATEGY_PROTOCOLS[strategy])}
+    record = {'id': strategy, 'result_contract': RESULT_CONTRACT}
     for part in (task['fragment'], task['workflow_proposal']['spec']):
         if part.get(FIELD) not in (None, record):
             raise ValueError('Collection strategy already frozen differently')
@@ -52,7 +42,7 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
 
 
 def strategy_id(task):
-    """Frozen strategy of this attempt; default keeps the historical chain."""
+    """Frozen strategy of this attempt; default keeps the react chain."""
     record = (task.get('fragment') or {}).get(FIELD) or {}
     value = record.get('id') if isinstance(record, dict) else record
     if value is None:
@@ -90,8 +80,7 @@ def outcome_facts(*, goal_status, end_reason, eligibility, save_status, details=
     eligibility: eligible / ineligible / unresolved (+ reason)
     save_status: not_saved / collected_pending_review / save_failed
     """
-    return {'schema_version': 'webcollect-strategy-outcome-1',
-            'goal_status': goal_status, 'end_reason': end_reason,
+    return {'goal_status': goal_status, 'end_reason': end_reason,
             'save_eligibility': eligibility, 'save_status': save_status,
             **({'details': details} if details else {})}
 
@@ -117,20 +106,31 @@ def strategy_result(task, *, summary, raw_receipt, evidence_refs=(), usage_refs=
     """
     from .batch_core import load_json
     from .planning import verify_evidence
-    verify_evidence([raw_receipt, *evidence_refs])
-    terminal = load_json(raw_receipt['path'])
+    verify_evidence([raw_receipt])
+    sealed_receipt = load_json(raw_receipt['path'])
+    terminal_ref = sealed_receipt.get('terminal') or {}
+    verify_evidence([terminal_ref, *evidence_refs])
+    terminal = load_json(terminal_ref['path'])
     ending = terminal.get('collection_ending') or {}
     goal_evidence = terminal.get('goal_evidence') or {}
     goal_status = ('completed'
                    if goal_evidence.get('business_goal_status') == 'VERIFIED'
                    else 'unconfirmed')
-    end_reason = summary.get('end_reason') or (
-        'goal_completed' if ending.get('kind') == 'AGENT_COMPLETE_VERIFIED'
-        else 'user_stopped' if summary.get('stop_reason') == 'blocked' and summary.get('unknown')
-        else 'unknown' if summary.get('unknown') else 'no_path')
-    return {'schema_version': RESULT_VERSION,
+    explicit_end = summary.get('strategy_end_reason') or summary.get('end_reason')
+    end_reason = explicit_end or (
+        'goal_completed' if goal_status == 'completed'
+                           and ending.get('kind') in ('AGENT_COMPLETE_VERIFIED', 'HOST_PLAN_ENDPOINT', 'VISIBLE_GOAL_REPORTED')
+        else 'unsuitable' if ending.get('kind') == 'UNSUITABLE_TASK'
+        else 'no_progress' if ending.get('kind') == 'NO_PROGRESS_END'
+        else 'no_path' if ending.get('kind') == 'AGENT_GIVE_UP'
+        else 'user_stopped' if summary.get('user_stopped') is True
+        else 'unknown' if summary.get('unknown')
+        else 'engine_error' if summary.get('failure_class') == 'program'
+        else 'no_path' if summary.get('stop_reason') in ('blocked', 'no_path')
+        else 'unknown')
+    return {'result_contract': RESULT_CONTRACT,
             'strategy': deepcopy((task.get('fragment') or {}).get(FIELD) or {'id': DEFAULT_STRATEGY}),
-            'binding': {key: task.get(key) for key in ('task_id', 'task_version', 'site_uri')},
+            'binding': {key: task.get(key) for key in ('task_id', 'task_version', 'site_uri') if key in task},
             'goal': {'goal_status': goal_status,
                      'evidence': deepcopy(goal_evidence) if goal_evidence else None},
             'execution': {'effective_steps': summary.get('effective_steps'),
@@ -139,3 +139,21 @@ def strategy_result(task, *, summary, raw_receipt, evidence_refs=(), usage_refs=
             'end': outcome_facts(goal_status=goal_status, end_reason=end_reason,
                                  eligibility='unresolved', save_status='not_saved'),
             'usage_refs': list(usage_refs or []), 'raw_receipt': raw_receipt}
+
+
+def finalize_strategy_result(result, *, save_status, eligibility=None, details=None):
+    """Replace the session-stage transient end facts with the actual outcome.
+
+    Called only after RuntimeStore commit or a decision not to save; the
+    sealed session originals are never rewritten. save_status:
+    collected_pending_review / not_saved / save_failed.
+    """
+    finalized = deepcopy(result)
+    if eligibility is None:
+        eligibility = 'eligible' if save_status == 'collected_pending_review' else 'ineligible'
+    goal_status = finalized['goal']['goal_status']
+    finalized['end'] = outcome_facts(goal_status=goal_status,
+                                     end_reason=finalized['end']['end_reason'],
+                                     eligibility=eligibility,
+                                     save_status=save_status, details=details)
+    return finalized

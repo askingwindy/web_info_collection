@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from webcollect.batch_core import file_sha
-from webcollect.closing_policy import EFFECTIVE_VERSION, VERSION
+from webcollect.plan_protocol import ENDING_POLICY as EFFECTIVE_VERSION
 from webcollect.react_session import ReactSession
 
 
@@ -49,7 +49,7 @@ class OnlineEffectiveClosureTests(unittest.TestCase):
         ReactSession._range_close(session,'KNOWN_NO_EFFECT','preserve original evidence')
         self.assertTrue(session.collection_ending['safe_for_pending_sample'])
         self.assertFalse(session.collection_ending['external_effect_unknown'])
-        self.assertEqual(session.collection_ending['attempt_limit'],10)
+        self.assertIsNone(session.collection_ending['attempt_limit'])
         self.assertEqual(session.collection_ending['unverified_tail_dispatches'],2)
 
     def test_online_rejects_label_only_proof_when_original_value_changed(self):
@@ -57,28 +57,3 @@ class OnlineEffectiveClosureTests(unittest.TestCase):
         ReactSession._range_close(session,'KNOWN_NO_EFFECT','unverified value change')
         self.assertFalse(session.collection_ending['safe_for_pending_sample'])
         self.assertTrue(session.collection_ending['external_effect_unknown'])
-
-    def test_effective_limit_kind_is_budget_stop(self):
-        session=self.session();session.actual_dispatches=10
-        session.trajectory=[{'after_observation_id':'final'}]*10
-        session.business_attempt_refs=[]
-        ReactSession._range_close(session,'TEN_EFFECTIVE_STEP_LIMIT','effective ceiling')
-        self.assertEqual(session.stop_reason,'budget')
-
-    def test_close_budget_prefix_counts_effective_steps_after_more_than_ten_attempts(self):
-        class CapturedClose(Exception):pass
-        session=SimpleNamespace(_raw_receipt=None,state='recording',trajectory=[{}]*5,
-            _v2=lambda:True,task={'fragment':{'ending_policy':EFFECTIVE_VERSION}},
-            plan_controller=None,stop_reason='budget',stop_summary='ceiling',unknown=False,
-            business_attempt_refs=[{'path':str(i)} for i in range(12)],actual_dispatches=12,
-            observation_records={})
-        captured={}
-        def close(kind,reason,**kwargs):
-            captured.update(kind=kind,**kwargs);raise CapturedClose
-        session._range_close=close
-        # This test stops before file sealing; raw proof is tested above. The
-        # 12-attempt journal must not invalidate a five-effective-step prefix.
-        with patch('webcollect.react_session.load_json',return_value={'actual_dispatches_delta':1,'outcome':'EFFECT_NOT_VERIFIED','raw_steps':[]}):
-            with self.assertRaises(CapturedClose):ReactSession._close(session)
-        self.assertEqual(captured['kind'],'MODEL_BUDGET_LIMIT')
-        self.assertFalse(captured['force_pending'])

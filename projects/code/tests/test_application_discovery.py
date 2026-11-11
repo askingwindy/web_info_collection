@@ -38,7 +38,7 @@ class SiteTables(unittest.TestCase):
         self.f.response(rows)
         args=dict(pool_path=self.pool.path,ledger_path=self.root/'model.db',history_set=self.f.chain,
             output=self.root/'output'/key,sources=sources,batch_key=key,discovery_mode='mixed',target=10,
-            max_batches=1,batch_size=10,model_protocol='entry-tools-2')
+            max_batches=1,batch_size=10)
         args.update(kwargs)
         return produce_entries(self.f.cfg,**args)
 

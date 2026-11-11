@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 ADAPTER_ID = 'jyshare-hmac-widget-1'
 EXECUTION_ID = 'observed-form-result-v1'
-EXECUTION_VERSION = 'observed-form-result-1'
+EXECUTION_VERSION = 'observed-form-result'
 BUSINESS_ID = 'keyed-message-authentication-v1'
 STRATEGY_ID = BUSINESS_ID
 URI = 'https://www.jyshare.com/crypto/hmacsha256/'
@@ -138,7 +138,7 @@ def _subgoals():
 
 
 def _business_identity(task):
-    return {'schema_version': 'webcollect-business-identity-1', 'business_id': BUSINESS_ID,
+    return {'schema_version': 'business-identity', 'business_id': BUSINESS_ID,
             'execution_capability_id': EXECUTION_ID,
             'definition': {'business_goal': '使用公开示例密钥为公告生成消息认证码',
                            'necessary_input_roles': ['public-example-key', 'message'],
@@ -187,7 +187,7 @@ def validated_business_identity(task):
     return task['business_identity']
 
 
-def compile_hmac(capability, spec, task_version='observed-hmac-compiler-1'):
+def compile_hmac(capability, spec, task_version=ADAPTER_ID + '-compiler'):
     from .planning import object_sha256
     from .collect import validate_plan
     from .task_contract import validate_m4_task
