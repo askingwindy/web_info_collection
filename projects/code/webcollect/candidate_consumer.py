@@ -607,7 +607,7 @@ async def consume(pool, claim, ledger, **kwargs):
 
 
 async def _consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
-                  session_soft_seconds=None, session_hard_seconds=None, collection_strategy=None):
+                  session_soft_seconds=None, session_hard_seconds=None, collection_strategy=None, runlog=None):
     """Exactly one original claim, one goal and at most one saved result."""
     # Historical duration arguments are accepted but no longer stop consumption.
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
@@ -661,12 +661,16 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         'application_registry':supplied_policy.get('site_failure_guard',{}).get('application_registry'),
         'site_id_version':'table1-rowid-site-id-1',
         'site_id':pool.delivery_site_id(claim['candidate_id'])}
+    if runlog is not None:
+        runlog.attach(siteId=claim['site_id'])
     claim_ref = exclusive(root/'claim.json', claim)
     pool.stage(claim, 'observation', {'claim_reference':claim_ref})
     async def renew():
         while True:
             await asyncio.sleep(2)
     stage='observation'
+    if runlog is not None:
+        runlog.info('processing', stage='observation')
     async def work_in(stack):
         nonlocal stage
         snapshot = claim['snapshot']
@@ -682,6 +686,8 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
             route_policy = LOGIN_ENTRY_VERSION if reason in ('login_page', 'explicit_login_required_to_use') else ROUTING_VERSION
             pool.record_disposition(claim, disposition=disposition, reason=reason, stage='first_frame',
                 evidence=list(session['anchor'].values()), policy_version=route_policy)
+            if runlog is not None:
+                runlog.info('abandoned', disposition=disposition, reason=reason, stage='first_frame')
             return {'state':'failed', 'disposition':disposition, 'reason':reason, 'formal_attempts':0}
         hints = _entry_hints(claim)
         record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
@@ -695,6 +701,8 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         identity(catalog, identities, registry=registry, candidate_observation=True)
         pool.stage(claim, 'planning', {'catalog':str(catalog)})
         stage = 'planning'
+        if runlog is not None:
+            runlog.info('processing', stage='planning')
         generated = await asyncio.to_thread(generate, ledger, catalog, root/'planning',
             generator='react-url', history_registry=registry, history_set=history_set,
             react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
@@ -709,13 +717,17 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         if generated.get('pending'):
             state,outcomes=planning_failure(ledger,generated['pending'])
             pool.finish(claim,state=state,stage='planning',reason=canonical(outcomes))
+            if runlog is not None:
+                runlog.info('failed', stage='planning', state=state, reason=canonical(outcomes)[:200])
             return {'state':state,'stage':'planning','requests':outcomes,'formal_attempts':0}
         if not generated['generated_tasks']:
             pool.finish(claim,state='failed',stage='planning',reason=canonical(generated)); return {'state':'failed','stage':'planning','formal_attempts':0}
         plan=root/'planning/plan.json'; stage='execution'
+        if runlog is not None:
+            runlog.info('processing', stage='execution')
         pool.stage(claim,stage,{'plan':str(plan),'queue_job_id':generated.get('queue_job_id')})
         execution=await execute(ledger,plan,catalog,root/'execution',registry,policy,qc_policy=qc_policy,site_pool=pool.path,
-            entry_session=session)
+            entry_session=session, runlog=runlog)
         pool.stage(claim,'save_reconciliation',{'execution_result':execution})
         result=finish_or_reconcile(pool,claim)
         if not result.get('saved'):
@@ -796,9 +808,9 @@ def _cohort_rows(path, pool, registry, batch):
 
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
-              poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, **kwargs):
+              poll_seconds=None, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, log_level='INFO', log_dir=None, **kwargs):
     if effort_profile is not None:
-        from .react_session import validate_effort_profile
+        from .session_core import validate_effort_profile
         effort_profile = validate_effort_profile(effort_profile)
     rows = None
     if cohort is not None:
@@ -873,12 +885,19 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 record('inventory_empty', application_id=application_id)
                 await asyncio.sleep(delay)
                 continue
+            # 一条claim对应一次消费：claim_id本身作为展示sessionId，从领取到收尾全程不变。
+            from .runlog import for_claim
+            runlog = for_claim(kwargs['output'], worker_id, claim, strategy=collection_strategy,
+                               level=log_level, log_dir=log_dir)
+            runlog.attach(siteId=claim.get('site_id'))
+            runlog.info('claim', claimId=claim['claim_id'], candidateId=claim['candidate_id'])
             try:
                 result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
-                    collection_strategy=collection_strategy,
+                    collection_strategy=collection_strategy, runlog=runlog,
                     **({'effort_profile':effort_profile} if effort_profile else {}),
                     **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
             except asyncio.CancelledError:
+                runlog.info('cancelled', claimId=claim['claim_id'], reason='worker_cancelled')
                 if campaign:
                     shutdown=load_json(campaign)
                     record('campaign_worker_cancelled',claim_id=claim['claim_id'],
@@ -887,6 +906,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                            claim_state=pool.get_claim(claim['claim_id'])['state'])
                 raise
             except Exception as error:
+                runlog.info('failed', claimId=claim['claim_id'],
+                    errorType=type(error).__name__, reason=str(error)[:200])
                 current=pool.get_claim(claim['claim_id'])
                 if current['state']=='consuming':
                     pool.finish(claim,state='reconcile',stage=current['stage'],reason=type(error).__name__+': '+str(error))
@@ -903,6 +924,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             result={**result,'claim_id':claim['claim_id'],'candidate_id':claim['candidate_id']}
             processed += 1
             record('candidate_finished',result=result)
+            runlog.info('candidate_finished', state=result.get('state'),
+                saved=bool(result.get('saved')), stage=result.get('stage'))
             if bounded:results.append(result)
         except Exception as error:
             record('consumer_error',claim_id=claim.get('claim_id') if claim else None,
@@ -1052,6 +1075,9 @@ def main(argv=None):
     runp.add_argument('--collection-strategy',choices=STRATEGIES,default=STRATEGY_BANDED_REACT,
         help='Freeze the collection strategy for new tasks: react (default, strategy 1) or screenshot_plan (strategy 2)')
     runp.add_argument('--producer-batch',help='Consume only newly published rows from this producer batch; wait when inventory is empty')
+    runp.add_argument('--log-level',choices=('INFO','DEBUG'),default='INFO',
+        help='Display log level; DEBUG additionally records model input/output to model-debug.jsonl')
+    runp.add_argument('--log-dir',type=Path,help='Override the default <output>/logs/<workerId> log directory')
     import sys
     argv = list(sys.argv[1:] if argv is None else argv)
     for i, value in enumerate(argv):
@@ -1098,7 +1124,7 @@ def main(argv=None):
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
-            collection_strategy=a.collection_strategy))
+            collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
     print(json.dumps(result,ensure_ascii=False))
 
 

@@ -166,7 +166,7 @@ def validate_reading_completion(record, basis):
     from pathlib import Path
     from types import SimpleNamespace
     from .agent_observation import project
-    from .react_session import struct_goal
+    from .session_core import struct_goal
     receipt = basis.get('reading_plan_completion') or {}
     if receipt.get('policy') != READING_COMPLETION_POLICY:
         raise ValueError('Reading endpoint is missing frozen remaining-plan completion receipt')
@@ -313,7 +313,7 @@ def validate_result_completion(record):
     from pathlib import Path
     from types import SimpleNamespace
     from .agent_observation import project
-    from .react_session import struct_goal
+    from .session_core import struct_goal
     from .plan_evidence import facts, unverified_required_checks
     root = Path(record['receipt']['boundary']['path']).parent
     sealed = record['receipt']['files_sha256']
@@ -473,7 +473,7 @@ def validate_record(record):
             # machinery; the offline replay must reconstruct the same surface,
             # or objective requirements derived from the goal description
             # (downward reading) would silently differ between both sides.
-            from .react_session import struct_goal
+            from .session_core import struct_goal
             session.requested_goal = struct_goal(record['task'])
             from .goal_evidence import contract_for
             if contract_for(session.task):

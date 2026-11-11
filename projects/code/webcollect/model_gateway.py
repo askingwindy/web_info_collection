@@ -25,6 +25,7 @@ from jsonschema import Draft202012Validator
 from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, BudgetStop, CONSUMER_KINDS, _integer, validate_config, file_sha, save_json
 from .planning import object_sha256
 from .plan_protocol import WIKI_READING_COMPLETION
+from .runlog import now_iso
 
 
 QC_TRANSPORT_POLICY = 'qc-wall-deadline-1'
@@ -458,12 +459,67 @@ def native_generation_options(model, *, output_limit=None, reasoning_effort=None
 
 
 class ModelGateway:
-    def __init__(self, ledger):
+    def __init__(self, ledger, runlog=None):
         self.ledger = ledger
         self.config = validate_config(ledger.config, require_model=True)
         from .model_credentials import credential
         self._credential = None
         self._session_id = None
+        # Display-only logging context; None keeps this gateway exactly as before.
+        # Per-physical-request start clocks are per-instance state, never shared
+        # across sessions, and never enter any business identity.
+        self.runlog = runlog
+        self._request_clock = {}
+
+    def _log_request_started(self, job, rid, model, purpose, *, native_context=None):
+        if self.runlog is None:
+            return
+        self._request_clock[rid] = (time.monotonic(), now_iso(), purpose)
+        self.runlog.model_call(event='request_started', requestId=rid, jobId=job['id'],
+            provider=model['provider'], model=model['model'], stage=purpose,
+            callKind=job['kind'], attemptId=(native_context or {}).get('attempt_id'),
+            httpDispatch=model['provider'] != 'synthetic')
+
+    def _usage_fields(self, usage):
+        if usage is None:
+            return {'inputTokens': None, 'outputTokens': None, 'totalTokens': None,
+                    'cachedInputTokens': None, 'usage': None}
+        return {'inputTokens': usage.get('input_tokens'), 'outputTokens': usage.get('output_tokens'),
+                'totalTokens': (usage.get('input_tokens') or 0) + (usage.get('output_tokens') or 0)
+                    if usage.get('input_tokens') is not None and usage.get('output_tokens') is not None else None,
+                'cachedInputTokens': usage.get('cached_input_tokens'),
+                'usage': {key: usage.get(key) for key in usage
+                          if key not in ('input_tokens', 'output_tokens', 'cached_input_tokens')} or None}
+
+    def _log_request_finished(self, job, rid, state, *, usage=None, error=None, diagnostics=None):
+        if self.runlog is None:
+            return
+        started, started_iso, stage = self._request_clock.pop(rid, (None, None, job['kind']))
+        elapsed = None if started is None else round((time.monotonic() - started) * 1000)
+        self.runlog.model_call(event='request_finished', requestId=rid, jobId=job['id'],
+            state=state, stage=stage, startedAt=started_iso, endedAt=now_iso(),
+            elapsedMs=elapsed, errorType=error,
+            **self._usage_fields(usage), **({'diagnostics': diagnostics} if diagnostics else {}))
+
+    def _log_debug_request(self, rid, purpose, model, payload, images):
+        if self.runlog is None or not self.runlog.debug_enabled:
+            return
+        from .runlog import image_references
+        self.runlog.model_debug(requestId=rid, stage=purpose, direction='request',
+            provider=model['provider'], model=model['model'], payload=payload,
+            images=image_references(images))
+
+    def _log_debug_response(self, rid, purpose, *, raw=None, parsed=None, normalized=None,
+                            normalization=None, error=None):
+        if self.runlog is None or not self.runlog.debug_enabled:
+            return
+        record = {'requestId': rid, 'stage': purpose, 'direction': 'response',
+                  'providerResponse': raw, 'parsed': parsed,
+                  **({'normalized': normalized} if normalized is not None else {}),
+                  **({'planNormalization': normalization} if normalization else {}),
+                  **({'error': type(error).__name__ + ': ' + str(error)[:400]} if error else {})}
+        self.runlog.model_debug(**record)
+
 
     def _account_id(self):
         from .model_credentials import account_id
@@ -478,6 +534,12 @@ class ModelGateway:
             'local_error':type(error).__name__})
 
     def _settle_failure(self, job, rid, *, state, usage=None, response=None, error=None):
+        stage = self._request_clock.get(rid, (None, None, job['kind']))[2]
+        self._log_request_finished(job, rid, state, usage=usage, error=error,
+                                   diagnostics=(response or {}).get('failure_diagnostic'))
+        self._log_debug_response(rid, stage,
+            raw=(response or {}).get('provider_response'), parsed=(response or {}).get('result'),
+            normalization=(response or {}).get('plan_normalization'))
         try:
             self.ledger.settle_request(rid,state=state,usage=usage,response=response,error=error)
         except sqlite3.Error as cleanup:
@@ -701,6 +763,11 @@ class ModelGateway:
             original_requests = list(con.execute('SELECT id,state,response FROM model_requests WHERE job_id=? AND purpose=? ORDER BY attempt', (job['id'],purpose)))
         settled = [row for row in original_requests if row['state'] == 'succeeded']
         if settled:
+            if self.runlog is not None:
+                self.runlog.model_call(event='cache_hit', jobId=job['id'],
+                    requestId=settled[-1]['id'], provider=model['provider'],
+                    model=model['model'], stage=purpose, callKind=job['kind'],
+                    reusedRequestId=settled[-1]['id'])
             with self.ledger.transaction() as con:
                 self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':settled[-1]['id']})
             return normalize_structured_fields(json.loads(settled[-1]['response'])['result'])
@@ -810,6 +877,11 @@ class ModelGateway:
                     self.ledger.heartbeat(job)
                     time.sleep(min(limit.seconds,1))
             if request['state'] == 'succeeded':
+                if self.runlog is not None:
+                    self.runlog.model_call(event='cache_hit', jobId=job['id'],
+                        requestId=request['id'], provider=model['provider'],
+                        model=model['model'], stage=purpose, callKind=job['kind'],
+                        reusedRequestId=request['id'])
                 with self.ledger.transaction() as con:
                     self.ledger.event(con,'model_cache_hit',{'kind':job['kind'],'job_id':job['id'],'request_id':request['id']})
                 return normalize_structured_fields(json.loads(request['response'])['result'])
@@ -822,6 +894,7 @@ class ModelGateway:
                         break
                 continue  # Previously charged invalid response is retained, never resent under the same identity.
             rid = request['id']
+            self._log_request_started(job, rid, model, purpose, native_context=native_context)
             usage, parsed, raw = None, None, None
             normalization_record = None
             transport_receipt = {}
@@ -883,6 +956,7 @@ class ModelGateway:
                         # BigModel accepts a caller-provided request_id in the JSON body.
                         # Bind this HTTP attempt, including a timeout, to its existing ledger ID.
                         payload['request_id'] = rid
+                    self._log_debug_request(rid, purpose, model, payload, images)
                     req = urllib.request.Request(model['endpoint'], json.dumps(payload).encode(), headers={
                         'Authorization': 'Bearer ' + self._credential,
                         'Content-Type': 'application/json', 'X-Client-Request-Id': rid})
@@ -1035,6 +1109,11 @@ class ModelGateway:
                     timeout_retry = {'timeout_retry_of':rid,
                         'timeout_retry_root':timeout_retry.get('timeout_retry_root', rid),
                         'timeout_retry_number':timeout_retries}
+                    if self.runlog is not None:
+                        self.runlog.model_call(event='timeout_retry_scheduled', requestId=rid,
+                            jobId=job['id'], retryNumber=timeout_retries,
+                            retryOf=timeout_retry['timeout_retry_root'],
+                            delaySeconds=delay, originalOutcome='unknown')
                     with self.ledger.transaction() as con:
                         self.ledger.event(con, 'model_timeout_retry_scheduled', {
                             'job_id':job['id'], **timeout_retry, 'delay_seconds':delay,
@@ -1101,6 +1180,9 @@ class ModelGateway:
                 response = {'result': parsed, 'provider_response': raw, **transport_receipt,
                             'content_envelope_normalized': normalized,
                             **({'tool_call_name': tool_name} if tool_name else {})}
+                self._log_request_finished(job, rid, 'succeeded', usage=usage)
+                self._log_debug_response(rid, purpose, raw=raw, parsed=parsed, normalized=normalized,
+                                         normalization=normalization_record)
                 try:
                     if qc_transport: self.ledger.request_window(job, 0, cleanup_seconds=0)
                     self.ledger.settle_request(rid, state='succeeded', usage=usage, response=response)

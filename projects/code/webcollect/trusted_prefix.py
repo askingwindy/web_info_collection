@@ -24,7 +24,7 @@ CLASSIFICATION = '1-4 effective actions -> short_flow; >=5 -> ordinary; 0 -> not
 def _projection(source, raw_root, end_step, ids, *, rule=VERSION, _verified=None):
     from .postprocess import effective_trajectory
     from .agent_observation import project
-    from .react_session import struct_goal
+    from .session_core import struct_goal
     minimum = RULES.get(rule)
     if minimum is None:
         raise ValueError('Unknown trusted-prefix rule')

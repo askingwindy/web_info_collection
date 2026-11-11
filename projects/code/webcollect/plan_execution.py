@@ -81,7 +81,7 @@ def step_execution_proof(task,step,row,before,after,*,target_id=None):
     effect=atomic_effect(before,after,action,row['arguments'],cid,
                          rule_version=task['fragment'].get('effective_action_rule',RULE_VERSION))
     if not effect['verified'] or react.get('effect_evidence')!=effect:return None
-    from .react_session import struct_goal
+    from .session_core import struct_goal
     return {'policy':VERSION,'kind':('PLANNED_BODY_READING' if reading else 'PLANNED_BACK_LANDING' if action=='back' else 'PLANNED_ANCHOR_LANDING' if anchor else 'PLANNED_LINK_LANDING'),
         'plan_step_sha256':object_sha256(step),'requested_goal_sha256':object_sha256(struct_goal(task)),
         'operation_id':row['operation_id'],'raw_step':row['raw_step'],'dispatch':row['dispatch'],

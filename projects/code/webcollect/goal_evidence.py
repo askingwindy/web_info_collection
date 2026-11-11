@@ -15,7 +15,7 @@ VERSION = GOAL_EVIDENCE_PROTOCOL
 
 
 def contract_for(task):
-    from .react_session import struct_goal
+    from .session_core import struct_goal
     if task.get('fragment', {}).get('plan_protocol') != PLAN_PROTOCOL:
         return None
     objective = task['fragment'].get('session_objective', {}).get('objective') or struct_goal(task)

@@ -20,7 +20,7 @@ from .agent_controller import exclusive
 from .plan_protocol import (ACTION_STABILITY_PROTOCOL, EFFECTIVE_ACTION_RULE, ENDING_POLICY,
                             NAVIGATION_PROTOCOL, PLAN_PROTOCOL, REACT_PROTOCOL, RESULT_EXECUTION_POLICY,
                             WIKI_READING_COMPLETION)
-from .react_session import REACT_VERSION, is_react_task, struct_goal, describe_goal, validate_task
+from .session_core import REACT_VERSION, is_react_task, struct_goal, describe_goal, validate_task
 from .react_protocol import atomic_effect
 
 

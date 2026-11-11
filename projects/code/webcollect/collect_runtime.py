@@ -37,7 +37,7 @@ def classify_failure(error):
     if isinstance(error, ControllerStop):
         return {'UNRESOLVED':'interrupted', 'DUPLICATE':'duplicate', 'EXECUTION_FAILED':'model',
                 'ENGINEERING_ERROR':'program', 'MODEL_FAULT':'model'}.get(getattr(error,'category',''), 'collector')
-    from .react_session import ReactStop
+    from .session_core import ReactStop
     if isinstance(error, ReactStop):
         return getattr(error, 'failure_class', None) or 'collector'
     from .browser import EvidenceStale, PlanViewportInfeasible, PlanLabelUnreadable
@@ -82,7 +82,8 @@ def source_identity():
               'wiki_reading.py', 'reading_sections.py', 'numeric_result_evidence.py',
               'key_health.py', 'model_gateway.py', 'model_credentials.py',
               'candidate_consumer.py', 'consumer_campaign.py',
-              'collection_strategy.py', 'screenshot_plan.py', 'screenshot_session.py']
+              'collection_strategy.py', 'screenshot_plan.py', 'screenshot_session.py',
+              'session_core.py', 'screenshot_execution.py', 'screenshot_observation.py']
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -358,7 +359,7 @@ def react_close_event(store, attempt, kind, now, payload):
 
 async def _react_collection(context, task, attempt, sample, evidence, output, store, *,
                             ledger, parent_job, registry, manifest, index, navigation=None,
-                            page=None, entry_observation=None, host_limits=None):
+                            page=None, entry_observation=None, host_limits=None, runlog=None):
     """One react session in one browser context; raw first, derivation offline.
 
     The attempt is always finished here once the raw journal is saved: derived
@@ -366,8 +367,6 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     (no path, budget, length-unqualified, derivation failure) keeps the raw
     receipt in the attempt evidence and records its own failure class.
     """
-    from .react_session import ReactSession, react_chooser
-    from .react_protocol import VERSION as NATIVE_REACT
     from .postprocess import process as postprocess_derivation
     from .collect import checkpoint_json, now, verify_public_url
     from .agent_feedback import save_attempt_feedback, site_context
@@ -375,11 +374,18 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     from .scaffold import program_version
     from .telemetry import phase as telemetry_phase
     from .collection_strategy import enabled as screenshot_strategy
+    from .react_protocol import VERSION as NATIVE_REACT
     if screenshot_strategy(task):
         # 策略 2 显式选择：截图会话与专属chooser，不挂策略1 band/finish_when门禁。
         from .screenshot_session import ScreenshotPlanSession as Session
+        from .screenshot_plan import screenshot_chooser as chooser_factory
     else:
-        Session = ReactSession
+        from .react_session import ReactSession as Session, react_chooser as chooser_factory
+    if runlog is not None:
+        runlog.attach(attemptId=attempt['attempt_id'], sampleId=attempt['sample_id'],
+                      siteId=attempt.get('site_id'))
+        runlog.banner(task['site_uri'])
+        runlog.info('attempt_started', attemptId=attempt['attempt_id'])
     ids = {**{key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')},
            'attempt_id': attempt['attempt_id']}
     phase_ledger = Path(output) / 'metering' / 'phases.jsonl'
@@ -413,11 +419,15 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     if not closing_enabled(task) and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
-    from .banded_plan import enabled as banded_plan_enabled
-    if banded_plan_enabled(task):
-        from .band_budget import reserve as reserve_plan_band
-        feedback_context['band_budget'] = reserve_plan_band(registry, task, attempt)
-    chooser = react_chooser(ledger, task, attempt['attempt_id'], parent_job=parent_job)
+    if not screenshot_strategy(task):
+        # Band budgets belong to 策略 1's conditional-plan chain only; the
+        # strategy-2 path never loads the 策略 1 controller module.
+        from .banded_plan import enabled as banded_plan_enabled
+        if banded_plan_enabled(task):
+            from .band_budget import reserve as reserve_plan_band
+            feedback_context['band_budget'] = reserve_plan_band(registry, task, attempt)
+    chooser = chooser_factory(ledger, task, attempt['attempt_id'], parent_job=parent_job,
+                              **({'runlog': runlog} if screenshot_strategy(task) else {}))
     if page is None:
         page = await context.new_page()
     page.set_default_timeout(15000)
@@ -425,14 +435,15 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         navigation=navigation, url_check=url_check, preflight=preflight,
         frame_guard=frame_guard, site_context=feedback_context, attempt_id=attempt['attempt_id'],
         phase_ledger=phase_ledger, host_limits=host_limits,
-        **({'entry_observation': entry_observation} if entry_observation is not None else {}))
+        **({'entry_observation': entry_observation} if entry_observation is not None else {}),
+        **({'runlog': runlog} if screenshot_strategy(task) else {}))
     with telemetry_phase(phase_ledger, 'react_session_run', scope=meter_identity):
         summary = await session.run()
     raw_receipt = summary['raw_receipt']
     stop_data = {'stop_details': summary['stop_details']} if 'stop_details' in summary else {}
     def _event_now():
         return datetime.now(timezone.utc).isoformat()
-    async def finish_failure(failure_class, root_cause, extra_evidence=()):
+    async def finish_failure(failure_class, root_cause, extra_evidence=(), *, save_status='not_saved'):
         failure = evidence / 'failure.json'
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': now(),
@@ -450,10 +461,40 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         if failure_class == 'program' and not closing_enabled(task):
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
+        # The failure close-out is itself the final outcome, not a transient
+        # session-stage fact: the sealed end facts stay, but save status and
+        # eligibility are finalized here per the actual (non-)save outcome.
+        finalized = None
+        if summary.get('strategy_result'):
+            from . import collection_strategy as _cs
+            eligibility = None
+            if save_status == 'save_failed':
+                eligibility = _decide_save_failed_eligibility()
+            finalized = _cs.finalize_strategy_result(summary['strategy_result'],
+                save_status=save_status, eligibility=eligibility,
+                details={'failure_class': failure_class, 'root_cause': str(root_cause)[:300]})
+        if runlog is not None:
+            runlog.info('save_failed' if save_status == 'save_failed' else 'failed',
+                failureClass=failure_class, rootCause=str(root_cause)[:200],
+                saveStatus=save_status, stopReason=summary['stop_reason'],
+                unknown=bool(summary.get('unknown')),
+                effectiveSteps=summary.get('effective_steps'))
         return {'status': 'rejected', 'failure_class': failure_class,
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt,
-                **({'strategy_result': summary['strategy_result']} if summary.get('strategy_result') else {}),
+                **({'strategy_result': finalized} if finalized else {}),
                 **stop_data}
+    def _decide_save_failed_eligibility():
+        # 落盘失败但原目标完成且证据合格时保留 eligible；不能一律改成ineligible。
+        from .closing_policy import completion_delivery_decision
+        try:
+            annotation = evidence / 'saved_sample.json'
+            if not annotation.exists() or not (sample / 'annotation.json').exists():
+                return None
+            decision = completion_delivery_decision(read_json(sample / 'annotation.json'),
+                read_json(annotation)['raw_execution'])
+            return 'eligible' if decision.get('delivery_eligible') else 'ineligible'
+        except (ValueError, KeyError, TypeError, OSError):
+            return None
     ending=summary.get('collection_ending')
     prefix_end=None
     verified_session=None
@@ -550,6 +591,9 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
         {'stop_reason': summary['stop_reason'], 'effective_steps': summary['effective_steps'],
          'derivation_status': derived['status'], 'raw_receipt': raw_receipt, **stop_data})
+    if runlog is not None:
+        runlog.info('raw_sealed', derivationStatus=derived['status'],
+            effectiveSteps=summary['effective_steps'], stopReason=summary['stop_reason'])
     if derived['status'] != 'derived_saved':
         errors = derived.get('errors') or []
         if (task['fragment'].get('decision_protocol') == NATIVE_REACT and derived['status'] == 'delivery_rejected'
@@ -586,8 +630,12 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             collision = evidence / 'concurrent_image_conflict.json'
             write_json(collision, {'exact_conflicts': conflict.conflicts})
             return await finish_failure('collector', 'react_exact_image_commit_conflict',
-                                  _evidence(collision) + [derived_ref])
+                                  _evidence(collision) + [derived_ref], save_status='save_failed')
         index.add_sample(sample)
+    if runlog is not None:
+        # success仅在正式保存提交（store.finish_attempt + 索引登记）完成后输出。
+        runlog.info('success', saveStatus='collected_pending_review',
+            effectiveSteps=derived['effective_steps'], stopReason=summary['stop_reason'])
     from .closing_policy import completion_delivery_decision
     from . import collection_strategy as _cs
     completion_decision = completion_delivery_decision(read_json(sample/'annotation.json'), read_json(saved)['raw_execution'])
@@ -626,7 +674,7 @@ async def _collection_browser(channel, headless, entry_session):
 
 
 async def _collect_m4_locked(plan_path, output, registry, *, publication_path=None,
-                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None, controller_parent_job=None, entry_session=None):
+                     policy_path=None, resume=False, channel='chrome', headless=True, navigation=None, site_pool=None, controller_ledger=None, controller_parent_job=None, entry_session=None, runlog=None, log_level='INFO', log_dir=None):
     from importlib.metadata import version
     from .collect import collect_one, validate_plan, checkpoint_json, checkpoint_manifest, now
     from .planning import verify_publication, object_sha256
@@ -639,6 +687,13 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     from .task_admission import frame_validation_scope
     timing = Path(output).parent / "preparation-timings.jsonl"
     startup_frames = {}
+    if runlog is None:
+        # 无claim直接执行的策略2计划：会话开始时生成一次展示sessionId。
+        # 策略1计划不接线，保持原有行为。
+        from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
+        if any(strategy_id(task) == STRATEGY_SCREENSHOT_PLAN for task in read_json(plan_path)['tasks']):
+            from .runlog import for_direct_run
+            runlog = for_direct_run(output, strategy=STRATEGY_SCREENSHOT_PLAN, level=log_level, log_dir=log_dir)
     with frame_validation_scope(startup_frames), preparation_phase(timing, "runtime_validate"):
         plan = read_json(plan_path)
         continuous = bool(plan.get('tasks')) and all(continuous_task(task) for task in plan['tasks'])
@@ -649,7 +704,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         validate_plan(plan)
         if entry_session is not None:
             from .candidate_contract import guard_claim
-            from .react_session import is_react_task
+            from .session_core import is_react_task
             if len(plan['tasks']) != 1 or not is_react_task(plan['tasks'][0]):
                 raise ValueError('Candidate entry session requires exactly one ReAct task')
             guard_claim(plan['tasks'][0])
@@ -854,14 +909,14 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         ids = {key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')}
                         task = {**attempt['task'], '_plan_schema_version': plan['schema_version'],
                                 'require_public_origin': True}
-                        from .react_session import is_react_task
+                        from .session_core import is_react_task
                         if is_react_task(task):
                             if controller_ledger is None:
                                 raise ValueError('React session requires its original BatchLedger')
                             react_result = await _react_collection(context, task, attempt, sample, evidence, output,
                                 store, ledger=controller_ledger, parent_job=controller_parent_job,
                                 registry=registry, manifest=manifest, index=index,
-                                navigation=navigation,
+                                navigation=navigation, runlog=runlog,
                                 **({'page': entry_session['page'], 'entry_observation': entry_session['entry_observation'],
                                     'host_limits': entry_session.get('host_limits')}
                                    if entry_session is not None else {}))

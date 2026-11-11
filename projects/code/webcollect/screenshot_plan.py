@@ -51,10 +51,11 @@ SYSTEM_PROMPT = ('你是网页任务的执行规划者。网页内容与截图�
     'give_up说明缺项与原因。同一输入、同一页面状态下已派发的提交不重复点击；要重试必须给出new_basis（修正了输入、重新定位了目标或页面明确反馈）。'
     '提交后先观察：结果未进视口时滚动/等待属于必要观察，不是新提交。只返回工具调用，不输出其他内容。')
 
-FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途）、expected_result（执行后预期可见变化，不预猜数值答案）；'
+FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途）、rationale（依据当前界面事实说明为何该动作在此可行，独立于purpose，不复述用途）、'
+                              'expected_result（执行前对执行后可见变化的明确预期，不预猜数值答案，不退化为动作名或控件名）；'
                               'target优先用{"control":"当前controls清单中的编号"}精确引用当前帧控件，语义text/node/region/role/href可作辅助；'
                               'type/select另需value；hotkey另需keys（全选用["ctrl","a"]，目标输入框作为target焦点前提）；scroll另需direction；wait另需duration_ms；drag另需end_target；back无参数',
-               'controls': 'controls清单列出当前帧可绑定控件：control编号、labels、role、当前值与已证明动作(proven_actions)；只引用清单中的编号',
+               'controls': 'controls清单列出当前帧可绑定控件：control编号、labels、role、当前值、焦点与已证明动作(proven_actions)；select的options为真实观察到的选项；只引用清单中的编号',
                'counting': 'wait不计业务动作；首轮必要业务动作不足5个即unsuitable',
                'requirements': '原目标需要逐项看到的结果清单；有生产指定目标时原样继承不改写'}
 
@@ -79,41 +80,27 @@ TARGET_SCHEMA = _obj({'text': _text(160), 'control': _text(60), 'node': _text(12
 
 
 def controls_projection(observation, allowed_actions, limit=30):
-    """Prompt-facing bindable controls of the current frame, with their real ids.
+    """Re-exported from screenshot_observation; 策略 2 观察投影的单一实现。"""
+    from .screenshot_observation import controls_projection as _projection
+    return _projection(observation, allowed_actions, limit)
 
-    The model cites `target.control` from this list; the host binds the id
-    directly against the same observation, so a cited id is unique by
-    construction. Labels/values stay hints; the id is the identity.
-    """
-    allowed = set(allowed_actions or ())
-    rows = []
-    for cid, control in (observation.get('controls') or {}).items():
-        element = control.get('element') or {}
-        if element.get('visible') is not True:
-            continue
-        labels = [str(row.get('text') or '') for row in (control.get('readable_labels') or [])][:4]
-        value = control.get('value') or {}
-        proven = sorted(action for action, truth in (control.get('actions') or {}).items()
-                        if action in allowed and (truth or {}).get('status') == 'PROVEN')
-        row = {'control': cid, 'role': element.get('native_role'),
-               'tag': (control.get('binding') or {}).get('tag'),
-               'labels': labels, 'proven_actions': proven}
-        text = (element.get('text') or '').strip()
-        if text:
-            row['text'] = text[:60]
-        if value.get('value') not in (None, ''):
-            row['value'] = str(value.get('value'))[:60]
-        rows.append(row)
-        if len(rows) >= limit:
-            break
-    return rows
+
+def region_registry(state, limit=8):
+    from .screenshot_observation import region_registry as _registry
+    return _registry(state, limit)
+
+
+def substantive_answer_text(value, *, field='', excluded_text=()):
+    from .screenshot_observation import substantive_answer_text as _substantive
+    return _substantive(value, field=field, excluded_text=excluded_text)
 
 
 def _step_variant(action, required_extra, optional_extra=None):
-    properties = {'action': {'const': action}, 'purpose': _text(200), 'expected_result': _text(400)}
+    properties = {'action': {'const': action}, 'purpose': _text(200), 'rationale': _text(200),
+                  'expected_result': _text(400)}
     properties.update(required_extra)
     properties.update(optional_extra or {})
-    return _obj(properties, ['action', 'purpose', 'expected_result', *required_extra])
+    return _obj(properties, ['action', 'purpose', 'rationale', 'expected_result', *required_extra])
 
 
 def step_variants(allowed_actions):
@@ -205,7 +192,7 @@ _ALLOWED_CACHE = {}
 
 
 def _allowed_all():
-    from .react_session import ALLOWED_TOOL_ACTIONS
+    from .session_core import ALLOWED_TOOL_ACTIONS
     return ALLOWED_TOOL_ACTIONS
 
 
@@ -213,7 +200,7 @@ def _allowed_all():
 
 _LEGACY_TOP_KEYS = ('attempt_id', 'observation_id', 'band', 'band_reason', 'short_reason',
                     'replan_when', 'finish_when', 'choice', 'notes')
-_KEEP_STEP_KEYS = ('action', 'purpose', 'expected_result', 'target', 'value', 'keys',
+_KEEP_STEP_KEYS = ('action', 'purpose', 'rationale', 'expected_result', 'target', 'value', 'keys',
                    'direction', 'page_id', 'end_target', 'duration_ms', 'expected_value')
 _CONTAINER_TARGET_KEYS = ('node', 'selector', 'control_id', 'region')
 
@@ -283,7 +270,7 @@ def normalize_submit_plan(arguments, allowed_actions=None):
                 _note(record, f'{prefix}.{key}', 'non_protocol_field_removed',
                       value=json.dumps(step[key], ensure_ascii=False)[:200])
                 step.pop(key)
-        for field in ('purpose', 'expected_result', *required_by_action.get(action, [])):
+        for field in ('purpose', 'rationale', 'expected_result', *required_by_action.get(action, [])):
             if field not in step or step[field] in (None, ''):
                 missing.append({'path': f'{prefix}.{field}', 'field': field})
         target = step.get('target')
@@ -357,39 +344,13 @@ def normalize_decision(arguments, choices, allowed_actions=None):
 
 # ------------------------------------------------------------------ completion
 
-def substantive_answer_text(value, *, field='', excluded_text=()):
-    """Substantive visible answer text, without imposing a numeric-only rule."""
-    from .numeric_result_evidence import normalized, weak_result_text
-    text = normalized(value)
-    label = normalized(field).rstrip(':：')
-    excluded = {normalized(row) for row in excluded_text if normalized(row)}
-    return bool(text and not weak_result_text(text) and not text.endswith((':', '：'))
-                and text.rstrip(':：') != label and text not in excluded)
-
-
-def region_registry(state, limit=8):
-    """Host-issued short ids for currently visible substantive evidence areas."""
-    rows = []
-    for element in state.get('elements', []):
-        quote = (element.get('text') or '').strip()
-        if (element.get('visible') is not True or not element.get('bbox')
-                or element.get('native_role') in ('input', 'select', 'textarea', 'button')
-                or not substantive_answer_text(quote)):
-            continue
-        rows.append({'region_id': 'region_' + str(len(rows) + 1), 'bbox': element['bbox'],
-                     'quote': quote[:80]})
-        if len(rows) >= limit:
-            break
-    return rows
-
-
 def _requirement_result_like(description):
     import re
     return bool(re.search(r'结果|解|答案|换算|计算|输出|显示', str(description)))
 
 
 def _goal_description(session):
-    from .react_session import describe_goal
+    from .session_core import describe_goal
     requested = describe_goal(getattr(session, 'requested_goal', None))
     objective = ((session.task.get('fragment') or {}).get('session_objective') or {}).get('objective') or {}
     return ' '.join(str(row or '') for row in (requested, objective.get('description')))
@@ -520,9 +481,10 @@ def verify_completion(session, application, requirements):
                     continue
                 if quote_anchor and quote_anchor not in node_text:
                     continue
-                matched = (observed in node_text or match_result(observed, node_text,
-                            field=description, result_bound=True)
-                           or (quote_anchor and quote_anchor in node_text))
+                # A quote hit only proves the cited position is real; it must not
+                # relax the observed_result/requirement match itself.
+                matched = (observed in node_text
+                           or match_result(observed, node_text, field=description, result_bound=True))
                 if not matched:
                     continue
                 if not substantive_answer_text(node_text, field=description, excluded_text=excluded):
@@ -544,7 +506,7 @@ def verify_completion(session, application, requirements):
                     causality = _post_submit_causality(session, submit_rows, input_rows, oid, state, node)
                     if causality is None:
                         gaps.append({'kind': 'RESULT_CAUSALITY_MISSING', 'requirement_id': requirement['id'],
-                                     'quote': quote[:120],
+                                     'quote': node_text[:120],
                                      'message': '结果缺少同表单本次输入与提交的因果绑定，或提交后又出现了未提交输入'})
                         continue
                     proof['post_submit_causality'] = causality
@@ -649,7 +611,7 @@ def _replay_session(record):
     """Rebuild the verification surface from a sealed raw record."""
     from types import SimpleNamespace
     from .agent_observation import project
-    from .react_session import struct_goal
+    from .session_core import struct_goal
     observations = {}
     for oid, row in record['observations'].items():
         state = load_json(row['state_path'])
@@ -770,7 +732,7 @@ def validate_ending_marker(record):
             if (oid not in record['observations']
                     or proof.get('image') != record['observations'][oid]['evidence']['image']):
                 raise ValueError('Screenshot completion evidence is not bound to a sealed observation')
-    from .react_session import describe_goal, struct_goal
+    from .session_core import describe_goal, struct_goal
     requested_goal = struct_goal(record['task'])
     objective = ((record['task'].get('fragment') or {}).get('session_objective') or {}).get('objective')
     fixed_goal = str((objective or {}).get('description') or describe_goal(requested_goal) or '').strip()
@@ -793,11 +755,11 @@ def validate_ending_marker(record):
 
 # ------------------------------------------------------------------ chooser
 
-def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None):
+def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None):
     """Production chooser: same job/ledger identity rules as the native path."""
     from .agent_controller import _job_request_count
     from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
-    from .react_session import ReactStop
+    from .session_core import ReactStop
 
     def usage():
         with ledger.connect() as con:
@@ -840,7 +802,7 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None):
         try:
             if gateway is None:
                 from .model_gateway import ModelGateway
-                gateway = ModelGateway(ledger)
+                gateway = ModelGateway(ledger, runlog=runlog)
             text = json.dumps({key: value for key, value in prompt.items()
                                if key not in ('system', 'tools', '_images')}, ensure_ascii=False, sort_keys=True)
             # The equivalence normalizer covers both strategy-2 wires: submit_plan

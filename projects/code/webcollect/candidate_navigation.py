@@ -34,9 +34,9 @@ def excluded_article(task, url):
 
 
 def has_page_capacity(task, urls):
-    from .react_protocol import NATIVE_VERSIONS
+    from .plan_protocol import REACT_PROTOCOL
     fragment = task['fragment']
-    if fragment.get('decision_protocol') in NATIVE_VERSIONS and None in fragment.get('budgets', {}).values():
+    if fragment.get('decision_protocol') == REACT_PROTOCOL and None in fragment.get('budgets', {}).values():
         return True
     return len(urls) < LEGACY_PAGE_LIMIT
 

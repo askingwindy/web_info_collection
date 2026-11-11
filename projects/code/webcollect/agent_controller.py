@@ -762,7 +762,7 @@ def model_chooser(ledger, task, attempt_id, *, parent_job=None):
 
 
 def verify_ledger_binding(plan, ledger):
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     if any(is_controlled(task) or is_react_task(task) for task in plan['tasks']):
         expected = plan.get('generation',{}).get('controller_ledger')
         if ledger is None or expected != {'path':str(ledger.path), 'config_sha256':object_sha256(ledger.config)}:

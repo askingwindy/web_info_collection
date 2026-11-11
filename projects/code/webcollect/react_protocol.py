@@ -42,7 +42,7 @@ def rule_sources():
 
 
 def native_tools(allowed_actions, protocol=REACT_PROTOCOL, reference_protocol=REFERENCE_PROTOCOL, planning_protocol=PLANNING_INTENT_PROTOCOL, require_intent=False):
-    from .react_session import (obj, TEXT, NULLABLE_TEXT, GOAL_UPDATE,
+    from .session_core import (obj, TEXT, NULLABLE_TEXT, GOAL_UPDATE,
                                 ACTION_ARGUMENTS, ALLOWED_TOOL_ACTIONS, INSPECT_KINDS, STOP_REASONS)
     common = {'goal_update': {'anyOf': [{'type': 'null'}, GOAL_UPDATE]}, 'decision_summary': TEXT}
     steps = [obj({'action': {'const': action}, 'goal': TEXT, 'expected': TEXT,
@@ -281,7 +281,7 @@ def atomic_effect(before, after, action, arguments, control_id=None, *, rule_ver
 
 def inspect_schema(common=None):
     """One branch per material kind; optional paging does not require nulls."""
-    from .react_session import obj, TEXT
+    from .session_core import obj, TEXT
     common = common or {}
     variants = []
     for kind in ('html', 'control', 'search', 'pages', 'history', 'feedback'):

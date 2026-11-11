@@ -1,10 +1,11 @@
-"""策略 2 会话：复用 ReactSession 原子执行/取证/账本，替换决策循环。
+"""策略 2 会话：共享引擎核心之上，替换决策循环。
 
 The session reuses the entry observation, trusted capture, atomic dispatch,
-effect verification, business-attempt journal and raw close-out from
-ReactSession. What changes is the decision loop: one first-round submit_plan,
-deterministic execution of planned steps, model checkpoints only at business
-events (submit-like clicks, navigation, dialogs, binding/identity refusals,
+effect verification, business-attempt journal and raw close-out from the shared
+engine core (session_core.RawSessionCore), never the 策略 1 decision loop.
+What changes is the decision loop: one first-round submit_plan, deterministic
+execution of planned steps, model checkpoints only at business events
+(submit-like clicks, navigation, dialogs, binding/identity refusals,
 result reading or plan exhaustion) and a verified `complete`.
 """
 import asyncio
@@ -18,13 +19,25 @@ from . import collection_strategy as _cs
 from .screenshot_plan import (SYSTEM_PROMPT,
     FIRST_RULES, BRANCH_RULES, BUSINESS_MINIMUM, PREFERRED_MAXIMUM, NON_BUSINESS_ACTIONS,
     DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, NO_PROGRESS_STALL_LIMIT, submit_plan_tools,
-    decision_tools, controls_projection, normalize_submit_plan, normalize_decision,
-    first_plan_admission, business_actions, region_registry, verify_completion)
-from .react_session import ReactSession, ReactStop
+    decision_tools, normalize_submit_plan, normalize_decision,
+    first_plan_admission, business_actions, verify_completion)
+from .screenshot_observation import controls_projection, region_registry
+from .session_core import RawSessionCore, ReactStop
+from .screenshot_execution import bind_target, react_step
 
 
-class ScreenshotPlanSession(ReactSession):
+class ScreenshotPlanSession(RawSessionCore):
     """策略 2 execution: screenshot checkpoints and remaining-plan revision."""
+
+    def _boundary_system_prompt_sha256(self):
+        # 策略 2 records its own frozen submit-plan boundary, not the native
+        # tool loop's system prompt.
+        return object_sha256(SYSTEM_PROMPT)
+
+    def _boundary_tool_schema_sha256(self, contracted):
+        # Same: the wire contract is submit_plan_tools for the first round and
+        # per-checkpoint decision_tools, recorded here as the session boundary.
+        return object_sha256(submit_plan_tools(self.task['fragment']['allowed_actions']))
 
     def __init__(self, task, directory, choose, page, **kwargs):
         super().__init__(task, directory, choose, page, **kwargs)
@@ -89,6 +102,8 @@ class ScreenshotPlanSession(ReactSession):
             self.unknown = True
             self.failure_class = 'interrupted'
             self.state = 'closed_by_host'
+            self._runlog('cancelled', internalDeadline=internal_deadline,
+                effectiveSteps=len(self.trajectory), unknown=True)
             if not internal_deadline or not self.host_limits or time.monotonic() < (
                     self.host_limits['started_monotonic'] + self.host_limits['hard_seconds']):
                 self._close()
@@ -100,6 +115,9 @@ class ScreenshotPlanSession(ReactSession):
             self.state = 'closed_by_host'
         self.host_failure = stop is not None
         receipt = self._close()
+        self._runlog('session_end', stopReason=self.stop_reason,
+            effectiveSteps=len(self.trajectory), actualActions=self.actual_dispatches,
+            unknown=bool(self.unknown), failureClass=self.failure_class)
         return self._strategy_summary(receipt)
 
     def _strategy_summary(self, receipt):
@@ -228,12 +246,21 @@ class ScreenshotPlanSession(ReactSession):
                 # 同一观察下的有界纠正：给精确反馈再请求一次，不派发任何动作。
                 self.initial_feedback = feedback
                 self.event('screenshot-plan-rejected', feedback=feedback, dispatched=False)
+                if getattr(self, 'runlog', None) is not None:
+                    self._runlog('plan_rejected', observationId=self.current['observation_id'],
+                        reason=feedback.get('kind'), retriable=True)
                 return
             self.event('screenshot-plan-rejected', feedback=feedback, dispatched=False, final=True)
+            if getattr(self, 'runlog', None) is not None:
+                self._runlog('plan_rejected', observationId=self.current['observation_id'],
+                    reason=feedback.get('kind'), retriable=False)
             self._range_close('UNSUITABLE_TASK', feedback['message'])
             return
         if feedback['kind'] == 'unsuitable':
             self.event('screenshot-plan-unsuitable', reason=feedback['unsuitable'])
+            if getattr(self, 'runlog', None) is not None:
+                self._runlog('plan_rejected', observationId=self.current['observation_id'],
+                    reason='unsuitable', retriable=False)
             self._range_close('UNSUITABLE_TASK', '模型报告自然路径不适合：' + str(feedback['unsuitable'].get('reason') or ''))
             return
         requirements = plan.get('requirements') or []
@@ -242,6 +269,9 @@ class ScreenshotPlanSession(ReactSession):
                 'kind': 'missing_requirements', 'field_paths': ['requirements'],
                 'message': '缺少完成事项requirements；每项一条原目标必须看到的结果'}
             self.event('screenshot-plan-rejected', feedback=self.initial_feedback, dispatched=False)
+            if getattr(self, 'runlog', None) is not None:
+                self._runlog('plan_rejected', observationId=self.current['observation_id'],
+                    reason='missing_requirements', retriable=True)
             return
         self.frozen_goal = fixed_goal or plan['goal']
         if self.working_goal is None:
@@ -254,6 +284,9 @@ class ScreenshotPlanSession(ReactSession):
             goal=self.frozen_goal, requested_goal=deepcopy(self.requested_goal),
             session_objective=deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
             requirements=deepcopy(self.requirements), steps=deepcopy(self.plan['steps']), admission=feedback)
+        if getattr(self, 'runlog', None) is not None:
+            self._runlog('plan_accepted', observationId=self.current['observation_id'],
+                plannedSteps=len(self.plan['steps']), requirements=len(self.requirements))
 
     # ------------------------------------------------------------------ execution
 
@@ -261,7 +294,6 @@ class ScreenshotPlanSession(ReactSession):
 
     def _bind_target(self, step):
         """Bind a semantic target to the unique current control, if any."""
-        from .banded_plan import bind_target
         target = step.get('target')
         if not target:
             return None
@@ -313,29 +345,8 @@ class ScreenshotPlanSession(ReactSession):
                 'new_basis_required': True}, identity
 
     def _react_step(self, step, control_ids):
-        from .banded_plan import execution_keys
-        action = step['action']
-        actual = {'action': action, 'goal': step.get('purpose') or action,
-                  'expected': step.get('expected_result') or step.get('purpose') or action,
-                  'rationale': step.get('purpose'), 'expected_result': step.get('expected_result')}
-        for key in ('value', 'keys', 'direction', 'page_id', 'duration_ms'):
-            if key in step:
-                actual[key] = step[key]
-        if action == 'hotkey' and isinstance(actual.get('keys'), list):
-            # 与策略1相同的宿主平台映射（ctrl+a→meta+a on darwin）。
-            actual['keys'] = execution_keys(actual['keys'])
-        if action in ('click', 'double_click', 'right_click', 'drag', 'type', 'select'):
-            actual['control_id'] = control_ids[0]
-        if action == 'hotkey':
-            # 原生协议要求显式可空的 control_id；焦点前提由当前焦点核实。
-            actual['control_id'] = control_ids[0] if control_ids else None
-        if action == 'drag':
-            endpoint = step.get('end_target') or {}
-            matches = self._bind_target({'target': endpoint}) or []
-            if len(matches) != 1:
-                raise ValueError('DRAG_DESTINATION_NOT_UNIQUELY_BOUND')
-            actual['end_control_id'] = matches[0]
-        return actual
+        return react_step(step, control_ids,
+                          lambda endpoint: self._bind_target({'target': endpoint}))
 
     async def _execute_round(self):
         if self.position >= len(self.plan['steps']):
@@ -512,6 +523,10 @@ class ScreenshotPlanSession(ReactSession):
         decision, record = normalize_decision(arguments, prompt['choices'], allowed_actions)
         self.event('screenshot-decision', reason=reason, decision=decision,
                    normalization=record, position=self.position)
+        if getattr(self, 'runlog', None) is not None:
+            self._runlog('checkpoint', observationId=self.current['observation_id'],
+                decision=decision.get('decision'), reason=reason, position=self.position,
+                effectiveSteps=len(self.trajectory))
         # A different answer, citation, new_basis or revised tail is new work,
         # not a repeated no-progress decision. Only the whole identical decision
         # on the same observation and feedback is bounded.
@@ -572,9 +587,23 @@ class ScreenshotPlanSession(ReactSession):
         if choice == 'complete':
             checks, gaps = verify_completion(self, decision, self.requirements)
             if gaps:
+                verified_now = [row['requirement_id'] for row in checks if row.get('status') == 'VERIFIED']
+                if verified_now:
+                    # 已核验的部分证据保留：补证只需针对剩余缺项，不重放已完成事项。
+                    self.verified_requirement_ids = sorted(set(
+                        getattr(self, 'verified_requirement_ids', None) or []) | set(verified_now))
                 self.completion_feedback = {'kind': 'COMPLETION_EVIDENCE_GAPS', 'gaps': gaps,
-                    'message': '完成申请缺证；在同一或历史观察中补引用，不重放已完成的输入与提交'}
-                self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False)
+                    'verified_requirement_ids': list(getattr(self, 'verified_requirement_ids', None) or []),
+                    'verified': [{'requirement_id': row['requirement_id'],
+                                  'observed': str(row.get('observed_visible_text') or '')[:120]}
+                                 for row in checks if row.get('status') == 'VERIFIED'],
+                    'message': '完成申请缺证；已证实事项无需重复举证，只需为缺项在同一或历史观察中补引用，不重放已完成的输入与提交'}
+                self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False,
+                           verified_requirement_ids=list(getattr(self, 'verified_requirement_ids', None) or []))
+                if getattr(self, 'runlog', None) is not None:
+                    self._runlog('completion_gaps', observationId=self.current['observation_id'],
+                        gaps=[gap.get('kind') for gap in gaps],
+                        verifiedRequirementIds=list(getattr(self, 'verified_requirement_ids', None) or []))
                 # Stay at this checkpoint. Returning to the main loop could
                 # execute an obsolete remaining action before the supplement.
                 return await self._checkpoint(reason, self.completion_feedback)
@@ -606,6 +635,9 @@ class ScreenshotPlanSession(ReactSession):
                              'executed_effective_steps': len(self.trajectory),
                              'remaining_planned_steps': max(0, len(self.plan['steps']) - self.position)}}
         self.event('goal-evidence', **deepcopy(self.goal_evidence))
+        if getattr(self, 'runlog', None) is not None:
+            self._runlog('goal_verified', observationId=self.current['observation_id'],
+                requirements=len(self.requirements), effectiveSteps=len(self.trajectory))
         self._range_close(READY_ENDING, '原目标事项均由可见证据逐项绑定并核验')
 
     # ------------------------------------------------------------------ helpers
@@ -614,6 +646,8 @@ class ScreenshotPlanSession(ReactSession):
         if kind == READY_ENDING and self.completion_endpoint_basis is None:
             raise ValueError('COMPLETE_ENDING_REQUIRES_VERIFIED_COMPLETION')
         super()._range_close(kind, reason, **kwargs)
+        self._runlog('range_close', kind=kind, reason=str(reason)[:200],
+            unknown=bool(getattr(self, 'unknown', False)))
         if kind in RAW_ONLY_ENDINGS:
             self.strategy_end_reason = ('unsuitable' if kind == 'UNSUITABLE_TASK'
                                         else 'no_progress' if kind == 'NO_PROGRESS_END' else 'no_path')
@@ -644,5 +678,5 @@ def _public_effective(row):
 
 
 def describe(goal):
-    from .react_session import describe_goal
+    from .session_core import describe_goal
     return describe_goal(goal)

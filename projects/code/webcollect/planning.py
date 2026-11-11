@@ -265,7 +265,7 @@ def _build_publication(plan, capabilities, *, now=None, require_preflight=True):
     """Validate current bindings and derive a receipt without editing inputs."""
     from .collect import validate_plan
     from .preflight import validate_preflight_binding
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     if not isinstance(plan, dict) or plan.get('schema_version') != 'plan-m4':
         raise ValueError('规划发布仅接受严格M4计划')
     plan = deepcopy(plan)

@@ -22,7 +22,7 @@ def ensure_schema(con):
 
 
 def _is_react(task):
-    from .react_session import is_react_task
+    from .session_core import is_react_task
     return is_react_task(task)
 
 
