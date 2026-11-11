@@ -570,10 +570,10 @@ def _inspect_delivery(dataset,profile,reviews=None,baseline=None,evidence=None,s
         failure_paths=[ai_failures] if isinstance(ai_failures,(str,Path)) else list(ai_failures or [])
         semantic_sampling,accepted=evaluate_sampling(delivery_sampling_plan,dataset,
             ai_reviews=[reviews] if reviews else [],human_reviews=human_paths,ai_failures=failure_paths)
-        review_errors=[];review_migrations=[]
+        review_errors=[]
     else:
         if human_reviews or ai_failures:raise ValueError('Separate human/failure inputs require an explicit delivery sampling plan')
-        accepted,review_errors,review_migrations=delivery_review_intake(reviews,formats['samples'],fingerprint)
+        accepted,review_errors,_=delivery_review_intake(reviews,formats['samples'],fingerprint)
     try:duplicates=analyze(dataset)
     except (OSError,ValueError,TypeError,KeyError,IndexError) as error:
         duplicates=analysis_error(error,sample_count=len(formats['samples']),dataset_label=dataset)

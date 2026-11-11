@@ -1,10 +1,16 @@
 """Bound navigation from observed links or actual action-triggered landings."""
 from urllib.parse import urlsplit
 from .candidate_contract import same_application
+from .plan_protocol import (DELAYED_NAVIGATION_PROTOCOL as DELAYED_PROTOCOL,
+                            NAVIGATION_PROTOCOL, REACT_PROTOCOL)
 
 LEGACY_PAGE_LIMIT=64
 NAV_ACTIONS={'click','double_click','hotkey','type','select','open_url','back'}
-DELAYED_PROTOCOL='webcollect-explicit-href-landing-1'
+# Sealed historical records keep their originally frozen names; new fragments
+# only ever carry the stable names. Read-side dual acceptance.
+SEALED_DELAYED_PROTOCOLS=(DELAYED_PROTOCOL,'webcollect-explicit-href-landing-1')
+SEALED_NAVIGATION_PROTOCOLS=(NAVIGATION_PROTOCOL,'observed-navigation-2')
+SEALED_DECISION_PROTOCOLS=(REACT_PROTOCOL,'webcollect-react-native-2','webcollect-react-native-3')
 
 
 def delayed_landing(operation, source, current, landed, *, same_tab, no_other_action, no_new_tab):
@@ -34,9 +40,8 @@ def excluded_article(task, url):
 
 
 def has_page_capacity(task, urls):
-    from .react_protocol import NATIVE_VERSIONS
     fragment = task['fragment']
-    if fragment.get('decision_protocol') in NATIVE_VERSIONS and None in fragment.get('budgets', {}).values():
+    if fragment.get('decision_protocol') in SEALED_DECISION_PROTOCOLS and None in fragment.get('budgets', {}).values():
         return True
     return len(urls) < LEGACY_PAGE_LIMIT
 
@@ -47,8 +52,7 @@ def extend(task, urls, state, previous=None):
     if previous and excluded_article(task, url):
         raise ValueError('ARTICLE_OUTSIDE_RUN_SCOPE')
     verify_public_url(url)
-    from .plan_protocol import NAVIGATION_PROTOCOL
-    observed_navigation = task['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL
+    observed_navigation = task['fragment'].get('navigation_protocol') in SEALED_NAVIGATION_PROTOCOLS
     if not observed_navigation and not same_application(task,url): raise ValueError('Candidate navigation left evidence-backed application')
     if url not in urls:
         if not previous or previous['action_type'] not in NAV_ACTIONS:
@@ -74,7 +78,7 @@ def verify_path(task, states, operations):
     urls=list(task['fragment']['page_urls'])
     for i,state in enumerate(states):
         operation = operations[i-1] if i else None
-        if (i and task['fragment'].get('navigation_protocol') == 'observed-navigation-2'
+        if (i and task['fragment'].get('navigation_protocol') in SEALED_NAVIGATION_PROTOCOLS
                 and states[i-1]['url'] != state['url'] and (not operation or operation['action_type'] not in NAV_ACTIONS)):
             raise ValueError('Navigation URL changed without an actual triggering action')
         extend(task,urls,state,operation)

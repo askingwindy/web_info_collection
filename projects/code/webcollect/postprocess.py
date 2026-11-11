@@ -199,12 +199,10 @@ def _same_view(before, after):
 
 
 def _delayed_bridge(record, previous, before_id, after_id):
-    from .candidate_navigation import delayed_landing, DELAYED_PROTOCOL
-    from .plan_protocol import DELAYED_NAVIGATION_PROTOCOL
+    from .candidate_navigation import delayed_landing, SEALED_DELAYED_PROTOCOLS
     # New fragments freeze the stable protocol name; sealed historical
     # fragments keep the old delayed-landing literal bytes.
-    if record['task']['fragment'].get('delayed_navigation_protocol') not in (
-            DELAYED_NAVIGATION_PROTOCOL, DELAYED_PROTOCOL):
+    if record['task']['fragment'].get('delayed_navigation_protocol') not in SEALED_DELAYED_PROTOCOLS:
         return None
     for proof in record['terminal'].get('delayed_navigations',[]):
         if proof['operation_id'] != previous['operation_id']:

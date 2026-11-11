@@ -3,15 +3,24 @@ import math
 import re
 from urllib.parse import urlsplit
 
+from .plan_protocol import PLAN_PROTOCOL
+
 VERSION = 'webcollect-consumer-page-policy-1'
+PAGE_POLICY = VERSION
 LOGIN_ENTRY_VERSION = 'webcollect-login-entry-exclusion-1'
-PLAN_PROTOCOL = 'webcollect-banded-conditional-plan-7'
+# Sealed historical tasks keep their originally frozen plan-protocol names;
+# new tasks only ever carry the stable name. Read-side dual acceptance.
+SEALED_PLAN_PROTOCOLS = ('webcollect-banded-conditional-plan-7',
+                         'webcollect-banded-conditional-plan-8',
+                         'webcollect-banded-conditional-plan-9',
+                         'webcollect-banded-conditional-plan-10',
+                         'webcollect-banded-conditional-plan-11')
 EXIT_LABELS = {'取消', '返回', '关闭', '取消下载', '暂不登录', '稍后再说',
                'cancel', 'back', 'close', 'not now', 'cancel download'}
 
 
 def enabled(task):
-    return task.get('fragment', {}).get('plan_protocol') in (PLAN_PROTOCOL,'webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11')
+    return task.get('fragment', {}).get('plan_protocol') in (PLAN_PROTOCOL, *SEALED_PLAN_PROTOCOLS)
 
 
 def full_image(state):

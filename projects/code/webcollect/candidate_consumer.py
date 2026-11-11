@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
-from site_planner.candidate_pool import CandidatePool
+from site_planner.candidate_pool import CandidatePool, VERSION2 as CANDIDATE_VERSION2
 from .batch_core import BatchLedger, BudgetStop, load_json, file_sha, OutcomeUnknown, save_json
 from .planning import canonical, verify_evidence
 from .agent_controller import exclusive
@@ -617,9 +617,22 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
     if current['state']!='consuming': return {'state':current['state'],'dispatched':False}
     with pool.transaction() as con: pool._fence(con,claim)
     if current['stage']!='claimed': return finish_or_reconcile(pool,claim)
+    snapshot = claim['snapshot']
+    # Legacy pre-entry-protocol rows (e.g. webcollect-data-candidate-1) became
+    # claimable again when the protocol filter was removed; their frozen bodies
+    # lack the entry/target goal contract this consumer executes. Settle the
+    # claim cleanly instead of crashing mid-dispatch and leaving it consuming.
+    if (not isinstance(snapshot, dict) or snapshot.get('schema_version') != CANDIDATE_VERSION2
+            or snapshot.get('candidate_kind') not in ('entry', 'target')
+            or not isinstance(snapshot.get('entry_url'), str)
+            or 'requested_goal' not in snapshot):
+        reason = ('LEGACY_SNAPSHOT: claimed candidate body is not a current '
+                  + CANDIDATE_VERSION2 + ' entry/target snapshot; no dispatch')
+        pool.finish(claim, state='failed', stage='claim', reason=reason)
+        return {'state': 'failed', 'stage': 'claim', 'reason': reason,
+                'formal_attempts': 0, 'browser_calls': 0, 'model_calls': 0}
     paths = startup_check(ledger, output=output, registry=registry, policy=policy, history_set=history_set, qc_policy=qc_policy, pool=pool)
     output, registry, policy, history_set = (paths[k] for k in ('output','registry','policy','history_set'))
-    snapshot = claim['snapshot']
     # A never-before-claimed candidate whose entry URL and requested goal already
     # hold a registry task re-derives that task's key: execution would be refused
     # as a paused duplicate. Close it now with zero browser and model cost, before

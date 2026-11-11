@@ -8,10 +8,17 @@ is unresolved. There is no cumulative step ceiling.
 """
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256
-from .plan_protocol import ENDING_POLICY, PLAN_WAIT_EXECUTION_POLICY
+from .plan_protocol import ENDING_POLICY, PLAN_PROTOCOL, PLAN_WAIT_EXECUTION_POLICY
 from .reading_progress import same_view
 
 MINIMUM = 5
+# Sealed historical markers/tasks keep their originally frozen plan-protocol
+# names (V1-V13); current writers only emit the stable name. Read-side dual
+# acceptance for validating sealed persistent records.
+SEALED_PLAN_PROTOCOLS = (PLAN_PROTOCOL,) + tuple(
+    'webcollect-banded-conditional-plan-%d' % n for n in range(1, 14))
+SEALED_BOUNDARY_PLAN_PROTOCOLS = (PLAN_PROTOCOL,) + tuple(
+    'webcollect-banded-conditional-plan-%d' % n for n in range(7, 14))
 PROMPT = ('首轮优先把自由目标设计为可用5–8个必要有效动作的完整自然路径，再冻结目标和checks；自然必要路径可以超过8步。'
           '自由目标必须依据首帧可见功能选择单一、具体、结果可核验的完整目标；提交前逐步确认路径可达、终态可证。'
           '固定requested_goal不得缩小或替换，按原目标规划全部必要动作；只有少于5步或无法完成才如实stop。'
@@ -108,8 +115,8 @@ def validate_plan_page_bindings(record):
 
 def verified_wait_plan_effect(record, effect_name, event, step, position, *, plan_name):
     """Replay a zero-business wait only from its sealed dispatch/result."""
-    from .plan_protocol import PLAN_PROTOCOL
-    if record['task'].get('fragment', {}).get('plan_protocol') != PLAN_PROTOCOL: return None
+    if record['task'].get('fragment', {}).get('plan_protocol') not in (
+            PLAN_PROTOCOL, 'webcollect-banded-conditional-plan-13'): return None
     actual = event.get('actual') or {}; tool = actual.get('tool_result') or {}; data = tool.get('data') or {}
     if (step.get('action') != 'wait' or actual.get('actual_effective_delta') != 0
             or event.get('established') is not True or event.get('literal_expected_established') is not True
@@ -437,12 +444,12 @@ def validate_record(record):
         from .consumer_page_policy import ending_evidence
         actual = ending_evidence(record['task'], prefix, {oid: state(record, oid) for oid in record['observations']}, final)
         if (not actual or actual != marker.get('boundary_return_evidence')
-                or marker.get('plan_protocol') != PLAN_PROTOCOL
+                or marker.get('plan_protocol') not in SEALED_BOUNDARY_PLAN_PROTOCOLS
                 or marker.get('plan_protocol') != record['task']['fragment'].get('plan_protocol') or not safe):
             raise ValueError('Boundary return lacks two original effective actions and a sealed safe return')
     if marker.get('kind') == 'HOST_PLAN_ENDPOINT':
         if (marker.get('plan_protocol') != record['task']['fragment'].get('plan_protocol')
-                or marker.get('plan_protocol') != PLAN_PROTOCOL):
+                or marker.get('plan_protocol') not in SEALED_PLAN_PROTOCOLS):
             raise ValueError('Host endpoint is not bound to the original plan task')
         basis = marker.get('endpoint_evidence') or {}
         if basis.get('source') != 'host_result_completion':
@@ -571,9 +578,9 @@ def annotation_errors(annotation):
             or (marker.get('unverified_tail_dispatches', 0) > 0 and kind != 'KNOWN_NO_EFFECT')):
         errors.append('Exceptional closure kind/range/attempt references are inconsistent')
     if kind == 'HOST_BOUNDARY_RETURN':
-        from .consumer_page_policy import PAGE_POLICY, PLAN_PROTOCOL as CURRENT_PLAN
+        from .consumer_page_policy import PAGE_POLICY
         proof = marker.get('boundary_return_evidence') or {}
-        if (marker.get('plan_protocol') != CURRENT_PLAN
+        if (marker.get('plan_protocol') not in SEALED_BOUNDARY_PLAN_PROTOCOLS
                 or proof.get('policy') != PAGE_POLICY
                 or marker.get('goal_completion') != 'NOT_CLAIMED' or marker.get('finish_origin') != 'host'
                 or effective < 2 or marker.get('unverified_tail_dispatches') != 0):

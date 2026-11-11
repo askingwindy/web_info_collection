@@ -1081,7 +1081,7 @@ def report(ledger,queue_path,output,*,profile=None,document_job=None):
         errors=coverage_errors(record,annotation)
         if errors:raise ValueError('; '.join(errors))
         records.append(record)
-    exported={'schema_version':'qc-review-2' if ledger.config['mode']=='real' else 'webcollect-synthetic-review-test-1',
+    exported={'schema_version':'qc-review' if ledger.config['mode']=='real' else 'webcollect-synthetic-review-test-1',
               'records':records,'customer_acceptance':'UNKNOWN'}
     if queue.get('trial'):
         if document_job:

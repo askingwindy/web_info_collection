@@ -1,8 +1,7 @@
 """Evidence-only reading position; seen means displayed, never human comprehension."""
 from .planning import object_sha256
 
-from .plan_protocol import READING_PROGRESS_PROTOCOL as VERSION
-END_POLICY = 'webcollect-five-effective-visible-ending-1'
+from .plan_protocol import READING_PROGRESS_PROTOCOL as VERSION, READING_PROGRESS_END as END_POLICY
 
 
 def lines(state):

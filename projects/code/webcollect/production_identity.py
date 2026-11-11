@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .batch_core import file_sha, load_json
 from .planning import canonical, object_sha256, verify_evidence
+from .plan_protocol import NAVIGATION_PROTOCOL, REACT_PROTOCOL
 
 VERSION = 'webcollect-pilot-page-identity-1'
 REVIEW_CHECKS = ('application_identity', 'task_page_identity', 'page_history', 'effective_action_limit')
@@ -160,7 +161,7 @@ def validate_identity(task, *, observed_states=None):
         earned = ({page_url(row['url']) for row in observed_states
                    if canonical_key(row['url'], registry) == whole}
                   if is_react_task(task) else set())
-        if task.get('fragment', {}).get('navigation_protocol') == 'observed-navigation-2':
+        if task.get('fragment', {}).get('navigation_protocol') in (NAVIGATION_PROTOCOL, 'observed-navigation-2'):
             from .collect import verify_public_url
             for row in observed_states:
                 verify_public_url(row['url'])
@@ -186,7 +187,7 @@ def validate_identity(task, *, observed_states=None):
         # visible content in the very same browser document; hydration may
         # interleave insertions, so containment is ordered, not contiguous.
         if (not corroborated and page['kind'] == 'content' and 'candidate_binding' in task
-                and task.get('fragment', {}).get('decision_protocol') == 'webcollect-react-native-3'
+                and task.get('fragment', {}).get('decision_protocol') in (REACT_PROTOCOL, 'webcollect-react-native-3')
                 and state.get('document_identity')):
             original = _normalized(state.get('visible_text', ''))
             corroborated = len(original) >= 40 and any(
@@ -440,7 +441,7 @@ def accept(con, task_key, task, sample_id):
 
 def navigation_page_allowed(task, url):
     from .candidate_contract import same_application
-    if task.get('fragment', {}).get('navigation_protocol') == 'observed-navigation-2':
+    if task.get('fragment', {}).get('navigation_protocol') in (NAVIGATION_PROTOCOL, 'observed-navigation-2'):
         from .collect import verify_public_url
         verify_public_url(url)
         return True  # Full trigger/path evidence is checked by candidate_navigation.verify_path.

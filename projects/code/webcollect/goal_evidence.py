@@ -411,7 +411,7 @@ def reading_evidence(s, start, contract):
                 and (branch.get('provider_reply') or {}).get('choice') == reply.get('choice')
                 and reply.get('attempt_id') == s.attempt_id and is_article(origin)):
             archived = []
-            if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') in ('webcollect-banded-conditional-plan-8','webcollect-banded-conditional-plan-9','webcollect-banded-conditional-plan-10','webcollect-banded-conditional-plan-11'):
+            if getattr(s, 'task', {}).get('fragment', {}).get('plan_protocol') in (PLAN_PROTOCOL, 'webcollect-banded-conditional-plan-8', 'webcollect-banded-conditional-plan-9', 'webcollect-banded-conditional-plan-10', 'webcollect-banded-conditional-plan-11'):
                 # A verified citation keeps its original observation/source
                 # through legal reading/link/return steps. A returned document
                 # is accepted only by the real navigation proof above.

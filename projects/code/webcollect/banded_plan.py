@@ -56,7 +56,12 @@ def remaining_step_allowance(s):
 
 
 def system_with_attempt_limit(text, limit=None, complete_goal=False):
-    """The single current planner wording: preferred 5-8, no hard ceiling."""
+    """The single current planner wording: preferred 5-8, no hard ceiling.
+
+    ``limit`` and ``complete_goal`` stay in the signature for existing callers;
+    the current policy has no cumulative step ceiling, so neither parameter
+    alters the wording.
+    """
     text = (text.replace('5步档自然5步，长档6–8步且第6步之后有具体业务用途；', '')
                 .replace('按分档规划，five自然5步，long自然6–8步，若自然短则用short，无需说明长度原因。', ''))
     return text + '\n首轮优先把自由目标设计为可用5–8个必要有效动作的完整自然路径，并逐步核算可达路径和终态证据；自然必要路径可以超过8步，不因长度淘汰。固定requested_goal不得改写，按原目标规划实际所需的全部动作，只有少于5步或无法完成才如实stop。目标冻结后不得缩成阶段目标；全部checks有实际证据且实际至少5步才能形成候选，不设首轮或累计最大步数。short_flow、可信前缀和controlled_exception均不形成有效样本，未完成只内部留证。重规划仅列剩余必要动作，完成即结束，不截断，也不凑步。'
@@ -1118,9 +1123,6 @@ class Controller:
         if complete_goal:
             payload['planning_range']={'ordinary_minimum':5,'initial_complete_path_maximum':None,'initial_complete_path_preferred_maximum':8,'cumulative_maximum':None,'remaining_effective_steps':None,'short_flow':'不属于有效候选'}
             payload.setdefault('replan_contract',{}).update(budget_instruction='仅规划完整原目标的剩余必要动作，不设累计执行步数上限；不要重放已完成或无效果的动作。')
-        elif limit==10:
-            payload['planning_range']={'ordinary_minimum':5,'cumulative_maximum':10,'remaining_effective_steps':remaining_step_allowance(s),'short_flow':'自然1–4步保留，不凑步'}
-            payload.setdefault('replan_contract',{}).update(remaining_effective_limit=remaining_step_allowance(s),attempt_limit=10,budget_instruction='仅规划剩余有效动作，累计最多10步；重规划不重置。不要重放已完成或无效果的动作。')
         if limit is None and not complete_goal:
             payload.pop('bands',None)
             contract_payload=payload.get('replan_contract',{})
@@ -1130,7 +1132,7 @@ class Controller:
                 contract_payload['fields']='steps必填；其他字段继承原目标与证据，不设步数额度'
         from .plan_execution import enabled as execution_enabled
         if execution_enabled(s.task):
-            execution_range='不设累计执行步数上限，完成即结束' if complete_goal else '累计最多10步'
+            execution_range='不设累计执行步数上限，完成即结束'
             payload['system']+=f'动作效果与目标完成分开：目录或正文链接点击按原目标、实际href和实测落地核验；未来正文用原问题描述，不把预猜关键词当跳转成功的唯一依据。宿主确认落地只推进当前动作，原问题仍由checks和终点证据独立核验。输入必须先真实聚焦；单位已满足目标只核对不重选。无效前提反馈后只重规划剩余必要动作，{execution_range}，不凑步。'
         from .plan_evidence import READING_COMPLETION_POLICY
         if (s.task['fragment'].get('reading_completion_policy')==READING_COMPLETION_POLICY

@@ -75,7 +75,7 @@ def prepare_data(report, *, reviewer_name, context):
     if not isinstance(reviewer_name, str) or not reviewer_name.strip():
         raise ValueError('盲审需要已确认的真人审核姓名')
     if report.get('scope') != 'delivery':
-        raise ValueError('盲审入口仅接受当前delivery报告及qc-review-2绑定')
+        raise ValueError('盲审入口仅接受当前delivery报告及其审核绑定')
     samples = review_samples(report)
     if not samples or len({s['sample_id'] for s in samples}) != len(samples):
         raise ValueError('盲审需要非空、编号唯一的实际样本')

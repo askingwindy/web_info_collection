@@ -414,7 +414,7 @@ def _human_materials(ledger,receipt,new_paths,output):
     paths=[]
     if records:
         selected=output/'current-human-reviews.json'
-        delivery_sampling.write(selected,{'schema_version':'qc-review-2','records':list(records.values()),
+        delivery_sampling.write(selected,{'schema_version':'qc-review','records':list(records.values()),
             'selection_sources':[dict(sample_id=sid,**record_sources[sid]) for sid in sorted(records)],
             'actual_human_reviews_created':0})
         contexts=[{'sample_id':sid,'sample_path':str(Path(receipt['dataset'])/'samples'/sid)} for sid in current]
@@ -477,7 +477,7 @@ def _status(ledger,receipt_path,output,*,human_reviews=(),progress=None,request_
     history_before=_human_history_hash(ledger,receipt)
     human_paths,human_inputs,human_imports,human_document,human_document_source=_human_materials(ledger,receipt,human_reviews,output)
     if human_document is not None:
-        exported=_read(worker['review_file']) if receipt['mode']=='real' else {'schema_version':'qc-review-2','records':[]}
+        exported=_read(worker['review_file']) if receipt['mode']=='real' else {'schema_version':'qc-review','records':[]}
         exported['delivery_document_review']=human_document
         exported['documentary_resolution']={'actual_human_source':human_document_source,
                                             'original_worker_export':_ref(worker['review_file']),

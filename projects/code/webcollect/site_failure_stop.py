@@ -13,10 +13,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .batch_core import file_sha, load_json
 from .planning import canonical, object_sha256
+from .plan_protocol import REACT_SESSION_PROTOCOL
 from .production_identity import page_url
 
 VERSION = 'webcollect-whole-site-failure-stop-1'
 LIMIT = 3
+# Sealed historical react terminals/receipts keep 'webcollect-react-session-1';
+# current writers emit the stable name. Read-side dual acceptance.
+SEALED_REACT_SESSION_PROTOCOLS = (REACT_SESSION_PROTOCOL, 'webcollect-react-session-1')
 
 
 class SiteStopped(ValueError):
@@ -445,7 +449,7 @@ class SiteFailureStore:
         terminal = load_json(proof['terminal']['path'])
         zero_dispatch = (terminal.get('used') or {}).get('max_actions') == 0
         sealed_react = False
-        if terminal.get('protocol') == 'webcollect-react-session-1':
+        if terminal.get('protocol') in SEALED_REACT_SESSION_PROTOCOLS:
             # A react interruption may carry fully evidenced dispatched actions:
             # every trajectory row has a proven after observation and the raw
             # receipt seals the whole journal by SHA. The only remaining
@@ -457,7 +461,7 @@ class SiteFailureStore:
                 receipt = load_json(receipt_path)
                 rows = [json.loads(line) for line in
                         (raw_dir / 'trajectory.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
-                sealed_react = (receipt.get('protocol') == 'webcollect-react-session-1'
+                sealed_react = (receipt.get('protocol') in SEALED_REACT_SESSION_PROTOCOLS
                                 and terminal.get('unknown') is True
                                 and receipt.get('files_sha256', {}).get('terminal.json')
                                     == file_sha(raw_dir / 'terminal.json')

@@ -750,9 +750,8 @@ class CandidatePool:
     def stats(self):
         with self.pool.connect() as con:
             counts = {r[0]:r[1] for r in con.execute('SELECT state,COUNT(*) FROM data_candidates GROUP BY state')}
-            by_protocol = {}
-            for r in con.execute("SELECT json_extract(body,'$.schema_version') AS v, COUNT(*) FROM data_candidates GROUP BY v"):
-                if r[0] in by_protocol: by_protocol[r[0]] = r[1]
+            by_protocol = {r[0]:r[1] for r in con.execute(
+                "SELECT json_extract(body,'$.schema_version') AS v, COUNT(*) FROM data_candidates GROUP BY v")}
             qc = {r[0]:r[1] for r in con.execute('SELECT qc_state,COUNT(*) FROM candidate_results WHERE effective=1 GROUP BY qc_state')}
             return {'candidate_total':sum(counts.values()), **{k:counts.get(k,0) for k in ('pending','consuming','succeeded','failed','reconcile')},
                     'by_protocol':by_protocol,

@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
+import sqlite3
 import time
 import traceback
 from urllib.parse import urljoin, urlsplit
@@ -1354,7 +1355,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     pool.pool.checkpoint(session,stats_key,state)
             unit+=1
             if max_batches is not None and batches>=max_batches:break
-    except Exception as error:
+    except (ValueError, OSError, sqlite3.Error) as error:
+        # Expected operational failures only (budget stops, UNKNOWN outcomes,
+        # frozen-conflict ValueErrors, IO and SQLite errors). Programming
+        # errors must propagate instead of being masked as a PARTIAL report.
         stopped={'stage':'grounded_producer','type':type(error).__name__,'reason':str(error)}
         diagnostic={'schema_version':'producer-exception-diagnostic-1','recorded_at':time.time(),
                     'batch_scope':run,'unit':unit,'chunk_key':locals().get('chunk_key'),

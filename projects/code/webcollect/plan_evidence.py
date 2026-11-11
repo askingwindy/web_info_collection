@@ -4,7 +4,8 @@ import re
 import unicodedata
 from copy import deepcopy
 from .batch_core import load_json
-from .plan_protocol import PLAN_FACTS_PROTOCOL, READING_PLAN_COMPLETION_POLICY as _READING_POLICY, PLAN_EXECUTION_POLICY as _EXECUTION_POLICY
+from .plan_protocol import (PLAN_FACTS_PROTOCOL, READING_PLAN_COMPLETION_POLICY as _READING_POLICY,
+                            PLAN_EXECUTION_POLICY as _EXECUTION_POLICY, NUMERIC_RESULT_EVIDENCE_POLICY)
 
 VERSION = PLAN_FACTS_PROTOCOL
 
@@ -320,7 +321,7 @@ def facts(s,plan, *, page_urls=None, objective_evidence=None, page_binding=None)
                 process_match=bool(process_check and execution_binding and process_result_text(quote,check.get('field','')))
                 numeric_match=None
                 numeric_policy=(getattr(s,'task',{}).get('fragment',{}).get('numeric_result_evidence_policy')
-                                =='webcollect-numeric-result-evidence-1')
+                                in (NUMERIC_RESULT_EVIDENCE_POLICY,'webcollect-numeric-result-evidence-1'))
                 if numeric_policy:
                     from .numeric_result_evidence import match_result, numeric_target, weak_result_text
                     if weak_result_text(check['visible_text']):continue
