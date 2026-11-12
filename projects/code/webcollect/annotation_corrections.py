@@ -56,6 +56,77 @@ def step_narratives(row, before, element=None, *, current_facts=False):
     visible = bool(label and any(e.get('element_id') == (cid or current.get('element_id'))
                                 for e in before.get('elements', [])))
     result = {}
+    if current_facts:
+        # The saved frame supplies present facts; plans supply intent only.
+        name = '「' + label + '」' if label and label in before.get('visible_text', '') else '目标控件'
+        direction = {'down': '下', 'up': '上', 'left': '左', 'right': '右'}.get(args.get('direction'), '')
+        if action == 'scroll':
+            intent = re.sub(r'^(?:向[上下左右]滚动[，,]?|滚动[，,]?)', '', purpose).strip('，,。 ')
+            # Keep the specific objective, excluding assertions about the viewport.
+            intent = re.split(r'[；;。]', intent)[-1] if re.search('当前|现在|不可见|看不到|未显示', intent) else intent
+            if re.search('当前|现在|不可见|看不到|未显示|展开|收起', intent):
+                intent = '继续核对原目标所需的页面内容'
+            result.update(user_goal=f'向{direction}滚动以{intent or "继续核对页面内容"}',
+                          expected_result=f'预期视口向{direction}移动，显示该方向的页面内容。',
+                          next_step_rationale=f'为{intent or "继续核对页面内容"}，向{direction}滚动以调整视口。')
+        elif action == 'type':
+            value = str(args.get('text', ''))
+            old = current.get('value')
+            selected = current.get('all_text_selected') is True
+            start, end = current.get('selection_start'), current.get('selection_end')
+            selected = selected or (isinstance(old, str) and bool(old) and start == 0 and end == len(old))
+            premise = name + ('已获得焦点' if current.get('focused') else '是本次输入的目标控件')
+            if selected:
+                premise += '，现有内容已全选'
+            elif old == '':
+                premise += '，当前为空'
+            elif current.get('value_visible') is True and current.get('display_value'):
+                premise += '，当前显示「' + str(current['display_value']) + '」'
+            final_value = value if selected or old == '' else None
+            if isinstance(old, str) and type(start) is int and type(end) is int:
+                final_value = old[:start] + value + old[end:]
+            expected_text = (f'预期{name}中的值变为「{final_value}」。' if final_value is not None
+                             else f'预期在{name}的当前插入位置输入「{value}」。')
+            result.update(user_goal=f'在{name}中输入「{value}」', expected_result=expected_text,
+                          next_step_rationale=premise + f'，因此输入「{value}」以设置原目标要求的参数。')
+        elif action == 'hotkey':
+            keys = [str(k).lower() for k in args.get('keys', [])]
+            premise = name + ('已获得焦点' if current.get('focused') else '是本次编辑目标')
+            if set(keys) in ({'meta', 'a'}, {'ctrl', 'a'}, {'command', 'a'}):
+                result.update(user_goal=f'选中{name}中的现有内容以便替换',
+                    expected_result=f'预期选中{name}中的现有内容。',
+                    next_step_rationale=premise + '，需要替换原有输入，因此先全选现有内容。')
+            elif any(key in {'backspace', 'delete'} for key in keys):
+                selected = current.get('all_text_selected') is True or (current.get('value') and current.get('selection_start') == 0 and current.get('selection_end') == len(current['value']))
+                result.update(user_goal=f'删除{name}中的待替换内容',
+                    expected_result=f'预期{name}中的已选内容被删除。' if selected else f'预期删除{name}中光标附近的内容。',
+                    next_step_rationale=premise + ('，现有内容已全选，因此删除它以准备填写目标值。' if selected else '，因此使用删除键编辑现有内容。'))
+            else:
+                result.update(user_goal=f'在{name}执行快捷键操作', expected_result='预期页面响应本次快捷键操作。',
+                    next_step_rationale=premise + '，因此执行快捷键以继续当前任务。')
+        elif action == 'click' and element.get('inputable'):
+            result.update(user_goal=f'聚焦{name}以准备输入', expected_result=f'预期{name}获得焦点。',
+                next_step_rationale=f'原目标需要编辑{name}，因此点击该控件以准备输入。')
+        elif action in ('click', 'double_click', 'right_click'):
+            disclosure = element.get('native_role') == 'summary' or element.get('state') in {'expanded', 'collapsed'}
+            verb = ('收起' if element.get('state') == 'expanded' else '展开') if disclosure else '点击'
+            intent = purpose if not re.search(r'control|summary|e_\d+|schema|当前|现在|可见|看不到|未显示', purpose, re.I) else ''
+            goal = intent or f'{verb}{name}，核对对应的信息'
+            result.update(user_goal=goal,
+                expected_result=f'预期{name}对应的内容{verb}。' if disclosure else f'预期页面响应对{name}的操作并显示相应内容。',
+                next_step_rationale=f'当前页面可见{name}；本步目的是' + goal.rstrip('。') + '。')
+        elif action == 'select':
+            binding = next((b for b in before.get('capture_controls', []) if b.get('element_id') == (cid or current.get('element_id'))), {})
+            option = next((o.get('label') for o in binding.get('options', []) if str(o.get('value')) == str(args.get('value'))), None)
+            choice = '「' + str(option) + '」' if option else '原目标指定的选项'
+            result.update(user_goal=f'在{name}中选择{choice}', expected_result=f'预期{name}显示{choice}。',
+                next_step_rationale=f'{name}用于设置选项，因此选择{choice}以满足原目标条件。')
+        else:
+            intent = purpose if not re.search(r'control|schema|e_\d+', purpose, re.I) else '继续原目标操作'
+            result.update(user_goal=intent, expected_result='预期页面响应本次操作。',
+                next_step_rationale='为' + (intent or '继续原目标操作') + '，执行本次页面操作。')
+        if result:
+            return result
     if action == 'scroll' and expected in ('实测滚动位置改变', '核验预期条件：scroll_changed', 'scroll_changed'):
         direction = {'down': '下', 'up': '上', 'left': '左', 'right': '右'}.get(args.get('direction'))
         if direction:

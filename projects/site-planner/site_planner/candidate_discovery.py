@@ -618,16 +618,17 @@ def main(argv=None):
         if a.create_pool: SitePool(a.pool,initialize=True)
         print(json.dumps(CandidatePool(a.pool,install=True).stats())); return
     if a.command=='produce-entries':
-        print(json.dumps(produce_entries(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,history_set=a.history_set,
+        report=produce_entries(load_json(a.config),pool_path=a.pool,ledger_path=a.ledger,output=a.output,history_set=a.history_set,
             queries=a.query,sources=load_json(a.sources) if a.sources else (),
             directions=read_directions(a.directions) if a.directions else (),
             goals_path=Path(a.goals).absolute() if a.goals else None,target=a.target,max_searches=a.max_searches,
             max_batches=a.max_batches,batch_size=a.batch_size,stall_threshold=a.stall_threshold,
             per_direction_cap=a.per_direction_cap,batch_key=a.batch_key,discovery_mode=a.discovery_mode,feedback_scope=a.feedback_scope,entry_selection=a.entry_selection,
             search_count=a.search_count, search_engine=a.search_engine, categories=a.category, probe_search_hold=a.probe_search_hold, dispatch_holds=a.dispatch_holds, excluded_applications=load_json(a.excluded_applications) if a.excluded_applications else (),
-            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization,application_pending_cap=a.application_pending_cap,application_new_target=a.application_new_target,allowed_hosts=a.allowed_host,site_expansion=a.site_expansion,prefer_simplified_chinese=a.prefer_simplified_chinese),
-            ensure_ascii=False));return
+            producer_pipeline=a.producer_pipeline,producer_optimization=a.producer_optimization,application_pending_cap=a.application_pending_cap,application_new_target=a.application_new_target,allowed_hosts=a.allowed_host,site_expansion=a.site_expansion,prefer_simplified_chinese=a.prefer_simplified_chinese)
+        print(json.dumps(report,ensure_ascii=False))
+        return 0 if report.get('status')=='TARGET_REACHED' else 2
     raise ValueError('Unknown command: '+a.command)
 
 
-if __name__=='__main__': main()
+if __name__=='__main__': raise SystemExit(main())

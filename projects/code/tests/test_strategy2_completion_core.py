@@ -5,7 +5,7 @@ import test_strategy2_runlog_20261111 as substrate
 from webcollect.batch_core import load_json
 from webcollect.screenshot_plan import (
     NO_PROGRESS_STALL_LIMIT, READY_ENDING, _replay_session, narrative_grounding_gaps,
-    verify_completion, normalize_decision,
+    verify_completion, verify_final_presentation, verify_first_evidence_routes, normalize_decision,
 )
 from webcollect.screenshot_session import ScreenshotPlanSession
 
@@ -40,10 +40,15 @@ class CompletionCoreTests(substrate.SessionHarness):
         session.requirements = requirements or [
             {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'},
             {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地'}]
+        for row in session.requirements:
+            row.setdefault('evidence_route', {'source_type': {'input': 'input_state', 'result': 'page_result', 'content': 'page_content'}[row['kind']], 'observation_steps': [1]})
         session.plan = {'steps': [{'action': 'wait', 'duration_ms': 1}]}
+        from webcollect.screenshot_execution import bind_plan_targets
+        session._controls()
+        bind_plan_targets({'requirements': session.requirements}, session.current)
         session.plan_event = session.event('screenshot-plan', phase='first',
             goal=session.frozen_goal, requirements=deepcopy(session.requirements),
-            steps=deepcopy(session.plan['steps']))
+            steps=deepcopy(session.plan['steps']), final_presentation_step=1)
         return session
 
     def _answer(self, oid, index):
@@ -56,12 +61,34 @@ class CompletionCoreTests(substrate.SessionHarness):
         async def choose(prompt):
             index = len(prompts)
             prompts.append(deepcopy(prompt))
-            return {'arguments': {'decision': 'complete', 'reason': '补充当前缺项',
-                'answers': [self._answer(prompt['current_observation'], index)]}}
+            if index == 2:
+                return {'arguments': {'decision': 'complete', 'reason': '原目标事项已逐帧核验', 'answers': []}}
+            decision = {'decision': 'continue' if index == 0 else 'revise', 'reason': '保存当前帧证据',
+                        'answers': [self._answer(prompt['current_observation'], index)]}
+            if index == 1:
+                decision['remaining_plan'] = [{'action': 'wait', 'duration_ms': 1,
+                    'purpose': '等待当前内容稳定', 'rationale': '当前正文可见', 'expected_result': '正文保持稳定'}]
+            return {'arguments': decision}
 
-        session = await self._session(choose)
+        self.surface.state['elements'][-1]['visible'] = False
+        requirements = [
+            {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'},
+            {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地'},
+            {'id': 'i1', 'kind': 'input', 'description': '保留数量10',
+             'target': {'control': 'control-0'}, 'expected_value': '10'}]
+        session = await self._session(choose, requirements)
+        captured_input = session.current['observation_id']
+        for key in ('elements', 'values', 'capture_controls'):
+            self.surface.state[key] = [row for row in self.surface.state[key] if row['element_id'] != 'control-0']
+        await session._observe()
+        self.assertNotIn(captured_input, session.provided_observations)
         session.plan['steps'][0]['target'] = {'control': 'control-0', '_source': {'host': 'private'}}
         self.assertNotIn('_source', session._branch_prompt('plan_end')['remaining_plan'][0]['target'])
+        # The synthetic private-field projection probe is not a real step binding.
+        # Remove it before exercising continue; an unbound _source has no document
+        # identity and correctly makes the production checkpoint reject continue.
+        session.plan['steps'][0].pop('target')
+        self.assertIn('continue', session._branch_prompt('content_visible')['choices'])
         wire = {'decision': 'revise', 'reason': '沿用剩余目标', 'remaining_plan': [{
             'action': 'drag', 'target': {'control': 'control-0', '_source': {'forged': True}},
             'end_target': {'control': 'control-1', '_source': {'forged': True}},
@@ -72,20 +99,52 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertIn('_source', wire['remaining_plan'][0]['target'])
         self.assertEqual(sum(t['transform'] == 'host_binding_field_removed'
                              for t in normalization['transforms']), 2)
+        await session._checkpoint('content_visible')
+        self.assertEqual(set(session.verified_answers), {'r1', 'i1'})
+        self.surface.state['elements'][-2]['visible'] = False
+        self.surface.state['elements'][-1]['visible'] = True
+        await session._observe()
+        await session._checkpoint('content_visible')
+        self.assertEqual(set(session.verified_answers), {'r1', 'r2', 'i1'})
+        self.assertNotEqual(prompts[0]['current_observation'], prompts[1]['current_observation'])
         await session._checkpoint('plan_end')
         self.assertEqual(session.collection_ending['kind'], READY_ENDING)
         self.assertEqual(prompts[1]['missing_requirements'], ['r2'])
-        self.assertEqual(prompts[1]['confirmed_progress'][0]['requirement_id'], 'r1')
+        confirmed = next(row for row in prompts[1]['confirmed_progress'] if row['requirement_id'] == 'i1')
+        self.assertEqual(confirmed['source'], 'host_verified_capture')
+        self.assertFalse(confirmed['model_has_seen'], repr((captured_input, confirmed, session.host_input_proofs)))
+        self.assertNotIn(captured_input, session.provided_observations)
+        self.assertEqual(session.verified_answers['i1']['evidence'][0]['observation'], captured_input)
         event = load_json(session.goal_evidence['screenshot_completion']['path'])
-        self.assertEqual({a['requirement_id'] for a in event['application']['answers']}, {'r1', 'r2'})
+        self.assertEqual({a['requirement_id'] for a in event['application']['answers']}, {'r1', 'r2', 'i1'})
         receipt_ref = session._close()
         record = {**session.record(), 'receipt': load_json(receipt_ref['path']),
                   'terminal': load_json(session.root / 'terminal.json'),
                   'boundary': load_json(session.binding['path'])}
         replay, requirements = _replay_session(record)
+        verify_first_evidence_routes(record, replay)
         checks, gaps = verify_completion(replay, event['application'], requirements)
         self.assertEqual(gaps, [])
         self.assertEqual(checks, event['checks'])
+        self.assertTrue(replay.host_input_proofs)
+        self.assertNotIn(captured_input, replay.provided_observations)
+        saved_proofs, replay.host_input_proofs = replay.host_input_proofs, []
+        _, missing_proof_gaps = verify_completion(replay, event['application'], requirements)
+        self.assertIn('INPUT_STATE_NOT_VERIFIED', {gap['kind'] for gap in missing_proof_gaps})
+        replay.host_input_proofs = saved_proofs
+        visible, gaps = verify_final_presentation(replay, checks, requirements)
+        self.assertEqual(gaps, [])
+        self.assertEqual({row['requirement_id'] for row in visible}, {'r2'})
+        self.assertEqual(session.goal_evidence['final_visible_evidence'], visible)
+        self.assertEqual(record['terminal']['final_observation_id'], event['final_observation_id'])
+        self.assertNotEqual(event['final_observation_id'], prompts[-1]['current_observation'])
+        self.assertNotIn(event['final_observation_id'], replay.provided_observations)
+        self.assertEqual(event['completed_at'], record['terminal']['completed_at'])
+        self.assertEqual(session.first_route_status, 'deviated')
+        self.assertNotIn('identity', str(prompts[1]['known_business_state']))
+        self.assertNotIn('selector', str(prompts[1]['historical_evidence']))
+        self.assertTrue(prompts[1]['historical_evidence'])
+        self.assertTrue(all(row['evidence_only'] for row in prompts[1]['historical_evidence']))
 
     async def test_later_same_form_input_and_submission_invalidate_old_result(self):
         async def choose(prompt):
@@ -114,6 +173,11 @@ class CompletionCoreTests(substrate.SessionHarness):
             'element_id': 'result', 'text': '利润率：40%', 'native_role': 'status',
             'element_type': 'text', 'bbox': [10, 510, 800, 560], 'visible': True,
             'enabled': True, 'inputable': False, 'clickable': False, 'parent_id': 'root'})
+        formula = '本工具核算方法：输入数量先除以0.5，得到利润率百分数。'
+        self.surface.state['elements'].append({
+            'element_id': 'formula', 'text': formula, 'native_role': 'p',
+            'element_type': 'text', 'bbox': [10, 600, 900, 650], 'visible': True,
+            'enabled': True, 'inputable': False, 'clickable': False, 'parent_id': 'root'})
         self.surface.state['capture_controls'].append({'element_id': 'result',
             'selector': '#result', 'tag': 'p', 'form_selector': '#calculator',
             'result_region_selector': '#result'})
@@ -141,6 +205,20 @@ class CompletionCoreTests(substrate.SessionHarness):
         input_checks, input_gaps = verify_completion(session, input_application, [input_requirement])
         self.assertEqual(input_gaps, [])
         self.assertEqual(input_checks[0]['evidence'][0]['actual'], '20')
+        calculation_requirement = {'id': 'cross-check', 'kind': 'content', 'description': '核对利润率数值'}
+        calculation_answer = {'requirement_id': 'cross-check', 'observed_result': '用实际输入按页面公式核算为40%，与本次结果一致',
+            'evidence': [{'observation': result, 'quote': formula}],
+            'calculations': [{'expression': '20 / 0.5', 'source_requirement_ids': ['i1'],
+                             'result_requirement_id': 'r1', 'unit': '%'}]}
+        combined = {'answers': input_application['answers'] + application['answers'] + [calculation_answer]}
+        checks, gaps = verify_completion(session, combined, [input_requirement, *requirement, calculation_requirement])
+        self.assertEqual(gaps, [])
+        self.assertEqual(checks[-1]['calculations'][0]['computed_value'], 40)
+        self.assertNotIn('expected_value', checks[-1]['calculations'][0])
+        invalid = deepcopy(combined)
+        invalid['answers'][-1]['calculations'][0]['expression'] = '20 / 0.6'
+        _, gaps = verify_completion(session, invalid, [input_requirement, *requirement, calculation_requirement])
+        self.assertIn('UNCITED_OPERAND', {gap['kind'] for gap in gaps})
         # Removing a value after calculation is an edit, even though its action is hotkey.
         for action, cid, arguments in [('hotkey', 'control-0', {'keys': ['backspace']}), ('click', 'submit', {})]:
             self.surface.state['values'][0]['value'] = ''
@@ -179,7 +257,13 @@ class CompletionCoreTests(substrate.SessionHarness):
                     'expected_result': '页面出现结果'}]}}
 
         session = await self._session(choose)
+        # The accepted first plan already received this frame. Its first text
+        # read is part of the baseline, before simulating a no-effect dispatch.
+        session.provided_observations.add(session.current['observation_id'])
         session._stall_marker = session._progress_marker()
+        before_refresh = session._stall_marker
+        await session._observe()
+        self.assertEqual(before_refresh, session._progress_marker())
         session._stall_count = NO_PROGRESS_STALL_LIMIT - 1
         session.actual_dispatches += 1  # Dispatched without an established effect.
         session.position = 1          # Cursor bookkeeping is not business progress.

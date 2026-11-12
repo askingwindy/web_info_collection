@@ -10,8 +10,11 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from site_planner.application_discovery import Discovery
+from site_planner.application_discovery import Discovery, classify_homepage, site_context
 from site_planner.candidate_pool import CandidatePool
+from webcollect.batch_core import BatchLedger
+from webcollect.current_chain import current_evidence_roots, read_chain_scope
+from webcollect.planning import object_sha256, verify_evidence
 from .site_inventory import load_scope, resolve_sites, site_statistics
 
 
@@ -50,6 +53,63 @@ def producer_sources(pool, site):
             'SELECT host FROM aliases WHERE application_id=? ORDER BY host', (site['id'],))]
     hosts = sorted({site['host'], urlsplit(homepage['uri']).hostname.lower(), *aliases})
     return source, hosts
+
+
+def prepare_plan(scope_path, selectors, *, sources_path=None):
+    scope_path, scope = load_scope(scope_path)
+    pool = CandidatePool(scope['pool'], readonly=True)
+    selected = resolve_sites(pool, selectors)
+    sites = [site_statistics(pool, site) for site in selected]
+    plan = new_plan('prepare', scope_path, scope, sites)
+    plan['sources'] = str(sources_path.absolute()) if sources_path else None
+    plan['prepared'] = [{'application_id': site['application_id'],
+                         'action': 'reuse' if site['classification_state'] == 'confirmed' else 'classify_serially'}
+                        for site in sites]
+    return plan
+
+
+def prepare_sites(scope_path, selectors, *, sources_path=None):
+    """Confirm selected Table1 rows serially; never produce Table2 candidates."""
+    scope_path, scope = load_scope(scope_path)
+    plan = prepare_plan(scope_path, selectors, sources_path=sources_path)
+    pending = [site for site in plan['sites'] if site['classification_state'] != 'confirmed']
+    if not pending:
+        plan['ready'] = True
+        return plan
+    if not sources_path:
+        raise ValueError('Pending Table1 sites require a homepage sources JSON file')
+    sources = json.loads(Path(sources_path).read_text(encoding='utf-8'))
+    if not isinstance(sources, list) or not sources:
+        raise ValueError('Table1 preparation sources must be a nonempty JSON list')
+    verify_evidence([source['reference'] for source in sources])
+    pool = CandidatePool(scope['pool'])
+    selected_ids = {site['application_id'] for site in plan['sites']}
+    for source in sources:
+        application = pool.pool.application(source['uri'])
+        if not application or application['id'] not in selected_ids:
+            raise ValueError('Preparation source is outside the selected Table1 sites')
+    config = json.loads(Path(scope['producer_config']).read_text(encoding='utf-8'))
+    chain = read_chain_scope(Path(scope['history_set']).absolute())
+    root = current_evidence_roots(chain)[0] / 'producer-evidence' / object_sha256(
+        [config['run_id'], 'table1-prepare'])
+    root.mkdir(parents=True, exist_ok=True)
+    ledger = BatchLedger(scope['producer_db'], config)
+    batch = config['run_id'] + '/table1-prepare'
+    context, failures = site_context(pool, ledger, batch, sources, root)
+    if failures:
+        raise ValueError('Table1 homepage preparation failed: ' + json.dumps(failures, ensure_ascii=False))
+    for site in pending:
+        homepages = [document for document in context
+                     if document.get('site_evidence') == 'homepage'
+                     and (pool.pool.application(document['uri']) or {}).get('id') == site['application_id']]
+        if not homepages:
+            raise ValueError(f'Missing prepared homepage for {site["id"]}')
+        classify_homepage(pool, ledger, homepages[0], root, protocol='producer-site-classification-6')
+    pool = CandidatePool(scope['pool'], readonly=True)
+    selected = resolve_sites(pool, selectors)
+    plan['sites'] = [site_statistics(pool, site) for site in selected]
+    plan['ready'] = all(site['classification_state'] == 'confirmed' for site in plan['sites'])
+    return plan
 
 
 def producer_plan(scope_path, selectors, *, pages_per_site, workers,
@@ -136,6 +196,15 @@ def write_json(path, value):
 def launch(plan):
     root = Path(plan['log_root'])
     root.mkdir(parents=True, exist_ok=False)
+    if plan['role'] == 'producer':
+        for index, worker in enumerate(plan['workers'], 1):
+            command = worker['command']
+            source_index = command.index('--sources') + 1
+            sources = json.loads(command[source_index])
+            source_path = root / f'w{index:03d}-sources.json'
+            write_json(source_path, sources)
+            command[source_index] = str(source_path)
+            worker['sources_path'] = str(source_path)
     write_json(root / 'plan.json', plan)
     children = []
     interrupted = False
@@ -175,6 +244,7 @@ def launch(plan):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest='role', required=True)
+    prepare = sub.add_parser('prepare', allow_abbrev=False)
     producer = sub.add_parser('producer', allow_abbrev=False)
     consumer = sub.add_parser('consumer', allow_abbrev=False)
     for role in (producer, consumer):
@@ -185,6 +255,13 @@ def main(argv=None):
                           help='Total operating-system worker processes, divided evenly across sites')
         role.add_argument('--launch', action='store_true',
                           help='Actually launch and wait; without this flag only print the plan')
+    prepare.add_argument('--scope', type=Path, required=True)
+    prepare.add_argument('--site', action='append', required=True,
+                         help='Existing applications.id or registered primary/alias host; repeatable')
+    prepare.add_argument('--sources', type=Path,
+                         help='Homepage source list required only when a selected site is pending')
+    prepare.add_argument('--launch', action='store_true',
+                         help='Serially classify pending Table1 sites; never produce Table2 rows')
     producer.add_argument('--pages-per-site', type=positive, required=True,
                           help='Cumulative distinct NEW ceiling per site in this project')
     producer.add_argument('--prefer-simplified-chinese', action='store_true')
@@ -192,19 +269,27 @@ def main(argv=None):
                           help='Claim all currently eligible pending rows across producer batches; exit when empty')
     args = parser.parse_args(argv)
     try:
-        if args.role == 'producer':
-            plan = producer_plan(args.scope, args.site, pages_per_site=args.pages_per_site,
-                                 workers=args.workers,
-                                 prefer_simplified_chinese=args.prefer_simplified_chinese)
+        if args.role == 'prepare':
+            if args.launch:
+                result = {'launched': True, **prepare_sites(args.scope, args.site, sources_path=args.sources)}
+                code = 0 if result['ready'] else 2
+            else:
+                result = {'launched': False, **prepare_plan(args.scope, args.site, sources_path=args.sources)}
+                code = 0
         else:
-            plan = consumer_plan(args.scope, args.site, workers=args.workers)
-        if not args.launch:
-            result = {'launched': False, **plan}
-            code = 0
-        else:
-            summary = launch(plan)
-            result = {'launched': True, **plan, 'launch_summary': summary}
-            code = 130 if summary['interrupted'] else 0 if summary['succeeded'] else 1
+            if args.role == 'producer':
+                plan = producer_plan(args.scope, args.site, pages_per_site=args.pages_per_site,
+                                     workers=args.workers,
+                                     prefer_simplified_chinese=args.prefer_simplified_chinese)
+            else:
+                plan = consumer_plan(args.scope, args.site, workers=args.workers)
+            if not args.launch:
+                result = {'launched': False, **plan}
+                code = 0
+            else:
+                summary = launch(plan)
+                result = {'launched': True, **plan, 'launch_summary': summary}
+                code = 130 if summary['interrupted'] else 0 if summary['succeeded'] else 1
     except (KeyError, ValueError, OSError) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))

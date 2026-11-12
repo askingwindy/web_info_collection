@@ -487,15 +487,61 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertEqual(len(self.f.opener.calls), 2)
 
     def test_invalid_response_still_records_its_usage(self):
-        _, job, gateway, runlog = self._gateway()
-        self.fixture.response(self.fixture.message(arguments='{"answer":'))
-        with self.assertRaises(ValueError):
-            self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2)
-        finished = [row for row in self._calls(runlog)
-                    if row['event'] == 'request_finished']
-        self.assertTrue(finished)
-        self.assertEqual({row['state'] for row in finished}, {'invalid_response'})
+        from webcollect.screenshot_plan import decision_tools, normalize_decision
+        from webcollect.model_gateway import field_repair_plan, merge_field_repair
+        from jsonschema import Draft202012Validator, ValidationError
+        ledger, job, gateway, runlog = self._gateway()
+        step = {'action': 'click', 'purpose': '打开参考内容', 'rationale': '当前页面有参考入口',
+                'expected_result': '参考内容进入视口'}
+        original_arguments = {'decision': 'revise', 'reason': '保留已确认事项，只修订尾部', 'answers': [],
+                              'remaining_plan': [{**step, 'target': {'text': '参考说明'}}, deepcopy(step)]}
+        tools = decision_tools(['revise'], ['click'])
+        original_open = self.f.opener.open
+
+        def send(request, timeout):
+            if not self.f.opener.calls:
+                self.f.response(self.f.message(name='plan_decision', arguments=json.dumps(original_arguments)))
+            else:
+                payload = json.loads(request.data)
+                self.assertEqual(payload['tool_choice'], 'auto')
+                self.assertEqual(len(payload['tools']), 1)
+                self.assertEqual(payload['tools'][0]['function']['name'], 'repair_tool_arguments')
+                self.assertEqual(list(payload['tools'][0]['function']['parameters']['properties']), ['field_0'])
+                self.f.response(self.f.message(cid='patch-call', name='repair_tool_arguments',
+                    arguments=json.dumps({'field_0': {'text': '计算公式'}})))
+            return original_open(request, timeout)
+
+        self.f.opener.open = send
+        result = gateway.call_tool(job, 'tools', 'current observation', tools,
+            system='trusted policy', reasoning_effort='low', attempt_id='claim-1', attempts=2,
+            plan_normalizer=lambda value: normalize_decision(value, ['revise'], ['click']))
+        expected = deepcopy(original_arguments)
+        expected['remaining_plan'][1]['target'] = {'text': '计算公式'}
+        self.assertEqual(result['arguments'], expected)
+        self.assertEqual(result['name'], 'plan_decision')
+        self.assertEqual(result['assistant_message_origin'], 'host_field_patch')
+        self.assertEqual(result['provider_assistant_message']['tool_calls'][0]['function']['name'], 'repair_tool_arguments')
+        self.assertEqual(result['argument_repair']['base_arguments'], original_arguments)
+        self.assertEqual(result['argument_repair']['provider_patch'], {'field_0': {'text': '计算公式'}})
+        self.assertEqual(result['argument_repair']['validated_arguments'], expected)
+        finished = [row for row in self._calls(runlog) if row['event'] == 'request_finished']
+        self.assertEqual([row['state'] for row in finished], ['invalid_response', 'succeeded'])
         self.assertEqual(finished[0]['inputTokens'], 250)
+        self.assertIn(['remaining_plan', 1, 'target'],
+                      [row['field_path'] for row in finished[0]['diagnostics']['schema_errors']])
+        with ledger.connect() as con:
+            retained = [json.loads(row['response']) for row in con.execute('SELECT response FROM model_requests ORDER BY attempt')]
+        self.assertEqual(json.loads(retained[0]['provider_response']['choices'][0]['message']['tool_calls'][0]['function']['arguments']), original_arguments)
+        self.assertEqual(retained[1]['provider_response']['choices'][0]['message']['tool_calls'][0]['function']['name'], 'repair_tool_arguments')
+        self.assertEqual(retained[1]['result']['argument_repair']['merged_arguments'], expected)
+        # The patch schema cannot rewrite a valid sibling or bypass full validation.
+        schema = tools[0]['function']['parameters']
+        error = next(Draft202012Validator(schema).iter_errors(original_arguments))
+        repair = field_repair_plan(error, original_arguments, schema, 'plan_decision')
+        with self.assertRaises(ValidationError):
+            merge_field_repair(repair, {'field_0': {'text': '计算公式'}, 'reason': '越权修改'})
+        with self.assertRaises(ValidationError):
+            merge_field_repair(repair, {'field_0': 7})
 
     def test_debug_level_records_sanitized_wire_in_and_out(self):
         _, job, gateway, runlog = self._gateway(level='DEBUG')
@@ -568,7 +614,9 @@ class ChooserRunlogTests(unittest.IsolatedAsyncioTestCase):
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                             level='DEBUG', claim_id='claim-1')
         plan = {'goal': '阅读正文并回答原名',
-                'requirements': [{'id': 'r1', 'kind': 'content', 'description': '阅读正文并回答原名'}],
+                'final_presentation_step': 5,
+                'requirements': [{'id': 'r1', 'kind': 'content', 'description': '阅读正文并回答原名',
+                    'evidence_route': {'source_type': 'page_content', 'observation_steps': [5]}}],
                 'steps': [{'action': 'scroll', 'direction': 'down', 'purpose': f'阅读第{i}段',
                            'rationale': '逐段滚动阅读正文以找到答案',
                            'expected_result': '看到下一段正文'} for i in range(5)]}
@@ -658,8 +706,9 @@ class ScreenshotSessionRunlogTests(SessionHarness):
     def _plan(self):
         return {'goal': '修改数量为20并查看本次利润率结果',
                 'requirements': [
-                    {'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果'}],
-                'steps': self._steps()}
+                    {'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果',
+                     'evidence_route': {'source_type': 'page_result', 'observation_steps': [len(self._steps())]}}],
+                'final_presentation_step': len(self._steps()), 'steps': self._steps()}
 
     def _session(self, name, choose, runlog=None):
         evidence = self.root / name / 'evidence' / 'S000001_sample_000201'

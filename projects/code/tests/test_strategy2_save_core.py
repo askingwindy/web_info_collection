@@ -42,6 +42,70 @@ class Strategy2SaveCore(unittest.TestCase):
             self.assertEqual(annotation['steps'][0]['action']['target_text'], '搜尋欄')
             self.assertEqual(annotation['steps'][0]['tool_call'], original['steps'][0]['tool_call'])
             self.assertEqual(state_path.read_bytes(), original_state)
+            from webcollect.annotation_corrections import step_narratives
+            from webcollect.collect import describe_change
+            before = {'title': '测试', 'url': 'https://example.test/', 'visible_text': '厚度',
+                'scroll': [0, 0], 'elements': [{'element_id': 'input', 'text': '厚度',
+                    'element_type': 'input', 'inputable': True, 'visible': True, 'state': 'focused'}],
+                'values': [{'element_id': 'input', 'value': '4', 'display_value': '4',
+                    'value_visible': False, 'focused': True, 'selection_start': None, 'selection_end': None}]}
+            row = {'action': 'hotkey', 'arguments': {'keys': ['ctrl', 'a']},
+                'target': {'control_id': 'input'}, 'semantic_goal': '当前厚度为4，全部选中后改为6'}
+            prose = step_narratives(row, before, before['elements'][0], current_facts=True)
+            self.assertNotIn('4', prose['next_step_rationale'])
+            self.assertNotIn('4', prose['user_goal'])
+            selected = deepcopy(before)
+            selected['values'][0]['all_text_selected'] = True
+            typed = step_narratives({'action': 'type', 'arguments': {'text': '6'},
+                'target': {'control_id': 'input'}}, selected, before['elements'][0], current_facts=True)
+            self.assertIn('已获得焦点', typed['next_step_rationale'])
+            self.assertIn('已全选', typed['next_step_rationale'])
+            self.assertIn('值变为「6」', typed['expected_result'])
+            clicked = step_narratives({'action': 'click', 'semantic_goal': '展开control e_26 summary',
+                'target': {'control_id': 'help'}}, {'visible_text': '运作原理', 'values': [],
+                'elements': [{'element_id': 'help', 'text': '运作原理'}]},
+                {'element_id': 'help', 'text': '运作原理', 'native_role': 'summary'}, current_facts=True)
+            self.assertIn('运作原理', clicked['next_step_rationale'])
+            self.assertNotIn('e_26', clicked['next_step_rationale'])
+            self.assertEqual(postprocess.terminal_fallback_timestamp({'terminal': {'completed_at': '2026-11-12T01:00:00+08:00'}}),
+                             '2026-11-12T01:00:00+08:00')
+            self.assertEqual(postprocess.terminal_fallback_timestamp({'terminal': {}}), '')
+            # A result region contains every newly rendered answer, including
+            # the fourth row; an unrelated navigation refresh is excluded.
+            from webcollect.collect import action_content_changes
+            old = {'visible_text': '计算', 'elements': [
+                {'element_id': 'go', 'text': '计算', 'native_role': 'button', 'parent_id': 'root',
+                 'element_type': 'button', 'inputable': False, 'state': 'default'}]}
+            leaves = [{'element_id': 'r' + str(i), 'text': text, 'native_role': 'span',
+                       'element_type': 'text', 'parent_id': 'result'}
+                      for i, text in enumerate(['体积', '72.00 cu ft', '2.67 cu yd', '120 (80lb bags)'])]
+            new = {'visible_text': '体积\n72.00 cu ft\n2.67 cu yd\n120 (80lb bags)\n侧栏99',
+                   'elements': old['elements'] + [
+                       {'element_id': 'result', 'text': '', 'native_role': 'status', 'parent_id': 'root'},
+                       {'element_id': 'nav', 'text': '', 'native_role': 'navigation', 'parent_id': 'root'},
+                       {'element_id': 'ad', 'text': '侧栏99', 'native_role': 'span',
+                        'element_type': 'text', 'parent_id': 'nav'}] + leaves}
+            self.assertEqual(action_content_changes(old, new, old['elements'][0]),
+                             ['体积', '72.00 cu ft', '2.67 cu yd', '120 (80lb bags)'])
+            long_text = '长度乘宽度再乘厚度，厚度先除以12换为英尺；体积除以27换为立方码，再除以0.6核算袋数。'
+            long_after = deepcopy(new)
+            long_after.update(title='测试', url='https://example.test/', scroll=[0, 0], values=[])
+            long_after['elements'].append({'element_id': 'formula', 'text': long_text,
+                'native_role': 'p', 'element_type': 'text', 'parent_id': 'result'})
+            long_after['visible_text'] += '\n' + long_text
+            long_before = {**old, 'title': '测试', 'url': 'https://example.test/', 'scroll': [0, 0], 'values': []}
+            result = describe_change(long_before, long_after, {'action_type': 'click',
+                'arguments': {}, 'goal': '查看公式'}, old['elements'][0])
+            self.assertIn(long_text, result)
+            from webcollect.task_contract import narrative_evidence
+            self.assertEqual(narrative_evidence(result, long_before, long_after, {})[0], result)
+            for goal in ['点击计算', '展开运作原理']:
+                title = goal[2:]
+                word = step_narratives({'action': 'click', 'semantic_goal': goal},
+                    {'visible_text': title, 'elements': [], 'values': []},
+                    {'text': title, 'native_role': 'summary' if goal.startswith('展开') else 'button'}, current_facts=True)
+                self.assertEqual(word['user_goal'].count(title), 1)
+                self.assertNotIn('以' + goal, word['user_goal'])
 
     def test_qualified_derivation_destination_failure_retains_eligibility_and_evidence(self):
         # Supply the already verified execution boundary; exercise real goal
@@ -56,6 +120,21 @@ class Strategy2SaveCore(unittest.TestCase):
             quote = '页面已经显示本次查询的完整结果。'
             state_path.write_text(json.dumps({'title': '查询结果', 'url': 'https://example.test/',
                 'visible_text': quote, 'elements': [], 'values': []}, ensure_ascii=False))
+            # Derived arithmetic conclusions are labelled as calculation, while
+            # each source quote retains its real observation/frame basis.
+            derived = {'terminal': {'goal_evidence': {'business_goal_status': 'VERIFIED', 'checks': [
+                {'field': '比例核对', 'status': 'VERIFIED',
+                 'completion_mapping': 'cited_arithmetic_cross_check',
+                 'observed_visible_text': '两份合计为24',
+                 'calculations': [{'expression': '12 * 2', 'computed_value': 24, 'unit': '份'}],
+                 'evidence': [{'observation_id': 'o1', 'quote': quote}]}]}},
+                'observations': {'o1': {'state_path': str(state_path)}}, 'trajectory': []}
+            narrative = postprocess.planned_terminal_narrative(derived, {'visible_text': quote}, 'o1')
+            self.assertIn('计算核验通过', narrative['final_result'])
+            self.assertEqual(narrative['completion_judgement'].count('12 * 2 = 24'), 1)
+            self.assertNotIn('比例核对', narrative['final_result'])
+            self.assertIn('推导核对', narrative['completion_judgement'])
+            self.assertIn(quote, narrative['completion_judgement'])
             original_state = state_path.read_bytes()
             delivery = root / 'delivery'
             delivery.write_bytes(b'existing destination must remain untouched')

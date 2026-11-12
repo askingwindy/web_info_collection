@@ -44,6 +44,34 @@ def verify_document(document):
     return original
 
 
+def reusable_source_document(ledger, source):
+    """Reuse only an intact document from a completed normal evidence GET.
+
+    A generic source reference may point to HTML, text or a search receipt. Such
+    material is a hint for normal fetching, not an already-observed document.
+    Integrity failures remain failures; only a different format takes fallback.
+    """
+    ref = source['reference']
+    verify_evidence([ref])
+    try:
+        document = load_json(ref['path'])
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if (not isinstance(document, dict) or document.get('uri') != source['uri']
+            or document.get('site_evidence') not in ('homepage', 'directory', 'about')
+            or not isinstance(document.get('raw_html'), dict) or not document.get('job_id')):
+        return None
+    with ledger.connect() as con:
+        job = con.execute('SELECT kind,state,result FROM jobs WHERE id=?', (document['job_id'],)).fetchone()
+    if (job is None or job['kind'] != 'application-evidence-get' or job['state'] != 'done'
+            or json.loads(job['result'] or '{}') != {key: ref[key] for key in ('path', 'sha256')}
+            or type(document.get('http_status')) is not int or not 200 <= document['http_status'] < 300):
+        return None
+    verified = verify_document({**document, 'reference': ref})
+    verify_evidence([verified['raw_html']])
+    return verified
+
+
 class Discovery:
     def __init__(self, pool, *, install=False):
         self.pool = pool
@@ -401,7 +429,21 @@ def site_context(pool, ledger, batch, hits, output, *, isolate_homepages=False, 
                 if (pool.pool.application(h['uri']) or {}).get('id')==aid:
                     h['known_site_decision']={k:known[k] for k in ('decision_id','category','homepage','taxonomy_version')}
             continue
-        supplied=[h for h in hits if h.get('site_evidence')=='homepage' and (pool.pool.application(h['uri']) or {}).get('id')==aid]
+        supplied = []
+        for source in hits:
+            if source.get('site_evidence') != 'homepage' or (pool.pool.application(source['uri']) or {}).get('id') != aid:
+                continue
+            document = reusable_source_document(ledger, source)
+            if document is not None:
+                supplied.append(document)
+                for index, item in enumerate(context):
+                    if item.get('reference') == source['reference']:
+                        context[index] = {**item, **document, 'reference': source['reference']}
+            else:
+                # An unverified homepage label on a generic source stays a hint.
+                for item in context:
+                    if item.get('reference') == source['reference']:
+                        item.pop('site_evidence', None)
         if supplied:
             continue
         p=urlsplit(hit['uri']); match=re.match(r'^/(zh(?:-CN|-TW|-Hans|-Hant)?)(?:/|$)',p.path,re.I)

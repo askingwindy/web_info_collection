@@ -35,8 +35,82 @@ class PlanProtocolContract(unittest.TestCase):
         self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan'))
         self.assertEqual(DEFAULT_STRATEGY, STRATEGY_BANDED_REACT)
 
-    def test_candidate_consumption_binding_name_is_stable(self):
-        self.assertEqual(CONSUMPTION_VERSION, 'candidate-consumption')
+    def test_saved_research_requires_frozen_production_comparison(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        import sqlite3
+        from webcollect.batch_core import file_sha
+        from webcollect.candidate_contract import validate_research_v2
+        from webcollect.session_objective import VERSION
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def freeze(name, value):
+                path = root / name
+                path.write_text(json.dumps(value))
+                return {'path': str(path), 'sha256': file_sha(path)}
+            objective = freeze('session-objective.json', {'schema_version': VERSION,
+                'candidate_id': 'candidate', 'version': 1})
+            receipt = freeze('saved.json', {'sample_id': 'sample'})
+            binding = {'output': str(root), 'registry': str(root/'registry'),
+                       'ledger': str(root/'ledger'), 'history_set': str(root/'manifest')}
+            comparison = {'role': 'comparison', 'claim_id': 'original',
+                          'sample_id': 'sample', 'save_receipt': receipt}
+            auth = {'scope': 'fixed-baseline-research-only', 'candidate_id': 'candidate',
+                    'version': 1, 'original_claim_id': 'original', 'objective': objective,
+                    'comparisons': [comparison], 'production_counted': False,
+                    'pool': str(root/'pool'), 'registry': binding['registry']}
+            descriptor = {'schema_version': 'candidate-research-replay',
+                'original_claim_id': 'original', 'objective': objective,
+                'authorization': freeze('authorization.json', auth),
+                'comparisons': [comparison], 'production_counted': False}
+            con = sqlite3.connect(':memory:'); con.row_factory = sqlite3.Row
+            con.execute('CREATE TABLE candidate_claims(candidate_id,claim_id,binding,state)')
+            con.execute('CREATE TABLE candidate_results(candidate_id,claim_id,sample_id,record,effective)')
+            saved = {'sample_id': 'sample', 'registry': binding['registry'], 'save_receipt': receipt}
+            con.execute('INSERT INTO candidate_claims VALUES(?,?,?,?)',
+                        ('candidate','original',json.dumps(binding),'succeeded'))
+            con.execute('INSERT INTO candidate_results VALUES(?,?,?,?,1)',
+                        ('candidate','original','sample',json.dumps(saved))); con.commit()
+            @contextmanager
+            def connect():
+                yield con
+            pool = SimpleNamespace(path=root/'pool', pool=SimpleNamespace(connect=connect))
+            original = {'candidate_id':'candidate','claim_id':'original','version':1,
+                        'state':'succeeded','binding':binding}
+            validate_research_v2(descriptor, pool, original)
+            self.assertEqual(con.execute('SELECT effective FROM candidate_results').fetchone()[0], 1)
+            auth['comparisons'] = []; descriptor['comparisons'] = []
+            descriptor['authorization'] = freeze('authorization.json', auth)
+            with self.assertRaisesRegex(ValueError, 'production comparison'):
+                validate_research_v2(descriptor, pool, original)
+            # The browser-close proof permits only its named next research
+            # request; ordinary guards use it only while that claim is active.
+            from unittest.mock import patch
+            from webcollect.request_quarantine import authorized_transport_research
+            con.execute('ALTER TABLE candidate_claims ADD COLUMN request_id')
+            with sqlite3.connect(root/'pool') as disk:
+                con.backup(disk)
+            facts = {'pool':str(root/'pool'),'candidate_id':'candidate',
+                     'claim_id':'original','next_request_id':'run-r03/new-research'}
+            with sqlite3.connect(root/'registry') as registry:
+                registry.execute('CREATE TABLE m4_events(event_type,attempt_id,payload_json)')
+                registry.execute('INSERT INTO m4_events VALUES(?,?,?)',
+                    ('planning_timeout_research_authorized','attempt',json.dumps({
+                     'authorization':descriptor['authorization'],'closed_execution':facts})))
+            with patch('webcollect.request_quarantine.transport_closed_execution', return_value=facts):
+                self.assertTrue(authorized_transport_research(root/'registry','attempt',request_id='run-r03/new-research'))
+                self.assertFalse(authorized_transport_research(root/'registry','attempt',request_id='run-r04/new-research'))
+                self.assertFalse(authorized_transport_research(root/'registry','attempt'))
+                with sqlite3.connect(root/'pool') as disk:
+                    disk.execute('INSERT INTO candidate_claims VALUES(?,?,?,?,?)',
+                        ('candidate','next',json.dumps({'research_replay':{
+                         'original_claim_id':'original','production_counted':False}}),
+                         'consuming','run-r03/new-research'))
+                self.assertTrue(authorized_transport_research(root/'registry','attempt'))
+                with sqlite3.connect(root/'pool') as disk:
+                    disk.execute("UPDATE candidate_claims SET state='failed' WHERE claim_id='next'")
+                self.assertFalse(authorized_transport_research(root/'registry','attempt'))
+            con.close()
 
 
 class ClosingPolicyContract(unittest.TestCase):

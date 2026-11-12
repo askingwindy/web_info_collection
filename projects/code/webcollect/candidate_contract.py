@@ -25,7 +25,8 @@ def research_v2_inputs(descriptor):
     objective = load_json(descriptor['objective']['path'])
     authorization = load_json(descriptor['authorization']['path'])
     comparisons = descriptor['comparisons']
-    if (objective.get('schema_version') != 'webcollect-session-objective-1'
+    from .session_objective import VERSION as OBJECTIVE_PROTOCOL
+    if (objective.get('schema_version') != OBJECTIVE_PROTOCOL
             or authorization.get('scope') != 'fixed-baseline-research-only'
             or authorization.get('candidate_id') != objective.get('candidate_id')
             or authorization.get('version') != objective.get('version')
@@ -50,20 +51,51 @@ def research_v2_inputs(descriptor):
 
 
 def validate_research_v2(descriptor, pool, original, registry=None):
-    """One replay rule: settled failed sources and settled nonproduction saves."""
+    """Explicit same-objective replay; original production results stay effective."""
     authorization = research_v2_inputs(descriptor)
     old = original.get('binding') or {}
     objective = load_json(descriptor['objective']['path'])
+    permitted_reconcile = False
+    if original['state'] == 'reconcile':
+        from .candidate_consumer import _original_attempts
+        from .request_quarantine import authorized_transport_research
+        attempts = _original_attempts(original)
+        permitted_reconcile = bool(authorization.get('new_request_id') and attempts and all(
+            authorized_transport_research(old['registry'],row['attempt_id'],request_id=authorization['new_request_id'])
+            for row, _ in attempts))
     if (original['claim_id'] != descriptor['original_claim_id']
-            or original['state'] not in ('failed', 'succeeded')
+            or original['state'] not in ('failed', 'succeeded') and not permitted_reconcile
             or (original['candidate_id'], original['version']) !=
                (objective.get('candidate_id'), objective.get('version'))
-            or any(not old.get(k) for k in ('output', 'registry', 'ledger', 'history_set'))):
+            or any(not old.get(k) for k in ('registry', 'ledger', 'history_set'))):
         raise ValueError('Research replay requires a settled failed or saved nonproduction original execution')
     from .batch_core import file_sha
-    original_objective = Path(old['output']) / 'session-objective.json'
-    if file_sha(original_objective) != descriptor['objective']['sha256']:
-        raise ValueError('Research v2 cannot change original objective bytes')
+    if old.get('output'):
+        original_objective = Path(old['output']) / 'session-objective.json'
+        if file_sha(original_objective) != descriptor['objective']['sha256']:
+            raise ValueError('Research v2 cannot change original objective bytes')
+    else:
+        # A rejected startup has no output directory: reuse its already frozen
+        # research input, only with proof that it never reached observation.
+        replay = old.get('research_replay')
+        if (original['state'] != 'failed' or original.get('stage') != 'claimed'
+                or not replay or replay.get('objective') != descriptor['objective']):
+            raise ValueError('Research original has no frozen output objective')
+        research_v2_inputs(replay)
+        from .candidate_consumer import _original_attempts
+        if _original_attempts(original):
+            raise ValueError('Unstarted research original already has a formal attempt')
+        with pool.pool.connect() as con:
+            events = [json.loads(row[0]) for row in con.execute(
+                "SELECT record FROM candidate_events WHERE claim_id=? AND kind='research_claimed'",
+                (original['claim_id'],)).fetchall()]
+        if replay not in events:
+            raise ValueError('Unstarted research lacks its frozen claim event')
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(Path(old['ledger']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+            if any(original['claim_id'] in payload for (payload,) in con.execute('SELECT payload FROM jobs')):
+                raise ValueError('Unstarted research already has observation/planning jobs')
     if (Path(authorization['pool']).resolve() != pool.path.resolve()
             or Path(authorization['registry']).resolve() != Path(old['registry']).resolve()
             or registry is not None and Path(registry).resolve() != Path(old['registry']).resolve()):
@@ -80,11 +112,16 @@ def validate_research_v2(descriptor, pool, original, registry=None):
             row = con.execute('SELECT * FROM candidate_results WHERE candidate_id=? AND claim_id=?',
                               (original['candidate_id'], original['claim_id'])).fetchone()
             saved = json.loads(row['record']) if row else {}
-            if (not row or not nonproduction_save(row, saved, old)
+            original_comparison = {'role': 'comparison', 'claim_id': original['claim_id'],
+                                   'sample_id': saved.get('sample_id'),
+                                   'save_receipt': saved.get('save_receipt')}
+            saved_source = (row and (nonproduction_save(row, saved, old)
+                            or row['effective'] == 1 and original_comparison in descriptor['comparisons']))
+            if (not saved_source
                     or saved.get('sample_id') != row['sample_id']
                     or Path(saved.get('registry', '')).resolve() != Path(old['registry']).resolve()
                     or not saved.get('save_receipt')):
-                raise ValueError('Research replay requires the original saved nonproduction result')
+                raise ValueError('Research replay requires the original saved result and production comparison')
             verify_evidence([saved['save_receipt']])
             if load_json(saved['save_receipt']['path']).get('sample_id') != row['sample_id']:
                 raise ValueError('Research source save receipt differs')

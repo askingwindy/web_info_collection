@@ -34,7 +34,7 @@ def _control_row(cid, control, allowed):
     text = (element.get('text') or '').strip()
     if text:
         row['text'] = text[:60]
-    for key in ('value', 'focused', 'selection_start', 'selection_end', 'all_text_selected', 'checked', 'value_visible'):
+    for key in ('value', 'input_type', 'focused', 'selection_start', 'selection_end', 'all_text_selected', 'checked', 'value_visible'):
         if key in value and value[key] is not None and (key != 'value' or value.get('value_visible') is True):
             row[key] = str(value[key])[:60] if key == 'value' else value[key]
     if element.get('state') == 'focused' or element.get('focused') is True or (control.get('probe') or {}).get('focused') is True:

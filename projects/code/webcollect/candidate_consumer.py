@@ -18,7 +18,7 @@ from .candidate_contract import capability
 from .request_quarantine import job_conflicts
 
 
-def guard_request_scope(ledger, uri, *, candidate_id=None):
+def guard_request_scope(ledger, uri, *, candidate_id=None, research_request_id=None):
     """Check original request ownership before any browser/model dispatch."""
     from .application_identity import canonical_key
     from .current_chain import PROJECT_RULES
@@ -41,7 +41,7 @@ def guard_request_scope(ledger, uri, *, candidate_id=None):
             site = payload.get('site_uri')
             if job_conflicts(
                     ledger,uri,candidate_id,payload,running=row['state']=='reserved',
-                    registry=row['registry'],dispatched_attempt=row['dispatch_attempt'],candidate_only=True):
+                    registry=row['registry'],dispatched_attempt=row['dispatch_attempt'],candidate_only=True,research_request_id=research_request_id):
                 raise OutcomeUnknown('Original model request unresolved for this scope; no dispatch: ' + row['id'])
             isolated.append({'kind':'model_request','id':row['id'],'site_uri':site,'state':row['state']})
         if con.execute("SELECT 1 FROM sqlite_master WHERE name='top_level_visits'").fetchone():
@@ -57,9 +57,9 @@ def guard_request_scope(ledger, uri, *, candidate_id=None):
     return isolated
 
 
-def guard_candidate_dispatch(ledger, uri, *, candidate_id):
+def guard_candidate_dispatch(ledger, uri, *, candidate_id, research_request_id=None):
     """Read-only preflight shared by candidate selection, collection and targeted recovery."""
-    isolated = guard_request_scope(ledger, uri, candidate_id=candidate_id)
+    isolated = guard_request_scope(ledger, uri, candidate_id=candidate_id,research_request_id=research_request_id)
     guard = ledger.config.get('site_failure_guard')
     # Formal planning also checks unfinished decision jobs, including those
     # without a reserved HTTP request. Use the same owner resolver here before
@@ -71,7 +71,7 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
             AND j.state IN ('queued','running','review_required')""").fetchall()
     for row in jobs:
         if job_conflicts(ledger, uri, candidate_id, json.loads(row['payload']),
-                         running=row['state']=='running', registry=row['registry'],candidate_only=True):
+                         running=row['state']=='running', registry=row['registry'],candidate_only=True,research_request_id=research_request_id):
             raise OutcomeUnknown('Original planning job unresolved for this scope; no dispatch: '+row['id'])
     # Site facts may not yet have ingested a just-interrupted formal attempt.
     # Consult its owning original registry read-only, as formal site_context does.
@@ -90,8 +90,8 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id):
             task=json.loads(raw);owner=(task.get('candidate_binding') or {}).get('candidate_id')
             conflict=bool(owner and owner==candidate_id)
             if conflict:
-                from .request_quarantine import accounted_rejected_focus
-                if accounted_rejected_focus(registry,attempt_id):continue
+                from .request_quarantine import accounted_closed_execution
+                if accounted_closed_execution(registry,attempt_id,research_request_id=research_request_id):continue
                 raise OutcomeUnknown('Original formal attempt unresolved for this scope; no dispatch: '+attempt_id)
     return isolated
 
@@ -975,16 +975,20 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     return results if bounded else {'processed':processed,'stop_reason':stop_reason,'events':str(events)}
 
 
-def guard_original_dispatch(original):
+def guard_original_dispatch(original, *, research_request_id=None):
     """Read the original execution accounts; no retry or state transition."""
     binding = original.get('binding') or {}
     candidate_id = original['candidate_id']
     for row,task in _original_attempts(original):
+        from .request_quarantine import authorized_http400_retry, authorized_transport_research
+        if (authorized_http400_retry(binding['registry'], row['attempt_id'])
+                or authorized_transport_research(binding['registry'],row['attempt_id'],request_id=research_request_id)):
+            continue
         if list(unverified_original_actions(row)):
             raise OutcomeUnknown('Original dispatched action has no verified after observation; no retry or replacement attempt')
         if row['status'] in ('reserved','running','interrupted') or row.get('failure_class') in ('unknown','interrupted'):
-            from .request_quarantine import accounted_rejected_focus
-            if not accounted_rejected_focus(binding['registry'],row['attempt_id']):
+            from .request_quarantine import accounted_closed_execution
+            if not accounted_closed_execution(binding['registry'],row['attempt_id']):
                 raise ValueError('Original runtime attempt unresolved; no retry')
     if binding.get('ledger'):
         with closing(sqlite3.connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
@@ -994,15 +998,19 @@ def guard_original_dispatch(original):
                 WHERE j.state IN ('running','review_required') AND j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')""").fetchall()
         ledger=BatchLedger(binding['ledger'],config)
         uri=original['snapshot']['entry_url']
-        guard_candidate_dispatch(ledger,uri,candidate_id=candidate_id)
+        guard_candidate_dispatch(ledger,uri,candidate_id=candidate_id,research_request_id=research_request_id)
         for state,raw,registry in jobs:
-            if job_conflicts(ledger,uri,candidate_id,json.loads(raw),running=state=='running',registry=registry):
+            if job_conflicts(ledger,uri,candidate_id,json.loads(raw),running=state=='running',registry=registry,research_request_id=research_request_id):
                 raise ValueError('Original planning/decision unresolved for this scope; no retry')
 
 
-def retry(pool, candidate_id, *, reason, recovery=None):
+def retry(pool, candidate_id, *, reason, recovery=None, authorization=None, closed_authorization=None):
     """Explicit retry only after reconciling original requests, visits and saves."""
     if not reason: raise ValueError('Explicit retry reason required')
+    if authorization and closed_authorization:
+        raise ValueError('Choose one original execution authorization')
+    definite = bool(closed_authorization)
+    authorization = closed_authorization or authorization
     if recovery:
         with pool.pool.connect() as con:
             for r in con.execute("SELECT record FROM candidate_events WHERE candidate_id=? AND kind='disposition'", (candidate_id,)):
@@ -1021,6 +1029,13 @@ def retry(pool, candidate_id, *, reason, recovery=None):
     if saved: finish_or_reconcile(pool,original,reconciliation=True)
     binding=original.get('binding') or {}
     if binding.get('registry'): sync_candidate_qc(pool.path,binding['registry'])
+    if authorization:
+        from .runtime import RuntimeStore
+        # This is an explicit appended permit, never a rewrite of the old claim.
+        with closing(sqlite3.connect(Path(binding['registry']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+            row = con.execute('SELECT scope_id FROM m4_attempts WHERE attempt_id=?', (binding['attempt_id'],)).fetchone()
+        RuntimeStore(binding['registry'], row[0]).authorize_http400_new_attempt(
+            binding['attempt_id'], authorization={'path': str(Path(authorization).resolve()), 'sha256': file_sha(authorization)}, definite=definite)
     guard_original_dispatch(original)
     with pool.transaction() as con:
         disposition = pool.disposition(con, candidate_id)
@@ -1044,7 +1059,9 @@ def retry(pool, candidate_id, *, reason, recovery=None):
         if current['state'] not in ('failed','reconcile','succeeded'): raise ValueError('Candidate is not retryable')
         con.execute('UPDATE candidate_results SET effective=0 WHERE candidate_id=?',(candidate_id,))
         con.execute("UPDATE data_candidates SET state='pending' WHERE candidate_id=?",(candidate_id,))
-        pool.event(con,candidate_id,original['claim_id'],'explicit_retry',{'reason':reason,'prior_state':current['state']})
+        pool.event(con,candidate_id,original['claim_id'],'explicit_retry',
+            {'reason':reason,'prior_state':current['state'], 'original_disposition':disposition,
+             'http400_authorization': str(Path(authorization).resolve()) if authorization else None})
         if recovery:
             pool.event(con,candidate_id,original['claim_id'],'disposition',
                 {**disposition, **recovery, 'disposition':'recovery_ready','original_disposition':disposition})
@@ -1083,7 +1100,7 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('--pool',required=True)
     sub=p.add_subparsers(dest='command',required=True)
     listp=sub.add_parser('list')
-    retry_p=sub.add_parser('retry'); retry_p.add_argument('--candidate-id',required=True); retry_p.add_argument('--reason',required=True)
+    retry_p=sub.add_parser('retry'); retry_p.add_argument('--candidate-id',required=True); retry_p.add_argument('--reason',required=True); retry_p.add_argument('--http400-authorization',type=Path); retry_p.add_argument('--closed-execution-authorization',type=Path)
     claim=sub.add_parser('claim'); claim.add_argument('--worker-id',required=True); claim.add_argument('--request-id',required=True)
     reconcile=sub.add_parser('reconcile'); reconcile.add_argument('--claim-id',required=True)
     runp=sub.add_parser('run')
@@ -1133,7 +1150,7 @@ def main(argv=None):
                 detail=details[r['candidate_id']]
                 r.update(discovery_tokens=detail['discovery_tokens'],consumer_result=detail['consumer_result'])
         result={'records':records,'statistics':statistics(pool)}
-    elif a.command=='retry': result=retry(pool,a.candidate_id,reason=a.reason)
+    elif a.command=='retry': result=retry(pool,a.candidate_id,reason=a.reason,authorization=a.http400_authorization,closed_authorization=a.closed_execution_authorization)
     elif a.command=='claim': result=pool.claim_next(a.worker_id,a.request_id)
     elif a.command=='reconcile': result=finish_or_reconcile(pool,pool.get_claim(a.claim_id),reconciliation=True)
     else:

@@ -17,7 +17,7 @@ from urllib.parse import urljoin, urlsplit
 from webcollect.batch_core import BatchLedger, OutcomeUnknown, load_json, save_json
 from webcollect.model_gateway import ModelGateway
 from webcollect.planning import object_sha256, verify_evidence
-from .application_discovery import Discovery, POLICY, site_context, classify_homepage, verify_document
+from .application_discovery import Discovery, POLICY, site_context, classify_homepage, verify_document, reusable_source_document
 from .candidate_pool import CandidatePool, VERSION2, entry_identity, landing_key
 from .discovery_agent import model_tool_decision
 from .discovery_tools import reference, glm_search, search_channel_hold
@@ -399,9 +399,9 @@ def bounded_directories(pool, ledger, run, documents, seeds, root, aliases, excl
                 failures.append({'uri':h['uri'],'stage':'directory','reason':'original_unresolved_source'});continue
             try:
                 # Reuse an explicitly frozen first-party directory, including archived evidence.
-                doc=load_json(h['reference']['path'])
-                if doc.get('uri')==h['uri'] and doc.get('raw_html'):
-                    verify_document({**doc,'reference':h['reference']});ref=h['reference']
+                doc=reusable_source_document(ledger,h)
+                if doc is not None:
+                    ref=h['reference']
                 else:doc,ref=homepage_document(ledger,run+'/directory',h['uri'],root)
                 result[aid+'/'+identity]={**doc,'reference':ref,'application_id':aid}
             except Exception as error:

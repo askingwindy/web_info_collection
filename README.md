@@ -1,5 +1,7 @@
 # WebCollect
 
+2026-11-12 策略2统一收口：首轮完整规划、可引用历史证据、宿主自动输入核验、当前结果终态与动作相关标注生成已集中修改。真实复验按本轮最多五次授权执行，旧成功样本和生产计数保留；研发新尝试另存。方案、验收边界和实际进展见[统一修复记录](docs/规划证据终态与标注统一修复-20261112.md)。
+
 ## 按站点统计与多进程启动（2026-11-11）
 
 新增 `webcollect.site_inventory` 与 `webcollect.site_workers`，不拆每站 SQLite，不改 Table1／Table2 结构或消费者 claim/snapshot 契约。站点选择器接受稳定的 `applications.id`、主 host 或已登记 alias host；内部派发始终使用 `applications.id`，不是交付展示编号 `S000001`。
@@ -31,7 +33,11 @@ $PY -B -m webcollect.site_workers consumer \
 
 不带 `--launch` 时只输出 JSON 命令计划，不创建运行目录或启动进程。生产模式要求站点已有 confirmed Table1 分类和可核验首页证据，`--pages-per-site` 是工程内跨批累计 DISTINCT NEW 上限；启动器按剩余量分配 worker，并同时设置该站 pending 上限，避免默认 100 条 pending 限制提前停止。消费模式不传 `--producer-batch`，每个 worker 固定一个 `application_id`，跨全部生产批次领取当前 pending；新增 `--stop-when-empty` 使空库存返回 `candidates_exhausted`，不再无限轮询。持续生产时仍使用原持续轮询入口。
 
-显式启动后，启动器保持前台并等待全部子进程，日志、计划和退出码写入 `results/site-workers/<plan_id>/`；Ctrl-C 会终止并等待已启动子进程，不建立独立后台服务。本轮全工程 50 条核心测试通过（7.785 秒），独立离线集成 4 项通过，见 `verify_results/site-workers-20261111-r01/`。真实 GLM、真实网页采集、真实消费者业务执行、真实多进程和 QC 均为 NOT_RUN。
+显式启动后，启动器保持前台并等待全部子进程，日志、计划和退出码写入 `results/site-workers/<plan_id>/`；生产者的每份 `--sources` JSON 会先落为同目录 `wNNN-sources.json`，子进程接收文件路径而非 JSON 字符串。Ctrl-C 会终止并等待已启动子进程，不建立独立后台服务。首轮全工程 50 条核心测试通过（7.785 秒），独立离线集成 4 项通过，见 `verify_results/site-workers-20261111-r01/`；该轮真实 GLM、真实网页采集、真实消费者业务执行、真实多进程和 QC 均为 NOT_RUN。
+
+2026-11-12 来源文件接线修复后的离线集成为 5 项 PASS（含 20 个轻量子进程与长中文来源回读），见 `verify_results/site-workers-sources-20261112-r01/`。随后真实补采 `results/site-workers/20261112001538-22ced6ea/` 的 20 个生产进程均退出 0，但业务报告仅 3 个 TARGET_REACHED、17 个 PARTIAL；Table2 累计 Muxtly 45（净增 0、缺 155）、Wiki 60（净增 60、缺 140）。Muxtly 受原模型 UNKNOWN 阻塞，Wiki 7 个 PARTIAL 另报并发分类变化；未自动续跑，消费者、QC、审核和导出均未运行。
+
+2026-11-11 策略2 动作多样性与控件投影统一优化：一次真实 wiki「月食」首轮暴露出模型看到 11 种步动作却提交 6 步连续 scroll。根因是控件投影固定取前 30 条、第 2 层保持文档原序，30 个名额里 15 个被 nav/form/div/span/img/h2 等不可派发容器占掉，9 条目录链接只投影 2 条、正文链接 0 条；加上候选 `requested_goal` 为空时的通用指令过泛，模型自提了纯线性通读目标。已修：区域型 scroll 目标无 `text` 时的 `KeyError` 崩溃、目标绑定异常未走有界检查点、RAW_PENDING 结算丢弃会话自己的 failureClass；控件投影改为只下发可派发行、正文可点控件先于站点导航、上限 30→60，并每观察归档一次 `screenshot-controls` 事件（此前 `provided_control_ids` 只在内存，事后无法核对模型看到了什么）；prompt 补全 11 种步动作与参数形状、禁止纯线性通读目标、首轮下发 `interaction_affordances` 交互形态事实清单，`first_plan_admission` 记 `action_histogram`。月食首帧离线复算：正文可点链接 0→29，不可动作容器行 15→0。全工程仍 50 条核心测试（只扩展断言，未新增执行项），`50 passed`、7.68 秒。**一处行为变化**：program 类 RAW_PENDING 现在会暂停整站 scope。真实 GLM、真实网页采集、独立 QC 与人工验收均 NOT_RUN，策略2 至今无 success 基线，效果需用户单独授权一次真实重跑才能确认。详见[方案与实施结果](docs/策略2动作多样性与控件投影统一优化草稿-20261111.md)。
 
 2026-11-11 输入规划与采集闭环统一修复已由 `gpt-6.1-sol / low` 子会话完成，见 [SSD 与实施记录](docs/策略2输入规划与采集闭环统一修复SSD-20261111.md)。策略2按需修改输入框，支持全选覆盖及全选删除后输入，贯通预期值检查、相关输入重提依据和 input/result/content 完成证据。检查覆盖35个不同核心用例，实际断点修复后受影响项均通过，维护总量仍为50；完整五步离线链在 integration 模式通过封存复核和机械保存。本轮未运行真实 GLM、真实网页或 QC，正式生产保存未验证；此前 Muxtly 十九步、零保存的失败原件保留。
 
@@ -611,3 +617,5 @@ Agent 只复用同站页面结构、控件语义、动作能力及绑定/重规�
 ### 单独消费者启动与策略2编号
 
 `candidate_consumer run` 在工程绑定检查后，仅当模型账户池不可用时执行已有启动探测；同一 `request-prefix` 视为同一次 launch，已有 UNKNOWN 探测不重发。campaign 的 worker 复用协调器健康记录。池仍不可用时返回 `key_pool_unavailable`，不无限轮询。策略2可引用当前观察 controls 中的 control ID 或对应 number。
+
+2026-11-12 策略2整体Agent状态、证据与输入契约统一修复及有界Muxtly验证见 [本轮记录](docs/策略2整体Agent修复与Muxtly有界验证-20261112.md)。真实完成与正式保存以逐轮收据为准。

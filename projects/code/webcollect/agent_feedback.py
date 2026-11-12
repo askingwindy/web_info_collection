@@ -208,8 +208,8 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                     result['executions'].append(entry)
                     unresolved = row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
                     if unresolved and scoped:
-                        from .request_quarantine import accounted_rejected_focus
-                        if accounted_rejected_focus(registry,row['attempt_id']):
+                        from .request_quarantine import accounted_closed_execution
+                        if accounted_closed_execution(registry,row['attempt_id']):
                             entry['focus_effect_accounted']=True
                             unresolved=False
                     if unresolved and (not owner_id or owner_id == candidate_id):
@@ -218,10 +218,14 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
         with model_ledger.connect() as con:
             generation_rows = con.execute("SELECT id,payload,result,created FROM jobs WHERE kind='task-generation' "
                                           "AND state='done' ORDER BY created DESC").fetchall()
-            for row in con.execute("""SELECT j.id,j.state,j.payload,json_extract(p.payload,'$.registry') AS registry
+            # Finalize the SELECT before recursively auditing original requests.
+            # A live cursor retains SHARED in rollback-journal SQLite; a pending
+            # writer then blocks the nested reader while waiting for this cursor.
+            decision_jobs = con.execute("""SELECT j.id,j.state,j.payload,json_extract(p.payload,'$.registry') AS registry
                     FROM jobs j LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
                     WHERE j.kind IN ('task-generation','fragment-decision','react-decision','react-native-decision')
-                    AND j.state IN ('queued','running','review_required')"""):
+                    AND j.state IN ('queued','running','review_required')""").fetchall()
+            for row in decision_jobs:
                 payload = json.loads(row['payload'])
                 if scoped:
                     blocks = job_conflicts(model_ledger, site_uri, candidate_id, payload,

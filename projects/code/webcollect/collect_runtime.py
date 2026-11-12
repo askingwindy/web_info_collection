@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 
@@ -33,6 +34,8 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
+    if isinstance(error, sqlite3.OperationalError):
+        return 'program'
     from .agent_controller import ControllerStop
     if isinstance(error, ControllerStop):
         return {'UNRESOLVED':'interrupted', 'DUPLICATE':'duplicate', 'EXECUTION_FAILED':'model',
@@ -184,6 +187,8 @@ def _evidence(path):
 
 def _root_cause(error):
     import re
+    if isinstance(error, sqlite3.OperationalError):
+        return type(error).__name__ + ': ' + str(error)
     if isinstance(error, NavigationTimeoutError):
         return 'navigation_timeout'
     match = re.search(r'net::ERR_[A-Z_]+', str(error))
@@ -606,6 +611,10 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         runlog.info('raw_sealed', derivationStatus=derived['status'],
             effectiveSteps=summary['effective_steps'], stopReason=summary['stop_reason'])
     if derived['status'] != 'derived_saved':
+        if runlog is not None and derived['status'] == 'processing_failed':
+            runlog.info('derivation_failed', errorCode=derived.get('error'),
+                stepId=derived.get('step_id'), operationId=derived.get('operation_id'),
+                recordRef=derived.get('record_ref'))
         errors = derived.get('errors') or []
         if (task['fragment'].get('decision_protocol') == NATIVE_REACT and derived['status'] == 'delivery_rejected'
                 and errors and all(error.startswith('producer_exact_dedup:') for error in errors)):
@@ -617,7 +626,9 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             # save failure; an explicit delivery rejection is not saved and
             # ineligible.
             return await finish_failure('program', 'derivation_' + derived['status'] + ': ' +
-                                  str(derived.get('error') or derived.get('errors') or '')[:300],
+                                  str(derived.get('error') or derived.get('errors') or '')[:240] +
+                                  ('; step_id=' + str(derived['step_id']) if 'step_id' in derived else '') +
+                                  ('; operation_id=' + str(derived['operation_id']) if 'operation_id' in derived else ''),
                                   strategy_save_status=('save_failed' if derived['status'] == 'processing_failed' else 'not_saved'),
                                   strategy_eligibility=(derived.get('save_eligibility', 'unresolved')
                                       if screenshot_strategy(task) and derived['status'] == 'processing_failed'
@@ -1070,6 +1081,9 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                          'not_business_success_evidence': True})
                         raise
                     except Exception as error:
+                        if isinstance(error, sqlite3.OperationalError) and runlog is not None:
+                            runlog.info('failed', failureClass='program',
+                                errorType=type(error).__name__, rootCause=_root_cause(error))
                         # If success already committed, never reinterpret it as a failed attempt.
                         committed = next(row for row in store.attempt_ledger()['attempts']
                                          if row['attempt_id'] == attempt['attempt_id'])
@@ -1080,7 +1094,9 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         if not failure.exists():
                             write_json(failure, {'error': str(error), 'timestamp': now(),
                                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
-                                'failure_class': classify_failure(error)})
+                                'failure_class': classify_failure(error),
+                                **({'error_type': type(error).__name__, 'root_cause': _root_cause(error)}
+                                   if isinstance(error, sqlite3.OperationalError) else {})})
                         from .agent_feedback import save_attempt_feedback
                         feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt, 'rejected', str(error))
                         # The attempt ledger settles before any file relocation:

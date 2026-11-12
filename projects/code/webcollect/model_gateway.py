@@ -458,6 +458,90 @@ def native_generation_options(model, *, output_limit=None, reasoning_effort=None
     return result
 
 
+def field_repair_plan(error, arguments, schema, tool_name):
+    """One explicit leaf-field repair, using the original selected schema only."""
+    from jsonschema.exceptions import ValidationError
+    if not isinstance(error, ValidationError) or not isinstance(arguments, dict):
+        return None
+    def selected(node, value):
+        variants = node.get('oneOf') if isinstance(node, dict) else None
+        if variants:
+            matches = [variant for variant in variants if any(
+                isinstance(value, dict) and value.get(key) == rule.get('const')
+                for key, rule in variant.get('properties', {}).items() if 'const' in rule)]
+            if len(matches) != 1:
+                return None
+            return matches[0]
+        return node
+    def locate(path):
+        node, value = schema, arguments
+        for part in path:
+            node = selected(node, value)
+            if not isinstance(node, dict):
+                return None, None
+            if isinstance(part, int) and isinstance(value, list) and 0 <= part < len(value):
+                node, value = node.get('items'), value[part]
+            elif isinstance(part, str) and isinstance(value, dict) and part in node.get('properties', {}):
+                node, value = node['properties'][part], value.get(part)
+            else:
+                return None, None
+        return selected(node, value), value
+    def leaves(item):
+        if item.context:
+            for child in item.context:
+                yield from leaves(child)
+        else:
+            yield item
+    fields = {}
+    for item in leaves(error):
+        path = list(item.absolute_path)
+        if not path:
+            return None
+        parent_schema, value = locate(path)
+        if parent_schema is None:
+            continue
+        if item.validator == 'required':
+            if not isinstance(value, dict):
+                continue
+            missing = [key for key in parent_schema.get('required', []) if key not in value]
+            for key in missing:
+                child = parent_schema.get('properties', {}).get(key)
+                if isinstance(child, dict):
+                    fields[tuple(path + [key])] = child
+        elif item.validator in ('type', 'enum', 'minLength', 'maxLength', 'minimum', 'maximum', 'pattern'):
+            if list(Draft202012Validator(parent_schema).iter_errors(value)):
+                fields[tuple(path)] = parent_schema
+        elif item.validator not in ('const',):
+            return None
+    # Whole plans/decisions and discriminators cannot be safely patched as fields.
+    forbidden = {'steps', 'remaining_plan', 'requirements', 'answers', 'decision', 'action', 'goal'}
+    if not fields or len(fields) > 6 or any(path[-1] in forbidden for path in fields):
+        return None
+    paths = sorted(fields, key=lambda path: json.dumps(path))
+    if any(path[:len(other)] == other for path in paths for other in paths if path != other):
+        return None
+    properties = {f'field_{index}': {**deepcopy(fields[path]),
+        'description': 'Replace only the exact argument field at JSON path ' + json.dumps(list(path), ensure_ascii=False)}
+        for index, path in enumerate(paths)}
+    patch_schema = {'type': 'object', 'additionalProperties': False, 'properties': properties, 'required': list(properties)}
+    return {'tool_name': tool_name, 'base_arguments': deepcopy(arguments), 'paths': [list(path) for path in paths],
+            'schema': patch_schema, 'original_schema': schema,
+            'tools': [{'type': 'function', 'function': {'name': 'repair_tool_arguments',
+                'description': 'Only replace the listed invalid fields. All other original arguments are frozen; never guess a target.',
+                'parameters': patch_schema}}]}
+
+
+def merge_field_repair(repair, patch):
+    Draft202012Validator(repair['schema']).validate(patch)
+    merged = deepcopy(repair['base_arguments'])
+    for index, path in enumerate(repair['paths']):
+        parent = merged
+        for part in path[:-1]:
+            parent = parent[part]
+        parent[path[-1]] = deepcopy(patch[f'field_{index}'])
+    return merged
+
+
 class ModelGateway:
     def __init__(self, ledger, runlog=None):
         self.ledger = ledger
@@ -563,8 +647,10 @@ class ModelGateway:
                   plan_normalizer=None):
         """Native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
-        Returned assistant/user messages are copied verbatim into attempt history;
-        reasoning_content belongs only in controlled protocol storage.
+        Provider assistant messages stay in provider_response. A bounded field repair
+        returns an explicitly marked host-composed assistant tool call for history,
+        alongside the unchanged provider patch and its merge provenance; ordinary
+        assistant/user messages remain verbatim. Reasoning stays in controlled storage.
         """
         if self.config['model']['provider'] == 'synthetic' and synthetic_response is None:
             raise ValueError('Synthetic tool adapter needs explicit assistant response')
@@ -791,6 +877,8 @@ class ModelGateway:
                 self._credential = self.ledger.bind_model_session(session_id, consumer=consumer)
                 self._session_id = session_id
         correction = None
+        field_repair = None
+        field_repair_used = False
         qc_binding = {}
         if qc_transport:
             try: material = json.loads(text)
@@ -853,6 +941,8 @@ class ModelGateway:
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
                         'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
                         'accounting_mode':'tokens-1', **timeout_retry,
+                        **({'field_repair': {'source_request_id': field_repair['source_request_id'],
+                            'allowed_paths': field_repair['paths'], 'tools': field_repair['tools']}} if field_repair else {}),
                         **({'transport_policy':QC_TRANSPORT_POLICY,
                             'focal_sample_id':job['payload'].get('candidate',{}).get('sample_id'),
                             'comparison_version':job['payload'].get('comparison_version'),
@@ -896,6 +986,10 @@ class ModelGateway:
             rid = request['id']
             self._log_request_started(job, rid, model, purpose, native_context=native_context)
             usage, parsed, raw = None, None, None
+            original_arguments = None
+            argument_repair = None
+            name = None
+            arguments = None
             normalization_record = None
             transport_receipt = {}
             settling_locally = False
@@ -917,7 +1011,9 @@ class ModelGateway:
                         if correction:
                             payload['messages'][-1]['content'] = deepcopy(parts) + [{'type':'text','text':correction}]
                         if not native_context.get('plain_json'):
-                            payload.update(tools=tools, tool_choice='auto')
+                            payload.update(tools=field_repair['tools'] if field_repair else tools, tool_choice='auto')
+                            if field_repair:
+                                payload['messages'][0]['content'] += '\n本轮仅调用repair_tool_arguments修复列出的精确字段。原工具其余字段已冻结，不重新生成计划。'
                         payload.update(native_generation_options(model, output_limit=output_limit,
                                                                  reasoning_effort=native_context['reasoning_effort']))
                     elif compatible_provider:
@@ -997,7 +1093,7 @@ class ModelGateway:
                 tool_calls = choice['message'].get('tool_calls') or []
                 tool_name = None
                 if native_context and not native_context.get('plain_json'):
-                    if not tool_calls and native_context.get('content_plan_protocol')=='strict-plan-content':
+                    if not field_repair and not tool_calls and native_context.get('content_plan_protocol')=='strict-plan-content':
                         arguments=strict_plan_content(choice['message'],native_context['declared'])
                         parsed={'response_kind':'strict_plan_content','content_plan_protocol':'strict-plan-content',
                                 'arguments':arguments,'request_id':rid,'source':'provider_content',
@@ -1012,10 +1108,20 @@ class ModelGateway:
                             raise ValueError('Tool protocol requires a unique nonempty call ID')
                         function = call.get('function') or {}
                         name = function.get('name')
-                        if call.get('type') != 'function' or name not in native_context['declared']:
+                        expected_names = {'repair_tool_arguments'} if field_repair else native_context['declared']
+                        if call.get('type') != 'function' or name not in expected_names:
                             raise ValueError('Tool name not declared')
                         original_arguments = json.loads(function.get('arguments') or '')
-                        arguments = normalize_structured_fields(original_arguments)
+                        if field_repair:
+                            argument_repair = {'source_request_id': field_repair['source_request_id'],
+                                'original_tool_name': field_repair['tool_name'],
+                                'base_arguments': deepcopy(field_repair['base_arguments']),
+                                'allowed_paths': deepcopy(field_repair['paths']), 'provider_patch': deepcopy(original_arguments)}
+                            arguments = merge_field_repair(field_repair, original_arguments)
+                            argument_repair['merged_arguments'] = deepcopy(arguments)
+                            name = field_repair['tool_name']
+                        else:
+                            arguments = normalize_structured_fields(original_arguments)
                         if not isinstance(arguments, dict):
                             raise ValueError('Tool arguments must be an object')
                         declared=native_context['declared'][name]
@@ -1027,8 +1133,14 @@ class ModelGateway:
                             # are both retained, and missing fields stay precise.
                             arguments, normalization_record = native_context['plan_normalizer'](arguments)
                         Draft202012Validator(declared).validate(arguments)
+                        assistant_message = {**deepcopy(choice['message']), 'role': 'assistant'}
+                        if argument_repair:
+                            assistant_message['tool_calls'][0]['function'] = {'name': name, 'arguments': json.dumps(arguments, ensure_ascii=False)}
+                            argument_repair['validated_arguments'] = deepcopy(arguments)
                         parsed = {'name':name, 'arguments':arguments, 'tool_call_id':cid,
-                                  'assistant_message':{**deepcopy(choice['message']), 'role':'assistant'},
+                                  'assistant_message':assistant_message,
+                                  **({'argument_repair': argument_repair, 'assistant_message_origin': 'host_field_patch',
+                                      'provider_assistant_message': deepcopy(choice['message'])} if argument_repair else {}),
                                   'user_message':deepcopy(user_message), 'request_id':rid,
                                   **({'plan_normalization': normalization_record}
                                      if normalization_record is not None else {})}
@@ -1069,7 +1181,24 @@ class ModelGateway:
                 detail = {'http_status': error.code, 'reason': 'provider_http_error'}
                 try:
                     body = {} if qc_transport else json.loads(error.read(65536))
-                    code = (body.get('error') or {}).get('code') if isinstance(body, dict) else None
+                    provider_error = (body.get('error') or {}) if isinstance(body, dict) else {}
+                    code = provider_error.get('code') if isinstance(provider_error, dict) else None
+                    if isinstance(provider_error, dict):
+                        message = str(provider_error.get('message') or '')[:1200]
+                        if self._credential:
+                            message = message.replace(self._credential, '[REDACTED]')
+                        # Provider prose is untrusted: remove keys, bearer tokens, URLs and quoted values.
+                        message = re.sub(r'(?i)(?:bearer\s+|sk-)[A-Za-z0-9_.-]+', '[REDACTED]', message)
+                        message = re.sub(r'https?://\S+', '[URL]', message)
+                        message = re.sub(r'([\"\'])(?:(?!\1).)*?\1', '[quoted value]', message)
+                        detail['provider_message'] = message[:500]
+                        parameter = provider_error.get('param')
+                        if isinstance(parameter, str) and re.fullmatch(r'[A-Za-z0-9_.$\[\]-]{1,200}', parameter):
+                            detail['parameter_path'] = parameter
+                    detail['request_shape'] = {'top_level_fields': sorted(payload),
+                        'message_count': len(payload.get('messages') or []),
+                        'tool_count': len(payload.get('tools') or []),
+                        'tool_names': [row.get('function', {}).get('name') for row in payload.get('tools') or []]}
                     if isinstance(code, (int, str)) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', str(code)):
                         detail['provider_code'] = str(code)
                     if native_context and str(code) in ('1302', '1305'):
@@ -1083,7 +1212,7 @@ class ModelGateway:
                     record_result(self.ledger, self._account_id(), code=detail.get('provider_code'),
                                   retry_after=detail.get('retry_after_seconds', 60))
                 self._settle_failure(job,rid, state='unknown', error='HTTPError:' + str(error.code),
-                                           response={'provider_error': detail, **transport_receipt})
+                                           response={'provider_error': detail, 'failure_diagnostic': {'source': 'provider_http_error', **detail}, **transport_receipt})
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
             except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 # Retain each timeout as UNKNOWN; retry only within this active call.
@@ -1135,11 +1264,13 @@ class ModelGateway:
                 self._settle_failure(job,rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
                                            response={'result': parsed, 'provider_response': raw, **transport_receipt,
+                                               **({'argument_repair': argument_repair} if argument_repair else {}),
                                                **({'plan_normalization': normalization_record}
                                                   if normalization_record is not None else {}),
                                                'failure_diagnostic': {
                                                    'source': 'no_provider_response' if raw is None else 'response_validation',
                                                    'error_type': type(error).__name__,
+                                                   'schema_errors': schema_error_feedback(error),
                                                    **({'local_cause': str(error)[:350]}
                                                       if raw is None and isinstance(error, (AssertionError, KeyError)) else {})}},
                                            error=type(error).__name__)
@@ -1148,6 +1279,8 @@ class ModelGateway:
                         + ('no_provider_response' if raw is None else 'provider_usage_invalid')
                         + '; error=' + type(error).__name__) from None
                 invalid_attempts += 1
+                if field_repair:
+                    raise ValueError('bounded_field_repair_failed: patch retained; no further correction dispatch') from None
                 failure_key = protocol_failure_key(error)
                 if consumer and failure_key in protocol_failures:
                     with self.ledger.transaction() as con:
@@ -1172,8 +1305,16 @@ class ModelGateway:
                                          'detail': "missing required field '" + row['field'] + "'"}
                                         for row in normalizer_missing
                                         if tuple(row['path'].split('.')) not in known][:12]
+                    if not field_repair_used and name in ('submit_plan', 'plan_decision') and isinstance(arguments, dict):
+                        field_repair = field_repair_plan(error, arguments, native_context['declared'][name], name)
+                        if field_repair:
+                            field_repair_used = True
+                            field_repair['source_request_id'] = rid
                     correction = json.dumps({'protocol_error':type(error).__name__,
                         'errors':errors,
+                        'rejected_tool_arguments': original_arguments,
+                        **({'allowed_repair_paths': field_repair['paths'],
+                            'repair_instruction': 'Return only repair_tool_arguments fields. Preserve every unlisted original argument; no action was dispatched.'} if field_repair else {}),
                         'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
             else:
                 # Local settlement is outside response parsing/format correction.

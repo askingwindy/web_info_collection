@@ -1254,6 +1254,9 @@ class RawSessionCore:
             truth = action_availability(dispatch_state, element, binding, value, probe, action)
             if truth['status'] != PROVEN:
                 raise ValueError(truth['status'] + ': ' + truth['reason'] + '（' + str(cid) + '）')
+            if action == 'type' and getattr(policy, 'STRATEGY', None) == 'screenshot_plan':
+                from .screenshot_execution import validate_input_precondition
+                validate_input_precondition(row, value, probe)
             if action in ('click','double_click') and excluded_article(self.task,binding.get('href')):
                 raise ValueError('ARTICLE_OUTSIDE_RUN_SCOPE')
             control = {'binding': binding, 'labels': readable_labels(probe)}
@@ -1963,6 +1966,7 @@ class RawSessionCore:
                               force_pending=not (budget_prefix or definite_tail))
             self.stop_reason=original_stop
         terminal = {'protocol': REACT_VERSION, 'state': self.state, 'stop_reason': self.stop_reason,
+            **({'completed_at': self.completed_at} if getattr(self, 'completed_at', None) else {}),
             **({'collection_ending':self.collection_ending} if self._v2() else {}),
             'host_failure':getattr(self,'host_failure',False),
             **({'glm_http_requests':self.glm_http_requests} if self.glm_http_requests is not None else {}),

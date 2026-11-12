@@ -1017,6 +1017,35 @@ class RuntimeStore:
                         row['task_key'], attempt_id)
             return self._view(saved)
 
+    def authorize_http400_new_attempt(self, attempt_id, *, authorization, definite=False, now=None):
+        """Append user permission without settling usage or changing old outcomes."""
+        from .batch_core import load_json
+        from .request_quarantine import http400_closed_execution, definite_closed_execution
+        verify_evidence([authorization])
+        verify = definite_closed_execution if definite else http400_closed_execution
+        facts = verify(self.registry, attempt_id, load_json(authorization['path']))
+        with self._transaction() as con:
+            row = self._attempt(con, attempt_id)
+            self._event(con, 'closed_execution_new_attempt_authorized' if definite else 'http400_new_attempt_authorized', timestamp(now),
+                        {'authorization': authorization, 'closed_execution': facts, 'definite_execution': definite},
+                        row['task_key'], attempt_id)
+        return facts
+
+    def authorize_planning_timeout_research(self, attempt_id, *, authorization, now=None):
+        """Append one bounded research permit; retain original UNKNOWN accounting."""
+        from .batch_core import load_json
+        from .request_quarantine import transport_closed_execution
+        verify_evidence([authorization])
+        facts = transport_closed_execution(self.registry, attempt_id, load_json(authorization['path']))
+        with self._transaction() as con:
+            row = self._attempt(con, attempt_id)
+            prior = con.execute("SELECT payload_json FROM m4_events WHERE event_type='planning_timeout_research_authorized' AND attempt_id=?",(attempt_id,)).fetchall()
+            if any(json.loads(raw[0])['closed_execution']['next_request_id'] == facts['next_request_id'] for raw in prior):
+                raise ValueError('This next research request already has its appended permit')
+            self._event(con,'planning_timeout_research_authorized',timestamp(now),
+                        {'authorization':authorization,'closed_execution':facts},row['task_key'],attempt_id)
+        return facts
+
     def reconcile_sealed_rejection(self, attempt_id, *, raw_receipt, failure, process_exit, model_ledger, cancellation_audit=None, rejected_focus_audit=None, now=None):
         """Close an expired orphan only from its known, sealed failed execution.
 

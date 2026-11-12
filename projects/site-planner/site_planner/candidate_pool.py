@@ -606,9 +606,22 @@ class CandidatePool:
             latest = con.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? '
                                  'ORDER BY created DESC,rowid DESC LIMIT 1', (candidate_id,)).fetchone()
             if (latest[0] != original_claim_id or con.execute("SELECT 1 FROM candidate_claims WHERE candidate_id=? "
-                    "AND state IN ('consuming','reconcile')", (candidate_id,)).fetchone()):
+                    "AND state='consuming'", (candidate_id,)).fetchone()):
                 raise ValueError('Research requires latest settled claim; original collection unresolved')
-            guard_original_dispatch(original)
+            # Historical UNKNOWN rows remain unchanged. Only an already appended,
+            # evidence-verified new-attempt permit can isolate their execution.
+            from webcollect.candidate_consumer import _original_attempts
+            from webcollect.request_quarantine import authorized_http400_retry, authorized_transport_research
+            for historical in con.execute("SELECT * FROM candidate_claims WHERE candidate_id=? AND state='reconcile'",
+                                          (candidate_id,)).fetchall():
+                historical = self._claim(historical)
+                guard_original_dispatch(historical,research_request_id=request_id)
+                attempts = list(_original_attempts(historical))
+                if not attempts or any(not authorized_http400_retry(
+                        historical['binding']['registry'], attempt['attempt_id']) and not authorized_transport_research(
+                        historical['binding']['registry'], attempt['attempt_id'],request_id=request_id) for attempt, _ in attempts):
+                    raise ValueError('Historical unresolved execution lacks its existing explicit new-attempt permit')
+            guard_original_dispatch(original,research_request_id=request_id)
             body = json.loads(row['body'])
             bind(objective, {'candidate_id': candidate_id, 'version': version, 'snapshot': body})
             sources = [json.loads(r[0]) for r in con.execute(

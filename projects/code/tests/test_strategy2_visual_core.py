@@ -92,6 +92,28 @@ class VisualPage:
 
 class Strategy2VisualCore(unittest.TestCase):
     def test_plan_target_provenance_rebind_and_wrong_object_refusal(self):
+        from webcollect.screenshot_plan import first_plan_admission, normalize_submit_plan
+        route_plan = {'goal': '读取结果并根据页面依据核对',
+            'requirements': [
+                {'id': 'result', 'kind': 'result', 'description': '读取业务结果',
+                 'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
+                {'id': 'check', 'kind': 'content', 'description': '核对结果',
+                 'evidence_route': {'source_type': 'derived_check', 'observation_steps': [4], 'depends_on': ['result']}}],
+            'final_presentation_step': 5,
+            'steps': [{'action': 'scroll', 'direction': 'down', 'purpose': '读取必要依据',
+                       'rationale': '计划前提：需要读取目标依据', 'expected_result': '必要依据进入视口'} for _ in range(5)]}
+        normalized, _ = normalize_submit_plan(route_plan)
+        self.assertEqual(normalized, route_plan)
+        self.assertTrue(first_plan_admission(normalized)[0])
+        invalid_route = deepcopy(route_plan)
+        invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [6]
+        self.assertEqual(first_plan_admission(invalid_route)[1]['kind'], 'EVIDENCE_ROUTE_INVALID')
+        invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [4]
+        invalid_route['requirements'][1]['evidence_route']['depends_on'] = ['unknown']
+        self.assertFalse(first_plan_admission(invalid_route)[0])
+        invalid_route = deepcopy(route_plan)
+        invalid_route['requirements'][0].pop('evidence_route')
+        self.assertEqual(first_plan_admission(invalid_route)[1]['kind'], 'PLAN_FIELDS_INVALID')
         original = observation()
         original['provided_control_ids'] = ['input1']
         rows = controls_projection(original, ['click', 'type'])
@@ -207,10 +229,25 @@ class Strategy2VisualCore(unittest.TestCase):
         select_all = {'action': 'hotkey', 'control_id': 'input1', 'keys': ['ctrl', 'a'],
                       'goal': '全选原数值', 'expected': '原数值已全选'}
         self.assertEqual(compile_step(task, [], select_all, focused_obs)[0]['keys'], ['ctrl', 'a'])
+        with self.assertRaisesRegex(ValueError, 'HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS'):
+            compile_step(task, [], {**select_all, 'control_id': None}, focused_obs)
         focused['value']['focused'] = False
         focused['element']['state'] = ''
         with self.assertRaisesRegex(ValueError, 'HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS'):
             compile_step(task, [], select_all, focused_obs)
+        # Replacement uses the observed selection, not a preceding double click.
+        c['value'].update(value='17', focused=True, selection_start=2, selection_end=2)
+        with self.assertRaisesRegex(ValueError, 'TYPE_INSERTION_EXPECTATION_MISMATCH'):
+            compile_step(task, [], step, obs)
+        self.assertEqual(compile_step(task, [], {**step, 'expected_value': '1742'}, obs)[0]['value'], '42')
+        c['value'].update(input_type='number', selection_start=None, selection_end=None,
+                          all_text_selected=False)
+        with self.assertRaisesRegex(ValueError, 'TYPE_REPLACEMENT_REQUIRES_OBSERVED_SELECTION_OR_EMPTY_VALUE'):
+            compile_step(task, [], step, obs)
+        # A browser lacking numeric selection evidence stays unknown; after-value
+        # verification remains mandatory instead of an impossible selection gate.
+        c['value'].pop('all_text_selected')
+        self.assertEqual(compile_step(task, [], step, obs)[0]['value'], '42')
         # The later real targeted observation confirms numeric full selection.
         c['value'].update(input_type='number', value='17', focused=True, all_text_selected=True)
         numeric_rows = compile_step(task, [], step, obs)

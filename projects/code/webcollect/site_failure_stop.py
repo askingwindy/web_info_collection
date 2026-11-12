@@ -784,11 +784,11 @@ class SiteFailureStore:
             app = application_key(json.loads(task)); key = 'formal:' + identity
             if key in existing:
                 old = existing[key]
-                from .request_quarantine import accounted_rejected_focus
+                from .request_quarantine import accounted_closed_execution
                 if (failure_class=='interrupted' and status=='rejected'
                         and (old['application_key'],old['stage'],old['state'],old['reason'])==(app,'formal',state,reason or status)
                         and set(old['evidence_sha256']) <= {r['sha256'] for r in json.loads(evidence) if isinstance(r,dict) and 'sha256' in r}
-                        and accounted_rejected_focus(registry,identity)):
+                        and accounted_closed_execution(registry,identity)):
                     continue  # Keep the original site fact and its original evidence binding.
                 if ((old['application_key'], old['stage'], old['state'], old['reason']) != (app, 'formal', state, reason or status)
                         or json.loads(evidence) and old['evidence_binding_sha256'] != object_sha256(json.loads(evidence))):

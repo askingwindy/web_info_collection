@@ -195,6 +195,42 @@ def react_step(step, control_ids, endpoint_matches):
     return actual
 
 
+
+def validate_input_precondition(step, value, probe=None):
+    """Check observed insertion facts; never synthesize focus/select/clear.
+
+    Number editors may not expose selection offsets. Unknown selection remains
+    unknown and the post-action expected_value receipt verifies the real result.
+    A click or double click never manufactures full selection here.
+    """
+    if step.get('action') != 'type':
+        return
+    if (probe or {}).get('focused') is not True and value.get('focused') is not True:
+        raise ValueError('TYPE_REQUIRES_CURRENT_FOCUS: explicitly focus the field first')
+    current = value.get('value')
+    if not isinstance(current, str):
+        raise ValueError('MISSING_INPUT_STATE')
+    start, end = value.get('selection_start'), value.get('selection_end')
+    encoded = current.encode('utf-16-le', errors='surrogatepass')
+    if value.get('all_text_selected') is True:
+        predicted = step['value']
+    elif (type(start) is int and type(end) is int
+          and 0 <= start <= end <= len(encoded) // 2):
+        predicted = (encoded[:start * 2] + step['value'].encode('utf-16-le', errors='surrogatepass')
+                     + encoded[end * 2:]).decode('utf-16-le', errors='surrogatepass')
+    elif not current:
+        predicted = step['value']
+    elif (value.get('input_type') == 'number' and value.get('all_text_selected') is False
+          and step.get('expected_value') == step['value']):
+        raise ValueError('TYPE_REPLACEMENT_REQUIRES_OBSERVED_SELECTION_OR_EMPTY_VALUE: '
+                         'double_click does not prove full selection; explicitly select/delete then observe')
+    else:
+        return
+    if predicted != step.get('expected_value'):
+        raise ValueError('TYPE_INSERTION_EXPECTATION_MISMATCH: current value and selection would produce '
+                         + repr(predicted) + '; explicitly select/delete, observe the empty value, then type')
+
+
 def compile_step(task, page_urls, step, observation, navigation_count=0):
     """Compile exactly one declared atomic action; never synthesize focus/clear."""
     action = step['action']
@@ -210,6 +246,10 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         truth = control.get('actions', {}).get(action, {})
         if truth.get('status') != 'PROVEN':
             raise ValueError(truth.get('status', 'INSUFFICIENT') + ': ' + truth.get('reason', 'MISSING_TARGET_PROBE'))
+    keys = execution_keys(step.get('keys', [])) if action == 'hotkey' else []
+    if action == 'hotkey' and not cid and (keys in (['meta', 'a'], ['ctrl', 'a'])
+            or any(key in ('backspace', 'delete') for key in keys)):
+        raise ValueError('HOTKEY_REQUIRES_CURRENT_TARGET_FOCUS: bind the input target before editing keys')
     if action == 'hotkey' and cid:
         # Ordinary post-click captures carry actual focus in values/elements;
         # a target probe is obtained again by the dispatch guard before keys.
@@ -228,6 +268,7 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
     row = deepcopy(step)
     if action == 'type':
         value = control.get('value') or {}
+        validate_input_precondition(step, value, control.get('probe'))
         if (value.get('input_type') == 'number' and value.get('value')
                 and value.get('focused') is True and value.get('all_text_selected') is True
                 and (control.get('probe') or {}).get('focused') is True):

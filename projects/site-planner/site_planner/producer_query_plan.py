@@ -71,9 +71,9 @@ def next_query(pool, ledger, run, key, categories, state, failures, root, *, ind
         with ledger.connect() as con:
             original_job=con.execute('SELECT state FROM jobs WHERE id=?',(job_id,)).fetchone()
             if not (original_job and original_job[0]=='done') and con.execute(
-                    "SELECT 1 FROM model_requests WHERE state='reserved' OR "
-                    "(state='unknown' AND id NOT IN (SELECT value FROM json_each(?))) LIMIT 1",(json.dumps(isolated),)).fetchone():
-                raise OutcomeUnknown('Original model request unresolved; category planner cannot dispatch')
+                    "SELECT 1 FROM model_requests WHERE job_id=? AND state IN ('reserved','unknown') LIMIT 1",
+                    (job_id,)).fetchone():
+                raise OutcomeUnknown('Original model request unresolved; category planner cannot dispatch: '+job_id)
         plan=model_decision(ledger,ModelGateway(ledger),'ai-search-plan',payload,PLAN_SCHEMA)
         from jsonschema import Draft202012Validator
         Draft202012Validator(PLAN_SCHEMA).validate(plan)

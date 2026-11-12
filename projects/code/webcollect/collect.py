@@ -683,6 +683,17 @@ def visible_result_description(state, before=None):
     return None
 
 
+def action_content_changes(before, after, element):
+    """Use the same target/result-region binding as effective-action evidence."""
+    if not element:
+        return []
+    from .screenshot_effect import content_effect
+    changed = set(content_effect(before, after, element.get('element_id')))
+    return list(dict.fromkeys(e['text'] for e in after.get('elements', [])
+        if e.get('element_id') in changed and e.get('text')
+        and e.get('element_type') not in {'button', 'input', 'select', 'link'}))
+
+
 def describe_change(before, after, op, element):
     """Describe observed changes; accessible names are not visible text/value evidence."""
     import re
@@ -869,14 +880,19 @@ def describe_change(before, after, op, element):
             else:
                 state_text = {'selected':'已选中','checked':'已勾选','unchecked':'已取消勾选',
                               'expanded':'已展开','collapsed':'已收起'}[transition['state']]
-                return '「' + transition['target_text'] + '」所在控件' + state_text
+                detail = ''
+                if transition['state'] == 'expanded':
+                    added = action_content_changes(before, after, element)
+                    if added:
+                        detail = '；新增可见内容：' + '；'.join('「' + line + '」' for line in added)
+                return '「' + transition['target_text'] + '」所在控件' + state_text + detail
     if action=='hotkey':
         if focused and focused.get('value') and focused.get('selection_start')==0 and focused.get('selection_end')==len(focused['value']):
             return '输入框中的原有内容已全部选中'
         keys=[str(key).lower() for key in op.get('arguments',{}).get('keys',[])]
         previous_focus=next((v for v in before['values'] if v.get('focused')),None)
         if (set(keys) in ({'ctrl','a'},{'meta','a'}) and len(keys)==2 and focused
-                and focused.get('value') and previous_focus
+                and focused.get('value') and focused.get('value_visible') is True and previous_focus
                 and focused['element_id']==previous_focus.get('element_id')
                 and focused['value']==previous_focus.get('value') and current):
             label='「'+current['text']+'」输入框' if current.get('text') in after.get('visible_text','') and current.get('text') else '输入框'
@@ -888,6 +904,10 @@ def describe_change(before, after, op, element):
             return f'「{current_element["text"]}」'+states[current_element['state']]
     if action=='click' and element and not any(e['element_id']==element['element_id'] for e in after['elements']):
         return f'「{element["text"]}」已不在当前视口' if element['text'] else '目标控件已不在当前视口'
+    if action in ('click', 'double_click') and visible_added:
+        content = action_content_changes(before, after, element)
+        if content:
+            return '操作后新增可见内容：' + '；'.join('「' + text + '」' for text in content)
     numeric=visible_numeric_context(after)
     if action=='click' and numeric and numeric!=visible_numeric_context(before):return '页面显示'+numeric
     if visible_added:return '页面出现的文字包括'+'和'.join(visible_reference(text) for text in visible_added[:3])

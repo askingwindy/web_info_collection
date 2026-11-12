@@ -249,6 +249,65 @@ def _scoped_continuity(record, previous, row, raw):
     return proof['accepted']
 
 
+
+def _verified_progress_return(record, outward, returning):
+    """A return may preserve newly acquired, still valid frozen goal evidence."""
+    if outward.get('action') != 'scroll' or returning.get('action') != 'scroll':
+        return False
+    final_checks = {c.get('requirement_id'): c for c in
+                    (record.get('terminal', {}).get('goal_evidence') or {}).get('checks', [])
+                    if c.get('status') == 'VERIFIED' and c.get('requirement_id')}
+    receipt = record.get('receipt') or {}
+    boundary = receipt.get('boundary') or {}
+    if not boundary.get('path') or not final_checks:
+        return False
+    middle_id = outward['after_observation_id']
+    dispatch = load_json(outward['dispatch']['path'])
+    operation_id = (dispatch.get('operation') or {}).get('operation_id', '')
+    try:
+        action_count = int(operation_id.rsplit('-', 1)[1])
+    except (ValueError, IndexError):
+        return False
+    seen = set()
+    root = Path(boundary['path']).parent
+    for name, digest in sorted((receipt.get('files_sha256') or {}).items()):
+        if not name.endswith('-screenshot-progress-evidence.json'):
+            continue
+        path = root / name
+        if file_sha(path) != digest:
+            raise ValueError('Incremental goal evidence changed after sealing')
+        event = load_json(path)
+        if event.get('boundary') != boundary:
+            raise ValueError('Incremental goal evidence differs from its attempt boundary')
+        count = (event.get('used') or {}).get('max_actions')
+        ids = set(event.get('verified_requirement_ids') or [])
+        if count == action_count:
+            for check in event.get('checks') or []:
+                rid = check.get('requirement_id')
+                if (rid not in seen and check == final_checks.get(rid)
+                        and any(p.get('observation_id') == middle_id for p in check.get('evidence') or [])):
+                    return True
+        if isinstance(count, int) and count <= action_count:
+            seen.update(ids)
+    return False
+
+
+def _input_effect_narrative(before, after, operation, effect):
+    """Describe actual editor state without quoting a clipped/hidden value."""
+    cid = (operation.get('evidence') or {}).get('anchor_element_id') or (effect or {}).get('control_id')
+    old = next((v for v in before.get('values', []) if v.get('element_id') == cid), {})
+    new = next((v for v in after.get('values', []) if v.get('element_id') == cid), {})
+    fields = (effect or {}).get('fields') or []
+    if ('target.all_text_selected' in fields and new.get('all_text_selected') is True
+            and new.get('focused') is True):
+        return '当前聚焦输入控件中的原有内容已全部选中'
+    if ('target.value' in fields and old.get('value') != new.get('value')
+            and new.get('value_visible') is not True):
+        return ('当前聚焦输入控件的实际值已清空' if new.get('value') == '' else
+                '输入控件的实际值已改变；当前视口未完整显示该值')
+    return None
+
+
 def flow_classification(effective):
     """Classify only the effective business actions in the saved range."""
     short = 0 < effective < 5
@@ -280,7 +339,7 @@ def ready_requires_prefix(task, terminal):
             and terminal.get('stop_reason')=='ready' and bool(required_result_checks(terminal, task)))
 
 
-def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
+def effective_trajectory(record, *, _audit_cancelled=False, _verified=None, _failure_execution=False):
     """Recount native atomic dispatches from sealed evidence, never model labels.
 
     A gap, unknown dispatch or ineffective operation rejects the whole chain;
@@ -341,7 +400,7 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
             raise ValueError('动作对应效果不可核验：' + row['operation_id'])
         if rows and not _same_view(_observation_state(record, rows[-1]['after_observation_id']), before) and not _delayed_bridge(record,rows[-1],rows[-1]['after_observation_id'],row['before_observation_id']) and not _scoped_continuity(record,rows[-1],row,raw):
             raise ValueError('连续轨迹存在未解释的状态缺口')
-        if rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
+        if not _failure_execution and rows and _same_view(_observation_state(record, rows[-1]['before_observation_id']), after):
             navigation_return = (record['task']['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL
                 and row['action'] == 'back' and rows[-1]['action'] in ('click','double_click','open_url','hotkey','type','select')
                 and before['url'] != after['url'])
@@ -355,7 +414,8 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
             from .consumer_page_policy import enabled as page_policy, returned_pair
             boundary_return=page_policy(record['task']) and returned_pair(
                 _observation_state(record, rows[-1]['before_observation_id']),before,after,rows[-1],row)
-            if not navigation_return and not useful_return and not boundary_return:
+            evidence_return = _verified_progress_return(record, rows[-1], row)
+            if not navigation_return and not useful_return and not boundary_return and not evidence_return:
                 raise ValueError('存在两步后回到原样的无效往返')
         rows.append(row)
     if rows and record['task']['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL:
@@ -395,6 +455,22 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None):
     from .wiki_reading import verify_record as verify_wiki
     verify_wiki(record, _verified=_verified)
     return rows
+
+
+
+def failed_execution_trajectory(record):
+    """Verify known failed execution effects without granting sample quality.
+
+    Uses the same per-dispatch raw/capture/operation/effect/continuity checks as
+    delivery recounting. Repeated back-and-forth actions remain in the returned
+    chain: they can have fully known effects while failing delivery quality.
+    The caller must separately reconcile ALL sealed dispatch intents, business
+    attempts and raw steps, and reject unmatched files or unknown tails. This
+    function never grants goal completion, save eligibility or delivery status.
+    """
+    if (record.get('terminal') or {}).get('stop_reason') == 'ready':
+        raise ValueError('Failed execution accounting cannot authorize a ready sample')
+    return effective_trajectory(record, _audit_cancelled=True, _failure_execution=True)
 
 
 def cancelled_dispatch_audit(raw_root):
@@ -537,8 +613,6 @@ def planned_terminal_narrative(record, final_state, final_id):
     correction. Reading may have cumulative evidence outside the final frame.
     """
     evidence = record['terminal'].get('goal_evidence') or {}
-    from .result_execution import completion_result_summary
-    numeric = completion_result_summary(evidence, final_observation_id=final_id)
     checks = evidence.get('checks') or []
     if evidence.get('business_goal_status') == 'VERIFIED' and checks:
         basis = []
@@ -551,11 +625,19 @@ def planned_terminal_narrative(record, final_state, final_id):
             if check.get('completion_mapping') == 'bound_input_state':
                 from .screenshot_effect import input_facts
                 proof = check['evidence'][0]
-                field = str(check.get('field') or '输入条件')
+                source_state = _observation_state(record, proof['observation_id'])
+                control = next((e for e in source_state.get('elements', []) if e.get('element_id') == proof['node']), {})
+                value = next((v for v in source_state.get('values', []) if v.get('element_id') == proof['node']), {})
+                field = str(control.get('text') or '输入条件')
                 actual = proof['actual']
-                description = ('已勾选' if actual else '未勾选') if proof['input_field'] == 'checked' else ('已清空' if actual == '' else '值为「' + str(actual) + '」')
+                displayed = value.get('display_value')
+                if proof['input_field'] != 'checked' and value.get('value_visible') is not True:
+                    description = '已核验输入状态，原观察未完整显示该值'
+                else:
+                    description = ('已勾选' if actual else '未勾选') if proof['input_field'] == 'checked' else ('已清空' if actual == '' else '值为「' + str(displayed if displayed is not None else actual) + '」')
                 current = input_facts(final_state).get(proof['node'], {})
-                still_visible = (current.get('identity') == proof['source'] and current.get(proof['input_field']) == actual
+                current_element = next((e for e in final_state.get('elements', []) if e.get('element_id') == proof['node']), {})
+                still_visible = (current_element.get('visible') is True and current.get('identity') == proof['source'] and current.get(proof['input_field']) == actual
                     and (proof['input_field'] == 'checked' or current.get('value_visible') is True))
                 verified_results.append(field + '：' + description)
                 basis.append(field + ('，末帧仍可见输入状态：' if still_visible else '，末帧前已观察到的输入状态：') + description)
@@ -575,22 +657,39 @@ def planned_terminal_narrative(record, final_state, final_id):
                                   if ref.get('operation_id') in operations)
             if not quotes:
                 return None
-            field = str(check.get('field') or '原目标条件')
-            verified_results.append(field + '：' + '、'.join(dict.fromkeys(quotes)))
-            labels = list(dict.fromkeys((operations[action_id].get('target') or {}).get('label')
-                                        or operations[action_id]['goal'] for action_id in action_ids))
-            operation_basis = ('，已实际操作' + '、'.join('「' + label + '」' for label in labels)) if labels else ''
-            cited = list(dict.fromkeys(quotes))
-            # Cumulative evidence is legitimate, but the customer reads the final
-            # screenshot, so the frame each quote came from is stated explicitly.
-            in_final = [quote for quote in cited if quote in final_visible]
-            earlier = [quote for quote in cited if quote not in final_visible]
-            basis.append(field + operation_basis
-                         + ('，末帧仍可见页面证据' + '、'.join('「' + quote + '」' for quote in in_final)
-                            if in_final else '')
-                         + ('，末帧前已观察到的页面证据' + '、'.join('「' + quote + '」' for quote in earlier)
-                            if earlier else ''))
-        final_result = numeric['final_result'] if numeric else '；'.join(verified_results)
+            field = '计算核对' if check.get('completion_mapping') == 'cited_arithmetic_cross_check' else '页面结果'
+            if check.get('completion_mapping') == 'cited_arithmetic_cross_check':
+                calculations = check.get('calculations') or []
+                conclusion = '；'.join(str(c.get('expression') or '') + ' = ' + str(c.get('computed_value')) + ' ' + str(c.get('unit') or '') for c in calculations)
+                if not conclusion or not calculations or any(not c.get('expression') for c in calculations):
+                    return None
+                verified_results.append('计算核验通过')
+                short_quotes = list(dict.fromkeys(q for q in quotes if len(q) <= 100))
+                basis.append('依据页面数据推导核对：' + conclusion
+                    + ('；页面依据' + '、'.join('「' + q + '」' for q in short_quotes) if short_quotes else '')
+                    + '；完整来源与计算证据保留在原执行记录中')
+            else:
+                cited = list(dict.fromkeys(quotes))
+                short_quotes = [quote for quote in cited if len(quote) <= 100]
+                if short_quotes:
+                    verified_results.append('页面结果：' + '、'.join(short_quotes))
+                else:
+                    verified_results.append('已核对原目标所需的页面内容')
+                in_final = [quote for quote in short_quotes if quote in final_visible]
+                earlier = [quote for quote in short_quotes if quote not in final_visible]
+                if in_final:
+                    basis.append('末帧可见' + '、'.join('「' + quote + '」' for quote in in_final))
+                if earlier:
+                    basis.append('此前已观察并核验' + '、'.join('「' + quote + '」' for quote in earlier))
+                if not short_quotes:
+                    basis.append('原目标内容核对通过，完整引文及来源保留在原执行记录中')
+        final_result = '；'.join(dict.fromkeys(verified_results))
+        final_proofs = evidence.get('final_visible_evidence') or []
+        current_quotes = list(dict.fromkeys(str(item.get('display_value') if item.get('kind') == 'input' and item.get('display_value') is not None else item.get('quote') or '')
+            for item in final_proofs if item.get('observation_id') == final_id))
+        current_quotes = [quote for quote in current_quotes if quote]
+        if current_quotes:
+            basis.append('完成时当前页面可见' + '、'.join('「' + quote + '」' for quote in current_quotes))
         return {'final_result': final_result,
                 'completion_judgement': '原目标各项核验依据：' + '；'.join(basis) + '。',
                 'basis': checks, 'is_ai_review': False}
@@ -739,12 +838,16 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
         op = {'action_type': row['action'], 'arguments': deepcopy(row['arguments']),
               'goal': row['goal'], 'expected': row['expected'],
               'selector': (row.get('target') or {}).get('selector'),
-              'evidence': {'target_label': (row.get('target') or {}).get('label')}}
-        step_result = describe_change(before, after, op, element)
+              'operation_id': row['operation_id'],
+              'evidence': {**(raw_step.get('operation', {}).get('evidence') or {}),
+                           'target_label': (row.get('target') or {}).get('label')}}
+        step_result = (_input_effect_narrative(before, after, op, row.get('effect_evidence'))
+                       or describe_change(before, after, op, element))
         observed_result, narrative = narrative_evidence(step_result, before, after, op)
         if observed_result is None:
             result.update(status='processing_failed',
-                          error='NARRATIVE_EVIDENCE_UNSUPPORTED', step_id=index)
+                          error='NARRATIVE_EVIDENCE_UNSUPPORTED', step_id=index,
+                          operation_id=row['operation_id'], narrative_evidence=narrative)
             return result
         # Delivery frames bind the pre-action observation: the state each
         # recorded action actually acted upon (audit_capture semantics).
@@ -791,10 +894,13 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
             wording = step_narratives(row, before, element, current_facts=screenshot_strategy(task))
             # These strings were emitted by the existing visual planning call
             # before execution; expected is still the separate machine predicate.
-            expected_prose = row.get('semantic_expected_result') or wording.get('expected_result')
+            expected_prose = (wording.get('expected_result') or row.get('semantic_expected_result')
+                              if screenshot_strategy(task) else row.get('semantic_expected_result') or wording.get('expected_result'))
             rationale = (wording.get('next_step_rationale') or row.get('semantic_rationale')
                          if screenshot_strategy(task) else
                          row.get('semantic_rationale') or wording.get('next_step_rationale'))
+            if wording.get('user_goal') and screenshot_strategy(task):
+                step['user_goal'] = wording['user_goal']
             if expected_prose:
                 step['action']['expected_result'] = expected_prose
             if rationale:
@@ -812,13 +918,14 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
         final_id = trajectory[-1]['after_observation_id']
     final_state = _observation_state(record, final_id)
     final_description = final_result if native else observed_frame_description(final_state, instruction)
-    # Byte-stable completion timestamp: derived from the raw terminal capture
-    # itself so re-derivation reproduces identical delivery artifacts.
-    final_capture = _observation_capture(record, final_id)
-    final_ns = (final_capture.get('attempts') or [{}])[-1].get('ended_ns')
-    from datetime import datetime, timezone
-    final_timestamp = (datetime.fromtimestamp(final_ns / 1e9, timezone.utc).isoformat()
-                       if isinstance(final_ns, int) else terminal_fallback_timestamp(record))
+    if native:
+        current_evidence = (record['terminal'].get('goal_evidence') or {}).get('final_visible_evidence') or []
+        current_quotes = list(dict.fromkeys(str(item.get('display_value') if item.get('kind') == 'input' and item.get('display_value') is not None else item.get('quote') or '')
+            for item in current_evidence if item.get('observation_id') == final_id))
+        if current_quotes:
+            final_description = '当前页面可见' + '、'.join('「' + quote + '」' for quote in current_quotes if quote)
+    # Completion is an event, not the preceding screenshot capture.
+    final_timestamp = record['terminal'].get('completed_at') or ''
     final_image = f'images/step_{effective + 1:03}.png'
     _write_delivery_bytes(delivery / final_image,
         Path(record['observations'][final_id]['evidence']['image']['path']).read_bytes())
@@ -907,8 +1014,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
 
 
 def terminal_fallback_timestamp(record):
-    from .collect import now as collect_now
-    return collect_now()
+    return record.get('terminal', {}).get('completed_at') or ''
 
 
 def _write_terminal_step(evidence, record, ids):
@@ -919,10 +1025,7 @@ def _write_terminal_step(evidence, record, ids):
         final_id = trajectory[-1]['after_observation_id']
     state = _observation_state(record, final_id)
     capture = _observation_capture(record, final_id)
-    ended_ns = (capture.get('attempts') or [{}])[-1].get('ended_ns')
-    from datetime import datetime, timezone
-    now = (datetime.fromtimestamp(ended_ns / 1e9, timezone.utc).isoformat()
-           if isinstance(ended_ns, int) else terminal_fallback_timestamp(record))
+    now = terminal_fallback_timestamp(record)
     number = len(trajectory) + 1
     raw = {'step_id': number, 'state': state, 'capture': capture,
            'operation': {'operation_id': 'react-finish', 'subgoal_id': 'react',
@@ -1005,7 +1108,8 @@ def process(evidence_root, delivery_root, ids, manifest, *, derivation=None, val
                          'sha256': file_sha(evidence_root / f'derived-failed-{version:02}.json')}})
         return failure
     if derived['status'] != 'derived':
-        row = {'status': derived['status'], 'derivation': version,
+        row = {**{key: derived[key] for key in ('error', 'errors', 'step_id', 'operation_id', 'narrative_evidence') if key in derived},
+               'status': derived['status'], 'derivation': version,
                'effective_steps': derived.get('effective_steps'),
                'short_flow': derived.get('short_flow'),
                'save_eligibility': derived.get('save_eligibility', 'ineligible'), 'browser_calls': 0, 'model_calls': 0}
