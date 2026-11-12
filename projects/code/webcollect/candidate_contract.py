@@ -368,3 +368,13 @@ def guard_reference(reference):
 def same_application(task, url):
     binding=task['candidate_binding']
     return application_matches(binding['candidate']['entry_url'],url,binding.get('application_registry'))
+
+
+def research_request_id(task):
+    """Read the caller identity from its verified frozen candidate claim."""
+    if not isinstance(task,dict) or not task.get('candidate_binding'):
+        return None
+    binding=validate_task_binding(task)
+    claim=load_json(binding['claim_reference']['path'])
+    replay=(claim.get('binding') or {}).get('research_replay')
+    return claim['request_id'] if replay and replay.get('production_counted') is False else None

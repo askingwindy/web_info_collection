@@ -376,7 +376,8 @@ async def entry_session(ledger, pool, claim, root):
     from .site_failure_stop import SiteFailureStore, execution_id
     uri = claim['snapshot']['entry_url']
     guard = ledger.config.get('site_failure_guard')
-    guard_candidate_dispatch(ledger, uri, candidate_id=claim['candidate_id'])
+    guard_candidate_dispatch(ledger, uri, candidate_id=claim['candidate_id'],
+        research_request_id=claim['request_id'] if pool.research_claim(claim) else None)
     jid = ledger.enqueue('candidate-observation', {'claim_id': claim['claim_id'], 'site_uri': uri})
     previous = ledger.get(jid)
     if previous['state'] != 'queued' or previous['attempts']:
@@ -653,7 +654,8 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
     research=pool.research_claim(current)
     if research and session_objective!=research['objective']:
         raise ValueError('Research must use frozen original objective reference')
-    isolated_unknown = guard_candidate_dispatch(ledger, claim['snapshot']['entry_url'], candidate_id=claim['candidate_id'])
+    isolated_unknown = guard_candidate_dispatch(ledger, claim['snapshot']['entry_url'], candidate_id=claim['candidate_id'],
+        research_request_id=claim['request_id'] if research else None)
     root = Path(output)/claim['claim_id']
     # The transaction elects the sole executor before directories or external IO.
     won = pool.stage(claim, 'observation', {'registry':registry, 'ledger':str(ledger.path),

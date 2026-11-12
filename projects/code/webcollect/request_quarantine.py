@@ -165,11 +165,7 @@ def _closed_execution(registry, attempt_id, authorization, *, definite=False, tr
     extra_refs = [authorization[key] for key in ('run_intent', 'process_start', 'launcher', 'worker')]
     verify_evidence(extra_refs)
     report = Path(exit_ref['path']).resolve().parent
-    source_root = report.parent if transport else report
-    if any(Path(authorization[key]['path']).resolve() != (report if key == 'process_start' else source_root)/name
-           for key, name in (('run_intent', 'run-intent.json'), ('process_start', 'process.json'),
-                             ('launcher', 'launch.py'), ('worker', 'worker.py'))):
-        raise ValueError('Original run intent, process and reviewed launch sources must share the exit report')
+    _verify_execution_entry(registry, attempt_id, authorization, report, load_json(authorization['process_start']['path']), transport=transport)
     intent = load_json(authorization['run_intent']['path'])
     started = load_json(authorization['process_start']['path'])
     import os
@@ -335,7 +331,9 @@ def transport_closed_execution(registry, attempt_id, authorization):
 
 
 def authorized_transport_research(registry, attempt_id, *, request_id=None):
-    """One exact next research request, or its currently active owned execution."""
+    """Require the exact request identity; never infer caller scope from activity."""
+    if not request_id:
+        return False
     from .batch_core import load_json
     from .planning import verify_evidence
     with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
@@ -344,12 +342,53 @@ def authorized_transport_research(registry, attempt_id, *, request_id=None):
         event=json.loads(raw); reference=event['authorization'];verify_evidence([reference])
         facts=transport_closed_execution(registry,attempt_id,load_json(reference['path']))
         if facts != event['closed_execution']:continue
-        if request_id is not None:
-            if request_id == facts['next_request_id']:return True
-            continue
+        if request_id != facts['next_request_id']:continue
         with closing(sqlite3.connect(Path(facts['pool']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
-            row=con.execute('SELECT state,binding,candidate_id FROM candidate_claims WHERE request_id=?',(facts['next_request_id'],)).fetchone()
-        if row and row[0]=='consuming' and row[2]==facts['candidate_id']:
-            replay=json.loads(row[1]).get('research_replay') or {}
-            if replay.get('original_claim_id')==facts['claim_id'] and replay.get('production_counted') is False:return True
+            row=con.execute('SELECT state,binding,candidate_id,expires,version FROM candidate_claims WHERE request_id=?',(request_id,)).fetchone()
+            original=con.execute('SELECT candidate_id,version FROM candidate_claims WHERE claim_id=?',(facts['claim_id'],)).fetchone()
+        if row is None:
+            return True  # Exact permit, before this request's sole claim exists.
+        import time
+        if (not original or row[0]!='consuming' or row[2]!=facts['candidate_id']
+                or (row[2],row[4]) != tuple(original) or row[3]<=time.time()):continue
+        binding=json.loads(row[1]);replay=binding.get('research_replay') or {}
+        if (replay.get('original_claim_id')!=facts['claim_id'] or replay.get('production_counted') is not False
+                or Path(binding.get('ledger','')).resolve()!=Path(facts['ledger']).resolve()
+                or Path(binding.get('registry','')).resolve()!=Path(registry).resolve()):continue
+        verify_evidence([replay['authorization']])
+        own_authorization=load_json(replay['authorization']['path'])
+        if own_authorization.get('new_request_id')==request_id:return True
     return False
+
+
+def _verify_execution_entry(registry, attempt_id, authorization, report, started, *, transport):
+    """Bind actual recorded launch sources; retain only already sealed old permits."""
+    from .batch_core import load_json
+    from .planning import verify_evidence
+    root=report.parent if transport else report
+    if (Path(authorization['run_intent']['path']).resolve()!=root/'run-intent.json'
+            or Path(authorization['process_start']['path']).resolve()!=report/'process.json'):
+        raise ValueError('Execution intent/process references differ from the original report')
+    if transport and 'command' in started:
+        command=started['command']
+        if (not isinstance(command,list) or len(command)!=3 or not all(isinstance(x,str) for x in command)
+                or not Path(command[0]).is_absolute() or not Path(command[0]).is_file()
+                or started.get('launcher')!=authorization['launcher']
+                or started.get('worker')!=authorization['worker']
+                or Path(command[1]).resolve()!=Path(authorization['worker']['path']).resolve()
+                or Path(command[2]).resolve()!=report):
+            raise ValueError('Recorded actual execution command and source hashes differ')
+        verify_evidence([started['launcher'],started['worker']])
+        return
+    if any(Path(authorization[key]['path']).resolve()!=root/name
+           for key,name in (('launcher','launch.py'),('worker','worker.py'))):
+        raise ValueError('Unrecorded execution source cannot substitute another launcher or worker')
+    if transport:
+        # Only the already appended original permit has reviewed old static
+        # entry evidence. New executions must record their actual command.
+        with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+            events=con.execute("SELECT payload_json FROM m4_events WHERE event_type='planning_timeout_research_authorized' AND attempt_id=?",(attempt_id,)).fetchall()
+        for (raw,) in events:
+            reference=json.loads(raw)['authorization'];verify_evidence([reference])
+            if load_json(reference['path'])==authorization:return
+        raise ValueError('New timeout isolation requires recorded actual launch command evidence')

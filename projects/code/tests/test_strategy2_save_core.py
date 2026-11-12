@@ -135,6 +135,34 @@ class Strategy2SaveCore(unittest.TestCase):
             self.assertNotIn('比例核对', narrative['final_result'])
             self.assertIn('推导核对', narrative['completion_judgement'])
             self.assertIn(quote, narrative['completion_judgement'])
+            input_state_path = raw / 'input.json'
+            input_state = {'visible_text': '原形状', 'elements': [
+                {'element_id': 'shape', 'text': '原形状', 'visible': True}],
+                'values': [{'element_id': 'shape', 'value': 'slab',
+                            'display_value': '板', 'value_visible': True}]}
+            input_state_path.write_text(json.dumps(input_state, ensure_ascii=False))
+            input_check = {'requirement_id': 'shape-check', 'status': 'VERIFIED',
+                'completion_mapping': 'bound_input_state', 'evidence': [
+                    {'observation_id': 'input', 'node': 'shape', 'input_field': 'value', 'actual': 'slab'}]}
+            input_record = {'observations': {'input': {'state_path': str(input_state_path)}},
+                'trajectory': [], 'terminal': {'goal_evidence': {'business_goal_status': 'VERIFIED',
+                    'checks': [input_check], 'final_visible_evidence': [
+                        {'kind': 'input', 'node': 'shape', 'requirement_id': 'shape-check',
+                         'observation_id': 'final', 'value_visible': True, 'display_value': '平板'}]}}}
+            input_final = {'visible_text': '新形状', 'elements': [{'element_id': 'shape', 'text': '新形状'}]}
+            input_narrative = postprocess.planned_terminal_narrative(input_record, input_final, 'final')
+            self.assertIn('新形状：值为「平板」', input_narrative['final_result'])
+            self.assertNotIn('slab', input_narrative['final_result'])
+            self.assertNotIn('值为「板」', input_narrative['completion_judgement'])
+            input_record['terminal']['goal_evidence']['final_visible_evidence'] = []
+            historical = postprocess.planned_terminal_narrative(input_record, input_final, 'final')
+            self.assertIn('原引用观察', historical['completion_judgement'])
+            self.assertIn('值为「板」', historical['final_result'])
+            self.assertNotIn('末帧仍可见', historical['completion_judgement'])
+            input_state['values'][0].pop('display_value')
+            input_state_path.write_text(json.dumps(input_state, ensure_ascii=False))
+            missing_display = postprocess.planned_terminal_narrative(input_record, input_final, 'final')
+            self.assertNotIn('slab', missing_display['final_result'])
             original_state = state_path.read_bytes()
             delivery = root / 'delivery'
             delivery.write_bytes(b'existing destination must remain untouched')

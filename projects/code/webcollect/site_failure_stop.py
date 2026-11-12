@@ -269,7 +269,7 @@ class SiteFailureStore:
         verify_evidence([document['raw_html']])
         return row['target_uri']
 
-    def _fact_scope(self, fact, books, producer):
+    def _fact_scope(self, fact, books, producer, *, research_request_id=None):
         from .request_quarantine import attempt_owner, visit_uri
         identity, _, stage, _, _, raw_refs = fact
         refs = json.loads(raw_refs)
@@ -280,7 +280,7 @@ class SiteFailureStore:
             attempt_id = ref.get('attempt_id')
             if not attempt_id or identity != 'formal:'+object_sha256({'attempt_id':attempt_id}):
                 return None
-            owner = attempt_owner(self.binding, ref.get('registry'), attempt_id)
+            owner = attempt_owner(self.binding, ref.get('registry'), attempt_id,research_request_id=research_request_id)
             if owner and (owner['status']=='interrupted' or owner['failure_class']=='interrupted'):
                 return owner
         if stage == 'probe':
@@ -296,6 +296,8 @@ class SiteFailureStore:
 
     def _project_holds(self, application, key, applied, candidate_id):
         from .request_quarantine import endpoint
+        from .candidate_contract import research_request_id
+        caller_request_id = research_request_id(application)
         holds = {'pages':0, 'closed_entries':0, 'tasks':0, 'matching_pages':[], 'matching_tasks':[]}
         uri = (application.get('initial_url') or application.get('site_uri')) if isinstance(application,dict) else application
         aliases = self.binding.get('application_registry')
@@ -348,7 +350,7 @@ class SiteFailureStore:
                 if fact[0] in applied:
                     continue
                 holds['unknown_effective'] += int(own_key)
-                owner = self._fact_scope(fact, books, str(producer))
+                owner = self._fact_scope(fact, books, str(producer),research_request_id=caller_request_id)
                 if not owner or endpoint(owner.get('site_uri') or owner['uri'], aliases)[0] != urlsplit(fact[1]).netloc.removeprefix('www.'):
                     holds['whole_unknowns'] += int(own_key)
                     continue

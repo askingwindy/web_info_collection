@@ -43,7 +43,7 @@ class PlanProtocolContract(unittest.TestCase):
         from webcollect.candidate_contract import validate_research_v2
         from webcollect.session_objective import VERSION
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             def freeze(name, value):
                 path = root / name
                 path.write_text(json.dumps(value))
@@ -88,10 +88,13 @@ class PlanProtocolContract(unittest.TestCase):
             from unittest.mock import patch
             from webcollect.request_quarantine import authorized_transport_research
             con.execute('ALTER TABLE candidate_claims ADD COLUMN request_id')
+            con.execute('ALTER TABLE candidate_claims ADD COLUMN expires')
+            con.execute('ALTER TABLE candidate_claims ADD COLUMN version')
+            con.execute('UPDATE candidate_claims SET version=1');con.commit()
             with sqlite3.connect(root/'pool') as disk:
                 con.backup(disk)
             facts = {'pool':str(root/'pool'),'candidate_id':'candidate',
-                     'claim_id':'original','next_request_id':'run-r03/new-research'}
+                     'claim_id':'original','next_request_id':'run-r03/new-research','ledger':binding['ledger']}
             with sqlite3.connect(root/'registry') as registry:
                 registry.execute('CREATE TABLE m4_events(event_type,attempt_id,payload_json)')
                 registry.execute('INSERT INTO m4_events VALUES(?,?,?)',
@@ -101,15 +104,29 @@ class PlanProtocolContract(unittest.TestCase):
                 self.assertTrue(authorized_transport_research(root/'registry','attempt',request_id='run-r03/new-research'))
                 self.assertFalse(authorized_transport_research(root/'registry','attempt',request_id='run-r04/new-research'))
                 self.assertFalse(authorized_transport_research(root/'registry','attempt'))
+                own_auth=freeze('next-authorization.json',{'new_request_id':'run-r03/new-research'})
                 with sqlite3.connect(root/'pool') as disk:
-                    disk.execute('INSERT INTO candidate_claims VALUES(?,?,?,?,?)',
-                        ('candidate','next',json.dumps({'research_replay':{
-                         'original_claim_id':'original','production_counted':False}}),
-                         'consuming','run-r03/new-research'))
-                self.assertTrue(authorized_transport_research(root/'registry','attempt'))
-                with sqlite3.connect(root/'pool') as disk:
-                    disk.execute("UPDATE candidate_claims SET state='failed' WHERE claim_id='next'")
+                    disk.execute('INSERT INTO candidate_claims VALUES(?,?,?,?,?,?,?)',
+                        ('candidate','next',json.dumps({'ledger':binding['ledger'],'registry':str(root/'registry'),
+                         'research_replay':{'original_claim_id':'original','production_counted':False,
+                         'authorization':own_auth}}),'consuming','run-r03/new-research',9999999999,1))
                 self.assertFalse(authorized_transport_research(root/'registry','attempt'))
+                self.assertFalse(authorized_transport_research(root/'registry','attempt',request_id='run-r04/new-research'))
+                self.assertTrue(authorized_transport_research(root/'registry','attempt',request_id='run-r03/new-research'))
+                with sqlite3.connect(root/'pool') as disk:
+                    disk.execute("UPDATE candidate_claims SET expires=0 WHERE claim_id='next'")
+                self.assertFalse(authorized_transport_research(root/'registry','attempt',request_id='run-r03/new-research'))
+            from webcollect.request_quarantine import _verify_execution_entry
+            report=root/'round-03';report.mkdir()
+            launch=freeze('launch-next.py',{'reviewed':'launcher'})
+            worker=freeze('worker-next.py',{'reviewed':'worker'})
+            entry={'run_intent':{'path':str(root/'run-intent.json')},
+                   'process_start':{'path':str(report/'process.json')},'launcher':launch,'worker':worker}
+            started={'command':[sys.executable,worker['path'],str(report)],'launcher':launch,'worker':worker}
+            _verify_execution_entry(root/'registry','attempt',entry,report,started,transport=True)
+            started['command'][1]=launch['path']
+            with self.assertRaisesRegex(ValueError,'actual execution command'):
+                _verify_execution_entry(root/'registry','attempt',entry,report,started,transport=True)
             con.close()
 
 

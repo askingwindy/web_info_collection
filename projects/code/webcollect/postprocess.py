@@ -623,24 +623,32 @@ def planned_terminal_narrative(record, final_state, final_id):
             if check.get('status') != 'VERIFIED':
                 return None
             if check.get('completion_mapping') == 'bound_input_state':
-                from .screenshot_effect import input_facts
                 proof = check['evidence'][0]
                 source_state = _observation_state(record, proof['observation_id'])
                 control = next((e for e in source_state.get('elements', []) if e.get('element_id') == proof['node']), {})
                 value = next((v for v in source_state.get('values', []) if v.get('element_id') == proof['node']), {})
                 field = str(control.get('text') or '输入条件')
-                actual = proof['actual']
-                displayed = value.get('display_value')
-                if proof['input_field'] != 'checked' and value.get('value_visible') is not True:
-                    description = '已核验输入状态，原观察未完整显示该值'
+                current_proof = next((item for item in evidence.get('final_visible_evidence', [])
+                    if item.get('kind') == 'input' and item.get('node') == proof['node']
+                    and item.get('requirement_id') == check.get('requirement_id')
+                    and item.get('observation_id') == final_id and item.get('value_visible') is True
+                    and item.get('display_value') is not None), None)
+                if current_proof is not None:
+                    current_control = next((e for e in final_state.get('elements', []) if e.get('element_id') == proof['node']), {})
+                    field = str(current_control.get('text') or '输入条件')
+                    displayed = str(current_proof['display_value'])
+                    description = '已清空' if displayed == '' else '值为「' + displayed + '」'
+                    basis.append(field + '，末帧仍可见输入状态：' + description)
                 else:
-                    description = ('已勾选' if actual else '未勾选') if proof['input_field'] == 'checked' else ('已清空' if actual == '' else '值为「' + str(displayed if displayed is not None else actual) + '」')
-                current = input_facts(final_state).get(proof['node'], {})
-                current_element = next((e for e in final_state.get('elements', []) if e.get('element_id') == proof['node']), {})
-                still_visible = (current_element.get('visible') is True and current.get('identity') == proof['source'] and current.get(proof['input_field']) == actual
-                    and (proof['input_field'] == 'checked' or current.get('value_visible') is True))
+                    displayed = value.get('display_value')
+                    if proof['input_field'] == 'checked':
+                        description = '已勾选' if proof['actual'] else '未勾选'
+                    elif value.get('value_visible') is not True or displayed is None:
+                        description = '已核验输入状态，原观察未完整显示该值'
+                    else:
+                        description = '已清空' if displayed == '' else '值为「' + str(displayed) + '」'
+                    basis.append(field + '，原引用观察中的输入状态：' + description)
                 verified_results.append(field + '：' + description)
-                basis.append(field + ('，末帧仍可见输入状态：' if still_visible else '，末帧前已观察到的输入状态：') + description)
                 continue
             quotes = []
             action_ids = []

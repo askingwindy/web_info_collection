@@ -115,7 +115,7 @@ def _verify_feedback_evidence(refs):
 
 
 def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None, collection_report=None,
-                 candidate_id=None):
+                 candidate_id=None, research_request_id=None):
     from urllib.parse import urlsplit
     from .application_identity import aliases, host_key
     from .current_chain import PROJECT_RULES, check_project_guard, registry_project
@@ -209,7 +209,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                     unresolved = row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
                     if unresolved and scoped:
                         from .request_quarantine import accounted_closed_execution
-                        if accounted_closed_execution(registry,row['attempt_id']):
+                        if accounted_closed_execution(registry,row['attempt_id'],research_request_id=research_request_id):
                             entry['focus_effect_accounted']=True
                             unresolved=False
                     if unresolved and (not owner_id or owner_id == candidate_id):
@@ -229,7 +229,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                 payload = json.loads(row['payload'])
                 if scoped:
                     blocks = job_conflicts(model_ledger, site_uri, candidate_id, payload,
-                                          running=row['state']=='running', registry=row['registry'])
+                                          running=row['state']=='running', registry=row['registry'],research_request_id=research_request_id)
                 else:
                     blocks = not payload.get('site_uri') or host_key(payload['site_uri']) == host
                 if blocks:
