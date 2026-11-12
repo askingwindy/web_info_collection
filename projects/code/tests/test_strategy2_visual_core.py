@@ -210,6 +210,13 @@ class Strategy2VisualCore(unittest.TestCase):
         self.assertEqual(resolve_control(rerendered, target), [])
         rerendered['document_identity'] = 'new-document'
         self.assertEqual(resolve_control(rerendered, target), [])
+        future_route = {'steps': [{'action': 'open_url', 'page_id': 'p0'},
+                                  {'action': 'click', 'target': {'text': '详情页章节', 'role': 'link'}}]}
+        bind_plan_targets(future_route, original)
+        self.assertEqual(future_route['steps'][1]['target'], {'text': '详情页章节', 'role': 'link'})
+        with self.assertRaisesRegex(ValueError, 'FUTURE_TARGET_REQUIRES_SEMANTICS'):
+            bind_plan_targets({'steps': [{'action': 'back'},
+                {'action': 'click', 'target': {'control': 'input1'}}]}, original)
 
         with tempfile.TemporaryDirectory() as temporary:
             state, reading = reading_observation(Path(temporary))
@@ -333,6 +340,39 @@ class Strategy2VisualCore(unittest.TestCase):
         compiled = react_step({**step, 'purpose': '输入金额', 'expected_result': '金额为42',
                                'rationale': '输入框可见'}, ['input1'], lambda _: [])
         self.assertEqual(compiled['expected_value'], '42')
+        # A requested container survives normalization and compilation; only
+        # that container's displacement can establish its scroll effect.
+        planned_scroll = {'action': 'scroll', 'target': {'control': 'panel'}, 'direction': 'down',
+                          'purpose': '读取弹层后续正文', 'rationale': '弹层存在未读正文',
+                          'expected_result': '弹层内后续正文进入视口'}
+        from webcollect.screenshot_plan import normalize_submit_plan
+        normalized_scroll, _ = normalize_submit_plan({'steps': [planned_scroll]})
+        self.assertEqual(normalized_scroll['steps'][0]['target'], {'control': 'panel'})
+        actual_scroll = react_step(planned_scroll, ['panel'], lambda _: [])
+        self.assertEqual(actual_scroll['control_id'], 'panel')
+        from webcollect.session_core import RawSessionCore, NATIVE_VERSION
+        validator = RawSessionCore.__new__(RawSessionCore)
+        validator.task = {'fragment': {'allowed_actions': ['scroll'],
+            'decision_protocol': NATIVE_VERSION, 'collection_strategy': {'id': 'screenshot_plan'}}}
+        validator._validate_step(actual_scroll)
+        validator._validate_step({key: value for key, value in actual_scroll.items() if key != 'control_id'})
+        with self.assertRaisesRegex(ValueError, '动作参数不合法'):
+            validator._validate_step({**actual_scroll, 'control_id': None})
+        panel = {'element': {'visible': True}, 'binding': {'scroll_container': {'visible': True, 'axes': ['y']}}}
+        scroll_task = {'fragment': {'allowed_actions': ['scroll']}}
+        self.assertEqual(compile_step(scroll_task, [], actual_scroll, {'controls': {'panel': panel}})[0]['control_id'], 'panel')
+        with self.assertRaisesRegex(ValueError, 'SCROLL_CONTAINER_NOT_UNIQUELY_BOUND'):
+            react_step(planned_scroll, [], lambda _: [])
+        before_panel = {'document_identity': 'dialog-doc', 'url': 'https://example.test/dialog',
+                        'scroll': [0, 0], 'elements': [], 'values': [],
+                        'scroll_containers': [{'element_id': 'panel', 'selector': '#panel', 'index': 0,
+                                               'visible': True, 'scroll': [0, 0]}]}
+        after_panel = deepcopy(before_panel)
+        after_panel['scroll_containers'][0]['scroll'] = [0, 100]
+        self.assertTrue(atomic_effect(before_panel, after_panel, 'scroll', {'direction': 'down'}, 'panel')['verified'])
+        page_only = deepcopy(before_panel)
+        page_only['scroll'] = [0, 100]
+        self.assertFalse(atomic_effect(before_panel, page_only, 'scroll', {'direction': 'down'}, 'panel')['verified'])
         wrong = deepcopy(after); wrong['values'][0]['value'] = '1742'
         self.assertTrue(atomic_effect(state, wrong, 'type', {'text': '42'}, 'input1')['verified'])
         self.assertFalse(step_expectation(compiled, wrong, 'input1')['matched'])

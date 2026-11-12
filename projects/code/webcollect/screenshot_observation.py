@@ -8,6 +8,8 @@ tree stay intact and remain the authoritative evidence.
 """
 
 
+from copy import deepcopy
+
 def substantive_answer_text(value, *, field='', excluded_text=()):
     """Substantive visible answer text, without imposing a numeric-only rule."""
     from .numeric_result_evidence import normalized, weak_result_text
@@ -55,6 +57,8 @@ def _control_row(cid, control, allowed):
                                 'disabled': bool(option.get('disabled'))}
                                for option in options[:20]]
             row['options_truncated'] = len(options) > 20
+    if (control.get('binding') or {}).get('scroll_container'):
+        row['scroll_container'] = deepcopy(control['binding']['scroll_container'])
     return row
 
 
@@ -127,7 +131,8 @@ def controls_projection(observation, allowed_actions, limit=60, body_ids=None):
         tier = _control_tier(control, allowed, body_ids)
         # Passive wrappers (nav/form/div/p/heading) can never be dispatched; only
         # the form and button tiers keep rows the page did not mark clickable.
-        if tier > 1 and element.get('clickable') is not True:
+        if tier > 1 and element.get('clickable') is not True and not (
+                'scroll' in allowed and (control.get('binding') or {}).get('scroll_container')):
             continue
         tiers[tier].append(_control_row(cid, control, allowed))
     rows = [row for tier in tiers for row in tier]
@@ -182,7 +187,7 @@ def _region_tier(element, quote):
     role = element.get('native_role')
     if role in ('status', 'alert', 'output', 'dialog') or element.get('result_region_selector'):
         return 0
-    if role in ('main', 'article', 'p', 'section', 'pre', 'table', 'td'):
+    if role in ('main', 'article', 'p', 'section', 'pre', 'table', 'tr', 'li', 'td', 'th'):
         return 1
     if role in _HEADING_ROLES:
         return 2
@@ -203,13 +208,37 @@ def region_registry(state, limit=12):
             e = tree.get(e.get('parent_id'))
         return False
     candidates = []
+    block_ids = set()
+    for block in state.get('text_blocks') or []:
+        quote = str(block.get('visible_text') or '').strip()
+        box = block.get('bbox') or []
+        if not quote or len(box) != 4 or box[0] >= box[2] or box[1] >= box[3]:
+            continue
+        owner = tree.get(block.get('element_id'), {})
+        if incidental(owner):
+            continue
+        block_ids.add(block.get('element_id'))
+        # Keep a whole visible row/sentence, never chop a person's name at the
+        # schema boundary. Long blocks remain raw evidence; expose their intact
+        # visible sentences or cells as individually citable regions.
+        pieces = [quote] if len(quote) <= 400 else [
+            q for q in block.get('complete_sentences') or [] if len(q) <= 400]
+        if not pieces and block.get('cells'):
+            pieces = [c['visible_text'] for c in block['cells'] if 0 < len(c.get('visible_text', '')) <= 400]
+        for piece in pieces:
+            row = {key: deepcopy(block[key]) for key in
+                   ('element_id', 'bbox', 'tag', 'member_ids', 'member_selectors', 'cells', 'headers') if key in block}
+            row.update(quote=piece, source='text_block')
+            ranked = dict(owner, native_role=block.get('tag') or owner.get('native_role'))
+            candidates.append((ranked, row))
     for e in elements:
         quote = (e.get('text') or '').strip()
-        if (e.get('visible') is not True or not e.get('bbox') or incidental(e)
-                or e.get('native_role') in ('input', 'select', 'textarea', 'button', 'a')
-                or not substantive_answer_text(quote)):
+        if (e.get('element_id') in block_ids or e.get('visible') is not True or not e.get('bbox') or incidental(e)
+                or e.get('native_role') in ('input', 'select', 'textarea', 'button')
+                or not quote or len(quote) > 400):
             continue
-        # Leaf/specific readable blocks prevent body/main wrappers consuming slots.
+        if e.get('native_role') != 'a' and not substantive_answer_text(quote):
+            continue
         if any(child.get('parent_id') == e.get('element_id') and child.get('visible') is True
                and (child.get('text') or '').strip() and (child.get('text') or '').strip() in quote
                for child in elements):
@@ -217,14 +246,17 @@ def region_registry(state, limit=12):
         ranked = dict(e)
         if e.get('element_id') in result_ids:
             ranked['result_region_selector'] = True
-        candidates.append((ranked, quote))
-    candidates.sort(key=lambda row: (_region_tier(*row), -min(len(row[1]), 240)))
+        candidates.append((ranked, {'element_id': e.get('element_id'), 'bbox': e['bbox'], 'quote': quote,
+                                    'member_ids': [e.get('element_id')], 'source': 'element'}))
+    candidates.sort(key=lambda row: (_region_tier(row[0], row[1]['quote']),
+                                    -min(len(row[1]['quote']), 240)))
     rows, seen = [], set()
-    for e, quote in candidates:
-        if quote in seen:
+    for e, row in candidates:
+        identity = (row.get('element_id'), row['quote'])
+        if identity in seen:
             continue
-        seen.add(quote)
-        rows.append({'region_id': 'region_' + str(len(rows) + 1), 'bbox': e['bbox'], 'quote': quote[:240]})
+        seen.add(identity)
+        rows.append({'region_id': 'region_' + str(len(rows) + 1), **row})
         if len(rows) >= limit:
             break
     return rows
@@ -284,7 +316,7 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
         state = load_json(observation['evidence']['state']['path'])
         before = await observe(page)
         dimensions = await page.evaluate('() => [Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)]')
-        keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text')
+        keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text', 'text_blocks', 'scroll_containers')
         if dimensions[1] > image.height * 1.15 and all(before.get(k) == state.get(k) for k in keys):
             png = await page.screenshot(full_page=True, scale='css', timeout=15000)
             after = await observe(page)
@@ -355,7 +387,7 @@ def verify_visuals(observation, visuals):
     if not visuals or not any(v.get('scope') == 'viewport' for v in visuals):
         raise ValueError('MISSING_CLEAR_VIEWPORT_IMAGE')
     state = load_json(observation['evidence']['state']['path'])
-    keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text')
+    keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text', 'text_blocks', 'scroll_containers')
     for visual in visuals:
         if visual.get('observation_id') != observation['observation_id']:
             raise ValueError('VISUAL_OBSERVATION_MISMATCH')

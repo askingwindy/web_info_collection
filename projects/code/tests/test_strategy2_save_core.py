@@ -56,6 +56,22 @@ class Strategy2SaveCore(unittest.TestCase):
             self.assertNotIn('4', prose['user_goal'])
             selected = deepcopy(before)
             selected['values'][0]['all_text_selected'] = True
+            # The same input identity permits Ctrl+A narration; a new document
+            # reusing its id/value must never inherit that input-effect prose.
+            before['document_identity'] = {'performance_time_origin': 1}
+            before['capture_controls'] = [{'element_id': 'input', 'selector': '#thickness',
+                                           'index': 0, 'tag': 'input', 'input_type': 'text'}]
+            selected['document_identity'] = deepcopy(before['document_identity'])
+            selected['capture_controls'] = deepcopy(before['capture_controls'])
+            operation = {'action_type': 'hotkey', 'evidence': {'anchor_element_id': 'input'}}
+            self.assertIn('全部选中', postprocess._input_effect_narrative(
+                before, selected, operation, {'fields': ['target.all_text_selected']}))
+            navigated = deepcopy(selected)
+            navigated['document_identity'] = {'performance_time_origin': 2}
+            navigated['values'][0]['value'] = ''
+            self.assertEqual((before['title'], before['url']), (navigated['title'], navigated['url']))
+            self.assertIsNone(postprocess._input_effect_narrative(
+                before, navigated, operation, {'fields': ['target.value']}))
             typed = step_narratives({'action': 'type', 'arguments': {'text': '6'},
                 'target': {'control_id': 'input'}}, selected, before['elements'][0], current_facts=True)
             self.assertIn('已获得焦点', typed['next_step_rationale'])
@@ -122,9 +138,12 @@ class Strategy2SaveCore(unittest.TestCase):
             raw = evidence / 'raw'
             raw.mkdir(parents=True)
             state_path = raw / 'observation.json'
-            quote = '页面已经显示本次查询的完整结果。'
+            quote = '页面已经显示本次查询的完整结果：甲组负责人张三提交12份，乙组负责人李四提交12份。'
             state_path.write_text(json.dumps({'title': '查询结果', 'url': 'https://example.test/',
-                'visible_text': quote, 'elements': [], 'values': []}, ensure_ascii=False))
+                'visible_text': quote.replace('张三', '\n张三\n').replace('李四', '\n李四\n'),
+                'elements': [], 'values': [], 'text_blocks': [{'element_id': 'result-block',
+                    'tag': 'p', 'bbox': [0, 0, 200, 100], 'visible_text': quote,
+                    'complete_sentences': [quote]}]}, ensure_ascii=False))
             # Derived arithmetic conclusions are labelled as calculation, while
             # each source quote retains its real observation/frame basis.
             derived = {'terminal': {'goal_evidence': {'business_goal_status': 'VERIFIED', 'checks': [
@@ -132,7 +151,7 @@ class Strategy2SaveCore(unittest.TestCase):
                  'completion_mapping': 'cited_arithmetic_cross_check',
                  'observed_visible_text': '两份合计为24',
                  'calculations': [{'expression': '12 * 2', 'computed_value': 24, 'unit': '份'}],
-                 'evidence': [{'observation_id': 'o1', 'quote': quote}]}]}},
+                 'evidence': [{'observation_id': 'o1', 'node': 'result-block', 'quote': quote}]}]}},
                 'observations': {'o1': {'state_path': str(state_path)}}, 'trajectory': []}
             narrative = postprocess.planned_terminal_narrative(derived, {'visible_text': quote}, 'o1')
             self.assertIn('计算核验通过', narrative['final_result'])
@@ -140,6 +159,8 @@ class Strategy2SaveCore(unittest.TestCase):
             self.assertNotIn('比例核对', narrative['final_result'])
             self.assertIn('推导核对', narrative['completion_judgement'])
             self.assertIn(quote, narrative['completion_judgement'])
+            self.assertIn('甲组负责人张三', narrative['completion_judgement'])
+            self.assertIn('乙组负责人李四', narrative['completion_judgement'])
             input_state_path = raw / 'input.json'
             input_state = {'visible_text': '原形状', 'elements': [
                 {'element_id': 'shape', 'text': '原形状', 'visible': True}],

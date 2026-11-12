@@ -36,7 +36,7 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
         raise ValueError('A project requires a distinct local project ID')
     repository = Path(__file__).resolve().parents[3]
     root = (Path(root) if root is not None else
-            repository / 'database' / 'sqllite').absolute()
+            repository / 'database' / 'sqllite' / 'prod').absolute()
     if any(p.is_symlink() for p in (root,*root.parents)):
         raise ValueError('Project root cannot be a symbolic link')
     root = root.resolve()
@@ -114,7 +114,8 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=['init'])
     parser.add_argument('--root', type=Path,
-                        help='Persistent project root (default: database/sqllite)')
+                        help='Persistent project root (default: database/sqllite/prod for production; '
+                             'verification projects use an explicit --root under database/sqllite/verification)')
     parser.add_argument('--output-root', type=Path,
                         help='Collection output root (default: results/<project-id>/collections)')
     for name in ('project-id','policy-template','producer-config','consumer-config'):

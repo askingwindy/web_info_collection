@@ -294,9 +294,17 @@ def _verified_progress_return(record, outward, returning):
 
 def _input_effect_narrative(before, after, operation, effect):
     """Describe actual editor state without quoting a clipped/hidden value."""
+    if (not before.get('document_identity') or before.get('document_identity') != after.get('document_identity')
+            or before.get('url', '').split('#')[0] != after.get('url', '').split('#')[0]
+            or operation.get('action_type') not in ('type', 'select', 'hotkey')):
+        return None
     cid = (operation.get('evidence') or {}).get('anchor_element_id') or (effect or {}).get('control_id')
     old = next((v for v in before.get('values', []) if v.get('element_id') == cid), {})
     new = next((v for v in after.get('values', []) if v.get('element_id') == cid), {})
+    old_binding = next((b for b in before.get('capture_controls', []) if b.get('element_id') == cid), {})
+    new_binding = next((b for b in after.get('capture_controls', []) if b.get('element_id') == cid), {})
+    if not old or not new or not old_binding or not new_binding or any(old_binding.get(k) != new_binding.get(k) for k in ('selector', 'index', 'tag', 'input_type')):
+        return None
     fields = (effect or {}).get('fields') or []
     if ('target.all_text_selected' in fields and new.get('all_text_selected') is True
             and new.get('focused') is True):
@@ -306,6 +314,45 @@ def _input_effect_narrative(before, after, operation, effect):
         return ('当前聚焦输入控件的实际值已清空' if new.get('value') == '' else
                 '输入控件的实际值已改变；当前视口未完整显示该值')
     return None
+
+
+def _container_scroll_narrative(before, after, operation):
+    """Use the bound HTML container's own observed offsets, never the window."""
+    binding = (operation.get('evidence') or {}).get('scroll_container')
+    if operation.get('action_type') != 'scroll' or not binding:
+        return None
+    def source(state):
+        matches = [row for row in state.get('scroll_containers', [])
+                   if row.get('element_id') == binding.get('element_id')
+                   and row.get('selector') == binding.get('selector')
+                   and row.get('index', 0) == binding.get('index', 0)]
+        return matches[0] if len(matches) == 1 else None
+    old, new = source(before), source(after)
+    if (not old or not new or before.get('document_identity') != after.get('document_identity')
+            or len(old.get('scroll') or []) != 2 or len(new.get('scroll') or []) != 2):
+        raise ValueError('CONTAINER_SCROLL_NARRATIVE_SOURCE_MISSING')
+    dx, dy = (new['scroll'][i] - old['scroll'][i] for i in range(2))
+    moves = []
+    if dy:
+        moves.append(('向下' if dy > 0 else '向上') + f'{abs(dy):g}像素')
+    if dx:
+        moves.append(('向右' if dx > 0 else '向左') + f'{abs(dx):g}像素')
+    if not moves:
+        raise ValueError('CONTAINER_SCROLL_NARRATIVE_NO_MOVEMENT')
+    prefix = str(binding.get('selector') or '') + ' > '
+    quotes = []
+    for block in after.get('text_blocks', []):
+        if not str(block.get('selector') or '').startswith(prefix):
+            continue
+        visible = str(block.get('visible_text') or '').strip()
+        pieces = [visible] if 0 < len(visible) <= 400 else block.get('complete_sentences') or []
+        for quote in pieces:
+            if quote and len(quote) <= 400 and quote not in quotes:
+                quotes.append(quote)
+        if len(quotes) >= 2:
+            break
+    return ('目标滚动区域已' + '、'.join(moves)
+            + ('；区域内当前可见' + '、'.join('「' + quote + '」' for quote in quotes[:2]) if quotes else ''))
 
 
 def flow_classification(effective):
@@ -609,13 +656,13 @@ def terminal_judgement(completion_status, final_result):
 def _visible_proof_quote(state, quote, node_id=None, *, causal_result=False):
     # Completion accepts clipped paragraph whitespace and result values with
     # labels interleaved in the viewport. Narration must use that same evidence.
-    from .screenshot_plan import _flat, _visible_node_texts, _result_tokens_visible
-    if quote in state.get('visible_text', ''):
+    from .screenshot_plan import _flat, _visible_node_texts, _result_tokens_visible, _evidence_nodes
+    if node_id is None and quote in state.get('visible_text', ''):
         return True
-    return any(quote in _visible_node_texts(state, node)
+    return any(any(_flat(quote) in _flat(text) for text in _visible_node_texts(state, node))
         and (_flat(quote) in _flat(state.get('visible_text', ''))
              or _result_tokens_visible(state, node, quote, causal_result=causal_result))
-        for node in state.get('elements', [])
+        for node in _evidence_nodes(state)
         if node_id is None or node.get('element_id') == node_id)
 
 
@@ -692,7 +739,7 @@ def planned_terminal_narrative(record, final_state, final_id):
                 if not conclusion or not calculations or any(not c.get('expression') for c in calculations):
                     return None
                 verified_results.append('计算核验通过')
-                short_quotes = list(dict.fromkeys(q for q in quotes if len(q) <= 100))
+                short_quotes = list(dict.fromkeys(quotes))
                 basis.append('依据页面数据推导核对：' + conclusion
                     + ('；页面依据' + '、'.join('「' + q + '」' for q in short_quotes) if short_quotes else '')
                     + '；完整来源与计算证据保留在原执行记录中')
@@ -702,7 +749,10 @@ def planned_terminal_narrative(record, final_state, final_id):
                 if short_quotes:
                     answer = str(submitted.get(check.get('requirement_id'), {}).get('observed_result') or '')
                     displayed = answer if answer and any(answer in quote for quote in cited) else '、'.join(cited)
-                    verified_results.append(str(check.get('field') or '页面结果') + '：' + displayed)
+                    label = str(check.get('field') or '页面结果')
+                    if __import__('re').fullmatch(r'(?:r|requirement_?)\d+', label, __import__('re').I):
+                        label = '页面结果'
+                    verified_results.append(label + '：' + displayed)
                 else:
                     verified_results.append('已核对原目标所需的页面内容')
                 in_final = [quote for quote in short_quotes if _visible_proof_quote(final_state, quote)]
@@ -796,6 +846,7 @@ def derive(task, record, delivery, ids, manifest, *, resume=False):
 def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resume=False):
     """Internal derivation from the caller's already verified effective rows."""
     from .collect import chinese_ratio, describe_change, observed_frame_description
+    from .collection_strategy import enabled as screenshot_strategy
     from .task_contract import narrative_evidence, canonical_sha
     from .validate import validate_sample
     from .action_normalization import normalize_delivery_step
@@ -875,8 +926,14 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
               'operation_id': row['operation_id'],
               'evidence': {**(raw_step.get('operation', {}).get('evidence') or {}),
                            'target_label': (row.get('target') or {}).get('label')}}
-        step_result = (_input_effect_narrative(before, after, op, row.get('effect_evidence'))
-                       or describe_change(before, after, op, element))
+        document_changed = (screenshot_strategy(task) and before.get('document_identity')
+                            and after.get('document_identity')
+                            and before['document_identity'] != after['document_identity'])
+        step_result = ('页面已切换，' + observed_frame_description(after, op.get('goal', ''), before)
+                       if document_changed else
+                       (_container_scroll_narrative(before, after, op)
+                        or _input_effect_narrative(before, after, op, row.get('effect_evidence'))
+                        or describe_change(before, after, op, element)))
         observed_result, narrative = narrative_evidence(step_result, before, after, op)
         if observed_result is None:
             result.update(status='processing_failed',
@@ -907,6 +964,10 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                                                           op['evidence']['target_label'])}
         if row['action'] == 'drag':
             action['end_coordinate'] = [arguments['end_x'], arguments['end_y']]
+        if row['action'] == 'scroll':
+            # A bound scroll container is internal dispatch/effect evidence.
+            # Customer scroll fields remain empty, including target_text.
+            action['target_element_id'] = action['target_text'] = ''
         if element:
             action.update(target_bbox=element['bbox'], target_control_type=element['element_type'])
         step = {'step_id': index, 'image_path': image_path,
@@ -972,7 +1033,7 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     from .collection_strategy import enabled as _screenshot_enabled
     screenshot_task = _screenshot_enabled(task)
     if screenshot_task:
-        final_goal = '确认结果并结束本次任务'
+        final_goal = '确认网页「' + final_state['title'] + '」中的最终结果：' + final_description
         complete_expected = '预期结束本次任务，当前画面保留支持结论的结果或正文。'
         complete_rationale = '当前结果可核验且原目标剩余事项已完成，可以结束任务。'
         complete_result = '已结束本次任务；结束画面：' + final_description

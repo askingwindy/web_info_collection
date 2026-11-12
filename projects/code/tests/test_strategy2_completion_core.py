@@ -62,12 +62,18 @@ class CompletionCoreTests(substrate.SessionHarness):
             index = len(prompts)
             prompts.append(deepcopy(prompt))
             if index == 2:
+                self.assertNotIn('checkpoint_feedback', prompt, repr(prompt.get('checkpoint_feedback')))
                 return {'arguments': {'decision': 'complete', 'reason': '原目标事项已逐帧核验', 'answers': []}}
             decision = {'decision': 'continue' if index == 0 else 'revise', 'reason': '保存当前帧证据',
                         'answers': [self._answer(prompt['current_observation'], index)]}
             if index == 1:
-                decision['remaining_plan'] = [{'action': 'wait', 'duration_ms': 1,
-                    'purpose': '等待当前内容稳定', 'rationale': '当前正文可见', 'expected_result': '正文保持稳定'}]
+                decision['remaining_plan'] = [
+                    {'action': 'scroll', 'direction': 'up', 'amount': 300,
+                     'purpose': '返回人物资料展示区域', 'rationale': '原名尚不在当前画面',
+                     'expected_result': '接近已阅读的人物资料区域'},
+                    {'action': 'scroll', 'direction': 'up', 'amount': 300,
+                     'purpose': '共同展示人物原名及出生地', 'rationale': '最后画面需要同时显示两项原目标证据',
+                     'expected_result': '人物原名和出生地同时进入视口'}]
             return {'arguments': decision}
 
         self.surface.state['elements'][-1]['visible'] = False
@@ -83,7 +89,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         await session._observe()
         self.assertNotIn(captured_input, session.provided_observations)
         session.plan['steps'][0]['target'] = {'control': 'control-0', '_source': {'host': 'private'}}
-        self.assertNotIn('_source', session._branch_prompt('plan_end')['remaining_plan'][0]['target'])
+        self.assertNotIn('_source', session._branch_prompt('plan_end')['pending_steps'][0]['target'])
         # The synthetic private-field projection probe is not a real step binding.
         # Remove it before exercising continue; an unbound _source has no document
         # identity and correctly makes the production checkpoint reject continue.
@@ -103,6 +109,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(set(session.verified_answers), {'r1', 'i1'})
         self.surface.state['elements'][-2]['visible'] = False
         self.surface.state['elements'][-1]['visible'] = True
+        self.surface.state['scroll'][1] = 960
         await session._observe()
         await session._checkpoint('content_visible')
         self.assertEqual(set(session.verified_answers), {'r1', 'r2', 'i1'})
@@ -110,17 +117,44 @@ class CompletionCoreTests(substrate.SessionHarness):
         # still unmet at a later revise re-anchors its route to the new tail;
         # verified ones stay untouched, and the sealed first plan keeps its
         # original observation steps (SSD 3.1).
-        self.assertEqual(session.route_map, [None])
+        self.assertEqual(session.route_map, [None, None])
         r2_answer = session.verified_answers.pop('r2')
         session._reanchor_routes()
-        self.assertEqual(session.route_overrides, {'r2': [1]})
+        self.assertEqual(session.route_overrides, {'r2': [1, 2]})
         session.verified_answers['r2'] = r2_answer
         session.route_overrides = {}
         goal_prompt = session._branch_prompt('result')
         self.assertNotIn('continue', goal_prompt['choices'])
         self.assertIn('goal_ready', goal_prompt['next_checkpoint'])
         self.assertNotEqual(prompts[0]['current_observation'], prompts[1]['current_observation'])
-        await session._checkpoint('plan_end')
+        # The accepted goal-ready presentation segment runs both necessary
+        # scrolls continuously. Only the second scroll reveals both answers.
+        original_execute = self.surface.execute_action
+        presentation_scrolls = 0
+
+        def reveal_final_reading_frame(action, arguments):
+            nonlocal presentation_scrolls
+            previous_scroll = self.surface.state['scroll'][1]
+            original_execute(action, arguments)
+            if action == 'scroll':
+                self.surface.state['scroll'][1] = previous_scroll - 300
+                presentation_scrolls += 1
+                if presentation_scrolls == 2:
+                    self.surface.state['elements'][-2]['visible'] = True
+                    self.surface.state['elements'][-1]['visible'] = True
+
+        self.surface.execute_action = reveal_final_reading_frame
+        session.working_goal = session.frozen_goal  # normal first-plan admission fact
+        self.assertTrue(session._presentation_step_pending)
+        await session._execute_round()
+        self.assertEqual((presentation_scrolls, session.position, len(prompts)), (1, 1, 2))
+        self.assertTrue(session._presentation_step_pending)
+        self.assertEqual({gap['requirement_id'] for gap in verify_final_presentation(
+            session, list(session.verified_checks.values()), session.requirements)[1]}, {'r1'})
+        await session._execute_round()
+        self.assertEqual((presentation_scrolls, session.position, len(prompts)), (2, 2, 3))
+        self.assertEqual(prompts[-1]['call_purpose'], 'completion')
+        self.assertEqual(sum(not prompt['missing_requirements'] for prompt in prompts), 1)
         self.assertEqual(session.collection_ending['kind'], READY_ENDING)
         self.assertEqual(prompts[1]['missing_requirements'], ['r2'])
         confirmed = next(row for row in prompts[1]['confirmed_progress'] if row['requirement_id'] == 'i1')
@@ -147,7 +181,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         replay.host_input_proofs = saved_proofs
         visible, gaps = verify_final_presentation(replay, checks, requirements)
         self.assertEqual(gaps, [])
-        self.assertEqual({row['requirement_id'] for row in visible}, {'r2'})
+        self.assertEqual({row['requirement_id'] for row in visible}, {'r1', 'r2'})
         self.assertEqual(session.goal_evidence['final_visible_evidence'], visible)
         self.assertEqual(record['terminal']['final_observation_id'], event['final_observation_id'])
         self.assertNotEqual(event['final_observation_id'], prompts[-1]['current_observation'])
@@ -156,11 +190,19 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(session.first_route_status, 'deviated')
         self.assertNotIn('identity', str(prompts[1]['known_business_state']))
         self.assertNotIn('selector', str(prompts[1]['historical_evidence']))
-        self.assertTrue(prompts[1]['historical_evidence'])
+        # Already verified reading text is retained once in confirmed_progress,
+        # rather than duplicated as an additional historical region block.
+        reading = next(row for row in prompts[1]['confirmed_progress'] if row['requirement_id'] == 'r1')
+        self.assertEqual(reading['observed_result'], self.texts[0])
+        self.assertEqual(reading['evidence'][0]['observation'], prompts[0]['current_observation'])
+        self.assertTrue(reading['model_has_seen'])
         self.assertTrue(all(row['evidence_only'] for row in prompts[1]['historical_evidence']))
 
     async def test_later_same_form_input_and_submission_invalidate_old_result(self):
+        sent_prompts = []
+
         async def choose(prompt):
+            sent_prompts.append(deepcopy(prompt))
             return {'arguments': {'decision': 'continue', 'reason': '记录当前观察'}}
 
         requirement = [{'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果'}]
@@ -217,8 +259,9 @@ class CompletionCoreTests(substrate.SessionHarness):
         session.position = 3
         session.route_map = [1, 2, 3]
         session.route_frames = {3: result}
-        self.assertEqual(session._progress_checkpoint_reason(scroll_row),
-                         'historical_result_pending')
+        # Capturing a previously read result leaving the viewport does not
+        # itself request a new decision. It remains available for the next batch.
+        self.assertIsNone(session._progress_checkpoint_reason(scroll_row))
         session.route_overrides = {'r1': [3]}
         self.assertIn(result, session.provided_observations)
         choose.max_images = 2
@@ -226,6 +269,28 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertIsNotNone(visual)
         self.assertEqual(visual['observation_id'], result)
         self.assertEqual(visual['requirement_id'], 'r1')
+        # Host input observations must not interrupt an accepted route before
+        # its real result-producing submission. Identical paragraph captures do
+        # not create an additional evidence-image batch either.
+        saved_plan, saved_requirements = session.plan, session.requirements
+        saved_frames, saved_map, saved_position = session.route_frames, session.route_map, session.position
+        session.plan = {'steps': [{'action': 'click'}] * 4}
+        session.position, session.route_map = 2, [1, 2, 3, 4]
+        session.route_frames = {1: before, 2: entered}
+        from webcollect.screenshot_observation import region_registry
+        for oid in (before, entered):
+            session.region_registries[oid] = region_registry(load_json(session.observation_records[oid]['evidence']['state']['path']))
+        session.requirements = [
+            {'id': 'pending-input', 'kind': 'input', 'target': {'control': 'control-0'},
+             'expected_value': '999', 'description': '数量输入为999',
+             'evidence_route': {'source_type': 'input_state', 'observation_steps': [1, 2]}},
+            {'id': 'same-paragraph', 'kind': 'content', 'description': '阅读「人物原名」',
+             'evidence_route': {'source_type': 'page_content', 'observation_steps': [1, 2]}},
+            {'id': 'future-result', 'kind': 'result', 'description': '查看利润率结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [4]}}]
+        self.assertIsNone(session._progress_checkpoint_reason(None))
+        session.plan, session.requirements = saved_plan, saved_requirements
+        session.route_frames, session.route_map, session.position = saved_frames, saved_map, saved_position
         result_element['visible'] = True
         self.surface.state['visible_text'] = self.surface.state['visible_text'].replace('40% 60% 80%', '')
         self.surface.state['visible_text'] += '\n利润率：\n40%\n总利息：\n60%\n总还款：\n80%'
@@ -307,12 +372,14 @@ class CompletionCoreTests(substrate.SessionHarness):
         choose.max_images = 1
         limited_prompt = session._branch_prompt('history_capacity')
         await session._decide(limited_prompt)
+        limited_prompt = sent_prompts[-1]
         self.assertEqual(limited_prompt['history_supplement_unavailable']['kind'], 'IMAGE_LIMIT')
         self.assertEqual(len(limited_prompt['_images']), 1)
         choose.max_images = 2
         prompt = session._branch_prompt('result')
         self.assertTrue(any('40%' in row['text'] for row in prompt['candidate_results']))
         await session._decide(prompt)
+        prompt = sent_prompts[-1]
         self.assertEqual(prompt['screenshots'][0], session.current['observation_id'])
         self.assertIn(entered, prompt['screenshots'])
         self.assertIn(entered, session.provided_observations)
@@ -370,6 +437,60 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(session.collection_ending['kind'], 'NO_PROGRESS_END')
         self.assertEqual(session.trajectory, [])
         self.assertEqual(calls, 1)
+        # A business-attempt-shaped rejection is not a dispatch. Continue must
+        # preserve this pending step, and repeated identical questions close
+        # before issuing another provider request.
+        no_dispatch_calls = 0
+        refusal_prompts = []
+
+        async def continue_pending(prompt):
+            nonlocal no_dispatch_calls
+            no_dispatch_calls += 1
+            refusal_prompts.append(deepcopy(prompt))
+            self.assertIn('pending_steps', prompt)
+            self.assertNotIn('remaining_plan', prompt)
+            return {'arguments': {'decision': 'continue', 'reason': '保留当前未派发动作'}}
+
+        undispatched = await self._session(continue_pending, name='S000001_sample_000206')
+        undispatched.provided_observations.add(undispatched.current['observation_id'])
+
+        async def reject_before_dispatch(arguments):
+            return {'status': 'rejected', 'summary': 'NOT_DISPATCHED: synthetic permission refusal',
+                    'error': {'code': 'SYNTHETIC_PERMISSION'}, 'data': {'control_id': 'control-0'}}
+
+        undispatched._tool_act = reject_before_dispatch
+        self.assertFalse(undispatched._checkpoint_needed(
+            {'action': 'scroll'}, [], {'status': 'ok'}, {'outcome': 'VERIFIED'}))
+        await undispatched._execute_round()
+        self.assertEqual((undispatched.position, undispatched.actual_dispatches), (0, 0))
+        self.assertEqual(undispatched.trajectory, [])
+        self.assertEqual(no_dispatch_calls, 1)
+        refusal = refusal_prompts[-1]['checkpoint_feedback']
+        self.assertEqual(refusal['message'], 'NOT_DISPATCHED: synthetic permission refusal')
+        self.assertEqual(refusal['code'], 'SYNTHETIC_PERMISSION')
+        self.assertEqual(refusal['data'], {'control_id': 'control-0'})
+        self.assertFalse(refusal['business_attempt_created'])
+        self.assertFalse(refusal_prompts[-1]['latest_attempt_is_current_step'])
+        self.assertEqual(refusal_prompts[-1]['call_purpose'], 'route_deviation')
+        await undispatched._checkpoint('step_execution_refused', feedback=refusal)
+        self.assertEqual(no_dispatch_calls, 1)
+        self.assertEqual(undispatched.collection_ending['kind'], 'NO_PROGRESS_END')
+
+        # A completed wait is a real route operation despite having no GUI
+        # dispatch and contributing zero effective business steps.
+        waited = await self._session(continue_pending, name='S000001_sample_000207')
+        waited.plan['steps'] = [{'action': 'wait', 'duration_ms': 1},
+                               {'action': 'wait', 'duration_ms': 1}]
+
+        async def completed_wait(arguments):
+            return {'status': 'ok', 'data': {'wait_executed': True,
+                    'actual_actions_delta': 0, 'effective_steps_delta': 0}}
+
+        waited._tool_act = completed_wait
+        await waited._execute_round()
+        self.assertEqual((waited.position, waited.actual_dispatches), (1, 0))
+        self.assertEqual(waited.trajectory, [])
+
         # Same business wrapper, no native form: focus and newly observed fields
         # cannot substitute for a real related edit after the preceding submit.
         from webcollect.screenshot_effect import business_scope
@@ -442,6 +563,29 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertFalse(positioned._presentation_repair_permitted(
             [{'action': 'open_url', 'page_id': 'p2'}]))
         self.assertFalse(positioned._presentation_repair_permitted([]))
+
+        # Only an exact, visible HTML-dialog close button can finish a pure
+        # reading presentation repair; account actions remain forbidden.
+        self.surface.state['elements'].extend([
+            {'element_id': 'reading-dialog', 'native_role': 'dialog', 'text': '条目详情',
+             'bbox': [100, 100, 900, 700], 'visible': True, 'parent_id': 'root'},
+            {'element_id': 'dialog-close', 'native_role': 'button', 'text': '关闭',
+             'element_type': 'button', 'bbox': [800, 120, 860, 160], 'visible': True,
+             'enabled': True, 'clickable': True, 'inputable': False,
+             'parent_id': 'reading-dialog'}])
+        self.surface.state['capture_controls'].append({'element_id': 'dialog-close',
+            'selector': '#dialog-close', 'tag': 'button', 'input_type': 'button'})
+        await positioned._observe()
+        close = [{'action': 'click', 'target': {'control': 'dialog-close'}}]
+        positioned._controls()
+        bind_plan_targets({'steps': close}, positioned.current)
+        self.assertTrue(positioned._presentation_repair_permitted(close))
+        close_element = positioned.current['controls']['dialog-close']['element']
+        close_element['text'] = '关闭账户'
+        self.assertFalse(positioned._presentation_repair_permitted(close))
+        close_element['text'] = '关闭'
+        close_element['parent_id'] = 'root'
+        self.assertFalse(positioned._presentation_repair_permitted(close))
 
     def test_rationale_quotes_must_exist_in_the_current_frame(self):
         frame = '搜索结果\n金额 100 元\n下一页'

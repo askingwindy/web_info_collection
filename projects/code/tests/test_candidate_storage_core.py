@@ -27,8 +27,8 @@ class CandidateStorageCore(unittest.TestCase):
     def test_deleting_collection_output_preserves_project_candidates_and_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory).resolve()
-            root = temporary / 'database' / 'sqllite'
-            legacy = root / 'producer-muxtly-wiki-200-20261111-r01'
+            root = temporary / 'database' / 'sqllite' / 'prod'
+            legacy = root.parent / 'producer-muxtly-wiki-200-20261111-r01'
             legacy.mkdir(parents=True)
             sentinel = legacy / 'keep.txt'
             sentinel.write_text('legacy project must remain untouched')

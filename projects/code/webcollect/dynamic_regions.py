@@ -122,7 +122,7 @@ def projection(state, *, protect=()):
     result=deepcopy(state);allowed=regions(state);members={x for r in allowed for x in r['member_ids']};keep=protected_ids(state,protect)
     removed=members-keep
     meta=result.pop('dynamic_region_contract')
-    for field in ('elements','capture_controls','geometry_witnesses','capture_images','text_blocks','embedded_frames','unrelated_transform_proofs'):
+    for field in ('elements','capture_controls','geometry_witnesses','capture_images','text_blocks','scroll_containers','embedded_frames','unrelated_transform_proofs'):
         result[field]=[e for e in result.get(field,[]) if e.get('element_id') not in removed
             and not (field=='capture_images' and e.get('element_id') in members)]
     # A target within an animated image remains clickable, with stable original

@@ -1,9 +1,11 @@
 # WebCollect
 
+2026-11-12 已按[Wiki 阅读与调用优化方案](docs/策略2Wiki阅读与证据标注Token优化方案-20261112.md)集中完成工程、prompt、tool、schema及标注接线：首次路线连续执行，真实偏差时一次补齐尾部，重复请求先于发送收口，弹层滚动与完整正文证据贯通。受影响19条核心用例最新均通过，维护总量50；隔离计算7步／2次intent、弹层阅读5步／3次intent均经正常保存、候选回写和导出，32项检查通过。真实模型与采集未运行，历史包114个哈希仍一致；[实施证据与限制](verify_results/strategy2-wiki-plan-implementation-20261112-r01/report.md)区分局部失败复验、字符代理和真实效果。下方旧记录按各自时间理解。
+
 2026-11-12 门禁走读修复与保存链离线收口已完成（[证据与边界](verify_results/strategy2-save-chain-20261112-r01/report.md)）：首帧只判断首步确定输入冗余，不从引用命中推断滚动多余或正文／结果目标完成；结束修复按当前展示控件、同文档锚点及已核验前页导航事实许可，拒绝编辑／重置／焦点按键时返回具体缺项和定位建议。新增隔离计算8步、纯阅读5步，经正常 `_react_collection`、派生、RuntimeStore提交、候选回写及隔离导出，sample ID与哈希一致；加工失败保持 `program/save_failed/eligible`，integration批次导出仍拒绝。汇总44/44、反馈专项及失败分支5/5通过；受影响核心5个不同用例最新均通过，累计6次执行（5通过、1次旧断言失败后局部复验通过）、pytest共1.05秒，维护总量仍50，未全量重跑。仅合成离线夹具（导出使用生产形状测试），真实模型／网页／生产新增均0，QC／人工NOT_RUN、发布false、客户验收UNKNOWN；不启动采集。
 
 
-当前待实施计划已按“真实执行→完整标注→RuntimeStore正式提交→候选回写→delivery”收口，见[SSD文首](docs/策略2观察反馈与完成收尾优化SSD-20261112.md)。本次为代码复核与文档更新；末帧缺项与停滞判定尚需修复，旧25项集成只覆盖到派生文件，未证明正式提交与回写；没有启动新采集，旧执行Prompt已标为历史。
+此前三轮后计划（历史）已按“真实执行→完整标注→RuntimeStore正式提交→候选回写→delivery”收口，见[原 SSD](docs/策略2观察反馈与完成收尾优化SSD-20261112.md)。该时点仅完成代码复核与文档更新，末帧缺项与停滞判定尚需修复，旧25项集成只覆盖到派生文件；后续保存链修复、真实交付及内容复审分别见上述入口，不将该历史缺口当作当前仍未实施的结论。
 
 2026-11-12 三轮固定采集复核已结束：新授权 Muxtly／Wiki 每轮各5条，共3轮、30个唯一新候选及30个正式attempt，进程全部退出；每轮源码摘要一致，三份campaign均停止。宿主完成证据接受9条，正式保存／客户导出／内容复核合格均0，未新建客户样本包；claim failed 28、reconcile 2，新增模型UNKNOWN 2笔保留不重发。修复稳定目标事实停滞核算、语义全目标反馈、当前控件唯一别名正规化、正文路线与补图、结果完整叙述及无版本恢复引用；最后查实并修复goal_ready抢先拦截必要结束定位。维护核心总数仍50，受影响16个不同用例分批累计82次执行（80通过、2失败后局部复验通过），pytest累计4.30秒；最终离线集成25/25通过、必要定位专项通过，未全量重跑50条。**第3轮后最后改动仅离线覆盖，不增加第4轮，不宣称真实交付达标。** 独立AI QC、人工审核NOT_RUN，发布false，客户验收UNKNOWN。三轮明细、12步失败样本原恢复合同阻断及剩余规划／短流程问题见[本轮报告](docs/策略2三轮采集修复与交付复核-20261112.md)。
 
@@ -26,22 +28,22 @@ export PYTHONPATH=projects/code:projects/site-planner:projects/quality-inspector
 PY=projects/code/.venv/bin/python
 
 # 只读统计全部站点，也可重复加 --site 限定站点。
-$PY -B -m webcollect.site_inventory --scope database/sqllite/scope.json
+$PY -B -m webcollect.site_inventory --scope database/sqllite/prod/scope.json
 
 # 两个已确认站点各累计 1000 条 NEW，共 50 个生产者进程：每站 25 个。
 $PY -B -m webcollect.site_workers producer \
-  --scope database/sqllite/scope.json \
+  --scope database/sqllite/prod/scope.json \
   --site muxtly.com --site zh.wikipedia.org \
   --pages-per-site 1000 --workers 50 --launch
 
 # 领取一个站点的全部当前 pending，共 100 个消费者进程。
 $PY -B -m webcollect.site_workers consumer \
-  --scope database/sqllite/scope.json --site muxtly.com \
+  --scope database/sqllite/prod/scope.json --site muxtly.com \
   --workers 100 --all-pending --launch
 
 # 两个站点共 30 个消费者进程：每站 15 个。
 $PY -B -m webcollect.site_workers consumer \
-  --scope database/sqllite/scope.json \
+  --scope database/sqllite/prod/scope.json \
   --site muxtly.com --site zh.wikipedia.org \
   --workers 30 --all-pending --launch
 ```

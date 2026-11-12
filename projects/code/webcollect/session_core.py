@@ -948,6 +948,9 @@ class RawSessionCore:
         if extended:
             schema['properties'].update(rationale=TEXT,expected_result=TEXT)
             schema['required'].extend(['rationale','expected_result'])
+        if screenshot_task and action == 'scroll':
+            # Optional current container; absence still denotes page scrolling.
+            schema['properties']['control_id'] = TEXT
         if screenshot_task and action in ('type', 'select'):
             schema['properties']['expected_value'] = {'type': 'string', 'maxLength': 500}
             schema['required'].append('expected_value')
@@ -965,6 +968,8 @@ class RawSessionCore:
                     variant['required'].extend(['rationale','expected_result'])
             if screenshot_task:
                 for variant in variants['oneOf']:
+                    if variant['properties']['action'].get('const') == 'scroll' or variant['properties']['action'].get('enum') == ['scroll']:
+                        variant['properties']['control_id'] = TEXT
                     if variant['properties']['action'].get('const') in ('type', 'select') or variant['properties']['action'].get('enum') in (['type'], ['select']):
                         variant['properties']['expected_value'] = {'type': 'string', 'maxLength': 500}
                         variant['required'].append('expected_value')
@@ -1284,6 +1289,12 @@ class RawSessionCore:
                 operation['evidence']['focused_element_id'] = cid
         elif action == 'scroll':
             operation['arguments'] = {'direction': row['direction']}
+            if cid:
+                container = (control or {}).get('binding', {}).get('scroll_container') or {}
+                axis = 'y' if row['direction'] in ('up', 'down') else 'x'
+                if not container.get('visible') or axis not in container.get('axes', []):
+                    raise ValueError('SCROLL_CONTAINER_NOT_CURRENTLY_SCROLLABLE')
+                operation['evidence']['scroll_container'] = deepcopy(container)
         elif action == 'drag':
             endpoint_id=row['end_control_id']
             endpoint=next((e for e in dispatch_state['elements'] if e['element_id']==endpoint_id),None)
@@ -1538,6 +1549,11 @@ class RawSessionCore:
                          **({'semantic_rationale':step['rationale'],'semantic_expected_result':step['expected_result']}
                             if 'rationale' in step else {}),
                          'primitive': row['action'], 'primitive_index': len(executed) + 1}}
+        if operation['action_type'] == 'scroll' and operation.get('evidence', {}).get('scroll_container'):
+            # The customer contract gives scroll a pointer, not a control label.
+            # Keep the actual container in operation.evidence and the full state;
+            # target_element remains the exported control-action ground truth.
+            raw['target_element'] = None
         self.dialogs.clear()
         dispatch_started = False
         try:
@@ -1729,14 +1745,16 @@ class RawSessionCore:
             except ValueError as error:
                 raw['react']['after_observation_id']=after['observation_id']
                 raise ReactStop('blocked',str(error),'collector',operation=operation['operation_id']) from error
-        keys = ('url', 'document_identity', 'scroll', 'values', 'visible_text', 'elements')
+        keys = ('url', 'document_identity', 'scroll', 'scroll_containers', 'values', 'visible_text', 'elements')
         from .dynamic_regions import projection as content_projection
         raw_changed_fields=[key for key in keys if before_state.get(key)!=after_state.get(key)]
         old_content,new_content=content_projection(before_state),content_projection(after_state)
         changed_fields = [key for key in keys if old_content.get(key) != new_content.get(key)]
         png_changed = _sha(Path(after['evidence']['image']['path'])) != before_image['sha256']
         changed = bool(changed_fields) or png_changed
-        zero_scroll = operation['action_type'] == 'scroll' and before_state.get('scroll') == after_state.get('scroll')
+        zero_scroll = operation['action_type'] == 'scroll' and (
+            not effect['verified'] if operation.get('evidence', {}).get('scroll_container')
+            else before_state.get('scroll') == after_state.get('scroll'))
         if ((self.plan_controller is not None
                 or __import__('webcollect.collection_strategy',fromlist=['enabled']).enabled(self.task))
                 and (not effect['verified'] or zero_scroll or not changed)):

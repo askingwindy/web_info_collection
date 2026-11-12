@@ -19,7 +19,10 @@ def action_availability(state, element, binding, value, probe, action):
         return {'status': status, 'reason': reason}
     if action not in ACTIONS:
         return result(UNAVAILABLE, 'UNSUPPORTED_ACTION')
-    if action not in CONTROL_ACTIONS:
+    container_scroll = action == 'scroll' and element is not None
+    if container_scroll and not (binding or {}).get('scroll_container', {}).get('visible'):
+        return result(UNAVAILABLE, 'SCROLL_CONTAINER_NOT_OBSERVED')
+    if action not in CONTROL_ACTIONS and not container_scroll:
         return result(PROVEN, 'PAGE_ACTION_REQUIRES_FROZEN_SCOPE_CHECK')
     if not element or element.get('visible') is False or element.get('enabled') is False:
         return result(UNAVAILABLE, 'TARGET_ABSENT_HIDDEN_OR_DISABLED')
@@ -42,7 +45,7 @@ def action_availability(state, element, binding, value, probe, action):
         and isinstance(box,list) and len(box)==4 and isinstance(probe.get('coordinate'),list)
         and len(probe['coordinate'])==2 and box[0]<=probe['coordinate'][0]<box[2]
         and box[1]<=probe['coordinate'][1]<box[3])
-    if not labels and not pointer_bound:
+    if not labels and not pointer_bound and not container_scroll:
         return result(INSUFFICIENT, 'MISSING_READABLE_LABEL_EVIDENCE')
     if action in ('type', 'set_value'):
         if not element.get('inputable') or value.get('readonly') is True:
@@ -60,7 +63,7 @@ def action_availability(state, element, binding, value, probe, action):
     elif action=='drag':
         if not binding.get('selector') or not box:
             return result(INSUFFICIENT,'MISSING_DRAG_SOURCE_BINDING')
-    elif element.get('clickable') is not True:
+    elif not container_scroll and element.get('clickable') is not True:
         return result(UNAVAILABLE, 'NOT_CLICKABLE')
     return result(PROVEN, 'CURRENT_RENDERED_TARGET_PROVED')
 
@@ -99,7 +102,7 @@ def project(state, evidence, *, extended_actions=False):
         controls[eid] = {'element': deepcopy(element), 'binding': deepcopy(binding),
             'value': deepcopy(value), 'probe': deepcopy(current), 'readable_labels': readable_labels(current),
             'actions': {action: action_availability(state, element, binding, value, current, action)
-                        for action in sorted(control_actions)}}
+                        for action in sorted(control_actions | ({'scroll'} if binding.get('scroll_container') else set()))}}
     if not capture_verified:
         for control in controls.values():
             control['readable_labels'] = []
@@ -131,7 +134,8 @@ def require_action(state, operation):
         target = state.get('target') or {}
         if target.get('element_id') != evidence['focused_element_id'] or target.get('focused') is not True:
             raise ValueError('STALE_HOTKEY_FOCUS')
-    if operation['action_type'] in CONTROL_ACTIONS:
+    if operation['action_type'] in CONTROL_ACTIONS or (
+            operation['action_type'] == 'scroll' and evidence.get('anchor_element_id')):
         target = state.get('target') or {}; eid = evidence.get('anchor_element_id')
         element = next((e for e in state['elements'] if e['element_id'] == eid), None)
         binding = next((b for b in state['capture_controls'] if b['element_id'] == eid), {})

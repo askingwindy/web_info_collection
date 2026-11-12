@@ -185,6 +185,10 @@ def react_step(step, control_ids, endpoint_matches):
         actual['keys'] = execution_keys(actual['keys'])
     if action in ('click', 'double_click', 'right_click', 'drag', 'type', 'select'):
         actual['control_id'] = control_ids[0]
+    if action == 'scroll' and step.get('target'):
+        if not control_ids or len(control_ids) != 1:
+            raise ValueError('SCROLL_CONTAINER_NOT_UNIQUELY_BOUND')
+        actual['control_id'] = control_ids[0]
     if action == 'hotkey':
         actual['control_id'] = control_ids[0] if control_ids else None
     if action == 'drag':
@@ -240,6 +244,12 @@ def compile_step(task, page_urls, step, observation, navigation_count=0):
         raise ValueError('EXPECTED_VALUE_REQUIRED: declare the final input value')
     cid = step.get('control_id')
     control = observation['controls'].get(cid)
+    if action == 'scroll' and cid:
+        container = (control or {}).get('binding', {}).get('scroll_container') or {}
+        axis = 'y' if step.get('direction') in ('up', 'down') else 'x'
+        if (not control or control.get('element', {}).get('visible') is not True
+                or not container.get('visible') or axis not in container.get('axes', [])):
+            raise ValueError('SCROLL_CONTAINER_NOT_CURRENTLY_SCROLLABLE')
     if action in ('click', 'double_click', 'right_click', 'type', 'select', 'drag'):
         if not control:
             raise ValueError('TARGET_NOT_CURRENTLY_OBSERVED')
@@ -365,12 +375,28 @@ def _normalize_node_target(target, observation, allowed, normalization):
 
 
 def bind_plan_targets(plan, observation, allowed_ids=None, *, normalization=None):
-    """Snapshot host provenance at plan acceptance, including drag endpoints."""
+    """Bind the current segment; future documents retain declared semantics."""
+    from urllib.parse import urldefrag, urljoin
     allowed = set(allowed_ids if allowed_ids is not None else observation.get('provided_control_ids', []))
     normalization = normalization if normalization is not None else []
-    for step in [*plan.get('steps', []), *[r for r in plan.get('requirements', []) if r.get('kind') == 'input']]:
+    steps = plan.get('steps', [])
+    future = False
+    for index, step in enumerate([*steps, *[r for r in plan.get('requirements', []) if r.get('kind') == 'input']]):
+        deferred = future and index < len(steps)
         for key in ('target', 'end_target'):
             target = step.get(key) or {}
+            if deferred:
+                # Never reinterpret a first-frame number as a new-page control.
+                # An explicitly declared semantic target may be rebound when
+                # that page is actually observed; no unseen labels are invented.
+                if (target.get('control') or target.get('node')) and not any(
+                        target.get(field) for field in ('text', 'href', 'region')):
+                    raise ValueError('FUTURE_TARGET_REQUIRES_SEMANTICS: use text/role/href, not a current control number')
+                if target.get('control') or target.get('node') or target.get('_source'):
+                    target.pop('control', None); target.pop('node', None); target.pop('_source', None)
+                    normalization.append({'field': f'steps[{index}].{key}',
+                                          'transform': 'future_target_keeps_declared_semantics'})
+                continue
             _normalize_node_target(target, observation, allowed, normalization)
             cited = target.get('control')
             mark = None
@@ -393,6 +419,14 @@ def bind_plan_targets(plan, observation, allowed_ids=None, *, normalization=None
                 cid = None
             if cid:
                 target['_source'] = _source(observation, cid, mark)
+        if index < len(steps):
+            target = step.get('target') or {}
+            href = target.get('href') or target.get('_source', {}).get('binding', {}).get('href')
+            navigation = (step.get('action') in ('back', 'open_url') or
+                (step.get('action') in ('click', 'double_click') and href and
+                 urldefrag(urljoin(observation.get('url', ''), href))[0] !=
+                 urldefrag(observation.get('url', ''))[0]))
+            future = future or bool(navigation)
     return plan
 
 

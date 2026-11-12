@@ -1169,10 +1169,12 @@
   // Raw-only block evidence preserves inline reading order and reports actual
   // boundary visibility. Original DOM text supplies boundaries, never content
   // for a hidden range. The customer's UI-element schema remains unchanged.
-  const textBlocks=[];
-  for(const paragraph of document.querySelectorAll('p')) {
-    const text=clean(inlineText(paragraph));if(!text)continue;
+  const textBlocks=[],textBlockOwners=new Map();
+  for(const paragraph of document.querySelectorAll('p,li,tr,td,th')) {
+    const ownText=node=>{if(node.nodeType===Node.ELEMENT_NODE&&node!==paragraph&&((paragraph.localName==='li'&&node.matches('ul,ol'))||(paragraph.matches('tr,td,th')&&node.matches('table'))))return '';if(node.nodeType===Node.TEXT_NODE)return visibleText(node);if(node.nodeType!==Node.ELEMENT_NODE||!node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return '';if(node.tagName==='BR')return ' ';return [...node.childNodes].map(child=>{const text=ownText(child);return child.nodeType===Node.ELEMENT_NODE&&['block','list-item','table','table-row','table-cell','flex','grid'].includes(styleOf(child).display)?' '+text+' ':text;}).join(node.matches('tr')?' ':'');};
+    const text=clean(ownText(paragraph));if(!text)continue;
     if(!observer.ids.has(paragraph))observer.ids.set(paragraph,`e_${observer.next++}`);
+    textBlockOwners.set(observer.ids.get(paragraph),paragraph);
     const first=edgeText(paragraph),last=edgeText(paragraph,true);
     // Source punctuation supplies sentence boundaries, never hidden content.
     // Only sentences whose entire characters are in the clipped visible
@@ -1195,7 +1197,10 @@
       for(let j=i+1;!balanced(sentence)&&j<sourceParts.length;j++)sentence+=sourceParts[j];
       if(balanced(sentence)&&normalized(text).includes(normalized(sentence)))complete.push(clean(sentence));
     }
-    textBlocks.push({element_id:observer.ids.get(paragraph),visible_text:text,complete_sentences:complete,
+    const members=[paragraph,...paragraph.querySelectorAll('*')].filter(n=>!(paragraph.localName==='li'&&n!==paragraph&&n.closest('ul,ol')&&paragraph.contains(n.closest('ul,ol')))&&!(paragraph.matches('tr,td,th')&&n.closest('table')!==paragraph.closest('table'))&&clean(ownText(n))&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
+    for(const n of members)if(!observer.ids.has(n))observer.ids.set(n,`e_${observer.next++}`);
+    const r=paragraph.getBoundingClientRect(),clip=clipFor(paragraph);
+    textBlocks.push({element_id:observer.ids.get(paragraph),tag:paragraph.localName,bbox:[Math.max(0,r.left,clip.left),Math.max(0,r.top,clip.top),Math.min(width,r.right,clip.right),Math.min(height,r.bottom,clip.bottom)],member_ids:members.map(n=>observer.ids.get(n)),visible_text:text,complete_sentences:complete,
       starts_visible:!!textEdges.get(first)?.starts_visible,ends_visible:!!textEdges.get(last)?.ends_visible});
   }
   const assertionTargets=assertions.map(condition=>{
@@ -1402,6 +1407,26 @@
   // data-* or model assertion can declare a business result ignorable.
   const dynamicVersion='dynamic-regions';
   const selectorOf=n=>{const parts=[];for(;n&&n.nodeType===1;n=n.parentElement){const sib=n.parentElement?[...n.parentElement.children].filter(x=>x.localName===n.localName):[n];parts.unshift(n.localName+':nth-of-type('+(sib.indexOf(n)+1)+')');}return parts.join(' > ');};
+  for(const block of textBlocks){
+    const owner=textBlockOwners.get(block.element_id);
+    block.selector=selectorOf(owner);block.index=0;
+    block.member_selectors=[owner,...owner.querySelectorAll('*')].filter(n=>block.member_ids.includes(observer.ids.get(n))).map(selectorOf);
+    if(owner.localName==='tr'){
+      const cellRow=cell=>{if(!observer.ids.has(cell))observer.ids.set(cell,`e_${observer.next++}`);const r=cell.getBoundingClientRect(),clip=clipFor(cell);return {element_id:observer.ids.get(cell),selector:selectorOf(cell),tag:cell.localName,column_index:cell.cellIndex,visible_text:textBlocks.find(b=>b.element_id===observer.ids.get(cell))?.visible_text||'',bbox:[Math.max(0,r.left,clip.left),Math.max(0,r.top,clip.top),Math.min(width,r.right,clip.right),Math.min(height,r.bottom,clip.bottom)]};};
+      const visible=c=>c.visible_text&&c.bbox[0]<c.bbox[2]&&c.bbox[1]<c.bbox[3];
+      block.cells=[...owner.cells].map(cellRow).filter(visible);
+      block.headers=[...owner.closest('table').querySelectorAll('th')].filter(c=>c.closest('table')===owner.closest('table')).map(cellRow).filter(visible);
+    }
+  }
+  const scrollContainers=nodes.map((node,i)=>{
+    if(node===document.scrollingElement||!records[i].scrollable)return null;
+    const style=styleOf(node),axes=[];
+    if(['auto','scroll'].includes(style.overflowX)&&node.scrollWidth>node.clientWidth)axes.push('x');
+    if(['auto','scroll'].includes(style.overflowY)&&node.scrollHeight>node.clientHeight)axes.push('y');
+    if(!axes.length)return null;
+    const info={element_id:records[i].element_id,selector:selectorOf(node),index:0,bbox:records[i].bbox,scroll:[node.scrollLeft,node.scrollTop],scroll_size:[node.scrollWidth,node.scrollHeight],client_size:[node.clientWidth,node.clientHeight],axes,visible:true};
+    captureControls[i].scroll_container=info;return info;
+  }).filter(Boolean);
   const regionAttributes=n=>Object.fromEntries(['id','class','role','aria-label','aria-roledescription','title'].map(k=>[k,n.getAttribute(k)]));
   const nativeImagePaint=n=>{const c=styleOf(n);return n.children.length===0&&!clean(n.textContent)&&(c.backgroundImage!=='none'||c.maskImage!=='none')?{leaf:true,visible_text:'',background_image:c.backgroundImage,mask_image:c.maskImage}:null;};
   const categoryOf=n=>{
@@ -1580,7 +1605,7 @@
               bbox:records[i].bbox,rendered_bbox:b,samples,
               ...(records[i].clickable?{dispatch_point:dispatchPoint(node,records[i].bbox)}:{})};}),
     document_identity:{url_without_fragment:location.href.split('#')[0],performance_time_origin:performance.timeOrigin},
-    scroll:[scrollX,scrollY],elements:records,values,target:targetInfo,
+    scroll:[scrollX,scrollY],scroll_containers:scrollContainers,elements:records,values,target:targetInfo,
     visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,
     embedded_frames:nodes.map((node,i)=>node.matches('iframe,frame')?{
       element_id:records[i].element_id,bbox:records[i].bbox,title:node.getAttribute('title')||'',

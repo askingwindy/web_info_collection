@@ -105,12 +105,22 @@ def atomic_effect(before, after, action, arguments, control_id=None, *, rule_ver
     fields = []
     if action == 'scroll':
         b, a = before.get('scroll'), after.get('scroll')
+        if control_id:
+            old_container = next((r for r in before.get('scroll_containers', [])
+                                  if r.get('element_id') == control_id), None)
+            same_document = before.get('document_identity') == after.get('document_identity')
+            matches = [r for r in after.get('scroll_containers', [])
+                       if old_container and r.get('selector') == old_container.get('selector')
+                       and r.get('index', 0) == old_container.get('index', 0)
+                       and r.get('visible') is True]
+            new_container = matches[0] if same_document and len(matches) == 1 else None
+            b = (old_container or {}).get('scroll'); a = (new_container or {}).get('scroll')
         direction = arguments.get('direction')
         axis = 1 if direction in ('up', 'down') else 0
         if isinstance(a, list) and isinstance(b, list) and len(a) > axis and len(b) > axis:
             delta = a[axis] - b[axis]
             if (direction in ('down', 'right') and delta > 0) or (direction in ('up', 'left') and delta < 0):
-                fields.append('scroll')
+                fields.append('target.scroll' if control_id else 'scroll')
     elif action in ('type', 'select'):
         if cid is not None and old.get('value') != new.get('value'):
             fields.append('target.value')
@@ -131,6 +141,18 @@ def atomic_effect(before, after, action, arguments, control_id=None, *, rule_ver
                 fields.append('target.' + key)
         if control_state_transition(before, after, cid):
             fields.append('target.owner.state')
+        if action == 'click' and before.get('document_identity') == after.get('document_identity'):
+            old_nodes = {n['element_id']: n for n in before.get('elements', [])}
+            new_nodes = {n['element_id']: n for n in after.get('elements', [])}
+            owner, seen = cid, set()
+            while owner in old_nodes and owner not in seen:
+                seen.add(owner)
+                node = old_nodes[owner]
+                if (node.get('native_role') in ('dialog', 'alertdialog') and node.get('visible') is True
+                        and new_nodes.get(owner, {}).get('visible') is not True):
+                    fields.append('target.dialog_closed')
+                    break
+                owner = node.get('parent_id')
         if (action == 'hotkey' and arguments.get('keys') in (['meta','a'], ['ctrl','a'])
                 and old.get('input_type') == new.get('input_type') == 'number'
                 and old.get('focused') is True and new.get('focused') is True

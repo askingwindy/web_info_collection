@@ -3,14 +3,14 @@
 The session reuses the entry observation, trusted capture, atomic dispatch,
 effect verification, business-attempt journal and raw close-out from the shared
 engine core (session_core.RawSessionCore), never the 策略 1 decision loop.
-What changes is the decision loop: one first-round submit_plan, deterministic
-execution of planned steps, model checkpoints only at business events
-(submit-like clicks, navigation, dialogs, binding/identity refusals,
-result reading or plan exhaustion) and a verified `complete`.
+What changes is the decision loop: one first-round submit_plan, observed
+execution of the accepted route, model checkpoints for actual deviations,
+necessary evidence batches or completion, and a verified `complete`.
 """
 import asyncio
 from copy import deepcopy
 import json
+import re
 import time
 from datetime import datetime, timezone
 
@@ -64,6 +64,7 @@ class ScreenshotPlanSession(RawSessionCore):
         self.initial_feedback = None
         self.completion_feedback = None
         self.latest_attempt = None
+        self.latest_attempt_is_current_step = False
         self.last_effective = None
         self.dispatch_identities = {}
         self.no_progress_keys = {}
@@ -105,6 +106,8 @@ class ScreenshotPlanSession(RawSessionCore):
         # A previously seen key frame may be reattached once per pending
         # requirement after it leaves the viewport; never repeat it every call.
         self.history_supplement_keys = set()
+        self._checkpoint_requests = set()
+        self._reading_progress = set()
 
     # ------------------------------------------------------------------ run
 
@@ -221,6 +224,7 @@ class ScreenshotPlanSession(RawSessionCore):
         never provided, one historical key frame is attached (SSD 3.3): evidence
         only — its controls and coordinates can never dispatch an action.
         """
+        prompt = project_model_prompt(prompt)
         self._controls()
         visuals = await prepare_visuals(self.current, self.root, self.page,
                                         first=prompt.get('phase') == 'first')
@@ -228,7 +232,7 @@ class ScreenshotPlanSession(RawSessionCore):
         if self._inspection_visual and self._inspection_visual['observation_id'] == self.current['observation_id']:
             if not any(row['ref'] == self._inspection_visual['ref'] for row in available):
                 available.append(self._inspection_visual)
-        limit = int(getattr(self.choose, 'max_images', len(available)))
+        limit = int(getattr(self.choose, 'max_images', 2))
         if limit < 1:
             raise ReactStop('blocked', '模型图片配置至少须允许一张清晰视口图', 'program')
         key_visual = await self._key_evidence_visual()
@@ -241,7 +245,7 @@ class ScreenshotPlanSession(RawSessionCore):
                     'configured_images': limit, 'required_images': 2,
                     'requirement_id': key_visual.get('requirement_id'),
                     'observation': key_visual['observation_id'],
-                    'message': '当前图与必要历史图不能同时容纳；未提供该历史图，不得声称已经看过。可按正常导航重显证据或如实结束'}
+                    'message': '当前图与必要历史图不能同时容纳；未提供该历史图，不得声称已经看过。可在当前关键阅读段登记证据；无法提供必要历史图时如实报告能力缺项'}
                 key_visual = None
             else:
                 available.append(key_visual)
@@ -258,10 +262,24 @@ class ScreenshotPlanSession(RawSessionCore):
             return (3, row['ref'])
 
         visuals = sorted(available, key=priority)[:limit]
+        if key_visual is not None and key_visual not in visuals:
+            key_visual = None
         prompt['_images'] = [row['path'] for row in visuals]
         prompt['visual_evidence'] = deepcopy(visuals)
         observation_ids = list(dict.fromkeys(row['observation_id'] for row in visuals))
         prompt['screenshots'] = observation_ids
+        for oid in observation_ids:
+            if oid == self.current['observation_id']:
+                continue
+            state = _state_for_observation(self, oid)
+            if state is not None and oid not in self.region_registries:
+                self.region_registries[oid] = region_registry(state)
+                self.event('screenshot-regions', observation_id=oid, regions=deepcopy(self.region_registries[oid]))
+            history = prompt.setdefault('historical_evidence', [])
+            if not any(row['observation'] == oid for row in history):
+                history.append({'observation': oid, 'url': self.observation_records[oid].get('url'),
+                    'provided_this_request': True, 'evidence_only': True,
+                    'regions': deepcopy(self.region_registries.get(oid, []))})
         if observation_ids[0] != self.current['observation_id']:
             raise ReactStop('blocked', '当前清晰视口图必须提供', 'program')
         if len(observation_ids) > 1 and 'choices' in prompt:
@@ -281,7 +299,34 @@ class ScreenshotPlanSession(RawSessionCore):
                        requirement_id=key_visual.get('requirement_id'), scheduled=True,
                        reprovided=key_visual['observation_id'] in self.provided_observations,
                        dispatched=False)
-        self._last_model_intent = self.event('model-intent', prompt=_stripped(prompt))
+        if prompt.get('phase') == 'branch':
+            selected_evidence = [{
+                'url': self.observation_records[oid].get('url'),
+                'quotes': sorted({r.get('quote') or '' for r in self.region_registries.get(oid, [])
+                    if any(_reading_region_relevant(requirement, r) for requirement in self.requirements
+                           if requirement['id'] not in self.verified_answers)}),
+                'results': sorted({r['text'] for r in self._valid_result_rows(oid)}),
+                'newly_provided': oid not in self.provided_observations,
+            } for oid in observation_ids]
+            request_key = object_sha256({'facts': self._checkpoint_identity(prompt.get('checkpoint_feedback')),
+                                        'selected_evidence': selected_evidence,
+                                        'inspection_images': [v for v in visuals if v.get('scope') == 'image_crop']})
+            if request_key in getattr(self, '_checkpoint_requests', set()):
+                self.event('screenshot-checkpoint-deduplicated', reason=prompt.get('reason'), position=self.position)
+                self._range_close('NO_PROGRESS_END', '相同业务事实、实际证据和缺项已询问且无新依据，保留原件并结束')
+                return None
+            if not hasattr(self, '_checkpoint_requests'):
+                self._checkpoint_requests = set()
+            self._checkpoint_requests.add(request_key)
+        call_kind = ('planning' if prompt.get('phase') == 'first' else
+                     'evidence' if prompt.get('reason') in ('evidence_batch_boundary', 'key_evidence_visible') else
+                     'completion' if prompt.get('reason') in ('plan_exhausted', 'goal_ready', 'presentation_ready',
+                         'planned_evidence_complete', 'possible_goal_evidence', 'result_reading_or_plan_end',
+                         'submission_checkpoint', 'navigation_checkpoint') else 'route_deviation')
+        prompt['call_purpose'] = call_kind
+        prompt = project_model_prompt(prompt)
+        self._last_model_intent = self.event('model-intent', prompt=_stripped(prompt),
+                                             canonical_visual_evidence=deepcopy(visuals))
         self._consume('max_decisions')
         guard = getattr(self.choose, 'guard_unresolved', None)
         if guard:
@@ -313,8 +358,11 @@ class ScreenshotPlanSession(RawSessionCore):
                 model_intent=self._last_model_intent, dispatched=False)
             # Consume the one-shot supplement only after a successful response;
             # an UNKNOWN/failed request must not silently lose its evidence.
-            self.history_supplement_keys.add((
-                key_visual['requirement_id'], key_visual['observation_id']))
+            for requirement in self.requirements:
+                if any(self.route_frames.get(pos) == key_visual['observation_id']
+                       for pos in self._route_positions(requirement['id'])):
+                    self.history_supplement_keys.add((requirement['id'], key_visual['observation_id']))
+            self.history_supplement_keys.add((key_visual['requirement_id'], key_visual['observation_id']))
         self.event('model-observations-provided', model_intent=self._last_model_intent,
                    observation_ids=observation_ids)
         return response
@@ -334,18 +382,17 @@ class ScreenshotPlanSession(RawSessionCore):
         observed_urls = {row.get('url') for row in self.observation_records.values()}
         return {'current_url': self.current['url'],
                 'page_directory': [{'page_id': f'p{index}', 'url': url,
-                                    'observed': url in observed_urls}
-                                   for index, url in enumerate(self.page_urls)],
+                                    'observed': True}
+                                   for index, url in enumerate(self.page_urls) if url in observed_urls],
                 'current_inputs': {cid: {k: v for k, v in row.items() if k != 'identity'}
                                    for cid, row in input_facts(state).items()},
                 'known_business_state': self._known_business_inputs(state),
                 'historical_evidence': self._historical_evidence(),
                 'latest_attempt': _public_attempt(self.latest_attempt),
-                'action_facts': [_public_effective(row) for row in self.trajectory[-8:]],
+                'latest_attempt_is_current_step': self.latest_attempt_is_current_step,
                 'last_effective_action': _public_effective(self.last_effective),
                 'confirmed_progress': self._public_confirmed_progress(),
                 'candidate_results': self._candidate_results(),
-                'candidate_content': self._candidate_content(),
                 'first_route_status': self.first_route_status,
                 'missing_requirements': [row['id'] for row in self.requirements
                                          if row['id'] not in self.verified_answers]}
@@ -390,22 +437,14 @@ class ScreenshotPlanSession(RawSessionCore):
         return load_json(self.current['evidence']['state']['path']).get('visible_text') or ''
 
     def _bind_targets_feedback(self, plan):
-        gaps, transforms = [], []
-        rows = [(f'steps[{i}]', row) for i, row in enumerate(plan.get('steps', []))]
-        rows += [(f'requirements[{i}]', row) for i, row in enumerate(plan.get('requirements', []))
-                 if row.get('kind') == 'input']
-        for path, row in rows:
-            notes = []
-            try:
-                bind_plan_targets({'steps': [row]}, self.current,
-                    self.current.get('provided_control_ids', []), normalization=notes)
-            except ValueError as error:
-                gaps.append({'kind': 'TARGET_BINDING_INVALID', 'field_paths': [path + '.target'],
-                             'message': path + ': ' + str(error), 'dispatched': False})
-            transforms.extend({'path': path, **note} for note in notes)
-        if transforms:
-            self.event('screenshot-target-normalized', transforms=transforms)
-        return gaps
+        notes = []
+        try:
+            bind_plan_targets(plan, self.current, self.current.get('provided_control_ids', []), normalization=notes)
+        except ValueError as error:
+            return [{'kind': 'TARGET_BINDING_INVALID', 'message': str(error), 'dispatched': False}]
+        if notes:
+            self.event('screenshot-target-normalized', transforms=notes)
+        return []
 
     async def _first_plan_round(self):
         prompt = self._first_prompt()
@@ -603,7 +642,14 @@ class ScreenshotPlanSession(RawSessionCore):
         if self.position >= len(self.plan['steps']):
             await self._checkpoint('plan_exhausted')
             return
-        self._presentation_step_pending = False
+        if self._presentation_step_pending:
+            self._revalidate_progress()
+            _, gaps = verify_final_presentation(self, list(self.verified_checks.values()), self.requirements)
+            if (not self._goal_ready() or not gaps
+                    or not self._presentation_repair_permitted(self.plan['steps'][self.position:])):
+                self._presentation_step_pending = False
+                await self._checkpoint('presentation_ready' if not gaps else 'presentation_route_invalid')
+                return
         step = self.plan['steps'][self.position]
         action = step.get('action')
         try:
@@ -614,7 +660,7 @@ class ScreenshotPlanSession(RawSessionCore):
                 'message': f'目标绑定失败：{type(error).__name__}: {error}',
                 'step_position': self.position})
             return
-        requires_target = action in self.TARGET_REQUIRED_ACTIONS
+        requires_target = action in self.TARGET_REQUIRED_ACTIONS or (action == 'scroll' and bool(step.get('target')))
         if requires_target and (not matches or len(matches) != 1):
             await self._checkpoint('binding', feedback={
                 'kind': 'TARGET_NOT_UNIQUELY_BOUND',
@@ -658,9 +704,30 @@ class ScreenshotPlanSession(RawSessionCore):
         if self.state != 'recording':
             return
         new_attempt = len(getattr(self, 'business_attempt_refs', [])) > attempts_before
-        attempt = self.latest_attempt or {}
+        self.latest_attempt_is_current_step = new_attempt
+        attempt = (self.latest_attempt or {}) if new_attempt else {}
+        dispatch_delta = self.actual_dispatches - before_dispatches
+        effective_delta = len(self.trajectory) - before_effective
+        completed_wait = (action == 'wait' and (result or {}).get('status') == 'ok'
+                          and ((result or {}).get('data') or {}).get('wait_executed') is True)
         advanced = (result or {}).get('status') == 'ok' and (
-            not new_attempt or attempt.get('outcome') == 'VERIFIED')
+            (dispatch_delta > 0 and effective_delta > 0) or completed_wait)
+        self.event('screenshot-execution-cursor', position=self.position,
+                   actual_dispatches_delta=dispatch_delta, effective_steps_delta=effective_delta,
+                   wait_executed=completed_wait, advanced=advanced)
+        if (result or {}).get('status') != 'ok':
+            error = (result or {}).get('error') or {}
+            refusal = {'kind': 'STEP_EXECUTION_REFUSED',
+                'status': (result or {}).get('status') or 'missing_result',
+                'message': str((result or {}).get('summary') or '工具未返回可确认执行结果'),
+                'code': error.get('code') or (result or {}).get('code'),
+                'data': deepcopy((result or {}).get('data') or {}),
+                'error': deepcopy(error), 'dispatched': dispatch_delta > 0,
+                'actual_dispatches_delta': dispatch_delta,
+                'effective_steps_delta': effective_delta, 'business_attempt_created': new_attempt}
+            await self._checkpoint('step_execution_refused', feedback=refusal,
+                                   executed=dispatch_delta > 0 and not advanced)
+            return
         from .screenshot_effect import step_expectation
         expectation = step_expectation(step, load_json(self.current['evidence']['state']['path']),
                                        (matches or [None])[0])
@@ -685,7 +752,7 @@ class ScreenshotPlanSession(RawSessionCore):
             # 成功动作已在上方推进游标；只有未建立效果的已派发动作在选择
             # continue时才需要越过当前步，避免每个成功检查点跳过下一步。
             await self._checkpoint(route_reason or self._checkpoint_reason(step, matches or [], attempt),
-                                   executed=new_attempt and not advanced)
+                                   executed=dispatch_delta > 0 and not advanced)
 
     def _refresh_attempt_facts(self):
         """latest_attempt 与 last_effective_action 分开维护。"""
@@ -697,6 +764,8 @@ class ScreenshotPlanSession(RawSessionCore):
                 'purpose': (attempt.get('step') or {}).get('goal'),
                 'dispatched': attempt.get('actual_dispatches_delta', 0) > 0,
                 'effective': attempt.get('effective_steps_delta', 0) > 0,
+                'actual_dispatches_delta': attempt.get('actual_dispatches_delta', 0),
+                'effective_steps_delta': attempt.get('effective_steps_delta', 0),
                 'outcome': attempt.get('outcome'), 'reason': str(attempt.get('reason') or '')[:200],
                 'step': _public_step(attempt.get('step') or {}),
                 'ref': refs[-1]}
@@ -717,22 +786,14 @@ class ScreenshotPlanSession(RawSessionCore):
     def _checkpoint_needed(self, step, control_ids, result, attempt):
         if self.state != 'recording':
             return False
-        if self._goal_ready():
-            return True
         if attempt.get('outcome') in ('KNOWN_NO_EFFECT', 'EFFECT_NOT_VERIFIED', 'EFFECT_UNKNOWN'):
             return True
         if (result or {}).get('status') != 'ok':
             return True
-        if self.dialogs and len(self.dialogs) > len(self._dialog_checkpointed):
+        if self._goal_ready() and not self._presentation_step_pending:
             return True
-        if step.get('action') == 'click' and self._submit_like(control_ids):
-            return True
-        if self._document_changed():
-            return True
-        remaining = self.plan['steps'][self.position:]
-        if not remaining or all(row.get('action') in ('wait', 'scroll') for row in remaining):
-            return True
-        return False
+        # Capture/navigation boundaries do not invalidate an executable route.
+        return self.position >= len(self.plan['steps'])
 
     def _document_changed(self):
         return bool(self.latest_document_identity and self.current
@@ -899,37 +960,74 @@ class ScreenshotPlanSession(RawSessionCore):
         return rows
 
     def _progress_checkpoint_reason(self, row):
-        """Stop after route evidence, new results, or a known result leaving view."""
+        """Archive route frames; request interpretation at a real evidence boundary."""
+        oid = self.current['observation_id']
+        state = _state_for_observation(self, oid)
+        if state is None:
+            return None
+        if oid not in self.region_registries:
+            self.region_registries[oid] = region_registry(state)
+            self.event('screenshot-regions', observation_id=oid,
+                       regions=deepcopy(self.region_registries[oid]))
+        self._capture_input_progress()
         pending = [r for r in self.requirements if r['id'] not in self.verified_answers]
-        if not pending:
-            return None
-        position = self.position
-        original = self.route_map[position - 1] if position <= len(self.route_map) else None
         for requirement in pending:
-            route = requirement.get('evidence_route') or {}
-            if (original is not None and original in (route.get('observation_steps') or [])) \
-                    or position in self.route_overrides.get(requirement['id'], []):
-                return 'route_observation'
-        if row is not None and any(r['kind'] == 'content' for r in pending):
+            if requirement['kind'] != 'content' or self.position not in self._route_positions(requirement['id']):
+                continue
+            if not hasattr(self, '_reading_progress'):
+                self._reading_progress = set()
+            for region in self.region_registries[oid]:
+                if _reading_region_relevant(requirement, region):
+                    self._reading_progress.add((requirement['id'], self.current.get('url') or '', region['quote']))
+        remaining = self.plan['steps'][self.position:]
+        if not remaining:
+            return None
+        # Explicit required UI/content labels appearing together can indicate an
+        # earlier answer boundary. This requests interpretation; it never marks
+        # the labels or their neighbouring text as verified answers.
+        if pending and all(r['kind'] == 'content' for r in pending):
+            quotes = {region['quote'] for region in self.region_registries[oid]}
+            anchors = [set(text for pair in re.findall(r'「([^」]{2,})」|“([^”]{2,})”',
+                        r.get('description') or '') for text in pair if text) for r in pending]
+            if all(words and all(any(word in quote for quote in quotes) for word in words) for words in anchors):
+                marker = object_sha256({'requirements': [r['id'] for r in pending],
+                    'quotes': sorted(quote for quote in quotes if any(
+                        _reading_region_relevant(r, {'quote': quote}) for r in pending))})
+                seen = getattr(self, '_content_boundaries_seen', set())
+                if marker not in seen:
+                    self._content_boundaries_seen = seen | {marker}
+                    return 'possible_goal_evidence'
+        # Once all planned evidence boundaries have been reached, interpretation
+        # precedes any potentially redundant tail operation. No facts are assumed.
+        routes = [self._route_positions(r['id']) for r in pending]
+        if pending and all(positions and max(positions) <= self.position for positions in routes):
+            return 'planned_evidence_complete'
+        # Inputs have host-bound proofs and never consume interpretation image
+        # slots. Count distinct relevant content, not capture IDs or duplicates.
+        frames = set()
+        for requirement in pending:
+            if requirement['kind'] not in ('content', 'result'):
+                continue
+            for pos in self._route_positions(requirement['id']):
+                oid = self.route_frames.get(pos)
+                if pos > self.position or not oid or oid in self.provided_observations:
+                    continue
+                observation = self.observation_records.get(oid) or {}
+                if requirement['kind'] == 'result':
+                    quotes = {r['text'] for r in self._valid_result_rows(oid)}
+                else:
+                    quotes = {r['quote'] for r in self.region_registries.get(oid, [])
+                              if _reading_region_relevant(requirement, r)}
+                if quotes:
+                    frames.add((observation.get('url') or '', tuple(sorted(quotes))))
+        capacity = max(1, int(getattr(self.choose, 'max_images', 2)))
+        if len(frames) >= capacity and remaining[0].get('action') in ('back', 'open_url', 'click'):
+            return 'evidence_batch_boundary'
+        if row is not None and any(r['kind'] == 'result' for r in pending):
             before = _state_for_observation(self, row.get('before_observation_id'))
-            state = _state_for_observation(self, self.current['observation_id'])
-            if before is not None and state is not None:
-                old = {r['quote'] for r in region_registry(before)}
-                if any(r['quote'] not in old for r in region_registry(state)):
-                    return 'body_evidence_visible'
-        if row is None or not any(r['kind'] == 'result' for r in pending):
-            return None
-        before = _state_for_observation(self, row.get('before_observation_id'))
-        if before is None:
-            return None
-        before_texts = {entry['text'] for entry in self._result_rows(before)}
-        state = _state_for_observation(self, self.current['observation_id'])
-        if state is not None and any(entry['text'] not in before_texts
-                                     for entry in self._result_rows(state)):
-            return 'key_evidence_visible'
-        candidates = self._candidate_results()
-        if candidates and not any(entry['current_frame'] for entry in candidates):
-            return 'historical_result_pending'
+            old = {entry['text'] for entry in self._result_rows(before or {})}
+            if any(entry['text'] not in old for entry in self._result_rows(state)):
+                return 'key_evidence_visible'
         return None
 
     async def _key_evidence_visual(self):
@@ -943,7 +1041,7 @@ class ScreenshotPlanSession(RawSessionCore):
             return None
         for requirement in self.requirements:
             rid = requirement['id']
-            if rid in self.verified_answers:
+            if rid in self.verified_answers or requirement['kind'] == 'input':
                 continue
             for position in reversed(self._route_positions(rid)):
                 if position > self.position:
@@ -1054,34 +1152,24 @@ class ScreenshotPlanSession(RawSessionCore):
         return {'url': state.get('url'), 'inputs': public, 'results': results}
 
     def _historical_evidence(self):
-        """References to frames actually sent, never executable old controls."""
-        rows = []
-        from .screenshot_effect import input_facts
-        latest = {}
-        for observation in self.observation_records.values():
-            if observation.get('document_identity') == self.current['document_identity'] and observation.get('capture_verified'):
-                latest.update(input_facts(load_json(observation['evidence']['state']['path'])))
-        for oid, observation in self.observation_records.items():
-            if oid not in self.provided_observations or not observation.get('capture_verified'):
+        """Distinct provided historical sources, without duplicate inputs/answers."""
+        rows, seen = [], set()
+        verified = {proof.get('quote') for check in self.verified_checks.values()
+                    for proof in check.get('evidence', []) if proof.get('quote')}
+        for oid, observation in reversed(list(self.observation_records.items())):
+            if (oid == self.current['observation_id'] or oid not in self.provided_observations
+                    or not observation.get('capture_verified')):
                 continue
-            original = load_json(observation['evidence']['state']['path'])
-            from .screenshot_effect import input_facts
-            inputs = input_facts(original)
-            controls = observation.get('controls') or {}
-            rows.append({'observation': oid, 'url': observation.get('url'),
-                'current': oid == self.current['observation_id'], 'evidence_only': True,
-                'inputs': [{'control': cid, 'display_value': next((row.get('display_value') for row in original.get('values', []) if row['element_id'] == cid), None),
-                    'source_observation': oid,
-                    'value_visible': fact.get('value_visible'),
-                    'labels': controls.get(cid, {}).get('labels', []),
-                    'still_valid': (fact.get('identity') == latest.get(cid, {}).get('identity')
-                        and all(fact.get(key) == latest.get(cid, {}).get(key) for key in ('value', 'checked')))}
-                    for cid, fact in inputs.items()
-                    if cid in observation.get('provided_control_ids', [])],
-                'regions': deepcopy(self.region_registries.get(oid, [])),
-                'verified_quotes': [{'requirement_id': rid, 'quote': proof.get('quote')}
-                    for rid, check in self.verified_checks.items() for proof in check.get('evidence', [])
-                    if proof.get('observation_id') == oid]})
+            regions = []
+            for region in self.region_registries.get(oid, []):
+                key = _stable_region_key(observation, region)
+                if key in seen or region.get('quote') in verified:
+                    continue
+                seen.add(key)
+                regions.append(deepcopy(region))
+            if regions:
+                rows.append({'observation': oid, 'url': observation.get('url'),
+                             'model_has_seen': True, 'evidence_only': True, 'regions': regions})
         return rows
 
     def _public_confirmed_progress(self):
@@ -1155,6 +1243,7 @@ class ScreenshotPlanSession(RawSessionCore):
                         for key in ('value', 'checked') if key in facts[matches[0]]}
         return object_sha256({
             'goal_inputs': inputs,
+            'reading_ranges': sorted(getattr(self, '_reading_progress', set())),
             'verified_evidence': {rid: sorted(set((proof.get('quote') or '', proof.get('url') or '')
                 for proof in check.get('evidence', [])))
                 for rid, check in self.verified_checks.items()}})
@@ -1182,6 +1271,8 @@ class ScreenshotPlanSession(RawSessionCore):
         self._dialog_checkpointed = list(self.dialogs)
         remaining = self.plan['steps'][self.position:]
         choices = list(DECISIONS)
+        if int(getattr(self.choose, 'max_images', 2)) < 2 and 'inspect' in choices:
+            choices.remove('inspect')
         stale_tail = bool(remaining) and self._stale_citation(remaining[0])
         goal_ready = self._goal_ready()
         if (not remaining or stale_tail or goal_ready
@@ -1207,9 +1298,13 @@ class ScreenshotPlanSession(RawSessionCore):
                    'regions': self.region_registries[oid],
                    'controls': self._controls(),
                    'allowed_actions': list(self._allowed_actions()),
-                   'remaining_plan': [_public_step(row) for row in remaining],
+                   'pending_steps': [_public_step(row) for row in remaining],
                    'next_checkpoint': next_checkpoint,
-                   'reason': reason, 'choices': choices, 'rules': BRANCH_RULES,
+                   'reason': reason, 'choices': choices,
+                   'rules': {key: value for key, value in BRANCH_RULES.items()
+                             if key != 'calculations' or any(
+                                 (r.get('evidence_route') or {}).get('source_type') == 'derived_check'
+                                 for r in self.requirements)},
                    'tools': decision_tools(choices, self._allowed_actions(),
                                            sorted(self._referenceable_observations() | {oid})),
                    'progress': {'decisions_used': self.used['max_decisions'],
@@ -1223,12 +1318,34 @@ class ScreenshotPlanSession(RawSessionCore):
         payload['_images'] = [self.current['evidence']['image']['path']]
         return payload
 
+    def _checkpoint_identity(self, feedback):
+        def stable(value):
+            if isinstance(value, dict):
+                return {k: stable(v) for k, v in value.items() if k not in (
+                    'observation', 'observation_id', 'current_observation', 'reason', 'message', 'rationale', 'purpose',
+                    'source_observation', 'ref', 'path', 'sha256', 'step_position', 'document', 'document_identity')}
+            if isinstance(value, list):
+                return [stable(v) for v in value]
+            return value
+        states = {_stable_region_key(self.observation_records[oid], region)
+            for oid, regions in self.region_registries.items() for region in regions
+            if any(_reading_region_relevant(requirement, region) for requirement in self.requirements
+                   if requirement['id'] not in self.verified_answers)}
+        return object_sha256({'goal': self.frozen_goal, 'progress': self._stall_progress_marker(),
+            'next_step': stable(_public_step(self.plan['steps'][self.position:self.position + 1])),
+            'evidence': sorted(states), 'feedback': stable(feedback),
+            'completion': stable(self.completion_feedback),
+            'business_state': stable(self._business_state(load_json(self.current['evidence']['state']['path']))),
+            'inspection': (self._inspection_visual or {}).get('ref')})
+
     async def _checkpoint(self, reason, feedback=None, *, executed=False):
         prompt = self._branch_prompt(reason, feedback)
         response = await self._decide(prompt)
+        if response is None:  # deterministic duplicate close before a provider call
+            return
         arguments = response.get('arguments') or {}
         allowed_actions = self._allowed_actions()
-        decision, record = normalize_decision(arguments, prompt['choices'], allowed_actions)
+        decision, record = normalize_decision(arguments, prompt['choices'], allowed_actions, pending_steps=prompt['pending_steps'])
         self.event('screenshot-decision', reason=reason, decision=decision,
                    normalization=record, position=self.position)
         if getattr(self, 'runlog', None) is not None:
@@ -1357,7 +1474,7 @@ class ScreenshotPlanSession(RawSessionCore):
             self._reanchor_routes()
             self.completion_feedback = None
             # Only a newly accepted presentation repair may bypass goal_ready,
-            # for one action. The old tail never receives this permission, and
+            # as a segment, revalidated before every action. The old tail never receives this permission, and
             # a repair whose first step could alter verified facts (edit,
             # submission, navigation away) is sent back to the checkpoint.
             presentation_gaps = []
@@ -1412,6 +1529,23 @@ class ScreenshotPlanSession(RawSessionCore):
                 return False
             control = self.current['controls'].get(matches[0]) or {}
             element, binding = control.get('element') or {}, control.get('binding') or {}
+            # A real HTML dialog's exact close control may return pure reading
+            # evidence to its final page; unrelated/account-close buttons do not.
+            if (self.requirements and all(r.get('kind') == 'content' for r in self.requirements)
+                    and element.get('visible') is True and not element.get('inputable')
+                    and binding.get('tag') == 'button'
+                    and str(element.get('text') or '').strip() in ('关闭', 'Close', '×', '✕')
+                    and binding.get('input_type') != 'submit'):
+                state = load_json(self.current['evidence']['state']['path'])
+                nodes = {node['element_id']: node for node in state.get('elements', [])}
+                parent, seen = element.get('parent_id'), set()
+                while parent and parent not in seen:
+                    seen.add(parent)
+                    ancestor = nodes.get(parent) or {}
+                    if (ancestor.get('visible') is True
+                            and ancestor.get('native_role') in ('dialog', 'alertdialog')):
+                        return True
+                    parent = ancestor.get('parent_id')
             # Generic buttons can reset data, inputs can toggle conditions.
             return (not element.get('inputable') and binding.get('tag') != 'input'
                     and (element.get('native_role') in ('summary', 'tab')
@@ -1564,3 +1698,81 @@ def _public_step(value):
 def describe(goal):
     from .session_core import describe_goal
     return describe_goal(goal)
+
+
+def _stable_region_key(observation, region):
+    return object_sha256({'url': observation.get('url'), 'quote': region.get('quote')})
+
+
+def project_model_prompt(prompt):
+    """Compact the model view only; persisted capture/decision originals survive."""
+    result = deepcopy(prompt)
+    if result.get('phase') == 'branch' and 'remaining_plan' in result:
+        result['pending_steps'] = result.pop('remaining_plan')
+    result.pop('action_facts', None)  # latest attempt and last effective stay explicit
+    result.pop('candidate_content', None)  # current/historical regions own these sources
+    result['page_directory'] = [row for row in result.get('page_directory', []) if row.get('observed', True)]
+    for control in result.get('controls') or []:
+        states = control.get('action_states')
+        if isinstance(states, dict):
+            meaningful = {action: status for action, status in states.items()
+                          if status not in ('', None, 'INSUFFICIENT')}
+            if meaningful:
+                control['action_states'] = meaningful
+            else:
+                control.pop('action_states', None)
+            result['action_state_default'] = '省略的action_states状态为INSUFFICIENT或空；不代表PROVEN可执行'
+    controls_by_number = {row.get('number'): row for row in result.get('controls') or []}
+    visual = result.get('visual_evidence')
+    if isinstance(visual, dict) and visual.get('regions') == result.get('regions'):
+        visual.pop('regions', None)
+    if isinstance(visual, list):
+        for image in visual:
+            if image.get('observation_id') != result.get('current_observation'):
+                continue
+            for mapping in image.get('control_mapping') or []:
+                control = controls_by_number.get(mapping.get('number'))
+                if control and control.get('control') == mapping.get('control'):
+                    mapping.pop('control', None)
+                    if mapping.get('bbox') == control.get('bbox'):
+                        mapping.pop('bbox', None)
+                    image['control_mapping_source'] = 'number引用当前controls；badge仅为角标图像位置'
+    confirmed = result.get('confirmed_progress') or []
+    verified_quotes = {e.get('quote') for answer in confirmed for e in answer.get('evidence', []) if e.get('quote')}
+    seen, history = set(), []
+    for source in reversed(result.get('historical_evidence') or []):
+        if source.get('current'):
+            continue
+        regions = []
+        for region in source.get('regions', []):
+            key = (source.get('url'), region.get('quote'))
+            if key in seen or region.get('quote') in verified_quotes:
+                continue
+            seen.add(key)
+            regions.append(region)
+        if regions:
+            history.append({key: source[key] for key in ('observation', 'url', 'evidence_only',
+                'model_has_seen', 'provided_this_request') if key in source} | {'regions': regions})
+    result['historical_evidence'] = list(reversed(history))
+    rules = result.get('rules')
+    if isinstance(rules, dict) and not any((r.get('evidence_route') or {}).get('source_type') == 'derived_check'
+                                         for r in result.get('requirements', [])):
+        rules.pop('calculations', None)
+    return result
+
+
+def _reading_region_relevant(requirement, region):
+    """Conservative lexical relevance for stall accounting, never answer proof."""
+    description = requirement.get('description') or ''
+    quote = region.get('quote') or ''
+    anchors = re.findall(r'「([^」]{2,})」|“([^”]{2,})”', description)
+    if any(text in quote for pair in anchors for text in pair if text):
+        return True
+    # Four-character ranges preserve named concepts without treating common
+    # single characters, a new capture or unrelated banners as reading progress.
+    for word in re.findall(r'[A-Za-z][A-Za-z0-9_-]{3,}|[\u3400-\u9fff]{4,}', description):
+        if word.isascii() and word.lower() in quote.lower():
+            return True
+        if not word.isascii() and any(word[i:i + 4] in quote for i in range(len(word) - 3)):
+            return True
+    return False

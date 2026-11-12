@@ -500,15 +500,28 @@ def field_repair_plan(error, arguments, schema, tool_name, validation_errors=Non
     if not isinstance(error, ValidationError) or not isinstance(arguments, dict):
         return None
     def selected(node, value):
-        variants = node.get('oneOf') if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return node
+        variants = node.get('oneOf')
         if variants:
-            matches = [variant for variant in variants if any(
+            matches = variants if len(variants) == 1 else [variant for variant in variants if any(
                 isinstance(value, dict) and value.get(key) == rule.get('const')
-                for key, rule in variant.get('properties', {}).items() if 'const' in rule)]
+                for key, rule in variant.get('properties', {}).items() if isinstance(rule, dict) and 'const' in rule)]
             if len(matches) != 1:
                 return None
-            return matches[0]
-        return node
+            node = matches[0]
+        # Resolve only the active conditional branch. This same shared action
+        # schema is used on the wire; inactive action fields are never repaired.
+        result = deepcopy(node)
+        for condition in node.get('allOf', []):
+            if 'if' not in condition:
+                continue
+            branch = condition.get('then' if Draft202012Validator(condition['if']).is_valid(value) else 'else', {})
+            if not isinstance(branch, dict):
+                continue
+            result['required'] = list(dict.fromkeys(result.get('required', []) + branch.get('required', [])))
+            result['properties'] = {**result.get('properties', {}), **branch.get('properties', {})}
+        return result
     def locate(path):
         node, value = schema, arguments
         for part in path:
@@ -532,11 +545,17 @@ def field_repair_plan(error, arguments, schema, tool_name, validation_errors=Non
             if action and isinstance(item.instance, dict) and item.instance.get('action') != action:
                 return
             yield item
+    if tool_name == 'plan_decision':
+        decision = arguments.get('decision')
+        if decision != 'revise' and 'remaining_plan' in arguments:
+            return None
+        if decision != 'inspect' and any(key in arguments for key in ('image_ref', 'crop')):
+            return None
     fields = {}
     for parent in validation_errors or [error]:
         for item in leaves(parent):
             path = list(item.absolute_path)
-            if not path:
+            if not path and item.validator != 'required':
                 return None
             parent_schema, value = locate(path)
             if parent_schema is None:
@@ -556,7 +575,7 @@ def field_repair_plan(error, arguments, schema, tool_name, validation_errors=Non
                 return None
     # Whole plans/decisions and discriminators cannot be safely patched as fields.
     forbidden = {'steps', 'remaining_plan', 'requirements', 'answers', 'decision', 'action', 'goal'}
-    if not fields or len(fields) > 6 or any(path[-1] in forbidden for path in fields):
+    if not fields or any(path[-1] in forbidden for path in fields):
         return None
     paths = sorted(fields, key=lambda path: json.dumps(path))
     if any(path[:len(other)] == other for path in paths for other in paths if path != other):
@@ -1326,6 +1345,8 @@ class ModelGateway:
                 invalid_attempts += 1
                 if field_repair:
                     raise ValueError('bounded_field_repair_failed: patch retained; no further correction dispatch') from None
+                if native_context and native_context.get('plan_normalizer') and invalid_attempts >= 2:
+                    raise ValueError('bounded_plan_correction_failed: raw replies retained; no further correction dispatch') from None
                 failure_key = protocol_failure_key(error)
                 if consumer and failure_key in protocol_failures:
                     with self.ledger.transaction() as con:

@@ -572,6 +572,37 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertTrue(all('False schema' not in row['detail'] for row in feedback))
         self.assertIsNone(field_repair_plan(semantic_errors[0], semantic, semantic_schema, 'plan_decision',
                                             validation_errors=semantic_errors))
+        pending = expected['remaining_plan']
+        repeated = {'decision': 'continue', 'reason': '原路线仍适用', 'remaining_plan': deepcopy(pending)}
+        compact, record = normalize_decision(repeated, ['continue', 'revise'], ['click'], pending_steps=pending)
+        Draft202012Validator(semantic_schema).validate(compact)
+        self.assertNotIn('remaining_plan', compact)
+        self.assertEqual(record['transforms'][0]['transform'], 'exact_pending_tail_removed')
+        changed = deepcopy(repeated)
+        changed['remaining_plan'][0]['target']['text'] = '不同业务目标'
+        retained, _ = normalize_decision(changed, ['continue', 'revise'], ['click'], pending_steps=pending)
+        self.assertIn('remaining_plan', retained)
+        self.assertFalse(Draft202012Validator(semantic_schema).is_valid(retained))
+        # JSON booleans are not numeric durations, even though Python True == 1.
+        waiting = [{'action': 'wait', 'duration_ms': 1, 'purpose': '等候加载',
+                    'rationale': '加载尚未结束', 'expected_result': '页面加载结束'}]
+        bool_tail = deepcopy(waiting)
+        bool_tail[0]['duration_ms'] = True
+        typed, typed_record = normalize_decision(
+            {'decision': 'continue', 'reason': '继续', 'remaining_plan': bool_tail},
+            ['continue', 'revise'], ['wait'], pending_steps=waiting)
+        self.assertIn('remaining_plan', typed)
+        self.assertFalse(typed_record['transforms'])
+        self.assertFalse(Draft202012Validator(decision_schema(['continue', 'revise'], ['wait'])).is_valid(typed))
+        # The active click schema requests a target, never a null control or
+        # unrelated scroll/type parameters from inactive branches.
+        full_schema = decision_schema(['revise'], ['click', 'type', 'scroll', 'back'])
+        active_errors = list(Draft202012Validator(full_schema).iter_errors(original_arguments))
+        active_repair = field_repair_plan(active_errors[0], original_arguments, full_schema, 'plan_decision',
+                                          validation_errors=active_errors)
+        self.assertEqual(active_repair['paths'], [['remaining_plan', 1, 'target']])
+        with self.assertRaises(ValidationError):
+            merge_field_repair(active_repair, {'field_0': {'control': None}})
 
     def test_debug_level_records_sanitized_wire_in_and_out(self):
         _, job, gateway, runlog = self._gateway(level='DEBUG')
@@ -834,17 +865,19 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         self.assertEqual(accepted['actionHistogram'], {'click': 4, 'hotkey': 2, 'scroll': 1, 'type': 2})
         self.assertEqual(accepted['actionKinds'], 4)
         # The declared observation step (the scroll, plan step 8 of 9) produced a
-        # route checkpoint before the remaining tail action could be dispatched;
+        # consolidated evidence boundary before the remaining tail action could be dispatched;
         # once the goal verified there, the useless tail step never ran.
         checkpoints = [row for row in rows if row['event'] == 'checkpoint']
-        route = next(row for row in checkpoints if row['reason'] == 'route_observation')
+        route = next(row for row in checkpoints if row['reason'] == 'planned_evidence_complete')
         self.assertEqual(route['position'], 8)
         self.assertEqual(route['effectiveSteps'], 7)
         self.assertEqual(summary['effective_steps'], 7)
         route_prompt = next(p for p in prompts if p.get('phase') == 'branch'
-                            and p.get('reason') == 'route_observation')
-        self.assertEqual(len(route_prompt['remaining_plan']), 1)
+                            and p.get('reason') == 'planned_evidence_complete')
+        self.assertEqual(len(route_prompt['pending_steps']), 1)
         self.assertEqual(route_prompt['missing_requirements'], ['r1'])
+        self.assertNotIn('remaining_plan', route_prompt)
+        self.assertFalse(any(row['reason'] == 'route_observation' for row in checkpoints))
         # Captured-but-unregistered result rows are shown as candidates; having
         # captured them is not the same as a verified answer.
         self.assertTrue(route_prompt['candidate_results'])
