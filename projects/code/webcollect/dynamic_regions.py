@@ -10,7 +10,7 @@ import math
 import re
 from PIL import Image, ImageChops, ImageDraw
 
-from .plan_protocol import DYNAMIC_REGIONS_PROTOCOL, DYNAMIC_REGION_STABILITY
+from .plan_protocol import DYNAMIC_REGIONS_PROTOCOL, DYNAMIC_REGION_STABILITY, SEARCH_SUGGESTIONS_PROTOCOL
 VERSION=DYNAMIC_REGIONS_PROTOCOL
 STABILITY=DYNAMIC_REGION_STABILITY
 DYNAMIC_STABILITY_RULES=(STABILITY,)
@@ -18,7 +18,7 @@ DYNAMIC_STABILITY_RULES=(STABILITY,)
 # a real focused search input of this same state owns the popup. The category
 # is not derivable from tag/attributes alone, so regions() re-binds it here.
 SUGGESTION_CATEGORY='search_suggestions'
-SUGGESTION_VERSION='search-suggestions'
+SUGGESTION_VERSION=SEARCH_SUGGESTIONS_PROTOCOL
 # A frame-pair may carry animated paint that no DOM region classifies (the
 # 2026-11-06 experiment lost 18 pages to a ~300x108 animated block with no
 # element, text or control). Such change is tolerated only when its bounding

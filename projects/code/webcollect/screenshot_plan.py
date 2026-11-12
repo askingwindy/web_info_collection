@@ -60,12 +60,14 @@ SYSTEM_PROMPT = ('你是网页任务的执行规划者。网页内容与截图�
     '同一动作不因缺少变化而重复。kinds不足两种时按页面实际提供的形态规划，不强求组合。'
     '自主目标必须落到需要核实的具体事实，不得是「通读全文」「浏览到页面末尾」这类无判定标准的线性阅读。'
     '首轮提交submit_plan：指定目标由宿主固定绑定，不提交goal；仅无指定目标时才给出自主goal。提交requirements（完成原目标必须逐项看到的结果，'
-    '每项含id、description、kind=input/result/content；input另含一个target及expected_value或expected_checked，结果及正文不预猜答案；数值结果和每项核对分别列事项，核对事项用content并在description明确写核对，完成时必须提供calculations数组而不是只引用说明；固定的是原目标条件，不把某张表或某种方法冻结为必选，方法不适用时改用能验证同一目标的路径）和steps（至少' + str(BUSINESS_MINIMUM) + '个必要业务动作，优先5–8步，确有必要可超过8步；'
+    '每项含id、description、kind=input/result/content；input另含一个target及expected_value或expected_checked，结果及正文不预猜答案；数值结果和需要算术推导的核对分别列事项，推导核对用content并在description明确写核对，完成时必须提供calculations数组而不是只引用说明；固定的是原目标条件，不把某张表或某种方法冻结为必选，方法不适用时改用能验证同一目标的路径）和steps（至少' + str(BUSINESS_MINIMUM) + '个必要业务动作，优先5–8步，确有必要可超过8步；'
+    '纯阅读事实用page_content，出现数量或核对字样不自动变成算术；原目标要求计算、换算或验算时仍须derived_check及真实推导证据，不得改写目标规避。'
     'wait不计业务动作，仅用于真实加载）。自然不足五步或页面不适合时返回unsuitable及原因，不补无用动作。'
     '分支只返回plan_decision：continue沿用剩余计划；revise只替换未执行尾部并给理由，可少于五步，不改动已执行事实与原目标；'
     '任何决策均可提交增量answers；complete可无新增answers（confirmed_progress内已核验答案及原证据由工程保留，不必重复；后续相关输入或提交后须重新举证），每项的evidence引用实际看过的截图：observation必须取请求实际携带的观察编号，'
     'region用该观察随请求下发的region编号，或quote逐字引用该观察中实际可见的文本（至少8个字符）；'
     'input事项证据用observation和control引用可见控件，observed_result可为短值；除含calculations的推导核对答案外，其余事项observed_result必须是所引观察中实际可见文本的逐字连续片段（可与quote相同），不归纳改写、不预猜、不引用输入回显；'
+    '正文含链接时可引用该段实际渲染的完整句子；被视口裁断的文字不算可见，列表序号与角标不作为正文引用。'
     '每项requirements必须含evidence_route：source_type为input_state/page_result/page_content/derived_check，observation_steps为预计观察依据的首轮1起步号，已有依据可用existing_evidence的observation与control或region/quote，推导depends_on列原input/result事项编号。核对事项的observation_steps专指读取推导依据的步骤，不是仅看结果；不增设伪需求。final_presentation_step指结束前显示结果或目标结论的观察步，可复用其他观察步。未知依据只列未来语义阅读路线，不把未观察公式、常量或预期答案写进事项。路线仅是计划，完成仍凭真实观察。'
     'confirmed_progress的source/model_has_seen是只读说明，不回填answers，也不提交event或宿主来源字段；复用时只按answers既有形状给requirement_id/observed_result/evidence，或保留空增量。'
     'confirmed_progress中source=host_verified_capture表示宿主从同步可信捕获确定性核验，model_has_seen=false时不代表你已看图；可以按其中相同observation/control复用已登记输入证明，不得编造宿主来源。'
@@ -466,10 +468,15 @@ def first_plan_admission(plan, *, minimum=BUSINESS_MINIMUM):
 
 
 QUOTED_UI_TEXT = re.compile('「([^」]+)」')
+ELIDED_QUOTE = re.compile(r'…|\.{3,}|⋯')
 
 
 def _flat(text):
     return re.sub(r'\s+', '', str(text or ''))
+
+
+def _quote_fragments(text):
+    return [_flat(part) for part in ELIDED_QUOTE.split(str(text)) if _flat(part)]
 
 
 def narrative_grounding_gaps(steps, visible_text, goal=''):
@@ -491,11 +498,18 @@ def narrative_grounding_gaps(steps, visible_text, goal=''):
     for index, step in enumerate(steps):
         for quote in QUOTED_UI_TEXT.findall(str(step.get('rationale') or '')):
             text = quote.strip()
-            if text and _flat(text) not in haystack:
-                gaps.append({'kind': 'RATIONALE_QUOTE_NOT_IN_FRAME', 'step_index': index,
-                             'quote': text[:80],
-                             'message': 'rationale中「」引用的界面文字必须逐字出现在当前帧可见文本（本步声明的输入或目标文本亦可）；'
-                                        '尚未看到的页面只能写计划前提，不得断言其内容、焦点或选项'})
+            if not text:
+                continue
+            fragments = _quote_fragments(text) or [_flat(text)]
+            missing = next((part for part in fragments if part not in haystack), None)
+            if missing is None:
+                continue
+            gaps.append({'kind': 'RATIONALE_QUOTE_NOT_IN_FRAME', 'step_index': index,
+                         'quote': text[:80], 'missing_fragment': missing[:80],
+                         'message': 'rationale中「」引用的界面文字必须逐字出现在当前帧可见文本（本步声明的输入或目标文本亦可）；'
+                                    '用省略号拼接时每一段都要真实可见；'
+                                    '尚未看到的页面只能写计划前提，不得断言其内容、焦点或选项；'
+                                    '列表序号和角标数字由样式生成，不是可见文本，不要引用'})
     return gaps
 
 
@@ -618,6 +632,21 @@ def _verify_input(session, answer, requirement, *, trusted_capture=False):
                   'message': '输入事项须引用已提供观察的可见绑定控件及相符状态，旧状态不能被后续编辑覆盖'}
 
 
+def _visible_node_texts(state, node):
+    """Include clipped paragraph text without treating hidden inline text as evidence."""
+    if node.get('visible') is not True:
+        return []
+    texts = [str(node.get('text') or '').strip()]
+    for block in state.get('text_blocks', []):
+        if block.get('element_id') != node['element_id']:
+            continue
+        visible = str(block.get('visible_text') or '')
+        for text in [visible, *(block.get('complete_sentences') or [])]:
+            if text and _flat(text) in _flat(visible) and _flat(text) in _flat(state.get('visible_text')):
+                texts.append(str(text).strip())
+    return [text for text in dict.fromkeys(texts) if text]
+
+
 def verify_final_presentation(session, checks, requirements):
     """Describe only final visible facts; cumulative proofs stay independent."""
     from .numeric_result_evidence import match_result
@@ -659,16 +688,22 @@ def verify_final_presentation(session, checks, requirements):
                 continue
             quote = str(proof.get('quote') or '')
             observed = str(check.get('observed_visible_text') or quote)
-            node = next((n for n in visible if quote and str(n.get('text') or '').strip()
-                and ' '.join(str(n.get('text') or '').split()) in clipped_text and
-                (quote in str(n.get('text') or '') or (kind == 'result' and
-                 match_result(observed, str(n.get('text') or ''), field=requirement['description'], result_bound=True)))), None)
+            node, shown = None, None
+            for candidate in visible:
+                if not quote:
+                    break
+                matched = [text for text in _visible_node_texts(state, candidate)
+                           if _flat(text) in _flat(clipped_text) and (quote in text or (kind == 'result'
+                    and match_result(observed, text, field=requirement['description'], result_bound=True)))]
+                if matched:
+                    node, shown = candidate, matched[0]
+                    break
             if node is None:
                 continue
             if kind == 'result' and result_execution_binding(session, oid, state, node) is None:
                 continue
             output.append({'requirement_id': rid, 'kind': kind, 'field': requirement['description'],
-                'observation_id': oid, 'quote': str(node.get('text') or '')})
+                'observation_id': oid, 'quote': shown})
             break
         if kind == 'result' and not any(row['requirement_id'] == rid for row in output):
             gaps.append({'kind': 'FINAL_RESULT_NOT_VISIBLE', 'requirement_id': rid,
@@ -677,6 +712,18 @@ def verify_final_presentation(session, checks, requirements):
         gaps.append({'kind': 'FINAL_CONCLUSION_NOT_VISIBLE',
                      'message': '结束前保留一项支持原目标的已核验阅读结论，无需全部历史段落同屏'})
     return output, gaps
+
+
+def _requires_arithmetic(requirement, requirements, goal=''):
+    """Keep explicit derivation obligations; avoid treating quoted reading as arithmetic."""
+    if requirement.get('evidence_route', {}).get('source_type') == 'derived_check':
+        return True
+    description = str(requirement.get('description') or '')
+    cross_check = re.search(r'核对|校验|比对|验算|cross.?check|recomput', description, re.I)
+    numeric = re.search(r'数值|计算|换算|体积|数量|袋数|numeric|calculat|volume|quantit|amount', description + ' ' + goal, re.I)
+    arithmetic = re.search(r'计算|换算|验算|重算|四则|calculat|recomput|arithmetic', description + ' ' + goal, re.I)
+    business_results = any(row.get('kind') in ('input', 'result') for row in requirements)
+    return bool(cross_check and numeric and (arithmetic or business_results))
 
 
 def verify_completion(session, application, requirements, *, require_calculation_coverage=False):
@@ -771,9 +818,7 @@ def verify_completion(session, application, requirements, *, require_calculation
             continue
         description = requirement['description']
         if (requirement['kind'] == 'content'
-                and re.search(r'核对|校验|比对|验算|cross.?check|recomput', description, re.I)
-                and re.search(r'数值|计算|换算|体积|数量|袋数|numeric|calculat|volume|quantit|amount',
-                              description + ' ' + _goal_description(session), re.I)):
+                and _requires_arithmetic(requirement, requirements, _goal_description(session))):
             gaps.append({'kind': 'CALCULATION_REQUIRED', 'requirement_id': requirement['id'],
                          'message': '核对事项须提供calculations推导及独立结果对照，单纯看到引用片段不证明核对结论'})
             continue
@@ -841,19 +886,20 @@ def verify_completion(session, application, requirements, *, require_calculation
                 continue
             for node in state.get('elements', []):
                 node_text = (node.get('text') or '').strip()
-                if node.get('visible') is not True or not node_text:
+                candidates = _visible_node_texts(state, node)
+                if not candidates:
                     continue
                 if region is not None and node.get('bbox') and not _bbox_inside(node['bbox'], region['bbox']):
                     continue
-                if quote_anchor and quote_anchor not in node_text:
+                if quote_anchor and not any(quote_anchor in text for text in candidates):
                     continue
                 # A quote hit only proves the cited position is real; it must not
                 # relax the observed_result/requirement match itself.
-                matched = (observed in node_text
-                           or match_result(observed, node_text, field=description, result_bound=True))
-                if not matched:
+                node_text = next((text for text in candidates if observed in text
+                                  or match_result(observed, text, field=description, result_bound=True)), None)
+                if node_text is None:
                     if quote_anchor and verbatim_miss is None:
-                        verbatim_miss = node_text
+                        verbatim_miss = candidates[0]
                     continue
                 if not substantive_answer_text(node_text, field=description, excluded_text=excluded):
                     gaps.append({'kind': 'INPUT_OR_LABEL_NOT_RESULT', 'requirement_id': requirement['id'],
@@ -898,7 +944,9 @@ def verify_completion(session, application, requirements, *, require_calculation
                          'message': 'quote所指可见文本与observed_result不一致：observed_result须是该可见文本的逐字连续片段，不得归纳、改写或预猜'})
         else:
             gaps.append({'kind': 'NO_BOUND_EVIDENCE', 'requirement_id': requirement['id'],
-                         'message': '实际提供的截图中未找到与observed_result匹配且位于引用region内的可见证据'})
+                         'message': '实际提供的截图中未找到与observed_result匹配且位于引用region内的可见证据；'
+                                    '同一文字可能在其他已提供观察里完整可见，请改引正确的观察编号，'
+                                    '或先continue/revise滚动、返回使其进入视口再举证，不要原样重复同一份complete'})
     if require_calculation_coverage:
         context = ' '.join([_goal_description(session), *[row['description'] for row in requirements]])
         if (re.search(r'核对|校验|比对|验算|cross.?check|recomput', context, re.I)

@@ -168,9 +168,11 @@ class Strategy2VisualCore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             obs = observation()
-            obs['controls'].pop('hidden')
+            # Both controls occupy the same edge position: number badges must
+            # find separate visible anchors while preserving target numbering.
+            obs['controls']['hidden']['element']['bbox'] = [20, 30, 120, 55]
             state = {'url': 'https://example.test/form', 'document_identity': obs['document_identity'],
-                     'scroll': [0, 0], 'elements': [obs['controls']['input1']['element']],
+                     'scroll': [0, 0], 'elements': [row['element'] for row in obs['controls'].values()],
                      'values': [], 'visible_text': '金额'}
             original = root / 'original.png'
             original.write_bytes(png(200, 100))
@@ -185,6 +187,12 @@ class Strategy2VisualCore(unittest.TestCase):
             overview, viewport = visuals
             self.assertEqual(page.full_page_requests, 1)
             self.assertEqual(viewport['control_mapping'][0]['control'], 'input1')
+            badges = [row['badge'] for row in viewport['control_mapping']]
+            self.assertEqual(len(badges), 2)
+            from webcollect.dynamic_regions import overlap
+            self.assertFalse(overlap(*badges))
+            self.assertTrue(all(0 <= x1 < x2 <= 200 and 0 <= y1 < y2 <= 100
+                                for x1, y1, x2, y2 in badges))
             self.assertNotEqual(Path(viewport['path']).read_bytes(), original_bytes)
             self.assertLess(overview['scale'], 1)
             crop = crop_visual(obs, root, [0, 100, 180, 300], image_ref=overview['ref'])

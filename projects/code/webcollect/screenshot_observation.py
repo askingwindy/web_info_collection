@@ -14,8 +14,12 @@ def substantive_answer_text(value, *, field='', excluded_text=()):
     text = normalized(value)
     label = normalized(field).rstrip(':：')
     excluded = {normalized(row) for row in excluded_text if normalized(row)}
-    return bool(text and not weak_result_text(text) and not text.endswith((':', '：'))
-                and text.rstrip(':：') != label and text not in excluded)
+    stem = text.rstrip(':：')
+    # Prose legitimately ends with a colon before the content it introduces;
+    # only a label-like fragment is rejected for ending there.
+    return bool(text and not weak_result_text(text)
+                and (not text.endswith((':', '：')) or (len(stem) >= 8 and not weak_result_text(stem)))
+                and stem != label and text not in excluded)
 
 
 def _control_row(cid, control, allowed):
@@ -245,16 +249,28 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
     image = Image.open(source['path']).convert('RGB')
     canvas = image.copy()
     draw = ImageDraw.Draw(canvas)
-    mapping = []
+    mapping, placed = [], []
     for number, cid in enumerate(observation.get('provided_control_ids', []), 1):
         box = observation['controls'][cid].get('element', {}).get('bbox')
         if not box:
             continue
-        x, y = max(0, int(box[0])), max(0, int(box[1]) - 13)
         label = str(number)
-        draw.rectangle((x, y, x + len(label)*7+5, y+13), fill='yellow', outline='black')
-        draw.text((x+2, y), label, fill='black')
-        mapping.append({'number': number, 'control': cid, 'bbox': deepcopy(box)})
+        width, height = len(label) * 7 + 5, 13
+        left, top = max(0, int(box[0])), max(0, int(box[1]))
+        right, bottom = min(image.width, int(box[2])), min(image.height, int(box[3]))
+        fits = lambda x, y: 0 <= x and 0 <= y and x + width <= image.width and y + height <= image.height  # noqa: E731
+        # Every number must stay readable: a badge may move, never disappear.
+        free = lambda x, y: not any(x < rect[2] and rect[0] < x + width  # noqa: E731
+                                    and y < rect[3] and rect[1] < y + height for rect in placed)
+        anchors = [(left, top - height), (right - width, top - height), (left, top),
+                   (right - width, top), (left, bottom - height), (right - width, bottom - height)]
+        x, y = next(((cx, cy) for cx, cy in anchors if fits(cx, cy) and free(cx, cy)),
+                    next(((cx, cy) for cx, cy in anchors if fits(cx, cy)), (left, max(0, top - height))))
+        draw.rectangle((x, y, x + width, y + height), fill='yellow', outline='black')
+        draw.text((x + 2, y), label, fill='black')
+        placed.append((x, y, x + width, y + height))
+        mapping.append({'number': number, 'control': cid, 'bbox': deepcopy(box),
+                        'badge': [x, y, x + width, y + height]})
     marked = root / ('visual-' + oid[:16] + '-viewport.png')
     with marked.open('xb') as stream:
         canvas.save(stream, format='PNG')

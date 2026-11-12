@@ -12,7 +12,7 @@ import uuid
 
 from site_planner.application_discovery import Discovery, classify_homepage, site_context
 from site_planner.candidate_pool import CandidatePool
-from webcollect.batch_core import BatchLedger
+from webcollect.batch_core import BatchLedger, file_sha
 from webcollect.current_chain import current_evidence_roots, read_chain_scope
 from webcollect.planning import object_sha256, verify_evidence
 from .site_inventory import load_scope, resolve_sites, site_statistics
@@ -112,11 +112,35 @@ def prepare_sites(scope_path, selectors, *, sources_path=None):
     return plan
 
 
+def load_seed_files(paths):
+    """Load evidence-backed expansion seeds from JSON lists, grouped by hostname.
+
+    A seed page other than the Table1 decision homepage is fetched with its
+    raw HTML, so category/entry seeds let a site expand through its own links;
+    the saved homepage decision alone carries no hrefs to extract."""
+    grouped = {}
+    for path in paths:
+        seeds = json.loads(Path(path).read_text(encoding='utf-8'))
+        if not isinstance(seeds, list):
+            raise ValueError(f'Seeds file must hold a JSON list: {path}')
+        for seed in seeds:
+            host = (urlsplit(seed['uri']).hostname or '').lower()
+            reference = seed.get('reference') or {}
+            if not host or not reference.get('path') or not reference.get('sha256'):
+                raise ValueError(f'Seed needs uri and sha256 evidence reference: {seed.get("uri")}')
+            evidence = Path(reference['path'])
+            if not evidence.is_file() or file_sha(evidence) != reference['sha256']:
+                raise ValueError(f'Seed evidence missing or changed: {seed["uri"]} -> {evidence}')
+            grouped.setdefault(host, []).append(seed)
+    return grouped
+
+
 def producer_plan(scope_path, selectors, *, pages_per_site, workers,
-                  prefer_simplified_chinese=False):
+                  prefer_simplified_chinese=False, seed_files=()):
     scope_path, scope = load_scope(scope_path)
     pool = CandidatePool(scope['pool'], readonly=True)
     selected = resolve_sites(pool, selectors)
+    seeds_by_host = load_seed_files(seed_files)
     sites = []
     for site in selected:
         stats = site_statistics(pool, site)
@@ -126,22 +150,29 @@ def producer_plan(scope_path, selectors, *, pages_per_site, workers,
     active = [(site, stats) for site, stats in zip(selected, sites) if stats['remaining']]
     if not active:
         return plan
+    site_sources = {site['id']: producer_sources(pool, site) for site in selected}
+    selected_hosts = {host for _, hosts in site_sources.values() for host in hosts}
+    unmatched = sorted(set(seeds_by_host) - selected_hosts)
+    if unmatched:
+        raise ValueError(f'Seed hosts do not match any selected site: {", ".join(unmatched)}')
     worker_quotas = split_even(workers, len(active))
     for (site, stats), worker_quota in zip(active, worker_quotas):
-        source, hosts = producer_sources(pool, site)
-        for target in split_even(stats['remaining'], worker_quota):
+        source, hosts = site_sources[site['id']]
+        site_seeds = [seed for host in hosts for seed in seeds_by_host.get(host, [])]
+        for worker_index, target in enumerate(split_even(stats['remaining'], worker_quota)):
             if not target:
                 continue
             number = len(plan['workers']) + 1
             worker_id = f'producer-{number:03d}'
             batch_key = f'{plan["plan_id"]}-p{number:03d}'
+            seeds = [site_seeds[worker_index % len(site_seeds)]] if site_seeds else [source]
             command = [sys.executable, '-B', '-u', '-m',
                        'site_planner.candidate_discovery', 'produce-entries',
                        '--config', scope['producer_config'], '--ledger', scope['producer_db'],
                        '--pool', scope['pool'], '--history-set', scope['history_set'],
                        '--discovery-mode', 'expand', '--site-expansion',
                        '--search-engine', 'public', '--category', site['category'],
-                       '--sources', json.dumps([source], ensure_ascii=False, separators=(',', ':')),
+                       '--sources', json.dumps(seeds, ensure_ascii=False, separators=(',', ':')),
                        '--target', str(target), '--application-new-target', str(pages_per_site),
                        '--application-pending-cap', str(pages_per_site),
                        '--batch-key', batch_key]
@@ -151,7 +182,7 @@ def producer_plan(scope_path, selectors, *, pages_per_site, workers,
                 command.append('--prefer-simplified-chinese')
             plan['workers'].append({'worker_id': worker_id, 'application_id': site['id'],
                                     'host': site['host'], 'target': target,
-                                    'batch_key': batch_key, 'command': command})
+                                    'batch_key': batch_key, 'seeds': [seed['uri'] for seed in seeds], 'command': command})
     return plan
 
 
@@ -265,6 +296,8 @@ def main(argv=None):
     producer.add_argument('--pages-per-site', type=positive, required=True,
                           help='Cumulative distinct NEW ceiling per site in this project')
     producer.add_argument('--prefer-simplified-chinese', action='store_true')
+    producer.add_argument('--seeds-file', action='append', default=[], type=Path,
+                          help='Evidence-backed seed JSON lists; round-robin across site workers; repeatable')
     consumer.add_argument('--all-pending', action='store_true', required=True,
                           help='Claim all currently eligible pending rows across producer batches; exit when empty')
     args = parser.parse_args(argv)
@@ -280,7 +313,8 @@ def main(argv=None):
             if args.role == 'producer':
                 plan = producer_plan(args.scope, args.site, pages_per_site=args.pages_per_site,
                                      workers=args.workers,
-                                     prefer_simplified_chinese=args.prefer_simplified_chinese)
+                                     prefer_simplified_chinese=args.prefer_simplified_chinese,
+                                     seed_files=args.seeds_file)
             else:
                 plan = consumer_plan(args.scope, args.site, workers=args.workers)
             if not args.launch:

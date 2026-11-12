@@ -111,10 +111,13 @@ def step_narratives(row, before, element=None, *, current_facts=False):
             disclosure = element.get('native_role') == 'summary' or element.get('state') in {'expanded', 'collapsed'}
             verb = ('收起' if element.get('state') == 'expanded' else '展开') if disclosure else '点击'
             intent = purpose if not re.search(r'control|summary|e_\d+|schema|当前|现在|可见|看不到|未显示', purpose, re.I) else ''
-            goal = intent or f'{verb}{name}，核对对应的信息'
-            result.update(user_goal=goal,
+            if intent and label:
+                intent = re.sub(r'^(?:点击|单击|双击|右击|展开|收起)\s*[「“]?'
+                    + re.escape(label) + r'[」”]?\s*', '', intent).lstrip('，,：:；;。 ')
+                intent = re.sub(r'^(?:以便|以|来|并|后|用于)\s*', '', intent)
+            result.update(user_goal=f'{verb}{name}' + (f'以{intent}' if intent else ''),
                 expected_result=f'预期{name}对应的内容{verb}。' if disclosure else f'预期页面响应对{name}的操作并显示相应内容。',
-                next_step_rationale=f'当前页面可见{name}；本步目的是' + goal.rstrip('。') + '。')
+                next_step_rationale=f'当前页面可见{name}，为' + (intent or f'核对{name}对应的信息') + f'，因此{verb}该控件。')
         elif action == 'select':
             binding = next((b for b in before.get('capture_controls', []) if b.get('element_id') == (cid or current.get('element_id'))), {})
             option = next((o.get('label') for o in binding.get('options', []) if str(o.get('value')) == str(args.get('value'))), None)

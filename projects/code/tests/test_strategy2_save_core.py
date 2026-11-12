@@ -67,6 +67,11 @@ class Strategy2SaveCore(unittest.TestCase):
                 {'element_id': 'help', 'text': '运作原理', 'native_role': 'summary'}, current_facts=True)
             self.assertIn('运作原理', clicked['next_step_rationale'])
             self.assertNotIn('e_26', clicked['next_step_rationale'])
+            clicked = step_narratives({'action': 'click', 'semantic_goal': '展开「运作原理」以阅读说明',
+                'target': {'control_id': 'help'}}, {'visible_text': '运作原理', 'values': [],
+                'elements': [{'element_id': 'help', 'text': '运作原理'}]},
+                {'element_id': 'help', 'text': '运作原理', 'native_role': 'summary'}, current_facts=True)
+            self.assertEqual(clicked['user_goal'], '展开「运作原理」以阅读说明')
             self.assertEqual(postprocess.terminal_fallback_timestamp({'terminal': {'completed_at': '2026-11-12T01:00:00+08:00'}}),
                              '2026-11-12T01:00:00+08:00')
             self.assertEqual(postprocess.terminal_fallback_timestamp({'terminal': {}}), '')

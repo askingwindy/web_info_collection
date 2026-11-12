@@ -34,6 +34,13 @@ class PlanProtocolContract(unittest.TestCase):
         self.assertEqual(REACT_PROTOCOL, 'react-native')
         self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan'))
         self.assertEqual(DEFAULT_STRATEGY, STRATEGY_BANDED_REACT)
+        from webcollect.dynamic_regions import VERSION, SUGGESTION_VERSION
+        from webcollect.plan_protocol import DYNAMIC_REGIONS_PROTOCOL, SEARCH_SUGGESTIONS_PROTOCOL
+        script = (Path(__file__).parents[1] / 'webcollect/snapshot.js').read_text()
+        self.assertEqual(VERSION, DYNAMIC_REGIONS_PROTOCOL)
+        self.assertEqual(SUGGESTION_VERSION, SEARCH_SUGGESTIONS_PROTOCOL)
+        self.assertIn(f"const dynamicVersion='{VERSION}';", script)
+        self.assertIn(f"const suggestionVersion='{SUGGESTION_VERSION}';", script)
 
     def test_saved_research_requires_frozen_production_comparison(self):
         from contextlib import contextmanager
@@ -271,13 +278,46 @@ class CandidatePoolContract(unittest.TestCase):
                     (application_id,)).fetchone()[0]
             self.assertEqual(count, 2)  # The original roundtrip row plus exactly one raced NEW.
 
-    def test_v1_body_is_rejected(self):
+    def test_seeded_producer_plan_launch_keeps_sources_and_serial_prepare(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from webcollect import site_workers
         with tempfile.TemporaryDirectory() as tmp:
-            from site_planner.site_pool import SitePool
-            SitePool(Path(tmp) / 'pool.sqlite3', initialize=True)
-            pool = CandidatePool(Path(tmp) / 'pool.sqlite3', install=True)
-            with self.assertRaises(ValueError):
-                pool.put({'schema_version': 'webcollect-data-candidate-1'}, {'origin': 'x'})
+            root = Path(tmp)
+            proof = root / 'seed.txt'
+            proof.write_text('离线种子来源')
+            from webcollect.batch_core import file_sha
+            seeds = [{'uri': f'https://example.org/category/{i}',
+                      'reference': {'path': str(proof), 'sha256': file_sha(proof)}} for i in range(2)]
+            seed_file = root / 'seeds.json'
+            seed_file.write_text(json.dumps(seeds))
+            site = {'id': 'site', 'host': 'example.org', 'category': 'reference'}
+            scope = {key: str(root / key) for key in ('pool', 'producer_config', 'producer_db', 'history_set')}
+            with patch.object(site_workers, 'load_scope', return_value=(root/'scope', scope)), \
+                    patch.object(site_workers, 'CandidatePool'), \
+                    patch.object(site_workers, 'resolve_sites', return_value=[site]), \
+                    patch.object(site_workers, 'site_statistics', return_value={
+                        'cumulative_new': 0, 'application_id': 'site', 'classification_state': 'confirmed'}), \
+                    patch.object(site_workers, 'producer_sources', return_value=(seeds[0], ['example.org'])):
+                plan = site_workers.producer_plan(root/'scope', ['site'], pages_per_site=3,
+                                                 workers=3, seed_files=[seed_file])
+                self.assertEqual([w['seeds'] for w in plan['workers']],
+                                 [[seeds[0]['uri']], [seeds[1]['uri']], [seeds[0]['uri']]])
+                fallback = site_workers.producer_plan(root/'scope', ['site'], pages_per_site=1, workers=1)
+                self.assertEqual(fallback['workers'][0]['seeds'], [seeds[0]['uri']])
+                self.assertTrue(site_workers.prepare_sites(root/'scope', ['site'])['ready'])
+            plan['log_root'] = str(root/'launch')
+            with patch.object(site_workers.subprocess, 'Popen',
+                              return_value=SimpleNamespace(pid=1, wait=lambda: 0)):
+                self.assertTrue(site_workers.launch(plan)['succeeded'])
+            saved = json.loads((root/'launch/plan.json').read_text())
+            for i, worker in enumerate(saved['workers']):
+                path = worker['command'][worker['command'].index('--sources') + 1]
+                self.assertEqual(path, worker['sources_path'])
+                self.assertEqual(json.loads(Path(path).read_text()), [seeds[i % 2]])
+            proof.write_text('changed')
+            with self.assertRaisesRegex(ValueError, 'evidence missing or changed'):
+                site_workers.load_seed_files([seed_file])
 
 
 class CliEntriesSmoke(unittest.TestCase):

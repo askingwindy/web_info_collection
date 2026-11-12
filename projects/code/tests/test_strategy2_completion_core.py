@@ -311,6 +311,8 @@ class CompletionCoreTests(substrate.SessionHarness):
         # difference in the quoted text.
         self.assertEqual(narrative_grounding_gaps(steps, frame, '查证「人物生平」'), [])
         self.assertEqual(narrative_grounding_gaps([{'rationale': '当前帧可见「金额100元」'}], frame), [])
+        self.assertEqual(narrative_grounding_gaps([{'rationale': '看到「搜索结果…下一页」'}], frame), [])
+        self.assertEqual(narrative_grounding_gaps([{'rationale': '看到「搜索结果…不存在」'}], frame)[0]['missing_fragment'], '不存在')
 
     async def test_paraphrased_observed_result_reports_a_verbatim_gap(self):
         async def choose(prompt):
@@ -332,6 +334,33 @@ class CompletionCoreTests(substrate.SessionHarness):
         checks, gaps = verify_completion(session, answers(self.texts[0]), requirement)
         self.assertEqual(gaps, [])
         self.assertEqual(len(checks), 1)
+
+        # Inline links split element text; the clipped paragraph still proves
+        # the full sentence, while hidden sentence suffixes remain inadmissible.
+        body = next(row for row in self.surface.state['elements'] if row['element_id'] == 'body-0')
+        body['text'] = '这篇文章记载人物原名为'
+        self.surface.state['visible_text'] += '\n' + self.texts[0]
+        self.surface.state['text_blocks'] = [{'element_id': 'body-0',
+            'visible_text': self.texts[0], 'complete_sentences': [self.texts[0], self.texts[0] + '隐藏尾句']}]
+        await session._observe()
+        await session._decide(session._branch_prompt('inline_reading'))
+        oid = session.current['observation_id']
+        checks, gaps = verify_completion(session, answers(self.texts[0]), requirement)
+        self.assertEqual(gaps, [])
+        visible, gaps = verify_final_presentation(session, checks, requirement)
+        self.assertEqual(gaps, [])
+        self.assertEqual(visible[0]['quote'], self.texts[0])
+        _, gaps = verify_completion(session, answers(self.texts[0] + '隐藏尾句'), requirement)
+        self.assertIn('OBSERVED_RESULT_NOT_VERBATIM', [row['kind'] for row in gaps])
+        reading = [{**requirement[0], 'description': '阅读并核对人物资料数量'}]
+        _, gaps = verify_completion(session, answers(self.texts[0]), reading)
+        self.assertEqual(gaps, [])
+        derived = [{**reading[0], 'evidence_route': {'source_type': 'derived_check'}}]
+        _, gaps = verify_completion(session, answers(self.texts[0]), derived)
+        self.assertIn('CALCULATION_REQUIRED', [row['kind'] for row in gaps])
+        _, gaps = verify_completion(session, answers(self.texts[0]), [
+            {**reading[0], 'description': '根据数量计算并核对体积'}])
+        self.assertIn('CALCULATION_REQUIRED', [row['kind'] for row in gaps])
 
     async def test_cited_control_from_an_earlier_frame_removes_continue(self):
         async def choose(prompt):

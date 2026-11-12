@@ -1400,7 +1400,7 @@
   });
   // Shared semantic regions: original DOM/pixels remain intact. No arbitrary
   // data-* or model assertion can declare a business result ignorable.
-  const dynamicVersion='webcollect-dynamic-regions-1';
+  const dynamicVersion='dynamic-regions';
   const selectorOf=n=>{const parts=[];for(;n&&n.nodeType===1;n=n.parentElement){const sib=n.parentElement?[...n.parentElement.children].filter(x=>x.localName===n.localName):[n];parts.unshift(n.localName+':nth-of-type('+(sib.indexOf(n)+1)+')');}return parts.join(' > ');};
   const regionAttributes=n=>Object.fromEntries(['id','class','role','aria-label','aria-roledescription','title'].map(k=>[k,n.getAttribute(k)]));
   const nativeImagePaint=n=>{const c=styleOf(n);return n.children.length===0&&!clean(n.textContent)&&(c.backgroundImage!=='none'||c.maskImage!=='none')?{leaf:true,visible_text:'',background_image:c.backgroundImage,mask_image:c.maskImage}:null;};
@@ -1425,7 +1425,7 @@
   // control or action target inside, disjoint from the input, and free of the
   // existing paint/assertion/business-overlap guards. Suggestion changes
   // themselves never grant an action effect, effective step or QC credit.
-  const suggestionVersion='webcollect-search-suggestions-1';
+  const suggestionVersion='search-suggestions';
   const suggestionOwner=input=>{
     const ids=[...(input.getAttribute('aria-owns')||'').split(/\s+/),(input.getAttribute('aria-controls')||'').split(/\s+/)].filter(Boolean);
     const popups=[];
