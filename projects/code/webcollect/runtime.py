@@ -165,6 +165,17 @@ def _bound_quality_report(evidence):
                     'dataset': str(source), 'inspection_stage': report.get('inspection_stage')}
 
 
+def verify_derivation_successor(root, saved_reference, record_reference):
+    """Bind a versionless save to a later entry in the original derivation log."""
+    rows = [json.loads(line) for line in (Path(root)/'derivations.jsonl').read_text().splitlines()]
+    successor = next((index for index, item in enumerate(rows)
+        if item.get('status') == 'derived_saved' and item.get('saved_sample') == saved_reference
+        and item.get('record_ref') == record_reference), None)
+    if successor is None or not any(item.get('status') == 'processing_failed'
+            for item in rows[:successor]):
+        raise ValueError('Original failed derivation and bound successor must remain in the append-only ledger')
+
+
 class OwnedAttemptClosed(ValueError):
     """This exact owner committed a normal outcome before its lease expired."""
 
@@ -692,7 +703,6 @@ class RuntimeStore:
         if len(receipts) != 1: raise ValueError('One saved derivation receipt required')
         saved = load_json(receipts[0]['path'])
         if (saved.get('attempt_id') != row['attempt_id'] or saved.get('sample_id') != row['sample_id']
-                or saved.get('derivation', {}).get('version', 0) < 2
                 or saved.get('raw_execution', {}).get('receipt') != record['receipt']['terminal']):
             raise ValueError('Successor derivation must bind the identical raw attempt and sample')
         root = raw.parent; sample = root.parent.parent/'samples'/row['sample_id']
@@ -702,9 +712,7 @@ class RuntimeStore:
                 path = base/name
                 if path.is_symlink() or not path.resolve().is_relative_to(base.resolve()) or file_sha(path) != digest:
                     raise ValueError('Saved derivation bytes differ')
-        failures = [json.loads(line) for line in (root/'derivations.jsonl').read_text().splitlines()]
-        if not any(r.get('status') == 'processing_failed' and r.get('derivation', 0) < saved['derivation']['version'] for r in failures):
-            raise ValueError('Original failed derivation must remain in its append-only ledger')
+        verify_derivation_successor(root, receipts[0], saved.get('derivation', {}).get('record'))
         return {'schema_version':'offline-derivation-recovery',
                 'original_attempt':dict(row), 'original_failure':recovery['failure'],
                 'raw_receipt':recovery['raw_receipt'], 'closed_process':recovery['process_exit'],

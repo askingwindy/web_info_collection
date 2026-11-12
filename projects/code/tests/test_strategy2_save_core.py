@@ -171,7 +171,7 @@ class Strategy2SaveCore(unittest.TestCase):
             original_state = state_path.read_bytes()
             delivery = root / 'delivery'
             delivery.write_bytes(b'existing destination must remain untouched')
-            task = {'instruction': '查询并确认结果', 'fragment': {
+            task = {'instruction': '查询并确认结果', 'app_name': '示例计算器', 'fragment': {
                 'collection_strategy': {'id': 'screenshot_plan'},
                 'decision_protocol': REACT_PROTOCOL, 'ending_policy': ENDING_POLICY}}
             rows = [{'operation_id': f'op-{i}', 'action': 'click',
@@ -206,3 +206,14 @@ class Strategy2SaveCore(unittest.TestCase):
             self.assertFalse((evidence / 'saved_sample.json').exists())
             self.assertEqual(state_path.read_bytes(), original_state)
             self.assertEqual(delivery.read_bytes(), b'existing destination must remain untouched')
+            # The existing recovery contract binds the successor through this
+            # append-only log, without a removed implementation-version field.
+            from webcollect.runtime import verify_derivation_successor
+            saved_ref = {'path': str(evidence / 'saved_sample.json'), 'sha256': 'saved-bytes'}
+            record_ref = {'path': str(evidence / 'derived.json'), 'sha256': 'derived-bytes'}
+            with (evidence / 'derivations.jsonl').open('a') as stream:
+                stream.write(json.dumps({'status': 'derived_saved', 'saved_sample': saved_ref,
+                                         'record_ref': record_ref}) + '\n')
+            verify_derivation_successor(evidence, saved_ref, record_ref)
+            with self.assertRaises(ValueError):
+                verify_derivation_successor(evidence, {**saved_ref, 'sha256': 'other-save'}, record_ref)

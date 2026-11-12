@@ -14,19 +14,31 @@ from jsonschema import validate, ValidationError
 
 class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
     def test_empty_requirement_metadata_is_losslessly_normalized(self):
-        raw = {'goal': '计算', 'requirements': [{'id': 'r1', 'kind': 'result', 'description': '观察计算结果', 'id2': '',
-                                                 'evidence_route': {'source_type': 'page_result', 'observation_steps': [1]}}],
-               'steps': [{'action': 'back', 'purpose': '返回', 'rationale': '查看前页', 'expected_result': '前页出现'}],
+        raw = {'goal': '计算', 'requirements': [{'id': 'r1', 'kind': 'input', 'description': '设置数量', 'id2': '',
+                                                 'target': {'visible_label': '数量', 'role': 'input'}, 'expected_value': '10',
+                                                 'evidence_route': {'source_type': 'input_state', 'observation_steps': [1]}}],
+               'steps': [{'action': 'back', 'purpose': f'返回{index}', 'rationale': '查看前页',
+                          'expected_result': '前页出现'} for index in range(5)],
                'final_presentation_step': 1}
         before = deepcopy(raw)
         normalized, record = normalize_submit_plan(raw)
         validate(normalized, submit_plan_schema(['back']))
         self.assertEqual(raw, before)
-        self.assertEqual(record['transforms'][0]['path'], 'requirements[0].id2')
+        self.assertIn('requirements[0].id2', [r['path'] for r in record['transforms']])
+        self.assertEqual(normalized['requirements'][0]['target']['text'], '数量')
+        self.assertNotIn('visible_label', normalized['requirements'][0]['target'])
         raw['requirements'][0]['id2'] = 'another-business-id'
         normalized, _ = normalize_submit_plan(raw)
         with self.assertRaises(ValidationError):
             validate(normalized, submit_plan_schema(['back']))
+        # 普通首轮与宿主准入同一下限：不足五步的计划不能通过 wire schema；
+        # unsuitable 分支不要求凑够五步。
+        short = deepcopy(raw)
+        short['requirements'][0].pop('id2')
+        short['steps'] = short['steps'][:4]
+        with self.assertRaises(ValidationError):
+            validate(short, submit_plan_schema(['back']))
+        validate({'unsuitable': {'reason': '自然不足五步'}}, submit_plan_schema(['back']))
 
     async def test_standalone_checks_scope_then_probes_once_and_stops_unavailable(self):
         with tempfile.TemporaryDirectory() as directory:

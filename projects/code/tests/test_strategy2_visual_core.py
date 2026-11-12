@@ -104,8 +104,62 @@ class Strategy2VisualCore(unittest.TestCase):
                        'rationale': '计划前提：需要读取目标依据', 'expected_result': '必要依据进入视口'} for _ in range(5)]}
         normalized, _ = normalize_submit_plan(route_plan)
         self.assertEqual(normalized, route_plan)
-        self.assertTrue(first_plan_admission(normalized)[0])
-        invalid_route = deepcopy(route_plan)
+        self.assertEqual(first_plan_admission(normalized)[1]['kind'], 'UNREQUESTED_DERIVATION_CHECK')
+        explicit_derivation = deepcopy(route_plan)
+        explicit_derivation['goal'] = '读取结果并根据页面依据独立验算'
+        self.assertTrue(first_plan_admission(explicit_derivation)[0])
+        from webcollect.screenshot_plan import result_requirements_feedback
+        self.assertIsNone(result_requirements_feedback([], '页面输出的 Band F 年度与月度市政税账单'))
+        self.assertIsNone(result_requirements_feedback([], '读取页面计算输出的租房与买房总成本对比及更省的结论'))
+        reading = deepcopy(route_plan)
+        reading['goal'] = '阅读煎蛋卷条目，查看第1条引用来源及后续章节内容'
+        reading['requirements'] = [{'id': 'reading', 'kind': 'content',
+            'description': '阅读引用来源及后续章节',
+            'evidence_route': {'source_type': 'page_content', 'observation_steps': [3]}}]
+        self.assertTrue(first_plan_admission(reading)[0])
+        compound = deepcopy(route_plan)
+        compound['goal'] = '随后查看页面计算输出的月供、总利息与总成本结果'
+        compound['requirements'] = [
+            {'id': 'r1', 'kind': 'result', 'description': '页面输出的月供结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
+            {'id': 'r2', 'kind': 'result', 'description': '页面输出的总利息与总成本结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}}]
+        rejected = first_plan_admission(compound)[1]
+        self.assertEqual(rejected['kind'], 'RESULT_REQUIREMENT_ATOMICITY')
+        self.assertEqual(rejected['requirement_ids'], ['r2'])
+        compound['requirements'][1:] = [
+            {'id': 'r2', 'kind': 'result', 'description': '页面输出的总利息结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
+            {'id': 'r3', 'kind': 'result', 'description': '页面输出的总成本结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}}]
+        self.assertTrue(first_plan_admission(compound)[0])
+        missing = deepcopy(compound)
+        missing['requirements'].pop()
+        self.assertEqual(first_plan_admission(missing)[1]['missing_result_terms'], ['总成本'])
+        single_metric = deepcopy(route_plan)
+        single_metric['goal'] = '查看收入与支出比结果'
+        single_metric['requirements'] = single_metric['requirements'][:1]
+        single_metric['requirements'][0]['description'] = '查看收入与支出比结果'
+        self.assertTrue(first_plan_admission(single_metric)[0])
+        dual = deepcopy(single_metric)
+        dual['goal'] = '随后查看页面计算输出的单利利息与到期总额结果'
+        dual['requirements'][0]['description'] = '页面输出的单利利息与到期总额结果'
+        self.assertEqual(first_plan_admission(dual)[1]['kind'], 'RESULT_REQUIREMENT_ATOMICITY')
+        dual['requirements'] = [
+            {'id': 'r1', 'kind': 'result', 'description': '页面输出的单利利息结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
+            {'id': 'r2', 'kind': 'result', 'description': '页面输出的到期总额结果',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}}]
+        self.assertTrue(first_plan_admission(dual)[0])
+        misplaced = deepcopy(dual)
+        for requirement in misplaced['requirements']:
+            requirement['source_type'] = requirement['evidence_route'].pop('source_type')
+        normalized, transforms = normalize_submit_plan(misplaced)
+        self.assertTrue(all('source_type' not in row for row in normalized['requirements']))
+        self.assertEqual([row['evidence_route']['source_type'] for row in normalized['requirements']],
+                         ['page_result', 'page_result'])
+        self.assertEqual(len(transforms['transforms']), 2)
+        invalid_route = deepcopy(explicit_derivation)
         invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [6]
         self.assertEqual(first_plan_admission(invalid_route)[1]['kind'], 'EVIDENCE_ROUTE_INVALID')
         invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [4]
@@ -121,6 +175,17 @@ class Strategy2VisualCore(unittest.TestCase):
         bind_plan_targets(numeric, original)
         self.assertEqual(numeric['steps'][0]['target']['control'], rows[0]['control'])
         self.assertEqual(numeric['steps'][0]['target']['_source']['mark_number'], 1)
+        node_alias = {'requirements': [{'kind': 'input', 'target': {'node': '当前计算器的金额输入框', 'role': 'textbox'}}]}
+        alias_notes = []
+        unique_frame = deepcopy(original)
+        unique_frame['provided_control_ids'] = ['input1']
+        bind_plan_targets(node_alias, unique_frame, normalization=alias_notes)
+        self.assertEqual(node_alias['requirements'][0]['target']['control'], 'input1')
+        self.assertEqual(alias_notes[0]['transform'], 'unique_current_control_alias')
+        ambiguous = deepcopy(original)
+        ambiguous['provided_control_ids'].append('hidden')
+        with self.assertRaisesRegex(ValueError, 'TARGET_NODE_NOT_UNIQUELY_BOUND'):
+            bind_plan_targets({'steps': [{'target': {'node': '金额输入框'}}]}, ambiguous)
         conflict = deepcopy(original)
         conflict['controls']['1'] = control('1')
         conflict['provided_control_ids'].append('1')

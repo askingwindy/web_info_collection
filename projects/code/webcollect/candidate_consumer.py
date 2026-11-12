@@ -1168,6 +1168,7 @@ def main(argv=None):
         if a.campaign:
             import signal
             signal.signal(signal.SIGINT, signal.default_int_handler)
+            signal.signal(signal.SIGTERM, signal.default_int_handler)
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,

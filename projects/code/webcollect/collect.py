@@ -694,6 +694,24 @@ def action_content_changes(before, after, element):
         and e.get('element_type') not in {'button', 'input', 'select', 'link'}))
 
 
+def result_region_rows(state):
+    """Visible rows of bound result regions and status/output roles, tree order.
+
+    The same marking the strategy-2 host uses for known business results: a
+    capture control whose owner is the result region, or a status/alert/output
+    element. Text must also occur in this frame's clipped visible text.
+    """
+    bindings={b['element_id']:b for b in state.get('capture_controls',[])}
+    rows=[]
+    for e in state.get('elements',[]):
+        text=(e.get('text') or '').strip()
+        if (e.get('visible') is True and text and text in state.get('visible_text','')
+                and (bindings.get(e['element_id'],{}).get('result_region_selector')
+                     or e.get('native_role') in ('status','alert','output'))):
+            rows.append({'element_id':e['element_id'],'text':text})
+    return rows
+
+
 def describe_change(before, after, op, element):
     """Describe observed changes; accessible names are not visible text/value evidence."""
     import re
@@ -904,10 +922,18 @@ def describe_change(before, after, op, element):
             return f'「{current_element["text"]}」'+states[current_element['state']]
     if action=='click' and element and not any(e['element_id']==element['element_id'] for e in after['elements']):
         return f'「{element["text"]}」已不在当前视口' if element['text'] else '目标控件已不在当前视口'
+    # A submit-like click that produced or changed bound result rows enumerates
+    # every row: the calculator's volume, converted volume and bag count are one
+    # output set, and truncating to the first lines drops the required answers.
+    if action in ('click', 'double_click', 'hotkey'):
+        outputs=result_region_rows(after)
+        if outputs and outputs!=result_region_rows(before):
+            shown=[row['text'] for row in outputs]
+            return '页面输出'+'；'.join('「'+text+'」' for text in shown)
     if action in ('click', 'double_click') and visible_added:
         content = action_content_changes(before, after, element)
         if content:
-            return '操作后新增可见内容：' + '；'.join('「' + text + '」' for text in content)
+            return '操作后新增可见内容：' + '；'.join('「' + text + '」' for text in content[:6])
     numeric=visible_numeric_context(after)
     if action=='click' and numeric and numeric!=visible_numeric_context(before):return '页面显示'+numeric
     if visible_added:return '页面出现的文字包括'+'和'.join(visible_reference(text) for text in visible_added[:3])

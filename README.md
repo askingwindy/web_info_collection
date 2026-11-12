@@ -1,5 +1,18 @@
 # WebCollect
 
+2026-11-12 门禁走读修复与保存链离线收口已完成（[证据与边界](verify_results/strategy2-save-chain-20261112-r01/report.md)）：首帧只判断首步确定输入冗余，不从引用命中推断滚动多余或正文／结果目标完成；结束修复按当前展示控件、同文档锚点及已核验前页导航事实许可，拒绝编辑／重置／焦点按键时返回具体缺项和定位建议。新增隔离计算8步、纯阅读5步，经正常 `_react_collection`、派生、RuntimeStore提交、候选回写及隔离导出，sample ID与哈希一致；加工失败保持 `program/save_failed/eligible`，integration批次导出仍拒绝。汇总44/44、反馈专项及失败分支5/5通过；受影响核心5个不同用例最新均通过，累计6次执行（5通过、1次旧断言失败后局部复验通过）、pytest共1.05秒，维护总量仍50，未全量重跑。仅合成离线夹具（导出使用生产形状测试），真实模型／网页／生产新增均0，QC／人工NOT_RUN、发布false、客户验收UNKNOWN；不启动采集。
+
+
+当前待实施计划已按“真实执行→完整标注→RuntimeStore正式提交→候选回写→delivery”收口，见[SSD文首](docs/策略2观察反馈与完成收尾优化SSD-20261112.md)。本次为代码复核与文档更新；末帧缺项与停滞判定尚需修复，旧25项集成只覆盖到派生文件，未证明正式提交与回写；没有启动新采集，旧执行Prompt已标为历史。
+
+2026-11-12 三轮固定采集复核已结束：新授权 Muxtly／Wiki 每轮各5条，共3轮、30个唯一新候选及30个正式attempt，进程全部退出；每轮源码摘要一致，三份campaign均停止。宿主完成证据接受9条，正式保存／客户导出／内容复核合格均0，未新建客户样本包；claim failed 28、reconcile 2，新增模型UNKNOWN 2笔保留不重发。修复稳定目标事实停滞核算、语义全目标反馈、当前控件唯一别名正规化、正文路线与补图、结果完整叙述及无版本恢复引用；最后查实并修复goal_ready抢先拦截必要结束定位。维护核心总数仍50，受影响16个不同用例分批累计82次执行（80通过、2失败后局部复验通过），pytest累计4.30秒；最终离线集成25/25通过、必要定位专项通过，未全量重跑50条。**第3轮后最后改动仅离线覆盖，不增加第4轮，不宣称真实交付达标。** 独立AI QC、人工审核NOT_RUN，发布false，客户验收UNKNOWN。三轮明细、12步失败样本原恢复合同阻断及剩余规划／短流程问题见[本轮报告](docs/策略2三轮采集修复与交付复核-20261112.md)。
+
+2026-11-12 策略2协议修复后已完成双站真实固定采集并停止：多错误合并反馈、全部可修复叶字段一次修复、明确双输出原子准入及 `continue.remaining_plan` 精确 schema 反馈已落地；50 条核心测试全过（9.267 秒），离线集成 25／25 PASS，真实原始响应只读复算通过（`verify_results/strategy2-protocol-atomic-20261112-r07/`）。r05 对 Muxtly、Wiki 从 Table2 各取 5 条，4 rejected、2 interrupted、4 原账 running（相关进程均已退出），正式保存、导出、复核合格均为 0，campaign 已停止且未重派。r04 的历史导出 `S000001_sample_000009` 因 annotation 漏总成本 `$46958.76`，复核不合格，不能计为修复后交付。重复 complete 持续缺证据仍会循环到外层时限，真实闭环尚未通过。独立 AI QC、人工审核 NOT_RUN，发布 false。详见[真实客户交付汇总](verify_results/strategy2-two-sites-five-20261112-r05/client-delivery-summary.md)。
+
+2026-11-12 策略2观察反馈与完成收尾优化已按[待实施 SSD](docs/策略2观察反馈与完成收尾优化SSD-20261112.md)集中实施完成：路线驱动检查点（`evidence_route.observation_steps` 接入执行检查点）、候选结果层（`candidate_results` 区分已捕获与已核验）、按需历史关键帧补图（多观察 `_decide`，历史控件不可派发当前动作）、全部核验后 `goal_ready` 不执行无用尾部、revise 路线重锚、"页面结果确认与独立验算"义务分离（`DERIVATION_OBLIGATION`）、complete 步标注分工与结果区完整叙述、检查点无效决定接入 no-progress 停滞核算（修复无限模型请求缺陷）。核心测试维护 **50 条（上限内）全绿**，离线集成 25/25 PASS（[证据](verify_results/strategy2-observation-feedback-20261112-r01/offline-integration.json)）。真实双站验证按最多五次授权执行：Muxtly 因历史隔离许可合同阻断（0/5，见 [muxtly-blocked](verify_results/strategy2-observation-feedback-20261112-r01/muxtly-blocked.json)）；Wiki 3/5 次启动均失败于启动器/指令格式（零模型请求、零业务动作），冻结目标字节被 `validate_task_instruction` 确定性拒绝且 research 合同禁止改字节，站停于不可继续阻塞（[attempt-summary](verify_results/strategy2-observation-feedback-20261112-r01/wiki-run/attempt-summary.json)）。**本轮实现无真实验证通过结论。**
+
+2026-11-12 策略2观察反馈与完成收尾优化已整理为[待实施 SSD](docs/策略2观察反馈与完成收尾优化SSD-20261112.md)及[实施与双站各五次验证 Prompt](docs/策略2观察反馈优化实施与双站各五次验证Prompt-20261112.md)：路线驱动关键观察、累计证据上下文、按需历史补图、及时完成和首次标注一致性。本次仅落文档；下一 Agent 的有界验证范围为 Muxtly、Wiki 各最多五次，尚未启动。
+
 2026-11-12 三个活跃工作区的改动统一收口到主目录 `main`：保留主目录最新证据与 UNKNOWN 修复，整合 Wiki 阅读/角标修复和生产者 `--seeds-file` 轮转派发。仅做受影响的离线核心检查，不启动采集；取舍、测试与备份见[合并记录](docs/工作区改动合并与main收口-20261112.md)。
 
 2026-11-12 策略2统一收口：首轮完整规划、可引用历史证据、宿主自动输入核验、当前结果终态与动作相关标注生成已集中修改。真实复验按本轮最多五次授权执行，旧成功样本和生产计数保留；研发新尝试另存。方案、验收边界和实际进展见[统一修复记录](docs/规划证据终态与标注统一修复-20261112.md)。

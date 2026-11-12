@@ -31,8 +31,8 @@ class CompletionCoreTests(substrate.SessionHarness):
                 'visible': True, 'enabled': True, 'inputable': False, 'clickable': False,
                 'parent_id': 'root', 'scrollable': False, 'state': 'default'})
 
-    async def _session(self, choose, requirements=None):
-        root = self.root / 'evidence' / 'S000001_sample_000201'
+    async def _session(self, choose, requirements=None, name='S000001_sample_000201'):
+        root = self.root / 'evidence' / name
         session = ScreenshotPlanSession(self.task, root / 'raw', choose, self.page,
             steps_directory=root, attempt_id='completion-core-attempt')
         await session._open_entry()
@@ -106,6 +106,19 @@ class CompletionCoreTests(substrate.SessionHarness):
         await session._observe()
         await session._checkpoint('content_visible')
         self.assertEqual(set(session.verified_answers), {'r1', 'r2', 'i1'})
+        # The accepted revise (prompts[1]) replaced the plan tail. A requirement
+        # still unmet at a later revise re-anchors its route to the new tail;
+        # verified ones stay untouched, and the sealed first plan keeps its
+        # original observation steps (SSD 3.1).
+        self.assertEqual(session.route_map, [None])
+        r2_answer = session.verified_answers.pop('r2')
+        session._reanchor_routes()
+        self.assertEqual(session.route_overrides, {'r2': [1]})
+        session.verified_answers['r2'] = r2_answer
+        session.route_overrides = {}
+        goal_prompt = session._branch_prompt('result')
+        self.assertNotIn('continue', goal_prompt['choices'])
+        self.assertIn('goal_ready', goal_prompt['next_checkpoint'])
         self.assertNotEqual(prompts[0]['current_observation'], prompts[1]['current_observation'])
         await session._checkpoint('plan_end')
         self.assertEqual(session.collection_ending['kind'], READY_ENDING)
@@ -170,7 +183,7 @@ class CompletionCoreTests(substrate.SessionHarness):
             'arguments': {'text': '20'}, 'target': {'control_id': 'control-0'},
             'before_observation_id': before, 'after_observation_id': entered, 'effective': True})
         self.surface.state['elements'].append({
-            'element_id': 'result', 'text': '利润率：40%', 'native_role': 'status',
+            'element_id': 'result', 'text': '40% 60% 80%', 'native_role': 'status',
             'element_type': 'text', 'bbox': [10, 510, 800, 560], 'visible': True,
             'enabled': True, 'inputable': False, 'clickable': False, 'parent_id': 'root'})
         formula = '本工具核算方法：输入数量先除以0.5，得到利润率百分数。'
@@ -187,15 +200,57 @@ class CompletionCoreTests(substrate.SessionHarness):
             'arguments': {}, 'target': {'control_id': 'submit'},
             'before_observation_id': entered, 'after_observation_id': result, 'effective': True})
         await session._decide(session._branch_prompt('result'))
-        application = {'answers': [{'requirement_id': 'r1', 'observed_result': '利润率：40%',
-            'evidence': [{'observation': result, 'quote': '利润率：40%'}]}]}
+        self.assertTrue(any(row['observation'] == result
+                            for row in session._candidate_results()))
+
+        # A result frame already supplied to the model is still the visual
+        # evidence after a scroll removes that result from the current viewport.
+        # Text-only candidates cannot replace reattaching this historical image.
+        result_element = next(row for row in self.surface.state['elements']
+                              if row['element_id'] == 'result')
+        result_element['visible'] = False
+        await session._observe()
+        scrolled = session.current['observation_id']
+        scroll_row = {'operation_id': 'scroll-result-away', 'action': 'scroll',
+                      'arguments': {'direction': 'down'}, 'effective': True,
+                      'before_observation_id': result, 'after_observation_id': scrolled}
+        session.position = 3
+        session.route_map = [1, 2, 3]
+        session.route_frames = {3: result}
+        self.assertEqual(session._progress_checkpoint_reason(scroll_row),
+                         'historical_result_pending')
+        session.route_overrides = {'r1': [3]}
+        self.assertIn(result, session.provided_observations)
+        choose.max_images = 2
+        visual = await session._key_evidence_visual()
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual['observation_id'], result)
+        self.assertEqual(visual['requirement_id'], 'r1')
+        result_element['visible'] = True
+        self.surface.state['visible_text'] = self.surface.state['visible_text'].replace('40% 60% 80%', '')
+        self.surface.state['visible_text'] += '\n利润率：\n40%\n总利息：\n60%\n总还款：\n80%'
+        await session._observe()
+        session.route_overrides = {}
+        application = {'answers': [{'requirement_id': 'r1', 'observed_result': '40% 60% 80%',
+            'evidence': [{'observation': result, 'quote': '40% 60% 80%'}]}]}
         # A region reference allows a short actual result without weakening the
         # minimum length of free-form quote anchors.
-        region = next(r for r in session.region_registries[result] if '利润率' in r['quote'])
+        region = next(r for r in session.region_registries[result] if '40%' in r['quote'])
         application['answers'][0]['evidence'] = [{'observation': result, 'region': region['region_id']}]
         checks, gaps = verify_completion(session, application, requirement)
         self.assertEqual(gaps, [])
         self.assertEqual(len(checks), 1)
+        # Sibling values are concatenated in the semantic result node while
+        # their labels remain interleaved in the page's full visible text.
+        final_visible, final_gaps = verify_final_presentation(session, checks, requirement)
+        self.assertEqual(final_gaps, [])
+        self.assertEqual(final_visible[0]['quote'], '40% 60% 80%')
+        result_element['visible'] = False
+        await session._observe()
+        _, final_gaps = verify_final_presentation(session, checks, requirement)
+        self.assertEqual([row['kind'] for row in final_gaps], ['FINAL_RESULT_NOT_VISIBLE'])
+        result_element['visible'] = True
+        await session._observe()
         from webcollect.screenshot_execution import bind_plan_targets
         input_requirement = {'id': 'i1', 'kind': 'input', 'description': '数量为20',
                              'target': {'control': 'control-0'}, 'expected_value': '20'}
@@ -231,7 +286,49 @@ class CompletionCoreTests(substrate.SessionHarness):
             checks, gaps = verify_completion(session, application, requirement)
             self.assertEqual(checks, [])
             self.assertIn('RESULT_EVIDENCE_SUPERSEDED', {gap['kind'] for gap in gaps})
+            self.assertFalse(any(item['observation'] == result
+                                 for item in session._candidate_results()))
             session.trajectory.pop()
+
+        # An executed-route key frame the model never saw is attached as one
+        # historical supplement (SSD 3.3): verifiable, evidence-only, and it
+        # never rebinds current dispatch targets. The image limit keeps the
+        # current viewport mandatory.
+        session.route_map = [1, 2, 3]
+        session.route_frames = {2: entered, 3: result}
+        session.position = 2
+        session.requirements.append({'id': 'r2', 'kind': 'content',
+            'description': '阅读页面的公式说明', 'evidence_route': {
+                'source_type': 'page_content', 'observation_steps': [2]}})
+        choose.max_images = 2
+        visual = await session._key_evidence_visual()
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual['observation_id'], entered)
+        choose.max_images = 1
+        limited_prompt = session._branch_prompt('history_capacity')
+        await session._decide(limited_prompt)
+        self.assertEqual(limited_prompt['history_supplement_unavailable']['kind'], 'IMAGE_LIMIT')
+        self.assertEqual(len(limited_prompt['_images']), 1)
+        choose.max_images = 2
+        prompt = session._branch_prompt('result')
+        self.assertTrue(any('40%' in row['text'] for row in prompt['candidate_results']))
+        await session._decide(prompt)
+        self.assertEqual(prompt['screenshots'][0], session.current['observation_id'])
+        self.assertIn(entered, prompt['screenshots'])
+        self.assertIn(entered, session.provided_observations)
+        historical = next(row for row in prompt['visual_evidence'] if row['observation_id'] == entered)
+        from webcollect.screenshot_observation import verify_visuals
+        self.assertEqual(verify_visuals(session.observation_records[entered], [historical]),
+                         [historical['path']])
+        # Controls in the request all belong to the current frame; the historical
+        # observation is referenceable as evidence, never as a dispatch target.
+        self.assertTrue(all(row['control'] in session.current['controls'] for row in prompt['controls']))
+        observation_enum = prompt['tools'][0]['function']['parameters']['properties']['answers'][
+            'items']['properties']['evidence']['items']['properties']['observation']['enum']
+        self.assertIn(entered, observation_enum)
+        self.assertEqual(session._bind_target({'target': {'control': 'submit', '_source': {
+            'observation_id': entered, 'document_identity': 'another-document',
+            'control_id': 'submit', 'binding': {}, 'text': '计算', 'role': 'button', 'labels': []}}}), [])
 
     async def test_valid_complete_wins_at_stall_threshold(self):
         async def choose(prompt):
@@ -239,7 +336,7 @@ class CompletionCoreTests(substrate.SessionHarness):
                 'answers': [self._answer(prompt['current_observation'], 0)]}}
 
         session = await self._session(choose, [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'}])
-        session._stall_marker = session._progress_marker()
+        session._stall_marker = session._stall_progress_marker()
         session._stall_count = NO_PROGRESS_STALL_LIMIT
         await session._checkpoint('plan_end')
         self.assertEqual(session.collection_ending['kind'], READY_ENDING)
@@ -260,10 +357,12 @@ class CompletionCoreTests(substrate.SessionHarness):
         # The accepted first plan already received this frame. Its first text
         # read is part of the baseline, before simulating a no-effect dispatch.
         session.provided_observations.add(session.current['observation_id'])
-        session._stall_marker = session._progress_marker()
+        session._stall_marker = session._stall_progress_marker()
         before_refresh = session._stall_marker
+        self.surface.state['elements'].append({**self.surface.state['elements'][-1],
+            'element_id': 'live-advertisement', 'text': '广告倒计时变化，不是任务证据'})
         await session._observe()
-        self.assertEqual(before_refresh, session._progress_marker())
+        self.assertEqual(before_refresh, session._stall_progress_marker())
         session._stall_count = NO_PROGRESS_STALL_LIMIT - 1
         session.actual_dispatches += 1  # Dispatched without an established effect.
         session.position = 1          # Cursor bookkeeping is not business progress.
@@ -296,6 +395,53 @@ class CompletionCoreTests(substrate.SessionHarness):
         corrected = load_json(session.current['evidence']['state']['path'])
         conflict, _ = session._repeat_guard(step, ['control-0'], corrected, None)
         self.assertIsNone(conflict)
+
+        # 完成缺项投影纳入停滞核算：缺项减少是真实展示进展；同缺项的重复
+        # complete 仍在第二次有界结束（SSD 2026-11-12 收口计划 B.2）。
+        fresh = await self._session(choose, name='S000001_sample_000202')
+        fresh.provided_observations.add(fresh.current['observation_id'])
+        fresh._completion_gap_projection = (('FINAL_RESULT_NOT_VISIBLE', 'r1'),
+                                            ('FINAL_RESULT_NOT_VISIBLE', 'r2'))
+        fresh._stall_check({'decision': 'complete'}, None)
+        fresh._completion_gap_projection = (('FINAL_RESULT_NOT_VISIBLE', 'r2'),)
+        fresh._stall_check({'decision': 'complete'}, None)
+        self.assertIsNone(getattr(fresh, 'collection_ending', None))
+        fresh._stall_check({'decision': 'complete'}, None)
+        self.assertEqual(fresh.collection_ending['kind'], 'NO_PROGRESS_END')
+
+        # 必要定位许可：展示定位只允许确定不改变已核验事实的首步；编辑、提交、
+        # 焦点按键与离开文档的导航不放行；点击只按明确展示控件事实判定。
+        self.surface.state['elements'].append({
+            'element_id': 'submit', 'text': '计算', 'native_role': 'button',
+            'element_type': 'button', 'bbox': [10, 450, 210, 490], 'visible': True,
+            'enabled': True, 'clickable': True, 'inputable': False, 'parent_id': 'root'})
+        self.surface.state['capture_controls'].append({'element_id': 'submit',
+            'selector': '#submit', 'tag': 'button', 'input_type': 'submit',
+            'form_selector': '#calculator'})
+        positioned = await self._session(choose, name='S000001_sample_000203')
+        # 生产顺序：revise 接受前已 _bind_targets_feedback，target 带 _source。
+        from webcollect.screenshot_execution import bind_plan_targets
+        click_input = [{'action': 'click', 'target': {'control': 'control-0'}}]
+        retype = [{'action': 'type', 'target': {'control': 'control-0'}, 'value': '6'}]
+        submit_click = [{'action': 'click', 'target': {'control': 'submit'}}]
+        for bound in (click_input, retype, submit_click):
+            bind_plan_targets({'steps': bound}, positioned.current)
+        self.assertTrue(positioned._presentation_repair_permitted(
+            [{'action': 'scroll', 'direction': 'up'}]))
+        self.assertTrue(positioned._presentation_repair_permitted(
+            [{'action': 'wait', 'duration_ms': 1}]))
+        self.assertFalse(positioned._presentation_repair_permitted(click_input))
+        self.assertFalse(positioned._presentation_repair_permitted(
+            [{'action': 'hotkey', 'keys': ['home']}]))
+        self.assertFalse(positioned._presentation_repair_permitted(retype))
+        self.assertFalse(positioned._presentation_repair_permitted(submit_click))
+        self.assertFalse(positioned._presentation_repair_permitted(
+            [{'action': 'hotkey', 'keys': ['enter']}]))
+        self.assertFalse(positioned._presentation_repair_permitted(
+            [{'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'control': 'control-0'}}]))
+        self.assertFalse(positioned._presentation_repair_permitted(
+            [{'action': 'open_url', 'page_id': 'p2'}]))
+        self.assertFalse(positioned._presentation_repair_permitted([]))
 
     def test_rationale_quotes_must_exist_in_the_current_frame(self):
         frame = '搜索结果\n金额 100 元\n下一页'
@@ -334,6 +480,12 @@ class CompletionCoreTests(substrate.SessionHarness):
         checks, gaps = verify_completion(session, answers(self.texts[0]), requirement)
         self.assertEqual(gaps, [])
         self.assertEqual(len(checks), 1)
+        region = next(r for r in session.region_registries[oid] if r['quote'] == self.texts[0])
+        combined = answers(self.texts[0])
+        combined['answers'][0]['evidence'][0].update(region=region['region_id'], quote='拼接标签 ' + self.texts[0])
+        _, gaps = verify_completion(session, combined, requirement)
+        self.assertEqual(gaps[0]['kind'], 'EVIDENCE_QUOTE_NOT_IN_REGION')
+        self.assertIn(self.texts[0], gaps[0]['available_quotes'])
 
         # Inline links split element text; the clipped paragraph still proves
         # the full sentence, while hidden sentence suffixes remain inadmissible.
@@ -358,9 +510,14 @@ class CompletionCoreTests(substrate.SessionHarness):
         derived = [{**reading[0], 'evidence_route': {'source_type': 'derived_check'}}]
         _, gaps = verify_completion(session, answers(self.texts[0]), derived)
         self.assertIn('CALCULATION_REQUIRED', [row['kind'] for row in gaps])
+        # An explicit independent-derivation obligation still demands arithmetic;
+        # mere “计算并核对” wording is page-output confirmation (SSD 3.5).
+        _, gaps = verify_completion(session, answers(self.texts[0]), [
+            {**reading[0], 'description': '根据数量验算并核对换算过程'}])
+        self.assertIn('CALCULATION_REQUIRED', [row['kind'] for row in gaps])
         _, gaps = verify_completion(session, answers(self.texts[0]), [
             {**reading[0], 'description': '根据数量计算并核对体积'}])
-        self.assertIn('CALCULATION_REQUIRED', [row['kind'] for row in gaps])
+        self.assertEqual(gaps, [])
 
     async def test_cited_control_from_an_earlier_frame_removes_continue(self):
         async def choose(prompt):
@@ -378,3 +535,79 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertNotIn('continue', decision_enum)
         step['target']['_source']['document_identity'] = session.current['document_identity']
         self.assertIn('continue', session._branch_prompt('navigation_checkpoint')['choices'])
+
+        # 首屏只拒绝确定的首步重复输入；标题/局部引文不能证明滚动多余
+        # 或正文目标完成。计划接受与完成核验分别断言，不派发业务动作。
+        async def first_plan(plan, name):
+            root = self.root / 'evidence' / name
+            plan = deepcopy(plan)
+
+            async def submit(prompt):
+                return {'arguments': deepcopy(plan)}
+
+            fresh = ScreenshotPlanSession(self.task, root / 'raw', submit, self.page,
+                                          steps_directory=root, attempt_id=name.lower())
+            await fresh._open_entry()
+            for requirement in plan.get('requirements', []):
+                for anchor in requirement.get('evidence_route', {}).get('existing_evidence', []):
+                    if anchor.get('observation') == '首帧':
+                        anchor['observation'] = fresh.current['observation_id']
+            await fresh._first_plan_round()
+            return fresh
+
+        redundant_plan = {
+            'goal': '修改成本为20并查看利润率',
+            'final_presentation_step': 5,
+            'requirements': [{'id': 'r1', 'kind': 'result', 'description': '查看本次利润率结果',
+                              'evidence_route': {'source_type': 'page_result', 'observation_steps': [5]}}],
+            'steps': [
+                {'action': 'type', 'target': {'control': 'control-0'}, 'value': '10',
+                 'expected_value': '10', 'purpose': '重复输入数量框已有值',
+                 'rationale': '数量框当前已显示该值', 'expected_result': '数量仍为原值'},
+                {'action': 'scroll', 'direction': 'down', 'purpose': '滚动查看「数量」与「成本」',
+                 'rationale': '核对输入区当前状态',
+                 'expected_result': '「这里查看当前输入内容与页面状态。」进入视口'},
+                {'action': 'click', 'target': {'control': 'control-1'}, 'purpose': '聚焦成本输入框',
+                 'rationale': '成本需要输入新值', 'expected_result': '成本输入框获得焦点'},
+                {'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'control': 'control-1'},
+                 'purpose': '全选成本原值', 'rationale': '替换前需要全选', 'expected_result': '原值被选中'},
+                {'action': 'type', 'target': {'control': 'control-1'}, 'value': '20',
+                 'expected_value': '20', 'purpose': '输入成本20',
+                 'rationale': '本次计算使用成本20', 'expected_result': '成本显示为20'}]}
+        rejected = await first_plan(redundant_plan, 'S000001_sample_000204')
+        self.assertEqual(rejected.initial_feedback['kind'], 'FIRST_FRAME_REDUNDANT_STEPS')
+        self.assertEqual([row['step_index'] for row in rejected.initial_feedback['redundant']], [0])
+        self.assertEqual(rejected.initial_feedback['effective_business'], 4)
+        self.assertIsNone(rejected.plan)
+        self.assertIsNone(getattr(rejected, 'collection_ending', None))
+
+        anchored_plan = {
+            'goal': '确认数量默认值并阅读页面说明',
+            'final_presentation_step': 2,
+            'requirements': [
+                {'id': 'i1', 'kind': 'input', 'description': '数量保持默认10',
+                 'target': {'control': 'control-0'}, 'expected_value': '10',
+                 'evidence_route': {'source_type': 'input_state', 'observation_steps': [1]}},
+                {'id': 'c1', 'kind': 'content', 'description': '阅读页面状态说明',
+                 'evidence_route': {'source_type': 'page_content',
+                                    'existing_evidence': [{'observation': '首帧',
+                                        'quote': '这里查看当前输入内容与页面状态。'}]}}],
+            'steps': [
+                {'action': 'click', 'target': {'control': 'control-0'}, 'purpose': '聚焦数量输入框',
+                 'rationale': '确认默认值需要聚焦', 'expected_result': '数量输入框获得焦点'},
+                {'action': 'click', 'target': {'control': 'control-1'}, 'purpose': '聚焦成本输入框',
+                 'rationale': '核对另一输入', 'expected_result': '成本输入框获得焦点'},
+                {'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'control': 'control-1'},
+                 'purpose': '全选成本', 'rationale': '准备核对', 'expected_result': '成本原值被选中'},
+                {'action': 'type', 'target': {'control': 'control-1'}, 'value': '10',
+                 'expected_value': '10', 'purpose': '成本保持原值',
+                 'rationale': '成本当前已是该值', 'expected_result': '成本仍为原值'},
+                {'action': 'scroll', 'direction': 'down', 'purpose': '滚动阅读页面说明',
+                 'rationale': '说明在页面下方', 'expected_result': '说明文字进入视口'}]}
+        anchored = await first_plan(anchored_plan, 'S000001_sample_000205')
+        self.assertIsNone(anchored.initial_feedback)
+        self.assertIsNotNone(anchored.plan)
+        self.assertEqual(len(anchored.plan['steps']), 5)
+        self.assertEqual(anchored.verified_checks, {})
+        self.assertFalse(anchored._goal_ready())
+        self.assertEqual(anchored.actual_dispatches, 0)

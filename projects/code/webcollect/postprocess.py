@@ -606,6 +606,19 @@ def terminal_judgement(completion_status, final_result):
     return prefix + final_result
 
 
+def _visible_proof_quote(state, quote, node_id=None, *, causal_result=False):
+    # Completion accepts clipped paragraph whitespace and result values with
+    # labels interleaved in the viewport. Narration must use that same evidence.
+    from .screenshot_plan import _flat, _visible_node_texts, _result_tokens_visible
+    if quote in state.get('visible_text', ''):
+        return True
+    return any(quote in _visible_node_texts(state, node)
+        and (_flat(quote) in _flat(state.get('visible_text', ''))
+             or _result_tokens_visible(state, node, quote, causal_result=causal_result))
+        for node in state.get('elements', [])
+        if node_id is None or node.get('element_id') == node_id)
+
+
 def planned_terminal_narrative(record, final_state, final_id):
     """Describe verified goal evidence separately from the final viewport.
 
@@ -617,6 +630,12 @@ def planned_terminal_narrative(record, final_state, final_id):
     if evidence.get('business_goal_status') == 'VERIFIED' and checks:
         basis = []
         verified_results = []
+        submitted = {}
+        completion_ref = evidence.get('screenshot_completion')
+        if completion_ref:
+            verify_evidence([completion_ref])
+            submitted = {row['requirement_id']: row for row in
+                (load_json(completion_ref['path']).get('application') or {}).get('answers', [])}
         final_visible = final_state.get('visible_text', '')
         operations = {row['operation_id']: row for row in record['trajectory']}
         for check in checks:
@@ -658,7 +677,8 @@ def planned_terminal_narrative(record, final_state, final_id):
                 if observation_id not in record['observations'] or not quote:
                     continue
                 state = _observation_state(record, observation_id)
-                if quote not in state.get('visible_text', ''):
+                if not _visible_proof_quote(state, quote, item.get('node'),
+                        causal_result=bool(item.get('post_submit_causality'))):
                     continue
                 quotes.append(quote)
                 action_ids.extend(ref['operation_id'] for ref in item.get('action_refs') or []
@@ -678,13 +698,15 @@ def planned_terminal_narrative(record, final_state, final_id):
                     + '；完整来源与计算证据保留在原执行记录中')
             else:
                 cited = list(dict.fromkeys(quotes))
-                short_quotes = [quote for quote in cited if len(quote) <= 100]
+                short_quotes = cited
                 if short_quotes:
-                    verified_results.append('页面结果：' + '、'.join(short_quotes))
+                    answer = str(submitted.get(check.get('requirement_id'), {}).get('observed_result') or '')
+                    displayed = answer if answer and any(answer in quote for quote in cited) else '、'.join(cited)
+                    verified_results.append(str(check.get('field') or '页面结果') + '：' + displayed)
                 else:
                     verified_results.append('已核对原目标所需的页面内容')
-                in_final = [quote for quote in short_quotes if quote in final_visible]
-                earlier = [quote for quote in short_quotes if quote not in final_visible]
+                in_final = [quote for quote in short_quotes if _visible_proof_quote(final_state, quote)]
+                earlier = [quote for quote in short_quotes if quote not in in_final]
                 if in_final:
                     basis.append('末帧可见' + '、'.join('「' + quote + '」' for quote in in_final))
                 if earlier:
@@ -699,7 +721,7 @@ def planned_terminal_narrative(record, final_state, final_id):
         if current_quotes:
             basis.append('完成时当前页面可见' + '、'.join('「' + quote + '」' for quote in current_quotes))
         return {'final_result': final_result,
-                'completion_judgement': '原目标各项核验依据：' + '；'.join(basis) + '。',
+                'completion_judgement': '原目标各项核验依据：' + '；'.join(dict.fromkeys(basis)) + '。',
                 'basis': checks, 'is_ai_review': False}
     objective = evidence.get('session_objective') or {}
     completion = objective.get('completion') or {}
@@ -819,6 +841,10 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
             {'completion_status': completion_status, 'short_flow': short,
              'steps': [{'action': {'action_type': row['action']}} for row in trajectory]},
             raw_execution)
+    if complete_only and preflight['delivery_eligible'] and terminal_narrative is None:
+        if isinstance(record.get('_derivation_facts'), dict):
+            record['_derivation_facts']['save_eligibility'] = 'eligible'
+        raise ValueError('Verified complete execution has no grounded terminal narrative')
     if complete_only and (not preflight['delivery_eligible'] or terminal_narrative is None):
         # A safe fragment, controlled exception or missing result narrative is
         # internal raw evidence only; do not create formal annotation files.
@@ -940,11 +966,25 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     write_json_file(delivery / f'ui_tree/step_{effective + 1:03}.json',
                     {'image_path': final_image, 'screen_resolution': final_state['screen_resolution'],
                      'elements': final_state['elements']})
-    final_goal = '确认本段结束页面，' + final_description
+    # The complete step states its own ending duties: purpose is the short act of
+    # ending, rationale is why stopping now is justified, expected keeps the
+    # result frame; none of them repeats the whole final conclusion (SSD 3.7).
+    from .collection_strategy import enabled as _screenshot_enabled
+    screenshot_task = _screenshot_enabled(task)
+    if screenshot_task:
+        final_goal = '确认结果并结束本次任务'
+        complete_expected = '预期结束本次任务，当前画面保留支持结论的结果或正文。'
+        complete_rationale = '当前结果可核验且原目标剩余事项已完成，可以结束任务。'
+        complete_result = '已结束本次任务；结束画面：' + final_description
+    else:
+        final_goal = '确认本段结束页面，' + final_description
+        complete_expected = final_description
+        complete_rationale = final_description
+        complete_result = '最终页面已确认，' + final_goal
     complete_action = {'action_type': 'complete', 'target_element_id': '', 'target_text': '',
                        'coordinate': [], 'input_text': '',
                        'precondition': f'当前页面为「{final_state["title"]}」',
-                       'expected_result': final_description}
+                       'expected_result': complete_expected}
     steps.append({'step_id': effective + 1, 'image_path': final_image,
                   'ui_tree_path': f'ui_tree/step_{effective + 1:03}.json',
                   'page_name': '网页「' + final_state['title'] + '」',
@@ -954,8 +994,8 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
                                 'timestamp': final_timestamp,
                                 'context': 'Web / ' + (urlsplit(final_state['url']).hostname if task['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL else task['app_name'])},
                   'tool_result': {'status': 'success', 'return_value': {}, 'error': ''},
-                  'next_step_rationale': final_description,
-                  'step_result': '最终页面已确认，' + final_goal,
+                  'next_step_rationale': complete_rationale,
+                  'step_result': complete_result,
                   'exception_evidence': []})
     if record.get('trusted_prefix'):
         steps[-1]['exception_evidence']=['原始执行未确认完整目标完成；本样本仅保留连续可信操作区间，按可控异常交付。']
@@ -973,8 +1013,9 @@ def _derive_verified(task, record, trajectory, delivery, ids, manifest, *, resum
     completion_judgement = terminal_judgement(completion_status, final_result) if native else final_result
     if terminal_narrative:
         completion_judgement = terminal_narrative['completion_judgement']
-        steps[-1]['next_step_rationale'] = completion_judgement
-        steps[-1]['action']['expected_result'] = '预期结束页面保留本次操作的最终状态，可据已保存的任务证据核对完成情况。'
+        if not screenshot_task:
+            steps[-1]['next_step_rationale'] = completion_judgement
+            steps[-1]['action']['expected_result'] = '预期结束页面保留本次操作的最终状态，可据已保存的任务证据核对完成情况。'
     from .trajectory_types import classify
     actual_types=classify(record) if task['fragment'].get('planning_intent_protocol') else {'task_type':task['task_type'],'status':'LEGACY'}
     result['actual_task_types']=actual_types

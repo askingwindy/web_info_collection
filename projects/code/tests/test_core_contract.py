@@ -247,6 +247,37 @@ class CandidatePoolContract(unittest.TestCase):
             self.assertEqual(claim['candidate_id'], cid)
             self.assertEqual(claim['snapshot']['schema_version'], 'webcollect-data-candidate-2')
 
+            # The current task-generation marker must drive the Table2 entry
+            # projection. A redirect/pilot URI cannot silently replace the claim.
+            from webcollect.site_pool_sync import _page, _projection_candidate, _projection_uri
+            projected = {'site_uri': 'https://example.org/redirected-after-entry',
+                         'workflow_proposal': {'spec': {'consumer_projection': 'table2-entry'}},
+                         'candidate_binding': {
+                             'candidate_id': claim['candidate_id'], 'claim_id': claim['claim_id'],
+                             'version': claim['version'], 'candidate': claim['snapshot']}}
+            self.assertEqual(_projection_uri(projected), body['entry_url'])
+            self.assertEqual(_projection_candidate(projected), {
+                'candidate_id': cid, 'claim_id': claim['claim_id'], 'version': claim['version']})
+
+            # A Table2-only entry has no prebuilt Table1 page. Its verified
+            # original claim supplies the stable page identity for synchronization.
+            with pool.pool.connect() as connection:
+                application_id = connection.execute(
+                    'SELECT application_id FROM data_candidates WHERE candidate_id=?', (cid,)).fetchone()[0]
+            only_body = {**body, 'entry_url': 'https://example.org/table2-only',
+                         'requested_goal': {'kind': 'edit', 'entity': 'fields',
+                                            'parameters': {'quantity': 2}}}
+            only_cid, _ = pool._put_v2(only_body, {'origin': 'codex_session',
+                'run_id': 'offline-core-tests', 'references': [reference(proof)]},
+                application_id=application_id)
+            only_claim = pool.claim_next('core-test-worker', 'core/projection-only')
+            self.assertEqual(only_claim['candidate_id'], only_cid)
+            projected['candidate_binding'] = {
+                'candidate_id': only_cid, 'claim_id': only_claim['claim_id'],
+                'version': only_claim['version'], 'candidate': only_claim['snapshot']}
+            page_id, _ = _page(pool.pool, only_body['entry_url'], _projection_candidate(projected))
+            self.assertEqual(page_id, only_cid)
+
             # Two producers race for one remaining per-application NEW slot.
             # The limit is rechecked in the same transaction as publication.
             with pool.pool.connect() as connection:
@@ -276,7 +307,8 @@ class CandidatePoolContract(unittest.TestCase):
                 count = connection.execute(
                     'SELECT COUNT(*) FROM data_candidates WHERE application_id=?',
                     (application_id,)).fetchone()[0]
-            self.assertEqual(count, 2)  # The original roundtrip row plus exactly one raced NEW.
+            # Two controlled rows plus exactly one raced NEW.
+            self.assertEqual(count, 3)
 
     def test_seeded_producer_plan_launch_keeps_sources_and_serial_prepare(self):
         from unittest.mock import patch

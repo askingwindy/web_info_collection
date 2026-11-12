@@ -319,12 +319,59 @@ def cited_control(observation, cited, allowed):
     return None, None
 
 
-def bind_plan_targets(plan, observation, allowed_ids=None):
+def _normalize_node_target(target, observation, allowed, normalization):
+    node = target.get('node')
+    if not node:
+        return
+    cid, mark = cited_control(observation, node, allowed)
+    controls = observation.get('controls', {})
+    if cid is None:
+        # Prose is a determinate alias only when one current rendered control
+        # matches its actual label and every explicit role/href constraint.
+        from .screenshot_plan import _flat
+        matches = []
+        for key in allowed:
+            c = controls.get(key, {}); e = c.get('element', {})
+            if e.get('visible') is not True or not roles_equivalent(target.get('role'), e.get('native_role')):
+                continue
+            if target.get('href') and c.get('binding', {}).get('href') != target['href']:
+                continue
+            labels = [r['text'] for r in c.get('readable_labels', [])
+                      if r.get('kind') != 'visible_native_value']
+            if e.get('text') and not e.get('inputable'):
+                labels.append(e['text'])
+            if target.get('text') and target['text'] not in labels + [e.get('text')]:
+                continue
+            role_alias = node in ('input', 'select', 'textarea', 'button', 'a') and roles_equivalent(node, e.get('native_role'))
+            if role_alias or any(len(_flat(label)) >= 2 and _flat(label) in _flat(node) for label in labels):
+                matches.append(key)
+        cid = matches[0] if len(matches) == 1 else None
+    if cid is None:
+        candidates = [{'control': key, 'text': controls[key].get('element', {}).get('text'),
+                       'labels': [r['text'] for r in controls[key].get('readable_labels', [])]}
+                      for key in sorted(allowed) if key in controls]
+        import json
+        raise ValueError('TARGET_NODE_NOT_UNIQUELY_BOUND: node='+repr(node)+
+            '; use text for a rendered label or control for its current ID; current candidates='+
+            json.dumps(candidates, ensure_ascii=False))
+    if target.get('control'):
+        explicit, _ = cited_control(observation, target['control'], allowed)
+        if explicit != cid:
+            raise ValueError('CONTROL_TARGET_CONFLICT: node and control identify different current controls')
+    target.pop('node')
+    target.setdefault('control', cid)
+    normalization.append({'field': 'target.node', 'original': node, 'control': cid,
+                          'observation': observation['observation_id'], 'transform': 'unique_current_control_alias'})
+
+
+def bind_plan_targets(plan, observation, allowed_ids=None, *, normalization=None):
     """Snapshot host provenance at plan acceptance, including drag endpoints."""
     allowed = set(allowed_ids if allowed_ids is not None else observation.get('provided_control_ids', []))
+    normalization = normalization if normalization is not None else []
     for step in [*plan.get('steps', []), *[r for r in plan.get('requirements', []) if r.get('kind') == 'input']]:
         for key in ('target', 'end_target'):
             target = step.get(key) or {}
+            _normalize_node_target(target, observation, allowed, normalization)
             cited = target.get('control')
             mark = None
             if cited:

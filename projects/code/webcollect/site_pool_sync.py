@@ -84,14 +84,14 @@ def _projection_uri(task):
     # New consumer tasks project against the producer's original candidate
     # page. A proved redirect remains attempt evidence; it never requires a
     # consumer-created Table1 page. Old frozen tasks keep their original map.
-    if (task.get('workflow_proposal',{}).get('spec',{}).get('consumer_projection') in ('candidate-entry-1','table2-entry-2')
+    if (task.get('workflow_proposal',{}).get('spec',{}).get('consumer_projection') in ('candidate-entry-1','table2-entry')
             and task.get('candidate_binding')):
         return task['candidate_binding']['candidate']['entry_url']
     return task.get('pilot_identity', {}).get('task_page', {}).get('canonical_uri', task['site_uri'])
 
 
 def _projection_candidate(task):
-    if task.get('workflow_proposal', {}).get('spec', {}).get('consumer_projection') == 'table2-entry-2':
+    if task.get('workflow_proposal', {}).get('spec', {}).get('consumer_projection') == 'table2-entry':
         binding = task['candidate_binding']
         return {k:binding[k] for k in ('candidate_id','claim_id','version')}
 

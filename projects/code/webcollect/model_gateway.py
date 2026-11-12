@@ -418,31 +418,67 @@ def validate_branch(value, schema):
 
 def schema_error_feedback(error):
     """Report field errors, never a whole plan dump from a oneOf parent."""
+    return schema_errors_feedback([error])
+
+
+def schema_errors_feedback(errors):
+    """Flatten all independent validation errors into precise, deduplicated feedback."""
     from jsonschema.exceptions import best_match, ValidationError
-    if not isinstance(error,ValidationError):
-        return [{'field_path':[], 'detail':str(error).splitlines()[0][:350]}]
-    current = best_match([error])
     leaves = []
     def visit(e):
         if e.context:
-            for child in e.context: visit(child)
-        else:
-            path=list(e.absolute_path)
-            if e.validator=='const': return
-            # An action union has irrelevant branches; keep the declared action.
-            schema=e.schema if isinstance(e.schema,dict) else {}
-            instance=e.instance
-            action=(schema.get('properties',{}).get('action') or {}).get('const')
-            if action and isinstance(instance,dict) and instance.get('action')!=action:return
-            if e.validator=='required':
-                missing=[k for k in e.validator_value if isinstance(instance,dict) and k not in instance]
-                if missing:path=path+[missing[0]]
-            if e.validator=='additionalProperties' and isinstance(instance,dict):
-                extras=sorted(set(instance)-set(schema.get('properties',{})))
-                if extras:path=path+[extras[0]]
-            leaves.append({'field_path':path,'detail':e.message[:350]})
-    visit(current)
-    return leaves[:6] or [{'field_path':list(getattr(error,'absolute_path',())), 'detail':getattr(error,'message',str(error).splitlines()[0])[:350]}]
+            selected = best_match([e])
+            # best_match may select the parent itself when no branch is better.
+            if selected is not e:
+                visit(selected)
+                return
+            for child in e.context:
+                visit(child)
+            return
+        path = list(e.absolute_path)
+        if e.validator == 'const':
+            return
+        schema = e.schema if isinstance(e.schema, dict) else {}
+        instance = e.instance
+        action = (schema.get('properties', {}).get('action') or {}).get('const')
+        if action and isinstance(instance, dict) and instance.get('action') != action:
+            return
+        detail = e.message[:350]
+        if e.validator == 'not' and isinstance(e.validator_value, dict):
+            forbidden = [branch['required'][0] for branch in e.validator_value.get('anyOf', [])
+                         if isinstance(branch, dict) and len(branch.get('required') or []) == 1]
+            if forbidden:
+                for field in forbidden:
+                    row = {'field_path': path + [field],
+                           'detail': (field + ' is not allowed for the selected decision; '
+                                      'remove it or use the decision branch that permits it')}
+                    if row not in leaves:
+                        leaves.append(row)
+                return
+        if e.schema is False:
+            schema_path = list(e.schema_path)
+            if 'properties' in schema_path:
+                index = len(schema_path) - 1 - schema_path[::-1].index('properties')
+                if index + 1 < len(schema_path):
+                    path = path + [schema_path[index + 1]]
+                    detail = (str(schema_path[index + 1]) + ' is not allowed for the selected decision; '
+                              'remove it or use the decision branch that permits it')
+        if e.validator == 'required':
+            missing = [k for k in e.validator_value if isinstance(instance, dict) and k not in instance]
+            if missing:
+                path = path + [missing[0]]
+        if e.validator == 'additionalProperties' and isinstance(instance, dict):
+            extras = sorted(set(instance) - set(schema.get('properties', {})))
+            if extras:
+                path = path + [extras[0]]
+        row = {'field_path': path, 'detail': detail}
+        if row not in leaves:
+            leaves.append(row)
+    for error in errors:
+        if not isinstance(error, ValidationError):
+            return [{'field_path': [], 'detail': str(error).splitlines()[0][:350]}]
+        visit(best_match([error]))
+    return leaves[:12] or [{'field_path': [], 'detail': 'Response does not match the declared schema'}]
 
 
 def native_generation_options(model, *, output_limit=None, reasoning_effort=None):
@@ -458,8 +494,8 @@ def native_generation_options(model, *, output_limit=None, reasoning_effort=None
     return result
 
 
-def field_repair_plan(error, arguments, schema, tool_name):
-    """One explicit leaf-field repair, using the original selected schema only."""
+def field_repair_plan(error, arguments, schema, tool_name, validation_errors=None):
+    """One bounded leaf-field repair covering all current independent errors."""
     from jsonschema.exceptions import ValidationError
     if not isinstance(error, ValidationError) or not isinstance(arguments, dict):
         return None
@@ -491,28 +527,33 @@ def field_repair_plan(error, arguments, schema, tool_name):
             for child in item.context:
                 yield from leaves(child)
         else:
+            schema = item.schema if isinstance(item.schema, dict) else {}
+            action = (schema.get('properties', {}).get('action') or {}).get('const')
+            if action and isinstance(item.instance, dict) and item.instance.get('action') != action:
+                return
             yield item
     fields = {}
-    for item in leaves(error):
-        path = list(item.absolute_path)
-        if not path:
-            return None
-        parent_schema, value = locate(path)
-        if parent_schema is None:
-            continue
-        if item.validator == 'required':
-            if not isinstance(value, dict):
+    for parent in validation_errors or [error]:
+        for item in leaves(parent):
+            path = list(item.absolute_path)
+            if not path:
+                return None
+            parent_schema, value = locate(path)
+            if parent_schema is None:
                 continue
-            missing = [key for key in parent_schema.get('required', []) if key not in value]
-            for key in missing:
-                child = parent_schema.get('properties', {}).get(key)
-                if isinstance(child, dict):
-                    fields[tuple(path + [key])] = child
-        elif item.validator in ('type', 'enum', 'minLength', 'maxLength', 'minimum', 'maximum', 'pattern'):
-            if list(Draft202012Validator(parent_schema).iter_errors(value)):
-                fields[tuple(path)] = parent_schema
-        elif item.validator not in ('const',):
-            return None
+            if item.validator == 'required':
+                if not isinstance(value, dict):
+                    continue
+                missing = [key for key in parent_schema.get('required', []) if key not in value]
+                for key in missing:
+                    child = parent_schema.get('properties', {}).get(key)
+                    if isinstance(child, dict):
+                        fields[tuple(path + [key])] = child
+            elif item.validator in ('type', 'enum', 'minLength', 'maxLength', 'minimum', 'maximum', 'pattern'):
+                if list(Draft202012Validator(parent_schema).iter_errors(value)):
+                    fields[tuple(path)] = parent_schema
+            elif item.validator not in ('const',):
+                return None
     # Whole plans/decisions and discriminators cannot be safely patched as fields.
     forbidden = {'steps', 'remaining_plan', 'requirements', 'answers', 'decision', 'action', 'goal'}
     if not fields or len(fields) > 6 or any(path[-1] in forbidden for path in fields):
@@ -991,6 +1032,7 @@ class ModelGateway:
             name = None
             arguments = None
             normalization_record = None
+            native_validation_errors = None
             transport_receipt = {}
             settling_locally = False
             try:
@@ -1132,7 +1174,10 @@ class ModelGateway:
                             # strict schema; the raw reply and this transform record
                             # are both retained, and missing fields stay precise.
                             arguments, normalization_record = native_context['plan_normalizer'](arguments)
-                        Draft202012Validator(declared).validate(arguments)
+                        native_validation_errors = list(Draft202012Validator(declared).iter_errors(arguments))
+                        if native_validation_errors:
+                            from jsonschema.exceptions import best_match
+                            raise best_match(native_validation_errors)
                         assistant_message = {**deepcopy(choice['message']), 'role': 'assistant'}
                         if argument_repair:
                             assistant_message['tool_calls'][0]['function'] = {'name': name, 'arguments': json.dumps(arguments, ensure_ascii=False)}
@@ -1270,7 +1315,7 @@ class ModelGateway:
                                                'failure_diagnostic': {
                                                    'source': 'no_provider_response' if raw is None else 'response_validation',
                                                    'error_type': type(error).__name__,
-                                                   'schema_errors': schema_error_feedback(error),
+                                                   'schema_errors': schema_errors_feedback(native_validation_errors or [error]),
                                                    **({'local_cause': str(error)[:350]}
                                                       if raw is None and isinstance(error, (AssertionError, KeyError)) else {})}},
                                            error=type(error).__name__)
@@ -1295,7 +1340,7 @@ class ModelGateway:
                     break
                 if native_context:
                     path = list(getattr(error, 'absolute_path', ()))
-                    errors = schema_error_feedback(error)
+                    errors = schema_errors_feedback(native_validation_errors or [error])
                     # The strategy-2 normalizer lists every missing required field
                     # across all steps; merge so one correction carries the full
                     # precise path set instead of only the deepest failure.
@@ -1306,7 +1351,8 @@ class ModelGateway:
                                         for row in normalizer_missing
                                         if tuple(row['path'].split('.')) not in known][:12]
                     if not field_repair_used and name in ('submit_plan', 'plan_decision') and isinstance(arguments, dict):
-                        field_repair = field_repair_plan(error, arguments, native_context['declared'][name], name)
+                        field_repair = field_repair_plan(error, arguments, native_context['declared'][name], name,
+                                                        validation_errors=native_validation_errors)
                         if field_repair:
                             field_repair_used = True
                             field_repair['source_request_id'] = rid
