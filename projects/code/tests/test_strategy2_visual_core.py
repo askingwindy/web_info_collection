@@ -92,6 +92,32 @@ class VisualPage:
 
 class Strategy2VisualCore(unittest.TestCase):
     def test_plan_target_provenance_rebind_and_wrong_object_refusal(self):
+        # A native form popup is earned by its frozen form, trusted default
+        # submit event, exact opener and actual first navigation request.
+        from webcollect.plan_evidence import validate_native_form_popup
+        form = {'form_selector':'form','submitter_selector':'input[type=submit]',
+                'action':'https://example.org/search','method':'get',
+                'target':'_blank','enctype':'application/x-www-form-urlencoded','fields':[['q','正文']]}
+        state = {'url':'https://example.org/form','document_identity':'form-doc',
+                 'capture_controls':[{'element_id':'submit','selector':'input[type=submit]',
+                    'tag':'input','input_type':'submit','form_submission':form}]}
+        operation = {'action_type':'click','evidence':{'anchor_element_id':'submit'}}
+        landed = 'https://example.org/search?q=%E6%AD%A3%E6%96%87'
+        proof = {'form_intent':form,'source_url':state['url'],'source_document':'form-doc','source_node':'submit',
+                 'submit_events':[{'trusted':True,'default_prevented':False,'form_selector':'form',
+                    'submitter_selector':'input[type=submit]','source_url':state['url'],'source_document':'form-doc'}],
+                 'opener':{'url':state['url'],'document_identity':'form-doc'},'landed_url':landed,
+                 'initial_request_count':1,'initial_request':{'url':landed,'method':'GET','redirected':False,'post_data':None}}
+        self.assertTrue(validate_native_form_popup(proof,operation,state,landed))
+        wrong = deepcopy(proof);wrong['initial_request']['url']='https://example.org/other'
+        with self.assertRaisesRegex(ValueError,'REQUEST_UNPROVEN'):
+            validate_native_form_popup(wrong,operation,state,landed)
+        wrong = deepcopy(proof);wrong['opener']['document_identity']='other-document'
+        with self.assertRaisesRegex(ValueError,'SOURCE_UNPROVEN'):
+            validate_native_form_popup(wrong,operation,state,landed)
+        wrong = deepcopy(proof);wrong['submit_events'][0]['default_prevented']=True
+        with self.assertRaisesRegex(ValueError,'NATIVE_SUBMIT_UNPROVEN'):
+            validate_native_form_popup(wrong,operation,state,landed)
         from webcollect.screenshot_plan import first_plan_admission, normalize_submit_plan
         route_plan = {'goal': '读取结果并根据页面依据核对',
             'requirements': [
@@ -159,6 +185,13 @@ class Strategy2VisualCore(unittest.TestCase):
         self.assertEqual([row['evidence_route']['source_type'] for row in normalized['requirements']],
                          ['page_result', 'page_result'])
         self.assertEqual(len(transforms['transforms']), 2)
+        misplaced_input = {'requirements': [{'kind': 'input', 'target': {
+            'control': 'input1', 'expected_value': '42'}, 'expected_value': '42'}]}
+        normalized_input, _ = normalize_submit_plan(misplaced_input)
+        self.assertEqual(normalized_input['requirements'][0]['target'], {'control': 'input1'})
+        misplaced_input['requirements'][0]['target']['expected_value'] = '43'
+        conflicting, _ = normalize_submit_plan(misplaced_input)
+        self.assertEqual(conflicting['requirements'][0]['target']['expected_value'], '43')
         invalid_route = deepcopy(explicit_derivation)
         invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [6]
         self.assertEqual(first_plan_admission(invalid_route)[1]['kind'], 'EVIDENCE_ROUTE_INVALID')
@@ -273,6 +306,50 @@ class Strategy2VisualCore(unittest.TestCase):
             # itself is omitted to keep the actual model request within its cap.
             self.assertEqual(verify_visuals(obs, [viewport, crop]), [viewport['path'], crop['path']])
             self.assertEqual(original.read_bytes(), original_bytes)
+            # A timed-out optional overview retains the unchanged synchronized
+            # viewport; it supplies no fabricated whole-page evidence.
+            failed_obs = deepcopy(obs)
+            failed_obs.pop('visual_evidence', None)
+            failure_root = root / 'overview-timeout'
+            failure_root.mkdir()
+            from playwright.async_api import TimeoutError as ScreenshotTimeoutError
+            from unittest.mock import AsyncMock, patch
+            with patch.object(page, 'screenshot', new=AsyncMock(side_effect=ScreenshotTimeoutError('waiting for fonts to load'))):
+                fallback = asyncio.run(prepare_visuals(failed_obs, failure_root, page, first=True))
+            self.assertEqual(len(fallback), 1)
+            self.assertEqual(fallback[0]['scope'], 'viewport')
+            self.assertEqual(fallback[0]['overview_unavailable']['reason'], 'screenshot_timeout')
+            self.assertEqual(fallback[0]['source'], obs['evidence']['image'])
+            # All four optional read stages share timeout-only fallback.
+            for stage in ('before_observe', 'dimensions', 'after_observe'):
+                stage_obs = deepcopy(obs)
+                stage_obs.pop('visual_evidence', None)
+                stage_root = root / stage
+                stage_root.mkdir()
+                if stage == 'dimensions':
+                    async def dimensions_timeout(script, options=None):
+                        if script.startswith('() => [Math.max'):
+                            raise TimeoutError('dimension deadline')
+                        return deepcopy(state)
+                    boundary = patch.object(page, 'evaluate', side_effect=dimensions_timeout)
+                else:
+                    boundary = patch('webcollect.browser.observe', new=AsyncMock(
+                        side_effect=[TimeoutError('before deadline')] if stage == 'before_observe'
+                        else [deepcopy(state), ScreenshotTimeoutError('after deadline')]))
+                with boundary:
+                    stage_visuals = asyncio.run(prepare_visuals(stage_obs, stage_root, page, first=True))
+                self.assertEqual(len(stage_visuals), 1)
+                self.assertEqual(stage_visuals[0]['overview_unavailable']['reason'], stage + '_timeout')
+                self.assertEqual(stage_visuals[0]['source'], obs['evidence']['image'])
+                self.assertEqual(verify_visuals(stage_obs, stage_visuals), [stage_visuals[0]['path']])
+            broken = deepcopy(obs)
+            broken.pop('visual_evidence', None)
+            broken_root = root / 'program-error'
+            broken_root.mkdir()
+            with patch('webcollect.browser.observe', new=AsyncMock(side_effect=ValueError('real snapshot defect'))):
+                with self.assertRaisesRegex(ValueError, 'real snapshot defect'):
+                    asyncio.run(prepare_visuals(broken, broken_root, page, first=True))
+            self.assertEqual(original.read_bytes(), original_bytes)
             forged = deepcopy(crop)
             forged['parent_visual']['before_state']['sha256'] = '0' * 64
             with self.assertRaises(ValueError):
@@ -281,6 +358,34 @@ class Strategy2VisualCore(unittest.TestCase):
                 crop_visual(obs, root, [0, 0, 20, 20], image_ref='unseen-image')
 
     def test_atomic_input_focus_select_value_and_observed_effect_chain(self):
+        # Explicit wait time belongs inside the atomic deadline. Scale only
+        # the event-loop timer, retaining the production 20/65s decisions.
+        import asyncio
+        from unittest.mock import patch
+        from webcollect import browser
+        async def wait_deadlines():
+            original_wait_for = asyncio.wait_for
+            budgets = []
+            async def scaled_wait_for(pending, timeout):
+                budgets.append(timeout)
+                return await original_wait_for(pending, timeout=timeout / 1000)
+            async def normal_wait(*args):
+                await asyncio.sleep(.03)
+            with patch.object(browser, '_execute_and_settle', side_effect=normal_wait) as dispatch, \
+                 patch.object(browser.asyncio, 'wait_for', side_effect=scaled_wait_for):
+                await browser.execute(None, 'wait', {}, {'duration_ms': 60000})
+                self.assertEqual(dispatch.call_count, 1)
+            async def stalled(*args):
+                await asyncio.sleep(1)
+            with patch.object(browser, '_execute_and_settle', side_effect=stalled) as dispatch, \
+                 patch.object(browser.asyncio, 'wait_for', side_effect=scaled_wait_for):
+                with self.assertRaisesRegex(TimeoutError, '未知，不自动重发'):
+                    await browser.execute(None, 'wait', {}, {'duration_ms': 60000})
+                self.assertEqual(dispatch.call_count, 1)
+                with self.assertRaises(TimeoutError):
+                    await browser.execute(None, 'click', {})
+            self.assertEqual(budgets, [65, 65, 20])
+        asyncio.run(wait_deadlines())
         c = control()
         state = {'screen_resolution': [200, 100], 'document_identity': 'doc-current',
                  'url': 'https://example.test/form', 'scroll': [0, 0],
@@ -348,6 +453,8 @@ class Strategy2VisualCore(unittest.TestCase):
         from webcollect.screenshot_plan import normalize_submit_plan
         normalized_scroll, _ = normalize_submit_plan({'steps': [planned_scroll]})
         self.assertEqual(normalized_scroll['steps'][0]['target'], {'control': 'panel'})
+        planned_scroll['expected_result'] = '文' * 128
+        planned_scroll['purpose'] = '读' * 200
         actual_scroll = react_step(planned_scroll, ['panel'], lambda _: [])
         self.assertEqual(actual_scroll['control_id'], 'panel')
         from webcollect.session_core import RawSessionCore, NATIVE_VERSION
@@ -355,6 +462,10 @@ class Strategy2VisualCore(unittest.TestCase):
         validator.task = {'fragment': {'allowed_actions': ['scroll'],
             'decision_protocol': NATIVE_VERSION, 'collection_strategy': {'id': 'screenshot_plan'}}}
         validator._validate_step(actual_scroll)
+        self.assertEqual(actual_scroll['expected'], '文' * 128)
+        self.assertEqual(actual_scroll['goal'], '读' * 200)
+        with self.assertRaisesRegex(ValueError, 'ACTION_SCHEMA'):
+            validator._validate_step({**actual_scroll, 'expected': '文' * 401})
         validator._validate_step({key: value for key, value in actual_scroll.items() if key != 'control_id'})
         with self.assertRaisesRegex(ValueError, '动作参数不合法'):
             validator._validate_step({**actual_scroll, 'control_id': None})

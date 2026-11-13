@@ -60,7 +60,9 @@ def action_scoped_projection(state, node, action, *, click_validation=None):
     if action == 'click' and not element.get('clickable'):
         raise ValueError('Action-scoped click target is not clickable')
     if action in ('type', 'hotkey'):
-        if (element.get('native_role') not in ('input', 'combobox')
+        native_textarea = element.get('native_role') == 'textarea' and binding.get('tag') == 'textarea'
+        native_select_key = action == 'hotkey' and element.get('native_role') == 'select' and binding.get('tag') == 'select'
+        if (not (element.get('native_role') in ('input', 'combobox') or native_textarea or native_select_key)
                 or (action == 'type' and (not element.get('inputable') or value.get('readonly')))
                 or not value.get('value_visible')
                 or [v['element_id'] for v in state.get('values', []) if v.get('focused')] != [node]):
@@ -313,6 +315,8 @@ def reading_scope(state):
 def pair(before, after, png_before, png_after, scope):
     """Entry used by read-only planning checks and postprocess replays."""
     from .dynamic_regions import enabled as dynamic_enabled, pair as dynamic_pair
+    if scope.get('schema_version') in ACTION_SCOPED_VERSIONS and scope.get('purpose') != 'observed_reading_scroll':
+        return action_scoped_pair(before, after, png_before, png_after, scope)
     if dynamic_enabled(before) and dynamic_enabled(after) and scope.get('purpose') != 'observed_reading_scroll':
         return dynamic_pair(before, after, png_before, png_after, action_scope=scope)
     if scope.get('purpose') == 'observed_reading_scroll':
@@ -335,6 +339,4 @@ def pair(before, after, png_before, png_after, scope):
                 'before_fingerprint': fingerprint(before), 'after_fingerprint': fingerprint(after),
                 'png_before_sha256': hashlib.sha256(png_before).hexdigest(),
                 'png_after_sha256': hashlib.sha256(png_after).hexdigest(), 'pixel_change': pixels}
-    if scope.get('schema_version') in ACTION_SCOPED_VERSIONS:
-        return action_scoped_pair(before, after, png_before, png_after, scope)
     raise ValueError('Unknown action stability proof')

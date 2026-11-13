@@ -157,9 +157,19 @@ class OfflineSurface:
         attempt = {'dom_stable': True, 'before_fingerprint': fingerprint(state),
                    'after_fingerprint': fingerprint(state),
                    'started_ns': time.time_ns(), 'ended_ns': time.time_ns()}
-        return {'state': state, 'png': png, 'capture': {'snapshot_source': 'browser_dom',
+        receipt = {'snapshot_source': 'browser_dom',
             'screenshot_sha256': hashlib.sha256(png).hexdigest(),
-            'coordinate_space': 'screenshot_css_pixels', 'attempts': [attempt]}}
+            'coordinate_space': 'screenshot_css_pixels', 'attempts': [attempt]}
+        if 'capture_readiness' in state:
+            import base64
+            from webcollect.browser import CAPTURE_VERSION, stability_pair
+            from webcollect.action_stability import post_action_document_scope
+            proof = stability_pair(state, state, png, png, action_scope=kw.get('action_scope') or post_action_document_scope(state))
+            attempt.update(snapshot_before=deepcopy(state), snapshot_after=deepcopy(state), snapshot_final=deepcopy(state),
+                           original_png_base64=base64.b64encode(png).decode(), comparison_png_base64=base64.b64encode(png).decode(),
+                           stability=proof, final_stability=deepcopy(proof))
+            receipt['schema_version'] = CAPTURE_VERSION
+        return {'state': state, 'png': png, 'capture': receipt}
 
     def execute_action(self, action_type, arguments):
         self.executed.append((action_type, deepcopy(arguments)))
@@ -634,10 +644,11 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
 
 
-class ChooserRunlogTests(unittest.IsolatedAsyncioTestCase):
+class ChooserRunlogTests(SessionHarness):
     """Simulated provider transport through the real screenshot_chooser chain."""
 
     def setUp(self):
+        super().setUp()
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
@@ -674,28 +685,46 @@ class ChooserRunlogTests(unittest.IsolatedAsyncioTestCase):
         ledger = BatchLedger(self.root / 'chooser.sqlite3', config, initialize=True)
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                             level='DEBUG', claim_id='claim-1')
-        plan = {'goal': '阅读正文并回答原名',
-                'final_presentation_step': 5,
-                'requirements': [{'id': 'r1', 'kind': 'content', 'description': '阅读正文并回答原名',
-                    'evidence_route': {'source_type': 'page_content', 'observation_steps': [5]}}],
-                'steps': [{'action': 'scroll', 'direction': 'down', 'purpose': f'阅读第{i}段',
-                           'rationale': '逐段滚动阅读正文以找到答案',
-                           'expected_result': '看到下一段正文'} for i in range(5)]}
+        plan = {'goal': '修改数量为20、成本为60并核对输入值',
+                'final_presentation_step': 6,
+                'requirements': [
+                    {'id': f'i{i}', 'kind': 'input', 'description': f'{label}设为{value}',
+                     'target': {'text': label}, 'expected_value': value,
+                     'evidence_route': {'source_type': 'input_state', 'observation_steps': [pos]}}
+                    for i, label, value, pos in [(0, '数量', '20', 3), (1, '成本', '60', 6)]],
+                'steps': []}
+        for label, value in [('数量', '20'), ('成本', '60')]:
+            for action, extra, purpose in [
+                    ('click', {}, '聚焦输入框'),
+                    ('hotkey', {'keys': ['ctrl', 'a']}, '全选原值'),
+                    ('type', {'value': value, 'expected_value': value}, '替换原值')]:
+                plan['steps'].append({'action': action, 'target': {'text': label},
+                    **extra, 'purpose': purpose, 'rationale': f'{label}需要替换为本次值',
+                    'expected_result': f'{label}输入框完成{purpose}'})
         self.opener.raw['choices'] = [{'finish_reason': 'tool_calls', 'message': {
             'content': '', 'reasoning_content': 'opaque-offline-protocol-field',
             'tool_calls': [{'id': 'c1', 'type': 'function', 'function': {
                 'name': 'submit_plan', 'arguments': json.dumps(plan, ensure_ascii=False)}}]}}]
-        prompt = {'phase': 'first', 'system': 'trusted', 'tools': submit_plan_tools(
-            self.task['fragment']['allowed_actions']), '_images': [self.image],
-            'progress': {'decisions_used': 0}}
-        # Offline transport: freeze the credential so the non-core GLM account
-        # selection in model_credentials never runs here.
+        # Exercise the actual first request, gateway schema, normalization and
+        # admission, rather than validating only the standalone tool response.
+        root = self.root / 'entry-session'
         with patch('webcollect.batch_core.BatchLedger.bind_model_session',
                    return_value='CONTROLLED_UNUSED'):
             choose = screenshot_chooser(ledger, self.task, 'claim-1', runlog=runlog)
-            response = await choose(prompt)
-        self.assertEqual(response['name'], 'submit_plan')
-        self.assertEqual(len(response['arguments']['steps']), 5)
+            session = ScreenshotPlanSession(self.task, root / 'raw', choose, self.page,
+                steps_directory=root, attempt_id='claim-1')
+            await session._open_entry()
+            prompt = session._first_prompt()
+            self.assertEqual(prompt['goal_selection']['mode'], 'autonomous')
+            self.assertIsNone(prompt['goal'])
+            self.assertIn('goal', prompt['tools'][0]['function']['parameters']['allOf'][0]['else']['required'])
+            await session._first_plan_round()
+        self.assertIsNone(session.initial_feedback)
+        self.assertEqual(session.frozen_goal, plan['goal'])
+        self.assertEqual(len(session.plan['steps']), 6)
+        self.assertEqual(session._branch_prompt('checkpoint')['goal'], plan['goal'])
+        self.assertNotIn('goal', session._branch_prompt('checkpoint')['tools'][0]['function']['parameters']['properties'])
+        self.assertEqual(session.actual_dispatches, 0)
         calls = _rows(self.root / 'logs' / 'w1' / 'model-calls.jsonl')
         started = [row for row in calls if row['event'] == 'request_started']
         finished = [row for row in calls if row['event'] == 'request_finished']
@@ -708,6 +737,33 @@ class ChooserRunlogTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('opaque-offline-protocol-field', blob)
         self.assertNotIn('offline-secret-never-export', blob)
         self.assertNotIn('data:image/png;base64,', blob)
+
+        fixed_goal = '将数量改为20、成本改为60，并核对这两个输入值'
+        fixed_task = deepcopy(self.task)
+        fixed_task['workflow_proposal']['spec']['goal']['structured'] = {'description': fixed_goal}
+        fixed_task['task_id'] = 'react-' + object_sha256(
+            {'url': fixed_task['initial_url'], 'spec': fixed_task['workflow_proposal']['spec']})[:24]
+        fixed_plan = deepcopy(plan)
+        fixed_plan.pop('goal')
+        self.opener.raw['choices'][0]['message']['tool_calls'][0]['function']['arguments'] = json.dumps(fixed_plan, ensure_ascii=False)
+        root = self.root / 'fixed-session'
+        with patch('webcollect.batch_core.BatchLedger.bind_model_session', return_value='CONTROLLED_UNUSED'):
+            choose = screenshot_chooser(ledger, fixed_task, 'claim-fixed', runlog=runlog)
+            fixed = ScreenshotPlanSession(fixed_task, root / 'raw', choose, self.page,
+                steps_directory=root, attempt_id='claim-fixed')
+            await fixed._open_entry()
+            fixed_prompt = fixed._first_prompt()
+            self.assertEqual(fixed_prompt['goal_selection']['mode'], 'fixed')
+            self.assertEqual(fixed_prompt['goal'], fixed_goal)
+            schema = fixed_prompt['tools'][0]['function']['parameters']
+            self.assertNotIn('goal', schema['properties'])
+            from jsonschema import Draft202012Validator
+            self.assertTrue(list(Draft202012Validator(schema).iter_errors({**fixed_plan, 'goal': '改写目标'})))
+            await fixed._first_plan_round()
+        self.assertIsNone(fixed.initial_feedback)
+        self.assertEqual(fixed.frozen_goal, fixed_goal)
+        self.assertEqual(fixed._branch_prompt('checkpoint')['goal'], fixed_goal)
+        self.assertEqual(fixed.actual_dispatches, 0)
 
 
 class ScreenshotSessionRunlogTests(SessionHarness):

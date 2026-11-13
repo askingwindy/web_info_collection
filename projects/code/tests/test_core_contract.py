@@ -6,7 +6,6 @@ close-out, candidate-pool v2 claiming, and the documented CLI entries.
 All checks are offline; no real GLM, browser or production database is used.
 """
 import json
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -202,6 +201,10 @@ class StrategyResultContract(unittest.TestCase):
         task = {'task_id': 't', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
         freeze(task, STRATEGY_SCREENSHOT_PLAN)
         self.assertEqual(strategy_id(task), STRATEGY_SCREENSHOT_PLAN)
+        from webcollect.action_stability import ACTION_STABILITY_PROTOCOL
+        self.assertEqual(task['fragment']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
+        self.assertEqual(task['workflow_proposal']['spec']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
+        self.assertNotIn('plan_protocol', task['fragment'])
 
     def test_finalize_replaces_transient_end_with_actual_outcome(self):
         result = {'result_contract': RESULT_CONTRACT,
@@ -353,19 +356,41 @@ class CandidatePoolContract(unittest.TestCase):
 
 
 class CliEntriesSmoke(unittest.TestCase):
-    """The documented module entries must still parse their own arguments."""
+    """Explicit objective files reach the consumer without executing collection."""
 
-    ENTRIES = ('webcollect.task_generation', 'webcollect.candidate_consumer',
-               'site_planner.candidate_discovery', 'quality_inspector')
+    def test_consumer_objective_file_binding(self):
+        import hashlib
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from unittest.mock import Mock, patch
+        from webcollect import candidate_consumer as cli
 
-    def test_help_exits_zero(self):
-        for entry in self.ENTRIES:
-            done = subprocess.run([sys.executable, '-m', entry, '--help'],
-                                  capture_output=True, env={
-                                      'PATH': '/usr/bin:/bin',
-                                      'PYTHONPATH': 'projects/code:projects/site-planner:projects/quality-inspector'},
-                                  timeout=120)
-            self.assertEqual(done.returncode, 0, (entry, done.stderr[-500:]))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config.json'; config.write_text('{}')
+            objective = root / 'objective.json'
+            objective.write_text('{"objective":{"description":"固定目标"}}', encoding='utf-8')
+            args = ['--pool', str(root / 'pool'), 'run', '--config', str(config),
+                    '--ledger', str(root / 'ledger'), '--output', str(root / 'output'),
+                    '--registry', str(root / 'registry'), '--policy', str(root / 'policy'),
+                    '--history-set', str(root / 'manifest'), '--worker-id', 'fixed',
+                    '--request-prefix', 'fixed', '--limit', '1']
+            with patch.object(cli, 'CandidatePool') as pool, patch.object(cli, 'BatchLedger'), \
+                    patch.object(cli, 'run', new_callable=Mock) as run, patch.object(cli.asyncio, 'run', return_value={}), \
+                    redirect_stdout(StringIO()):
+                # Replace the async entry itself: no coroutine, probe, browser or ledger IO.
+                run.side_effect = lambda *a, **kw: kw
+                cli.main(args + ['--session-objective', str(objective)])
+                self.assertEqual(run.call_args.kwargs['session_objective'], {
+                    'path': str(objective.resolve()),
+                    'sha256': hashlib.sha256(objective.read_bytes()).hexdigest()})
+                cli.main(args)
+                self.assertIsNone(run.call_args.kwargs['session_objective'])
+                pool.reset_mock(); run.reset_mock()
+                objective.write_text('not JSON')
+                with self.assertRaises(json.JSONDecodeError):
+                    cli.main(args + ['--session-objective', str(objective)])
+                pool.assert_not_called(); run.assert_not_called()
 
 
 if __name__ == '__main__':

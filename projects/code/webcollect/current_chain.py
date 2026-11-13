@@ -233,12 +233,39 @@ def registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):
     return snapshot
 
 
+def _physical(value):
+    """Physical location of a recorded chain path. The retained project-layout
+    symlinks keep pre-migration records pointing at the same files; identity
+    comparisons resolve through them, execution paths stay real (see _path)."""
+    return Path(value).resolve()
+
+
+def _chain_identity(value):
+    """Layout-stable chain identity. The project moved its databases to the
+    prod anchor and re-declared the manifest under the new paths; chain
+    membership is the same physical registry, stores, result roots and id."""
+    if not isinstance(value, dict):
+        return None
+    manifest = value.get('manifest') if isinstance(value.get('manifest'), dict) else {}
+    project = value.get('candidate_project') if isinstance(value.get('candidate_project'), dict) else None
+    identity = {
+        'schema_version': value.get('schema_version'),
+        'chain_id': value.get('chain_id'),
+        'manifest': str(_physical(manifest['path'])) if manifest.get('path') else None,
+        'registry': str(_physical(value.get('registry'))),
+        'current_result_roots': [str(_physical(root)) for root in value.get('current_result_roots') or []]}
+    if project is not None:
+        identity['candidate_project'] = {key: (str(_physical(project[key])) if key in ('pool', 'site_ledger')
+                                               else project.get(key))
+                                         for key in ('rules', 'pool', 'site_ledger')}
+    return identity
+
+
 def same_chain(left, right):
     """Stable chain ownership; result membership is checked separately live."""
-    keys = ('schema_version', 'manifest', 'chain_id', 'registry', 'current_result_roots', 'candidate_project')
     return (isinstance(left, dict) and isinstance(right, dict)
             and left.get('schema_version') == right.get('schema_version') == SCOPE_SCHEMA
-            and all(left.get(key) == right.get(key) for key in keys))
+            and _chain_identity(left) == _chain_identity(right))
 
 
 def history_scope_extends(bound, actual):
@@ -252,8 +279,11 @@ def history_scope_extends(bound, actual):
         return bound == actual
     changing = {'current_results_refs', 'research_results_refs', 'customer_samples',
                 'research_samples', 'known_strategy_samples', 'unknown_strategy_samples'}
-    if {k: v for k, v in bound.items() if k not in changing} != {
-            k: v for k, v in actual.items() if k not in changing}:
+    identity_keys = {'schema_version', 'manifest', 'chain_id', 'registry', 'current_result_roots', 'candidate_project'}
+    if {k: v for k, v in bound.items() if k not in changing and k not in identity_keys} != {
+            k: v for k, v in actual.items() if k not in changing and k not in identity_keys}:
+        return False
+    if _chain_identity(bound) != _chain_identity(actual):
         return False
     for value in (bound, actual):
         if (value.get('customer_samples') != len(value.get('current_results_refs', []))
@@ -337,12 +367,14 @@ def validate_history_context(value):
 
 
 def current_evidence_roots(scope):
-    return [_path(scope['manifest']['path']).parent.parent, *(_path(root) for root in scope['current_result_roots'])]
+    return [_physical(scope['manifest']['path']).parent.parent, *(_physical(root) for root in scope['current_result_roots'])]
 
 
 def require_evidence_path(path, roots):
-    path = _path(path)
-    _require(any(path.is_relative_to(root) for root in roots), 'historical/out-of-chain observation reference rejected')
+    """A path frozen into historical evidence resolves through the retained
+    project-layout symlinks; the roots and byte-hash checks fence it."""
+    path = _physical(path)
+    _require(any(path.is_relative_to(_physical(root)) for root in roots), 'historical/out-of-chain observation reference rejected')
     return path
 
 
@@ -362,7 +394,7 @@ def assert_current_evidence(scope, value):
             for entry in item:find_relocations(entry)
         elif isinstance(item,dict):
             if item.get('schema_version')=='webcollect-rejected-frame-relocation-1':
-                old=_path(item['original_path']);current=_path(item['current']['path']);dispatch=_path(item['dispatch']['path'])
+                old=_physical(item['original_path']);current=_physical(item['current']['path']);dispatch=_physical(item['dispatch']['path'])
                 _require(all(any(p.is_relative_to(root) for root in roots) for p in (old,current,dispatch)),
                          'out-of-chain frame relocation rejected')
                 _require(old.suffix=='.png' and len(old.parents)>3 and old.parent.name=='images'
@@ -385,7 +417,7 @@ def assert_current_evidence(scope, value):
                                               'candidate-research-replay'):
                 from .candidate_contract import research_v2_inputs
                 authorization = research_v2_inputs(item)
-                _require(_path(authorization['registry']) == _path(scope['registry']),
+                _require(_physical(authorization['registry']) == _physical(scope['registry']),
                          'research v2 registry differs from current chain')
                 # These are frozen task inputs and explicitly named comparison
                 # receipts, not observations or completed facts for the new run.
@@ -416,7 +448,9 @@ def assert_current_evidence(scope, value):
                     path=relocations[(str(path),item['sha256'])]
                     _require(_ref(path)['sha256']==item['sha256'],'relocated frame bytes changed')
                 else:
-                    _require(_ref(path) == item, 'current observation reference changed')
+                    # The recorded path may carry the pre-migration layout; it
+                    # already resolved to this roots-fenced file, so bytes decide.
+                    _require(_ref(path)['sha256'] == item['sha256'], 'current observation reference changed')
                 if path.suffix == '.json' and str(path) not in visited:
                     visited.add(str(path)); walk(load_json(path))
             else:

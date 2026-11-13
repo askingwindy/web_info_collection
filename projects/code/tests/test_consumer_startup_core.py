@@ -53,6 +53,17 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['processed'], 0)
 
     async def test_available_pool_and_campaign_workers_never_probe(self):
+        from webcollect.consumer_campaign import stop_engineering_failure, stopped
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'campaign.json'
+            state.write_text(json.dumps({'deliveries': [], 'dispatch_stopped': False}))
+            stop_engineering_failure(state, {'error_type': 'OperationalError'})
+            stop_engineering_failure(state, {'error_type': 'another'})
+            self.assertTrue(stopped(state))
+            saved = json.loads(state.read_text())
+            self.assertEqual(saved['stop_reason'], 'ENGINEERING_FAILURE')
+            self.assertEqual(saved['stop_details']['error_type'], 'OperationalError')
         with tempfile.TemporaryDirectory() as directory:
             with patch('webcollect.candidate_consumer.startup_check', return_value={}), \
                  patch('webcollect.key_health.pool_available', side_effect=[True, False]), \

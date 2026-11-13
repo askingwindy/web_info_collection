@@ -529,7 +529,8 @@ async def observe(page, selector=None, index=0, timeout=15, assertions=None, pro
             if 'DOCUMENT_NOT_READY' not in str(error) and 'Execution context was destroyed' not in str(error):
                 raise
             # Read-only recovery: never replay a navigation or action.
-            await page.wait_for_function('document.body && document.readyState !== "loading"', timeout=timeout*1000)
+            await page.wait_for_load_state('domcontentloaded', timeout=timeout*1000)
+            await page.locator('body').wait_for(state='attached', timeout=timeout*1000)
             return await asyncio.wait_for(page.evaluate(SNAPSHOT_JS,options),timeout=timeout)
     except asyncio.TimeoutError as error:
         raise TimeoutError(f'页面同步观察超过{timeout}秒，停止该任务并保留检查点') from error
@@ -932,7 +933,37 @@ async def _execute_action(page, action, args, execution=None):
     else:raise ValueError('不支持的 Web 动作 '+action)
 
 
+ACTION_TIMEOUT_SECONDS = 20
+
+
+def record_native_dialog(page, records):
+    async def dismiss(dialog):
+        record = {'type': dialog.type, 'message': dialog.message, 'handling': 'dismiss_pending'}
+        records.append(record)
+        try:
+            await asyncio.wait_for(dialog.dismiss(), timeout=5)
+            record['handling'] = 'dismissed'
+        except Exception as error:
+            record['handling'] = 'dismiss_failed'
+            record['error'] = str(error)
+    page.on('dialog', dismiss)
+
+
 async def execute(page, action, args, execution=None):
+    # An atomic dispatch can have an unknown effect on timeout. Callers must
+    # retain their dispatched receipt and must never retry it automatically.
+    timeout = ACTION_TIMEOUT_SECONDS
+    if action == 'wait':
+        # The explicit protocol wait (at most 60s) is work, not a stalled
+        # primitive. Allow it plus bounded dispatch/settlement overhead.
+        timeout = max(timeout, min(60000, (execution or {}).get('duration_ms', 1000)) / 1000 + 5)
+    try:
+        await asyncio.wait_for(_execute_and_settle(page, action, args, execution), timeout=timeout)
+    except TimeoutError as error:
+        raise TimeoutError(f'原子动作 {action} 超过 {timeout:g} 秒；派发结果未知，不自动重发') from error
+
+
+async def _execute_and_settle(page, action, args, execution=None):
     execution=execution or {}
     if execution.get('wait_navigation'):
         # Mouse/keyboard APIs do not wait for document navigation. Register the

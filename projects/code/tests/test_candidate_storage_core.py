@@ -46,6 +46,22 @@ class CandidateStorageCore(unittest.TestCase):
             authorize_concurrency(scope_path, 100, 'offline 100-producer integration')
             self.assertEqual(BatchLedger(launch_scope['producer_db'],
                 load_json(launch_scope['producer_config'])).max_concurrent_jobs, 100)
+            # A retained layout alias still names this physical ledger. Keep
+            # the original frozen run/config checks when resuming its decision.
+            alias = temporary / 'old-layout'
+            alias.symlink_to(root, target_is_directory=True)
+            producer = BatchLedger(launch_scope['producer_db'], load_json(launch_scope['producer_config']))
+            with producer.transaction() as con:
+                row = con.execute("SELECT seq,detail FROM batch_events WHERE event='producer_concurrency' ORDER BY seq DESC LIMIT 1").fetchone()
+                decision = json.loads(row[1])
+                decision['ledger'] = str(alias / Path(producer.path).name)
+                con.execute('UPDATE batch_events SET detail=? WHERE seq=?', (json.dumps(decision), row[0]))
+            self.assertEqual(BatchLedger(producer.path, producer.config).max_concurrent_jobs, 100)
+            with producer.transaction() as con:
+                decision['ledger'] = str(temporary / 'other-ledger.sqlite3')
+                con.execute('UPDATE batch_events SET detail=? WHERE seq=?', (json.dumps(decision), row[0]))
+            with self.assertRaisesRegex(ValueError, 'Producer concurrency decision'):
+                BatchLedger(producer.path, producer.config)
             pool = CandidatePool(launch_scope['pool'])
             source = root / 'producer-evidence' / 'source.json'
             source.parent.mkdir()
@@ -94,6 +110,35 @@ class CandidateStorageCore(unittest.TestCase):
                 initialize(root, 'offline-project', {}, offline_config(), offline_config(),
                            output_root=temporary / 'must-not-be-created')
             self.assertFalse((temporary / 'must-not-be-created').exists())
+            # Deleted output must also remain an unavailable advisory history,
+            # while the current candidate still requires its original bytes.
+            from webcollect.agent_feedback import site_context
+            import sqlite3
+            registry = temporary / 'feedback.sqlite3'
+            missing = {'path': str(output / 'failure.json'), 'sha256': '0' * 64}
+            with sqlite3.connect(registry) as con:
+                con.execute('CREATE TABLE m4_tasks(task_key TEXT, task_json TEXT)')
+                con.execute('CREATE TABLE m4_attempts(task_key TEXT, attempt_id TEXT, sample_id TEXT, status TEXT, root_cause TEXT, failure_class TEXT, evidence_json TEXT, created_at TEXT)')
+                con.execute('INSERT INTO m4_tasks VALUES (?,?)', ('task', json.dumps({
+                    'task_id':'task', 'site_uri':'https://example.org/',
+                    'candidate_binding':{'candidate_id':'old'}})))
+                con.execute('INSERT INTO m4_attempts VALUES (?,?,?,?,?,?,?,?)',
+                    ('task', 'attempt', 'sample', 'rejected', 'failure', 'semantic', json.dumps([missing]), 'now'))
+            with patch('webcollect.collection_context.from_registry', return_value={}):
+                context = site_context(registry, 'https://example.org/', candidate_id='new')
+                unavailable = context['executions'][0]
+                self.assertEqual(unavailable['feedback_status'], 'UNAVAILABLE')
+                self.assertEqual(unavailable['evidence_error']['classification'], 'MISSING_FILE')
+                self.assertEqual(unavailable['references'], [missing])
+                self.assertEqual(context['images'], [])
+                self.assertEqual(context['avoid'], [])
+                with self.assertRaisesRegex(ValueError, '证据路径'):
+                    site_context(registry, 'https://example.org/', candidate_id='old')
+                output.mkdir(parents=True)
+                Path(missing['path']).write_text('{}')
+                context = site_context(registry, 'https://example.org/', candidate_id='new')
+                self.assertEqual(context['executions'][0]['evidence_error']['classification'], 'DIGEST_MISMATCH')
+
 
     def test_disposable_roots_are_rejected_before_scope_or_database_creation(self):
         with tempfile.TemporaryDirectory() as directory:

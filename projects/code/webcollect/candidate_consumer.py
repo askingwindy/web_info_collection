@@ -403,10 +403,10 @@ async def entry_session(ledger, pool, claim, root):
                     pool._fence(con, claim)
                 with phase(root/'phases.jsonl', 'entry_navigation', scope={'claim_id':claim['claim_id']}):
                     try:
-                        await BatchNavigation(ledger, job).goto(page, uri, purpose='candidate-entry:'+claim['claim_id'], timeout_ms=10000)
+                        await BatchNavigation(ledger, job).goto(page, uri, purpose='candidate-entry:'+claim['claim_id'], timeout_ms=30000)
                     except PlaywrightTimeoutError as error:
                         # BatchNavigation has already settled this explicit visit as failed.
-                        raise NavigationTimeoutError(uri, 'candidate-entry:'+claim['claim_id'], 10) from error
+                        raise NavigationTimeoutError(uri, 'candidate-entry:'+claim['claim_id'], 30) from error
                 with phase(root/'phases.jsonl', 'entry_capture_identity_save', scope={'claim_id':claim['claim_id']}):
                     from .action_stability import post_action_document_scope
                     entry_scope = post_action_document_scope({'url': uri})
@@ -604,7 +604,8 @@ async def consume(pool, claim, ledger, **kwargs):
         raise
     finally:
         stop.set()
-        await asyncio.to_thread(thread.join)
+        # The daemon observes stop after its current short transaction; never
+        # hold cancellation hostage to a busy database or executor.
 
 
 async def _consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
@@ -935,14 +936,33 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                            claim_state=pool.get_claim(claim['claim_id'])['state'])
                 raise
             except Exception as error:
+                import traceback
+                import sqlite3
+                diagnostic = {'error_type':type(error).__name__,
+                    'stage':claim.get('stage'), 'stage_source':'claim_snapshot',
+                    'stack':[{'file':frame.filename, 'line':frame.lineno, 'function':frame.name}
+                             for frame in traceback.extract_tb(error.__traceback__)],
+                    'sqlite_errorcode':getattr(error, 'sqlite_errorcode', None),
+                    'sqlite_errorname':getattr(error, 'sqlite_errorname', None)}
+                record('candidate_error', claim_id=claim['claim_id'], diagnostic=diagnostic)
+                if campaign and isinstance(error, sqlite3.Error):
+                    from .consumer_campaign import stop_engineering_failure
+                    stop_engineering_failure(campaign, {'claim_id':claim['claim_id'], **diagnostic})
                 runlog.info('failed', claimId=claim['claim_id'],
                     errorType=type(error).__name__, reason=str(error)[:200])
-                current=pool.get_claim(claim['claim_id'])
-                if current['state']=='consuming':
-                    pool.finish(claim,state='reconcile',stage=current['stage'],reason=type(error).__name__+': '+str(error))
+                try:
                     current=pool.get_claim(claim['claim_id'])
-                result={'state':current['state'],'stage':current['stage'],
-                        'reason':current.get('reason') or str(error)}
+                    if current['state']=='consuming':
+                        pool.finish(claim,state='reconcile',stage=current['stage'],reason=type(error).__name__+': '+str(error))
+                        current=pool.get_claim(claim['claim_id'])
+                    result={'state':current['state'],'stage':current['stage'],
+                            'reason':current.get('reason') or str(error), 'error_diagnostic':diagnostic}
+                except sqlite3.Error as settlement_error:
+                    # Keep the original failure; no successful settlement is asserted.
+                    result={'state':'reconcile', 'stage':claim.get('stage'),
+                            'reason':type(error).__name__+': '+str(error),
+                            'error_diagnostic':diagnostic,
+                            'settlement_error_type':type(settlement_error).__name__}
             # A saved item is queued before optional disposition write-back, so
             # a reporting failure never loses its independent export work.
             if campaign:
@@ -1110,6 +1130,8 @@ def main(argv=None):
     runp.add_argument('--limit',type=int); runp.add_argument('--category',action='append'); runp.add_argument('--application-id'); runp.add_argument('--qc-policy')
     runp.add_argument('--campaign',type=Path,help='Shared site campaign receipt-counted delivery target')
     runp.add_argument('--cohort',type=Path,help='Visit only never-claimed members of the frozen validation cohort, in order')
+    runp.add_argument('--session-objective',type=Path,
+        help='Explicit session objective JSON file; bound to the claimed candidate with its SHA256')
     runp.add_argument('--skip-wechat-articles', action='store_true', help='Record observed WeChat article links and skip them for this entry run')
     runp.add_argument('--target',type=int,help='Receipt-counted result target, separate from --limit')
     runp.add_argument('--target-basis',choices=('saved','qualified'),default='saved')
@@ -1137,6 +1159,12 @@ def main(argv=None):
     a=p.parse_args(argv)
     if a.command == 'run' and bool(a.first_plan_effort) != bool(a.branch_effort):
         p.error('--first-plan-effort and --branch-effort must be specified together')
+    session_objective = None
+    if a.command == 'run' and a.session_objective is not None:
+        objective_path = a.session_objective.resolve(strict=True)
+        session_objective = {'path': str(objective_path), 'sha256': file_sha(objective_path)}
+        load_json(objective_path)
+        verify_evidence([session_objective])
     pool=CandidatePool(a.pool)
     if a.command=='list':
         records=pool.rows()
@@ -1170,6 +1198,7 @@ def main(argv=None):
             signal.signal(signal.SIGINT, signal.default_int_handler)
             signal.signal(signal.SIGTERM, signal.default_int_handler)
         result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+            session_objective=session_objective,
             effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
             collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))

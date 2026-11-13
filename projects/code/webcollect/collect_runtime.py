@@ -4,6 +4,7 @@ An interrupted browser trajectory is retained as a failed attempt. Resume never
 stitches it to another session or reuses its allocated sample ID.
 """
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 import hashlib
 import json
@@ -175,10 +176,37 @@ def verify_committed_samples(output, attempts):
             raise ValueError('已完成样本的原始采集证据改变，停止续跑：' + attempt['sample_id'])
 
 
-async def heartbeat_lease(store, attempt, seconds):
-    while True:
-        await asyncio.to_thread(store.heartbeat, attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'])
-        await asyncio.sleep(max(0.1, seconds / 3))
+def _start_lease_renewal(store, attempt, seconds):
+    # Renewal must survive synchronous evidence work on the event loop and
+    # default-executor saturation. RuntimeStore still enforces owner/expiry.
+    stopped = threading.Event()
+    errors = []
+    def renew():
+        while not stopped.is_set():
+            try:
+                store.heartbeat(attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'])
+            except BaseException as error:
+                errors.append(error)
+                return
+            if stopped.wait(max(0.1, seconds / 3)):
+                return
+    thread = threading.Thread(target=renew, name='attempt-lease-heartbeat', daemon=True)
+    thread.start()
+    return stopped, errors, thread
+
+
+async def heartbeat_lease(store, attempt, seconds, renewal=None):
+    stopped, errors, thread = renewal or _start_lease_renewal(store, attempt, seconds)
+    try:
+        while thread.is_alive():
+            await asyncio.sleep(0.05)
+        if errors:
+            raise errors[0]
+        raise ValueError('租约心跳意外结束')
+    finally:
+        # Do not block cancellation on a busy SQLite transaction. Its next
+        # return observes this event and cannot renew again.
+        stopped.set()
 
 
 def _evidence(path):
@@ -261,8 +289,9 @@ def sync_manifest(store, output, manifest):
 
 
 async def _with_lease(job, store, attempt, lease_seconds):
+    renewal = _start_lease_renewal(store, attempt, lease_seconds)
+    heartbeat = asyncio.create_task(heartbeat_lease(store, attempt, lease_seconds, renewal))
     running = asyncio.create_task(job)
-    heartbeat = asyncio.create_task(heartbeat_lease(store, attempt, lease_seconds))
     try:
         done, _ = await asyncio.wait((running, heartbeat), return_when=asyncio.FIRST_COMPLETED)
         if heartbeat in done and running not in done:
@@ -796,7 +825,6 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
         scope = runtime_scope(output)
         store = RuntimeStore(registry, scope)
         if resume:
-            import sqlite3
             try:
                 prior_scope = store.snapshot()['scope']['state']
             except (ValueError, sqlite3.OperationalError) as error:

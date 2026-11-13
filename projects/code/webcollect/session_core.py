@@ -634,8 +634,8 @@ class RawSessionCore:
         self.dialogs = []
         self.excluded_links_seen = set()
         self.events = []
-        self.page.on('dialog', lambda dialog: self.dialogs.append(
-            {'type': dialog.type, 'message': dialog.message}))
+        from .browser import record_native_dialog
+        record_native_dialog(self.page, self.dialogs)
         self.binding = exclusive(self.root / 'boundary.json',
             {'protocol': REACT_VERSION, 'task': self.task, 'budgets': self.budgets,
              'language_exclusion_policy': __import__('webcollect.page_language',fromlist=['VERSION']).VERSION,
@@ -767,7 +767,7 @@ class RawSessionCore:
                     self.event('capture-navigation-retry', reason=reason,
                                retry=1, dispatched_again=False)
                     try:
-                        await self.page.wait_for_load_state('domcontentloaded')
+                        await asyncio.wait_for(self.page.wait_for_load_state('domcontentloaded'), timeout=20)
                     except Exception as settle_error:
                         error = settle_error
                     else:
@@ -1556,6 +1556,7 @@ class RawSessionCore:
             raw['target_element'] = None
         self.dialogs.clear()
         dispatch_started = False
+        form_watcher = None
         try:
             if observation.get('action_scope') and observation['action_scope']['action']!=operation['action_type']:
                 raise EvidenceStale('局部证据动作类型改变；本动作零派发')
@@ -1578,6 +1579,8 @@ class RawSessionCore:
                 from .browser import verify_drag_destination
                 await verify_drag_destination(self.page,operation['evidence']['drag_destination'],arguments)
             pages_before = set(self.page.context.pages)
+            from .plan_evidence import arm_native_form, finish_native_form
+            form_watcher = await arm_native_form(self.page, operation, state)
             dispatch_started = True
             self.actual_dispatches += 1
             try:
@@ -1587,12 +1590,17 @@ class RawSessionCore:
                     raw['return_navigation'] = {'method': 'switch_to_opener',
                         'from_url': self.page.url, 'source_url': popup_source.url,
                         'popup_provenance': deepcopy(self._popup_provenances[self.page])}
-                    await popup_source.bring_to_front()
+                    await asyncio.wait_for(popup_source.bring_to_front(), timeout=20)
                     self.page = popup_source
                 else:
                     if operation['action_type'] == 'back':
                         raw['return_navigation'] = {'method': 'go_back', 'from_url': self.page.url}
-                    await execute(self.page, operation['action_type'], arguments, {})
+                    try:
+                        await execute(self.page, operation['action_type'], arguments, {})
+                    finally:
+                        if form_watcher:
+                            raw['native_form_submit'] = await asyncio.wait_for(
+                                finish_native_form(self.page, form_watcher), timeout=2)
             except Exception as error:
                 from playwright.async_api import TimeoutError as PlaywrightTimeout
                 if operation['action_type'] != 'back' or not isinstance(error, PlaywrightTimeout):
@@ -1615,7 +1623,11 @@ class RawSessionCore:
                 raise ValueError('一次动作打开多个页面，需单独适配并记录')
             if new_pages:
                 from .plan_evidence import verify_popup
-                raw['popup_provenance'] = await verify_popup(self.page,next(iter(new_pages)),operation,state)
+                try:
+                    raw['popup_provenance'] = await verify_popup(self.page,next(iter(new_pages)),operation,state,form_watcher=form_watcher)
+                finally:
+                    if form_watcher and form_watcher.get('popup_proof'):
+                        raw['popup_provenance'] = deepcopy(form_watcher['popup_proof'])
                 if True:
                     if not hasattr(self, '_popup_sources'):
                         self._popup_sources = {}
@@ -1631,9 +1643,9 @@ class RawSessionCore:
                 raise ReactStop('blocked', raw['execution_error'], 'collector', capability_missing='tab_switch')
             if new_pages:
                 self.page = next(iter(new_pages))
-                await self.page.wait_for_load_state('domcontentloaded')
-                self.page.on('dialog', lambda dialog: self.dialogs.append(
-                    {'type': dialog.type, 'message': dialog.message}))
+                await asyncio.wait_for(self.page.wait_for_load_state('domcontentloaded'), timeout=20)
+                from .browser import record_native_dialog
+                record_native_dialog(self.page, self.dialogs)
                 raw['opened_page_url'] = self.page.url
         except ReactStop:
             raise
@@ -1661,6 +1673,7 @@ class RawSessionCore:
                 self._write_raw(step_id,raw)
                 raise ReactStop('blocked','派发前失败，零派发：'+str(error),'collector') from error
             raw['execution_error'] = str(error)
+            raw['native_dialogs'] = deepcopy(self.dialogs)
             raw['phase'] = 'dispatch'
             raw['dispatched'] = True
             raw['action_executed'] = None
@@ -1669,6 +1682,11 @@ class RawSessionCore:
             self.unknown = True
             raise ReactStop('blocked', '派发后结果未知（UNKNOWN），不自动补发：' + str(error),
                             'interrupted', unknown=True) from error
+        finally:
+            if form_watcher:
+                form_watcher['context'].remove_listener('request', form_watcher['listener'])
+                raw['native_form_requests'] = deepcopy(form_watcher['request_log'])
+                self._write_raw(step_id, raw)
         raw['dispatched'] = True
         raw['action_executed'] = True
         raw['phase'] = 'post_dispatch'

@@ -226,7 +226,7 @@ def _delayed_bridge(record, previous, before_id, after_id):
 
 def _scoped_continuity(record, previous, row, raw):
     """Explain only adjacent same-document drift using the next action's receipt."""
-    from .action_stability import pair
+    from .action_stability import pair, _observation_layout
     if record['task']['fragment'].get('action_stability_protocol') != ACTION_STABILITY_PROTOCOL:return False
     capture=raw.get('capture') or {}
     accepted=[a for a in capture.get('attempts',[]) if (a.get('stability') or {}).get('accepted') and (a.get('final_stability') or {}).get('accepted')]
@@ -239,6 +239,12 @@ def _scoped_continuity(record, previous, row, raw):
     before_id=previous['after_observation_id'];after_id=row['before_observation_id']
     a,b=record['observations'][before_id],record['observations'][after_id]
     try:
+        layouts = [_observation_layout(_observation_state(record, oid)) for oid in (before_id, after_id)]
+        # A newly requested target probe is dispatch evidence, not a page mutation.
+        for layout in layouts:
+            layout.pop('target', None)
+        if layouts[0] != layouts[1]:
+            return False
         proof=pair(_observation_state(record,before_id),_observation_state(record,after_id),
                    Path(a['evidence']['image']['path']).read_bytes(),Path(b['evidence']['image']['path']).read_bytes(),scope)
     except (ValueError,KeyError):return False
@@ -252,11 +258,36 @@ def _scoped_continuity(record, previous, row, raw):
 
 def _verified_progress_return(record, outward, returning):
     """A return may preserve newly acquired, still valid frozen goal evidence."""
-    if outward.get('action') != 'scroll' or returning.get('action') != 'scroll':
+    if outward.get('action') not in ('scroll', 'click') or returning.get('action') not in ('scroll', 'click'):
         return False
+    if 'click' in (outward.get('action'), returning.get('action')):
+        # Only a proven disclosure toggle may substitute for a scroll. Ordinary
+        # submit/focus clicks cannot turn fresh text into useful round trips.
+        from .screenshot_effect import control_state_transition, input_facts
+        for row in (outward, returning):
+            if row.get('action') != 'click':
+                continue
+            raw = load_json(row['raw_step']['path'])
+            cid = (raw['operation'].get('evidence') or {}).get('anchor_element_id')
+            before = _observation_state(record, row['before_observation_id'])
+            after = _observation_state(record, row['after_observation_id'])
+            transition = control_state_transition(before, after, cid)
+            if not transition or transition['state'] not in ('expanded', 'collapsed'):
+                return False
+            def business_inputs(state):
+                return {key: {k: v for k, v in fact.items() if k in ('value', 'checked', 'input_type', 'identity', 'enabled')}
+                        for key, fact in input_facts(state).items()}
+            if business_inputs(before) != business_inputs(after):
+                return False
     final_checks = {c.get('requirement_id'): c for c in
                     (record.get('terminal', {}).get('goal_evidence') or {}).get('checks', [])
                     if c.get('status') == 'VERIFIED' and c.get('requirement_id')}
+    if 'click' in (outward.get('action'), returning.get('action')):
+        # Requirements are frozen in the first screenshot plan.
+        from .screenshot_plan import _replay_session
+        _, frozen_requirements = _replay_session(record)
+        requirements = {r.get('id'): r for r in frozen_requirements}
+        final_checks = {rid: c for rid, c in final_checks.items() if requirements.get(rid, {}).get('kind') == 'content'}
     receipt = record.get('receipt') or {}
     boundary = receipt.get('boundary') or {}
     if not boundary.get('path') or not final_checks:
@@ -426,6 +457,14 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None, _fai
                 or raw.get('state') != before
                 or raw.get('capture', {}).get('screenshot_sha256') != record['observations'][row['before_observation_id']]['evidence']['image']['sha256']):
             raise ValueError('原子动作缺少成功派发或同步前后证据：' + row['operation_id'])
+        from .plan_evidence import native_form_intent, validate_native_form_popup
+        if ((raw.get('popup_provenance') or {}).get('kind') == 'native_form'
+                or raw.get('opened_page_url') and native_form_intent(operation, before)):
+            proof = raw.get('popup_provenance') or {}
+            if (raw.get('native_form_submit') != {'intent':proof.get('form_intent'), 'events':proof.get('submit_events')}
+                    or raw.get('opened_page_url') != after.get('url')):
+                raise ValueError('原生表单新页缺少实际提交与同步落地绑定')
+            validate_native_form_popup(proof, operation, before, after['url'])
         if row['action'] in ('wait', 'complete', 'observe', 'inspect'):
             raise ValueError('非有效操作不能进入连续动作轨迹')
         from .collection_strategy import enabled as screenshot_strategy
@@ -688,33 +727,41 @@ def planned_terminal_narrative(record, final_state, final_id):
         for check in checks:
             if check.get('status') != 'VERIFIED':
                 return None
-            if check.get('completion_mapping') == 'bound_input_state':
+            if check.get('completion_mapping') in ('bound_input_state', 'bound_input_conversion'):
+                state_name = '换算输出状态' if check.get('completion_mapping') == 'bound_input_conversion' else '输入状态'
                 proof = check['evidence'][0]
                 source_state = _observation_state(record, proof['observation_id'])
                 control = next((e for e in source_state.get('elements', []) if e.get('element_id') == proof['node']), {})
                 value = next((v for v in source_state.get('values', []) if v.get('element_id') == proof['node']), {})
                 field = str(control.get('text') or '输入条件')
                 current_proof = next((item for item in evidence.get('final_visible_evidence', [])
-                    if item.get('kind') == 'input' and item.get('node') == proof['node']
+                    if item.get('kind') in ('input', 'result') and item.get('node') == proof['node']
                     and item.get('requirement_id') == check.get('requirement_id')
-                    and item.get('observation_id') == final_id and item.get('value_visible') is True
-                    and item.get('display_value') is not None), None)
+                    and item.get('observation_id') == final_id
+                    and ((proof['input_field'] == 'checked' and item.get('checked_visible') is True
+                          and type(item.get('checked')) is bool and item['checked'] == proof['actual'])
+                         or (proof['input_field'] == 'value' and item.get('value_visible') is True
+                             and item.get('display_value') is not None))), None)
                 if current_proof is not None:
                     current_control = next((e for e in final_state.get('elements', []) if e.get('element_id') == proof['node']), {})
                     field = str(current_control.get('text') or '输入条件')
-                    displayed = str(current_proof['display_value'])
-                    description = '已清空' if displayed == '' else '值为「' + displayed + '」'
-                    basis.append(field + '，末帧仍可见输入状态：' + description)
+                    if proof['input_field'] == 'checked':
+                        description = '已勾选' if current_proof['checked'] else '未勾选'
+                    else:
+                        displayed = str(current_proof['display_value'])
+                        description = '已清空' if displayed == '' else '值为「' + displayed + '」'
+                    basis.append(field + '，末帧仍可见' + state_name + '：' + description)
                 else:
                     displayed = value.get('display_value')
                     if proof['input_field'] == 'checked':
                         description = '已勾选' if proof['actual'] else '未勾选'
                     elif value.get('value_visible') is not True or displayed is None:
-                        description = '已核验输入状态，原观察未完整显示该值'
+                        description = '已核验' + state_name + '，原观察未完整显示该值'
                     else:
                         description = '已清空' if displayed == '' else '值为「' + str(displayed) + '」'
-                    basis.append(field + '，原引用观察中的输入状态：' + description)
-                verified_results.append(field + '：' + description)
+                    basis.append(field + '，原引用观察中的' + state_name + '：' + description)
+                timing = ('末帧' if current_proof is not None else '此前阶段已核验') + state_name
+                verified_results.append(field + '（' + timing + '）：' + description)
                 continue
             quotes = []
             action_ids = []
@@ -766,7 +813,8 @@ def planned_terminal_narrative(record, final_state, final_id):
         final_result = '；'.join(dict.fromkeys(verified_results))
         final_proofs = evidence.get('final_visible_evidence') or []
         current_quotes = list(dict.fromkeys(str(item.get('display_value') if item.get('kind') == 'input' and item.get('display_value') is not None else item.get('quote') or '')
-            for item in final_proofs if item.get('observation_id') == final_id))
+            for item in final_proofs if item.get('observation_id') == final_id
+            and item.get('checked_visible') is not True))
         current_quotes = [quote for quote in current_quotes if quote]
         if current_quotes:
             basis.append('完成时当前页面可见' + '、'.join('「' + quote + '」' for quote in current_quotes))
@@ -1380,7 +1428,7 @@ def post_seal_name(name):
     Covers the canonical historical feedback names and every versioned
     appended receipt (same prefix, attempt/content digest suffix).
     """
-    return (name in ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl')
+    return (name in ('saved_sample.json', 'context_cleanup_error.json', 'derivations.jsonl', 'strategy-result.json')
             or name.startswith('planning-feedback-'))
 
 

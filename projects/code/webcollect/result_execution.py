@@ -86,6 +86,36 @@ def submission_row(row, before_state):
     return is_submission(row.get('action'), row.get('arguments'), binding, element)
 
 
+def frozen_input_refs(session, oid, form):
+    """A real submission may use a frozen, visible default without a fake edit."""
+    from copy import copy
+    from .screenshot_plan import _verify_input
+    from .screenshot_effect import business_scope
+    before = _state(session, oid)
+    if not before or not form:
+        return []
+    prefix = copy(session)
+    ids = list(session.observation_records)
+    prefix.observation_records = {key: session.observation_records[key] for key in ids[:ids.index(oid) + 1]}
+    output = []
+    for requirement in getattr(session, 'requirements', []):
+        if requirement.get('kind') != 'input':
+            continue
+        # Here we prove the actual state at submission, not historical completion.
+        expected = {**requirement, 'evidence_scope': 'current'}
+        answer = {'evidence': [{'observation': oid, 'control': cid} for cid in session.observation_records[oid]['controls']]}
+        check, _ = _verify_input(prefix, answer, expected, trusted_capture=True)
+        if not check:
+            continue
+        proof = check['evidence'][0]
+        if business_scope(before, proof['node']) != form:
+            continue
+        output.append({'operation_id': None, 'node': proof['node'], 'form_selector': form,
+            'after_observation_id': oid, 'input_origin': 'frozen_visible_state',
+            'requirement_id': requirement['id'], 'captured_input': proof})
+    return output
+
+
 def result_execution_binding(s, oid, state, node):
     """Bind a real result node to this attempt's input and submit, not a table."""
     binding=_binding(state,node['element_id'])
@@ -112,6 +142,8 @@ def result_execution_binding(s, oid, state, node):
                 submit=None
         is_submit = is_submission(action, row.get('arguments'), b, e)
         matching=[i for i in inputs if form and i['form_selector']==form] if screenshot else [i for i in inputs if not form or i['form_selector']==form]
+        if is_submit and not matching and screenshot:
+            matching = frozen_input_refs(s, row['before_observation_id'], form)
         if is_submit and matching and not page_feedback(after)['validation_feedback']:
             # The result must already be captured after submission. Scrolling
             # to a previously unseen static tax table cannot establish causality.
@@ -157,7 +189,7 @@ def completion_result_summary(evidence, *, final_observation_id):
         rows.append({'field':check.get('field'),'visible_result':proof['quote'],
             'observation_id':proof['observation_id'],'node':proof['node'],'url':proof['url'],
             'submission_operation_id':execution['submission']['operation_id'],
-            'input_operation_ids':[r['operation_id'] for r in execution['submission']['input_refs']]})
+            'input_operation_ids':[r['operation_id'] for r in execution['submission']['input_refs'] if r.get('operation_id')]})
     if not rows:return None
     final_result='；'.join((str(r['field'])+'：' if r['field'] else '')+r['visible_result'] for r in rows)
     return {'policy':RESULT_EXECUTION_POLICY,'final_result':final_result,

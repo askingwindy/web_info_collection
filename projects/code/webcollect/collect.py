@@ -1037,7 +1037,8 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
     page=await context.new_page()
     page.set_default_timeout(15000)
     dialogs=[]
-    page.on('dialog',lambda dialog:dialogs.append({'type':dialog.type,'message':dialog.message}))
+    from .browser import record_native_dialog
+    record_native_dialog(page, dialogs)
     operations=task['operations']+[{'action_type':'complete','arguments':{'status':'success'},
                 'goal':'确认最终页面符合任务要求','rationale':task['completion_judgement'],'expected':task['final_result']}]
     steps=[];previous=None;raw_records=[];ground_truth=[];ratios=[]
@@ -1346,6 +1347,7 @@ async def collect_one(context, task, directory, evidence, ids, *, navigation=Non
                 if op.get('postconditions'):raw['postconditions']=await assert_state(page,op['postconditions'],**protection)
             except Exception as e:
                 raw['execution_error']=str(e)
+                raw['native_dialogs']=[dict(dialog) for dialog in dialogs]
                 write_json(evidence/f'step_{i:03}.json',raw)
                 if controller:
                     try:

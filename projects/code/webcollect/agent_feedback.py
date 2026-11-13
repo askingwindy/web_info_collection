@@ -107,11 +107,19 @@ def _verify_feedback_evidence(refs):
         path = Path(ref['path'])
         # Always recheck path identity, even on a cache hit.
         if not path.is_absolute() or path.is_symlink() or not path.is_file():
-            raise ValueError('证据路径必须为已有绝对文件路径')
+            error = ValueError('证据路径必须为已有绝对文件路径')
+            error.evidence_classification = 'MISSING_FILE' if path.is_absolute() and not path.is_symlink() and not path.exists() else 'INVALID_PATH'
+            error.evidence_references = refs
+            raise error
         stat = path.stat()
         versions.append((str(path), ref.get('sha256'), (stat.st_dev, stat.st_ino,
             stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)))
-    _verified_feedback_versions(tuple(versions))
+    try:
+        _verified_feedback_versions(tuple(versions))
+    except ValueError as error:
+        error.evidence_references = refs
+        error.evidence_classification = 'DIGEST_MISMATCH' if str(error) == '证据SHA不匹配' else 'INVALID_EVIDENCE'
+        raise
 
 
 def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None, collection_report=None,
@@ -128,6 +136,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
         return urlsplit(known_hosts.get(key, key)).netloc.removeprefix('www.') if scoped else key
     host = context_host(site_uri)
     quality_groups = [[ref] for ref in quality]
+    strict_quality = {object_sha256(group) for group in quality_groups}
     result = {'schema_version': VERSION, 'generation': list(generation), 'executions': [],
               'quality': [], 'images': [], 'avoid': [], 'unresolved': []}
     if registry is not None and Path(registry).exists():
@@ -140,71 +149,88 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                 rows = con.execute('SELECT a.*,t.task_json FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key ORDER BY a.created_at DESC').fetchall()
                 for row in rows:
                     task = json.loads(row['task_json'])
-                    owner_id = (task.get('candidate_binding') or {}).get('candidate_id') if scoped else None
+                    actual_owner_id = (task.get('candidate_binding') or {}).get('candidate_id')
+                    owner_id = actual_owner_id if scoped else None
                     if context_host(task['site_uri']) != host and not (owner_id and owner_id == candidate_id):
                         continue
                     refs = json.loads(row['evidence_json'] or '[]')
-                    if refs: _verify_feedback_evidence(refs)
                     entry = {'attempt_id':row['attempt_id'], 'sample_id':row['sample_id'], 'task_id':task['task_id'],
                         'instruction':task.get('instruction'), 'status':row['status'], 'root_cause':row['root_cause'],
                         'failure_class':row['failure_class'], 'references':refs, 'feedback_status':'LEGACY_NO_STEP_BINDING'}
-                    for ref in refs:
-                        try: value = load_json(ref['path'])
-                        except (ValueError, UnicodeError): continue
-                        if value.get('schema_version') in (VERSION, 'webcollect-site-agent-feedback-1'):
-                            step_refs = [s['raw'] for s in value['steps']] + [s['image'] for s in value['steps']]
-                            if step_refs: _verify_feedback_evidence(step_refs)
-                            for step in value['steps']:
-                                raw=load_json(step['raw']['path'])
-                                dispatch=raw.get('controller_dispatch')
-                                if not dispatch:continue
-                                _verify_feedback_evidence([dispatch]);formal=load_json(dispatch['path']).get('formal_frame')
-                                if formal and not Path(formal['path']).exists():
-                                    result.setdefault('frame_relocations',[]).append({
-                                        'schema_version':'rejected-frame-relocation',
-                                        'original_path':formal['path'],'original_sha256':formal['sha256'],
-                                        'current':step['image'],'dispatch':dispatch})
-                            diagnostic_refs = [d['reference'] for d in value['diagnostics']] + [d['image'] for d in value['diagnostics'] if 'image' in d]
-                            if diagnostic_refs: _verify_feedback_evidence(diagnostic_refs)
-                            # Rolling context bound: only the two most recent attempts
-                            # (rows arrive newest-first) keep full step states and
-                            # attach images. Older attempts keep every reason,
-                            # operation and reference in a compact form; without
-                            # this bound the growing prompt exceeds the gateway
-                            # input reservation and blocks all later rounds.
-                            recent = len(result['executions']) < 2
-                            if recent:
-                                # Diagnostic bodies can be large; the advisory
-                                # context carries references only — the original
-                                # companion files remain on disk unchanged.
-                                entry.update(feedback={**{k: v for k, v in value.items() if k != 'diagnostics'},
-                                    'diagnostics': [{dk: dv for dk, dv in d.items() if dk != 'actual'}
-                                                    for d in value['diagnostics']]},
-                                    feedback_status='BOUND_ORIGINAL_STEPS')
-                                result['images'].extend(s['image'] for s in value['steps'])
-                                result['images'].extend(d['image'] for d in value['diagnostics'] if 'image' in d)
-                            else:
-                                entry.update(feedback={k: value[k] for k in ('schema_version', 'attempt_id',
-                                    'sample_id', 'task_id', 'outcome', 'error')},
-                                    feedback_status='BOUND_COMPACT_OLD_ATTEMPT',
-                                    steps=[{'step_id': s['step_id'], 'operation': s['operation'],
-                                            'execution_error': s['execution_error']} for s in value['steps']],
-                                    diagnostics=[{'name': Path(d['reference']['path']).name} for d in value['diagnostics']])
-                            for s in value['steps']:
-                                if s.get('execution_error'):
-                                    row_avoid = {'operation':s['operation'], 'reason':s['execution_error'],
-                                        'image':s['image'], 'source':ref}
-                                    if recent:
-                                        row_avoid['state'] = s['state']
-                                    result['avoid'].append(row_avoid)
-                    if 'm4_reviews' in tables:
+                    strict = (candidate_id is not None and actual_owner_id == candidate_id) or row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
+                    before = {key: len(result.get(key, [])) for key in ('images', 'avoid', 'frame_relocations')}
+                    try:
+                        if refs: _verify_feedback_evidence(refs)
+                        for ref in refs:
+                            try: value = load_json(ref['path'])
+                            except (ValueError, UnicodeError): continue
+                            if value.get('schema_version') in (VERSION, 'webcollect-site-agent-feedback-1'):
+                                step_refs = [s['raw'] for s in value['steps']] + [s['image'] for s in value['steps']]
+                                if step_refs: _verify_feedback_evidence(step_refs)
+                                for step in value['steps']:
+                                    raw=load_json(step['raw']['path'])
+                                    dispatch=raw.get('controller_dispatch')
+                                    if not dispatch:continue
+                                    _verify_feedback_evidence([dispatch]);formal=load_json(dispatch['path']).get('formal_frame')
+                                    if formal and not Path(formal['path']).exists():
+                                        result.setdefault('frame_relocations',[]).append({
+                                            'schema_version':'rejected-frame-relocation',
+                                            'original_path':formal['path'],'original_sha256':formal['sha256'],
+                                            'current':step['image'],'dispatch':dispatch})
+                                diagnostic_refs = [d['reference'] for d in value['diagnostics']] + [d['image'] for d in value['diagnostics'] if 'image' in d]
+                                if diagnostic_refs: _verify_feedback_evidence(diagnostic_refs)
+                                # Rolling context bound: only the two most recent attempts
+                                # (rows arrive newest-first) keep full step states and
+                                # attach images. Older attempts keep every reason,
+                                # operation and reference in a compact form; without
+                                # this bound the growing prompt exceeds the gateway
+                                # input reservation and blocks all later rounds.
+                                recent = len(result['executions']) < 2
+                                if recent:
+                                    # Diagnostic bodies can be large; the advisory
+                                    # context carries references only — the original
+                                    # companion files remain on disk unchanged.
+                                    entry.update(feedback={**{k: v for k, v in value.items() if k != 'diagnostics'},
+                                        'diagnostics': [{dk: dv for dk, dv in d.items() if dk != 'actual'}
+                                                        for d in value['diagnostics']]},
+                                        feedback_status='BOUND_ORIGINAL_STEPS')
+                                    result['images'].extend(s['image'] for s in value['steps'])
+                                    result['images'].extend(d['image'] for d in value['diagnostics'] if 'image' in d)
+                                else:
+                                    entry.update(feedback={k: value[k] for k in ('schema_version', 'attempt_id',
+                                        'sample_id', 'task_id', 'outcome', 'error')},
+                                        feedback_status='BOUND_COMPACT_OLD_ATTEMPT',
+                                        steps=[{'step_id': s['step_id'], 'operation': s['operation'],
+                                                'execution_error': s['execution_error']} for s in value['steps']],
+                                        diagnostics=[{'name': Path(d['reference']['path']).name} for d in value['diagnostics']])
+                                for s in value['steps']:
+                                    if s.get('execution_error'):
+                                        row_avoid = {'operation':s['operation'], 'reason':s['execution_error'],
+                                            'image':s['image'], 'source':ref}
+                                        if recent:
+                                            row_avoid['state'] = s['state']
+                                        result['avoid'].append(row_avoid)
+                    except (ValueError, OSError, UnicodeError) as error:
+                        if strict: raise
+                        for key, length in before.items():
+                            if key in result: del result[key][length:]
+                        entry = {key: value for key, value in entry.items() if key not in ('feedback', 'steps', 'diagnostics')}
+                        entry.update(feedback_status='UNAVAILABLE', evidence_error={
+                            'type':type(error).__name__, 'reason':str(error),
+                            'references':getattr(error, 'evidence_references', refs),
+                            'classification':getattr(error, 'evidence_classification', 'INVALID_EVIDENCE')})
+                    if 'm4_reviews' in tables and entry['feedback_status'] != 'UNAVAILABLE':
                         reviewed = con.execute('SELECT evidence_json FROM m4_reviews WHERE sample_id=?', (row['sample_id'],)).fetchone()
                         if reviewed:
-                            quality_groups.append(json.loads(reviewed[0]))
-                    if 'm4_quality_admissions' in tables:
+                            group = json.loads(reviewed[0])
+                            quality_groups.append(group)
+                            if strict: strict_quality.add(object_sha256(group))
+                    if 'm4_quality_admissions' in tables and entry['feedback_status'] != 'UNAVAILABLE':
                         admitted = con.execute('SELECT report_json FROM m4_quality_admissions WHERE sample_id=?', (row['sample_id'],)).fetchone()
                         if admitted:
-                            quality_groups.append([json.loads(admitted[0])])
+                            group = [json.loads(admitted[0])]
+                            quality_groups.append(group)
+                            if strict: strict_quality.add(object_sha256(group))
                     result['executions'].append(entry)
                     unresolved = row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
                     if unresolved and scoped:
@@ -280,11 +306,25 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
         except StaleSemanticRules as error:
             result.setdefault('quality_stale', []).append({'reason': str(error), 'group_sha256': digest})
             continue
-        result['quality'].append({'binding':binding, 'report':report})
-        # Dataset bytes are verified by the original QC binding gate above.
-        for sample in (Path(report['dataset'])/'samples').iterdir():
-            for image in sorted((sample/'images').glob('*.png')):
-                result['images'].append(reference(image))
+        except (ValueError, OSError) as error:
+            if digest in strict_quality: raise
+            result.setdefault('quality_unavailable', []).append({'references':group,
+                'type':type(error).__name__, 'reason':str(error)})
+            continue
+        images_before = len(result['images'])
+        quality_before = len(result['quality'])
+        try:
+            result['quality'].append({'binding':binding, 'report':report})
+            # Dataset bytes are verified by the original QC binding gate above.
+            for sample in (Path(report['dataset'])/'samples').iterdir():
+                for image in sorted((sample/'images').glob('*.png')):
+                    result['images'].append(reference(image))
+        except (ValueError, OSError) as error:
+            if digest in strict_quality: raise
+            del result['images'][images_before:]
+            del result['quality'][quality_before:]
+            result.setdefault('quality_unavailable', []).append({'references':group,
+                'type':type(error).__name__, 'reason':str(error)})
     # All bound images are sent; an over-large context must stop at the gateway's
     # configured image/input budget rather than silently omit failure evidence.
     result['images'] = list({r['sha256']:r for r in result['images']}.values())

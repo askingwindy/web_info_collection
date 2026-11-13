@@ -726,7 +726,7 @@
     // no child text, visual inference or frame action is synthesized.
     const text = opaqueFrame?'':name(element);
     const inputable = !element.readOnly && !element.matches('input[type=range],input[type=color],input[type=file],input[type=hidden],input[type=reset],input[type=image]') && element.matches('textarea,input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]),[contenteditable=true]');
-    const clickable = !opaqueFrame&&(element.matches('a[href],button,select,summary,input,label,[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio]') ||
+    const clickable = !opaqueFrame&&(element.matches('a[href],button,select,summary,input,textarea,label,[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio]') ||
        element.hasAttribute('onclick') || style.cursor === 'pointer');
     const scrollable = /(auto|scroll)/.test(style.overflowY+style.overflowX) && (element.scrollHeight>element.clientHeight || element.scrollWidth>element.clientWidth);
     const image=element.tagName==='IMG';
@@ -957,7 +957,7 @@
       .map(r=>[Math.floor((r.left+r.right-1)/2),Math.floor((r.top+r.bottom-1)/2)]);
     const canHit=([x,y])=>{const hit=document.elementFromPoint(x,y);return !!hit&&(hit===node||node.contains(hit));};
     const coordinate=candidates.find(canHit)||candidates[0];
-    return {schema_version:'webcollect-click-dispatch-point-1',coordinate,hit_valid:canHit(coordinate),
+    return {schema_version:'click-dispatch-point',coordinate,hit_valid:canHit(coordinate),
             visible_text:visibleText(node)};
   };
   let targetInfo=null;
@@ -1393,13 +1393,47 @@
     const words=[x.id,x.className,x.getAttribute('aria-label')].filter(v=>typeof v==='string').join(' ').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase();
     if(x.matches('output,[role=status],[aria-live=polite],[aria-live=assertive]')||/(?:^|[\s_-])(?:result|results|answer|output)(?:$|[\s_-])|计算结果|計算結果/.test(words))return x;
   }return null;};
+  // Read successful native fields without constructing FormData (which fires
+  // page formdata handlers), submitting, or reading any file contents.
+  const nativeFormSubmission=node=>{
+    const form=node.form;if(!form)return null;
+    const submits=x=>['button','input'].includes(x.localName)&&x.type==='submit';
+    const submitter=submits(node)?node:[...form.elements].find(submits)||null;
+    const action=submitter?.hasAttribute('formaction')?submitter.formAction:form.action;
+    const method=(submitter?.hasAttribute('formmethod')?submitter.formMethod:form.method).toLowerCase();
+    const enctype=submitter?.hasAttribute('formenctype')?submitter.formEnctype:form.enctype;
+    const target=submitter?.hasAttribute('formtarget')?submitter.formTarget:(form.target||document.querySelector('base[target]')?.target||'');
+    if(target!=='_blank'||!['get','post'].includes(method)||enctype!=='application/x-www-form-urlencoded')return null;
+    if(document.characterSet.toLowerCase()!=='utf-8'||form.acceptCharset&&!/^utf-8$/i.test(form.acceptCharset.trim()))return null;
+    const fields=[];
+    for(const field of form.elements){
+      if(field.matches(':disabled')||!field.name)continue;
+      if(field.hasAttribute('dirname')||field.name==='_charset_')return null;
+      if(field.localName==='input'){
+        if(['file','image','password'].includes(field.type))return null;
+        if(['reset','button'].includes(field.type)||field.type==='submit'&&field!==submitter)continue;
+        if(['checkbox','radio'].includes(field.type)&&!field.checked)continue;
+      }else if(field.localName==='button'){
+        if(field!==submitter)continue;
+      }else if(field.localName==='select'){
+        for(const option of field.options)if(option.selected&&!option.disabled&&!option.closest('optgroup[disabled]'))fields.push([field.name,option.value]);
+        continue;
+      }else if(field.localName!=='textarea'){
+        if(['fieldset','output'].includes(field.localName))continue;
+        return null;
+      }
+      fields.push([field.name,field.value]);
+    }
+    return {form_selector:evidenceSelector(form),submitter_selector:submitter?evidenceSelector(submitter):null,
+      action,method,enctype,target,fields};
+  };
   const captureControls=nodes.map((node,i)=>{
     const parts=[];let n=node;
     while(n&&n.nodeType===1){
       const siblings=n.parentElement?[...n.parentElement.children].filter(s=>s.localName===n.localName):[n];
       parts.unshift(n.localName+':nth-of-type('+(siblings.indexOf(n)+1)+')');n=n.parentElement;
     }
-    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,target:node.localName==='a'?(node.getAttribute('target')||''):null,input_type:node.type||'',form_index:node.form?[...document.forms].indexOf(node.form):null,
+    return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,target:node.localName==='a'?(node.getAttribute('target')||''):null,input_type:node.type||'',form_submission:nativeFormSubmission(node),form_identity:node.form?{action:node.form.action,method:node.form.method,target:node.form.target}:null,form_index:node.form?[...document.forms].indexOf(node.form):null,
       result_region_selector:resultOwner(node)?evidenceSelector(resultOwner(node)):null,form_selector:(node.form||node.closest('form'))?evidenceSelector(node.form||node.closest('form')):null,validation_message:node.validationMessage||'',aria_invalid:node.getAttribute('aria-invalid'),aria_role:node.getAttribute('role'),
       options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:clean(o.label),disabled:o.disabled})):[]};
   });

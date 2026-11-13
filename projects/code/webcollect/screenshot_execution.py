@@ -381,7 +381,7 @@ def bind_plan_targets(plan, observation, allowed_ids=None, *, normalization=None
     normalization = normalization if normalization is not None else []
     steps = plan.get('steps', [])
     future = False
-    for index, step in enumerate([*steps, *[r for r in plan.get('requirements', []) if r.get('kind') == 'input']]):
+    for index, step in enumerate([*steps, *[r for r in plan.get('requirements', []) if r.get('kind') == 'input' or r.get('result_kind') == 'input_conversion']]):
         deferred = future and index < len(steps)
         for key in ('target', 'end_target'):
             target = step.get(key) or {}

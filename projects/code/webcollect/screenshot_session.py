@@ -83,6 +83,9 @@ class ScreenshotPlanSession(RawSessionCore):
         self.extra_ready_endings = (READY_ENDING,)
         self._stall_marker = None
         self._stall_count = 0
+        self._stall_seen_markers = set()
+        self._checkpoint_evidence_seen = set()
+        self._stall_request_pending = False
         self.host_input_proofs = []
         self.first_route_status = "original"
         self.verified_answers = {}
@@ -308,6 +311,35 @@ class ScreenshotPlanSession(RawSessionCore):
                 'results': sorted({r['text'] for r in self._valid_result_rows(oid)}),
                 'newly_provided': oid not in self.provided_observations,
             } for oid in observation_ids]
+            # Count revisits before another provider request. A newly captured
+            # relevant quote/result may still need its first interpretation;
+            # capture IDs and reworded plans never establish that novelty.
+            def evidence_keys(item):
+                return {object_sha256([item['url'], kind, quote])
+                        for kind in ('quotes', 'results') for quote in item[kind]}
+            for oid in self.provided_observations:
+                prior_regions = self.region_registries.get(oid)
+                if prior_regions is None:
+                    prior_regions = region_registry(load_json(self.observation_records[oid]['evidence']['state']['path']))
+                offered = {'url': self.observation_records[oid].get('url'),
+                    'quotes': {r.get('quote') or '' for r in prior_regions
+                        if any(_reading_region_relevant(requirement, r) for requirement in self.requirements
+                               if requirement['id'] not in self.verified_answers)},
+                    'results': {r['text'] for r in self._valid_result_rows(oid)}}
+                self._checkpoint_evidence_seen.update(evidence_keys(offered))
+            new_evidence = False
+            for item in selected_evidence:
+                keys = evidence_keys(item)
+                if item['newly_provided'] and keys - self._checkpoint_evidence_seen:
+                    new_evidence = True
+                self._checkpoint_evidence_seen.update(keys)
+            self._track_stall_marker(count_revisit=True)
+            if new_evidence:
+                self._stall_count = 0
+            self._stall_request_pending = True
+            if self._stall_count >= NO_PROGRESS_STALL_LIMIT:
+                self._close_stall()
+                return None
             request_key = object_sha256({'facts': self._checkpoint_identity(prompt.get('checkpoint_feedback')),
                                         'selected_evidence': selected_evidence,
                                         'inspection_images': [v for v in visuals if v.get('scope') == 'image_crop']})
@@ -341,6 +373,7 @@ class ScreenshotPlanSession(RawSessionCore):
         except (SessionGLMCallLimit, BudgetStop, ReactStop, asyncio.CancelledError):
             raise
         except Exception as error:
+            self.strategy_end_reason = 'protocol_error'
             raise ReactStop('blocked', type(error).__name__ + ': ' + str(error), 'model') from error
         finally:
             counter = getattr(self.choose, 'requests_used', None)
@@ -408,6 +441,13 @@ class ScreenshotPlanSession(RawSessionCore):
         payload = {'phase': 'first', 'attempt_id': self.attempt_id,
                    'system': SYSTEM_PROMPT,
                    'goal': self._fixed_goal() or self.requested_goal,
+                   'goal_selection': {
+                       'mode': 'fixed' if self._fixed_goal() else 'autonomous',
+                       'instruction': ('逐字继承宿主指定目标，不能改写；工具不返回goal。'
+                           if self._fixed_goal() else
+                           '当前仅指定入口URL，三个目标字段为空是正常入口：你须依据实际页面与可用交互自主选择具体可验证、自然需要至少五个必要业务动作的目标，并在submit_plan.goal提交。'
+                           '可选择有意义的计算、查询或关联正文阅读；不得先选首屏浅阅读再靠无用途滚动、往返或验算凑步。确无可行目标才报告unsuitable。'),
+                       'freeze': '首轮接受后冻结，后续只修订剩余路线，不能换目标'},
                    'requested_goal': _public_step(self.requested_goal),
                    'session_objective': _public_step((self.task['fragment'].get('session_objective') or {}).get('objective')),
                    'current_observation': oid, 'screenshots': [oid],
@@ -418,6 +458,8 @@ class ScreenshotPlanSession(RawSessionCore):
                    'controls': controls,
                    'interaction_affordances': interaction_affordances(controls, self._body_ids()),
                    'allowed_actions': self._allowed_actions(),
+                   'tool_capabilities': {'file_upload': False,
+                       'instruction': '当前工具不支持文件上传或本地文件选择；自主目标不得依赖上传。固定目标需要上传时如实报告能力不足，不尝试以type替代。'},
                    'rules': FIRST_RULES,
                    'planning_range': {'minimum': BUSINESS_MINIMUM,
                                       'preferred_maximum': PREFERRED_MAXIMUM, 'maximum': None,
@@ -527,8 +569,8 @@ class ScreenshotPlanSession(RawSessionCore):
             if getattr(self, 'runlog', None) is not None:
                 self._runlog('plan_rejected', observationId=self.current['observation_id'],
                     reason=feedback.get('kind'), retriable=False)
-            self._range_close('UNSUITABLE_TASK', feedback['message'])
-            return
+            self.strategy_end_reason = 'protocol_error'
+            raise ReactStop('blocked', 'PLAN_ADMISSION_REJECTED: ' + feedback['message'], 'model')
         if feedback['kind'] == 'unsuitable':
             self.event('screenshot-plan-unsuitable', reason=feedback['unsuitable'])
             if getattr(self, 'runlog', None) is not None:
@@ -550,6 +592,7 @@ class ScreenshotPlanSession(RawSessionCore):
         if self.working_goal is None:
             self.working_goal = self.frozen_goal
         self.requirements = deepcopy(requirements)
+        self.final_requirement_ids = deepcopy(plan.get('final_requirement_ids'))
         self.plan = {'steps': plan['steps'], 'final_presentation_step': plan['final_presentation_step']}
         self.position = 0
         self._plan_accept_route_state(plan['steps'], plan['final_presentation_step'])
@@ -558,7 +601,8 @@ class ScreenshotPlanSession(RawSessionCore):
             goal=self.frozen_goal, requested_goal=deepcopy(self.requested_goal),
             session_objective=deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
             requirements=deepcopy(self.requirements), steps=deepcopy(self.plan['steps']),
-            final_presentation_step=self.plan['final_presentation_step'], admission=feedback)
+            final_presentation_step=self.plan['final_presentation_step'],
+            final_requirement_ids=deepcopy(self.final_requirement_ids), admission=feedback)
         if getattr(self, 'runlog', None) is not None:
             self._runlog('plan_accepted', observationId=self.current['observation_id'],
                 plannedSteps=len(self.plan['steps']), requirements=len(self.requirements),
@@ -884,10 +928,40 @@ class ScreenshotPlanSession(RawSessionCore):
         return rows
 
     def _valid_result_rows(self, oid):
+        """Candidate locations share the exact frozen result semantics with completion."""
+        output = self._valid_calculation_result_rows(oid)
+        from .screenshot_plan import _navigation_result_binding, _verify_input_conversion, _input_requirement_matches, _evidence_nodes
+        from .result_execution import _rows
+        from .screenshot_effect import input_facts
+        state = _state_for_observation(self, oid)
+        observation = self.observation_records.get(oid)
+        if not state or not observation:
+            return output
+        for requirement in self.requirements:
+            kind = requirement.get('result_kind')
+            if kind not in ('navigation', 'input_conversion'):
+                continue
+            if requirement.get('evidence_scope') != 'historical' and observation.get('document_identity') != self.current.get('document_identity'):
+                continue
+            if kind == 'navigation':
+                if _navigation_result_binding(self, _rows(self), oid, state, requirement):
+                    output.extend({'control': n['element_id'], 'text': n.get('text') or '', 'requirement_id': requirement['id']}
+                        for n in _evidence_nodes(state) if n.get('visible') is True and len(n.get('text') or '') >= 8)
+            else:
+                for cid in _input_requirement_matches(self, observation, requirement['target']):
+                    actual = input_facts(state).get(cid, {}).get('value')
+                    answer = {'observed_result': actual, 'evidence': [{'observation': oid, 'control': cid}]}
+                    check, _ = _verify_input_conversion(self, answer, requirement, trusted_capture=True)
+                    if check:
+                        output.append({'control': cid, 'text': actual, 'requirement_id': requirement['id']})
+        return output
+
+    def _valid_calculation_result_rows(self, oid):
         """Causal current-document results not superseded by later edits."""
         observation = self.observation_records.get(oid)
         if (not observation or not observation.get('capture_verified')
-                or observation.get('document_identity') != self.current.get('document_identity')):
+                or (observation.get('document_identity') != self.current.get('document_identity')
+                    and not any(r.get('kind') == 'result' and r.get('evidence_scope') == 'historical' and r.get('result_kind', 'calculation') == 'calculation' for r in self.requirements))):
             return []
         state = _state_for_observation(self, oid)
         if state is None:
@@ -915,7 +989,8 @@ class ScreenshotPlanSession(RawSessionCore):
                 continue
             proof = {'result_execution_binding': binding,
                      'post_submit_causality': causality}
-            if not _result_superseded(self, rows, oid, state, node, proof):
+            historical = any(r.get('kind') == 'result' and r.get('evidence_scope') == 'historical' and r.get('result_kind', 'calculation') == 'calculation' for r in self.requirements)
+            if historical or not _result_superseded(self, rows, oid, state, node, proof):
                 output.append(row)
         return output
 
@@ -1289,6 +1364,7 @@ class ScreenshotPlanSession(RawSessionCore):
         payload = {'phase': 'branch', 'attempt_id': self.attempt_id,
                    'system': SYSTEM_PROMPT,
                    'goal': self.frozen_goal, 'requirements': _public_step(self.requirements),
+                   'final_requirement_ids': deepcopy(getattr(self, 'final_requirement_ids', None)),
                    'requested_goal': _public_step(self.requested_goal),
                    'session_objective': _public_step((self.task['fragment'].get('session_objective') or {}).get('objective')),
                    'current_observation': oid, 'screenshots': [oid],
@@ -1407,7 +1483,7 @@ class ScreenshotPlanSession(RawSessionCore):
             self.completion_feedback = {'kind': 'COMPLETION_EVIDENCE_GAPS', 'gaps': gaps,
                 'verified_requirement_ids': self.verified_requirement_ids,
                 'verified_answers': deepcopy(list(self.verified_answers.values())),
-                'message': '已核验答案与原引用已保留；只补缺项。后续相关输入或提交会使旧计算证明失效。'}
+                'message': '已核验答案与原引用已保留；只补缺项。current事项在后续相关输入、提交或跳页后会失效；historical仅保留有真实阶段因果的原捕获。末帧只核验首轮指定展示事项。'}
             self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False,
                        verified_requirement_ids=self.verified_requirement_ids)
             self._runlog('completion_gaps', observationId=self.current['observation_id'],
@@ -1588,20 +1664,25 @@ class ScreenshotPlanSession(RawSessionCore):
         return object_sha256({'facts': self._progress_marker(),
                               'completion_gaps': list(self._completion_gap_projection)})
 
-    def _stall_check(self, decision, feedback):
-        """Shared no-progress accounting for every checkpoint reply.
-
-        Revisited frames, reworded decisions and out-of-choices replies all
-        never reset progress. Repeated complete with unchanged missing facts, or
-        the consecutive stall limit, ends the attempt. Corrected revise tails
-        remain executable within that same bounded allowance.
-        """
-        stall_marker = self._stall_progress_marker()
-        if stall_marker == self._stall_marker:
-            self._stall_count += 1
-        else:
-            self._stall_marker = stall_marker
+    def _track_stall_marker(self, *, count_revisit):
+        marker = self._stall_progress_marker()
+        if marker not in self._stall_seen_markers:
+            self._stall_seen_markers.add(marker)
             self._stall_count = 0
+        elif count_revisit:
+            self._stall_count += 1
+        self._stall_marker = marker
+        return marker
+
+    def _close_stall(self):
+        self.event('screenshot-no-progress-stall', dispatches=self.actual_dispatches,
+                   position=self.position, stall_count=self._stall_count)
+        self._range_close('NO_PROGRESS_END', '已访问的目标事实、有效证据和缺项状态反复回访，无进展结束')
+
+    def _stall_check(self, decision, feedback):
+        """Account each checkpoint once; only genuinely new state resets stalls."""
+        stall_marker = self._track_stall_marker(count_revisit=not self._stall_request_pending)
+        self._stall_request_pending = False
         key = object_sha256({'facts': stall_marker,
             'missing': sorted(row['id'] for row in self.requirements
                               if row['id'] not in self.verified_checks),
@@ -1609,9 +1690,7 @@ class ScreenshotPlanSession(RawSessionCore):
         self.no_progress_keys[key] = self.no_progress_keys.get(key, 0) + 1
         if ((decision.get('decision') == 'complete' and self.no_progress_keys[key] >= 2)
                 or self._stall_count >= NO_PROGRESS_STALL_LIMIT):
-            self.event('screenshot-no-progress-stall', dispatches=self.actual_dispatches,
-                       position=self.position, stall_count=self._stall_count)
-            self._range_close('NO_PROGRESS_END', '连续检查点无有效动作、业务状态变化或新增有效证据，无进展结束')
+            self._close_stall()
             return True
         return False
 

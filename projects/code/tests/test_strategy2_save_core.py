@@ -177,7 +177,7 @@ class Strategy2SaveCore(unittest.TestCase):
                          'observation_id': 'final', 'value_visible': True, 'display_value': '平板'}]}}}
             input_final = {'visible_text': '新形状', 'elements': [{'element_id': 'shape', 'text': '新形状'}]}
             input_narrative = postprocess.planned_terminal_narrative(input_record, input_final, 'final')
-            self.assertIn('新形状：值为「平板」', input_narrative['final_result'])
+            self.assertIn('新形状（末帧输入状态）：值为「平板」', input_narrative['final_result'])
             self.assertNotIn('slab', input_narrative['final_result'])
             self.assertNotIn('值为「板」', input_narrative['completion_judgement'])
             input_record['terminal']['goal_evidence']['final_visible_evidence'] = []
@@ -238,3 +238,35 @@ class Strategy2SaveCore(unittest.TestCase):
             verify_derivation_successor(evidence, saved_ref, record_ref)
             with self.assertRaises(ValueError):
                 verify_derivation_successor(evidence, {**saved_ref, 'sha256': 'other-save'}, record_ref)
+
+            # A real strategy settlement is written after the committed seal;
+            # it must not invalidate the frozen original capture bytes.
+            from webcollect.collect_runtime import verify_committed_samples
+            from webcollect.batch_core import file_sha
+            committed = (root / 'committed').resolve()
+            sample_dir = committed / 'samples' / 'saved'
+            capture_dir = committed / 'evidence' / 'saved'
+            sample_dir.mkdir(parents=True)
+            (capture_dir / 'raw').mkdir(parents=True)
+            annotation = sample_dir / 'annotation.json'
+            annotation.write_text('{"sample_id":"saved"}')
+            frame = capture_dir / 'raw' / 'frame.png'
+            frame.write_bytes(b'original sealed frame')
+            saved_path = capture_dir / 'saved_sample.json'
+            saved_path.write_text(json.dumps({'sample_id': 'saved', 'attempt_id': 'attempt',
+                'sample_files_sha256': {'annotation.json': file_sha(annotation)},
+                'capture_files_sha256': {'raw/frame.png': file_sha(frame)}}))
+            attempt = {'sample_id': 'saved', 'attempt_id': 'attempt',
+                'status': 'collected_pending_review', 'evidence': [
+                    {'path': str(saved_path), 'sha256': file_sha(saved_path)}]}
+            (capture_dir / 'strategy-result.json').write_text('{"runtime_settled":true}')
+            verify_committed_samples(committed, [attempt])
+            for original_file in (frame, annotation):
+                original_bytes = original_file.read_bytes()
+                original_file.write_bytes(b'changed original evidence')
+                with self.assertRaises(ValueError):
+                    verify_committed_samples(committed, [attempt])
+                original_file.write_bytes(original_bytes)
+            (capture_dir / 'unrelated.json').write_text('{}')
+            with self.assertRaises(ValueError):
+                verify_committed_samples(committed, [attempt])

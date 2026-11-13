@@ -285,7 +285,7 @@ class BatchLedger:
             if self.producer_concurrency:
                 decision = self.producer_concurrency
                 if (decision.get('schema_version') not in ('producer-concurrency', 'webcollect-producer-concurrency-1')
-                        or decision.get('ledger') != str(self.path)
+                        or Path(decision.get('ledger', '')).resolve() != self.path.resolve()
                         or decision.get('run_id') != self.config['run_id']
                         or decision.get('config_sha256') != object_sha256(self.config)
                         or type(decision.get('max_concurrent_jobs')) is not int

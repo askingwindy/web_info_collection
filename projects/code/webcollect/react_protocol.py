@@ -70,7 +70,7 @@ def native_tools(allowed_actions, protocol=REACT_PROTOCOL, reference_protocol=RE
             'description': bounded(300), 'basis_observation_id': TEXT, 'reason': bounded(120)})
         schema['properties']['decision_summary'] = bounded(80)
     for step in schemas['act']['properties']['step']['oneOf']:
-        step['properties'].update(goal=bounded(120), expected=bounded(120))
+        step['properties'].update(goal=bounded(200), expected=bounded(400))
     schemas['finish']['properties']['summary'] = bounded(300)
     schemas['finish']['properties']['evidence_refs']['description'] = (
         '至少包含本轮 observation_id 的原始字符串。仅填本会话的观察 ID，不带前缀、控件号、动作号或结果文字。')

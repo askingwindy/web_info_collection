@@ -37,6 +37,16 @@ def write_state(path, state):
     temporary.replace(path)
 
 
+def stop_engineering_failure(path, details):
+    """Fence new claims and retain the first recorded stop decision."""
+    with locked(path) as state:
+        state['dispatch_stopped'] = True
+        if not state.get('stop_reason'):
+            state['stop_reason'] = 'ENGINEERING_FAILURE'
+            state['stop_details'] = details
+        write_state(path, state)
+
+
 def target_count(state, application_id=None):
     """A delivery counts toward the target iff ordinary_target_eligible."""
     return sum(row.get('ordinary_target_eligible') is True for row in state['deliveries']
@@ -241,23 +251,24 @@ def main():
         while True:
             publish_pending(state, pool)
             with locked(state) as current:
+                engineering_drain = current.get('stop_reason') == 'ENGINEERING_FAILURE'
                 external_stop=bool(current.get('dispatch_stopped') and current.get('stop_reason') not in TARGET_REASONS)
                 dispatch_closed=bool(current.get('dispatch_stopped') or target_reached(current))
                 closed_sites={app for app in current.get('site_targets', {}) if site_reached(current, app)}
                 if target_reached(current) and not current.get('dispatch_stopped'):
                     current.update(dispatch_stopped=True, stop_reason='ORDINARY_TARGET_REACHED')
                     write_state(state,current)
-            if a.target_stop_mode == 'cancel':
+            if a.target_stop_mode == 'cancel' and not engineering_drain:
                 for worker in roster['workers']:
                     if worker['application_id'] in closed_sites and worker['number'] not in cancelled_sites:
                         process=processes[worker['number']]
                         if process.poll() is None: process.send_signal(signal.SIGINT)
                         cancelled_sites.add(worker['number'])
-            if external_stop:
+            if external_stop and current.get('stop_reason') != 'ENGINEERING_FAILURE':
                 interrupted=True
                 break
             if dispatch_closed:
-                if a.target_stop_mode == 'cancel' and reached(state):
+                if a.target_stop_mode == 'cancel' and not engineering_drain and reached(state):
                     target_cancelled=True
                     break
                 # Reaching the target closes new claims. Already dispatched
@@ -273,8 +284,8 @@ def main():
     finally:
         with locked(state) as current:
             current['dispatch_stopped'] = True
-            if interrupted:current['stop_reason']='INTERRUPTED_BY_USER'
-            elif target_cancelled:
+            if interrupted and not current.get('stop_reason'):current['stop_reason']='INTERRUPTED_BY_USER'
+            elif target_cancelled and not current.get('stop_reason'):
                 current.update(stop_reason='TARGET_REACHED', worker_shutdown_reason='TARGET_REACHED')
             write_state(state, current)
         if not interrupted and not target_cancelled:
@@ -285,7 +296,8 @@ def main():
             except KeyboardInterrupt:
                 interrupted=True
                 with locked(state) as current:
-                    current['stop_reason']='INTERRUPTED_BY_USER'
+                    if not current.get('stop_reason'): current['stop_reason']='INTERRUPTED_BY_USER'
+                    current['user_interrupted']=True
                     write_state(state,current)
         if interrupted or target_cancelled:
             for process in processes.values():

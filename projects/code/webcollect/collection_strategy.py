@@ -45,6 +45,12 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
         if part.get(FIELD) not in (None, record):
             raise ValueError('Collection strategy already frozen differently')
         part[FIELD] = deepcopy(record)
+        if strategy == STRATEGY_SCREENSHOT_PLAN:
+            # S2 owns its observation policy; reuse evidence helpers, not S1's controller.
+            from .action_stability import ACTION_STABILITY_PROTOCOL
+            if part.get('action_stability_protocol') not in (None, ACTION_STABILITY_PROTOCOL):
+                raise ValueError('Action stability already frozen differently')
+            part['action_stability_protocol'] = ACTION_STABILITY_PROTOCOL
     return task
 
 
@@ -89,7 +95,7 @@ def outcome_facts(*, goal_status, end_reason, eligibility, save_status, details=
 
     goal_status: unconfirmed / partial / completed
     end_reason: goal_completed / no_path / unsuitable / no_progress /
-                user_stopped / engine_error / unknown
+                user_stopped / protocol_error / engine_error / unknown
     eligibility: eligible / ineligible / unresolved (+ reason)
     save_status: not_saved / collected_pending_review / save_failed / unresolved
     """

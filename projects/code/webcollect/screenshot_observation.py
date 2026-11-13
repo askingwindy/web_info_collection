@@ -312,39 +312,53 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
                 'control_mapping': mapping, 'completion_evidence': True}
     visuals = [viewport]
     if first and page is not None:
+        import asyncio
         from .browser import observe
+        from playwright.async_api import TimeoutError as ScreenshotTimeoutError
         state = load_json(observation['evidence']['state']['path'])
-        before = await observe(page)
-        dimensions = await page.evaluate('() => [Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)]')
         keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text', 'text_blocks', 'scroll_containers')
-        if dimensions[1] > image.height * 1.15 and all(before.get(k) == state.get(k) for k in keys):
-            png = await page.screenshot(full_page=True, scale='css', timeout=15000)
-            after = await observe(page)
-            if all(before.get(k) == after.get(k) for k in keys):
-                full = root / ('visual-' + oid[:16] + '-full-original.png')
-                with full.open('xb') as stream:
-                    stream.write(png)
-                full_image = Image.open(BytesIO(png)).convert('RGB')
-                # Long pages remain an overview; the viewport remains pixel-clear.
-                ratio = min(1, 2400 / max(full_image.size))
-                overview = full_image.resize((max(1, round(full_image.width*ratio)), max(1, round(full_image.height*ratio))))
-                path = root / ('visual-' + oid[:16] + '-overview.png')
-                with path.open('xb') as stream:
-                    overview.save(stream, format='PNG')
-                import json
-                def exclusive(path, data):
-                    with path.open('x', encoding='utf-8') as stream:
-                        json.dump(data, stream, ensure_ascii=False, sort_keys=True, indent=2)
-                    return {'path': str(path.resolve()), 'sha256': file_sha(path)}
-                before_ref = exclusive(root / ('visual-' + oid[:16] + '-full-before.json'), before)
-                after_ref = exclusive(root / ('visual-' + oid[:16] + '-full-after.json'), after)
-                visuals.insert(0, {'ref': oid + '-overview', 'observation_id': oid,
-                    'scope': 'full_page_overview', 'path': str(path.resolve()), 'sha256': file_sha(path),
-                    'source': {'path': str(full.resolve()), 'sha256': file_sha(full)},
-                    'source_rect': [0, 0, full_image.width, full_image.height], 'scale': ratio,
-                    'document_identity': before.get('document_identity'),
-                    'before_state': before_ref, 'after_state': after_ref,
-                    'completion_evidence': False, 'note': '整体定位图；细节和完成引用使用当前清晰图或有来源的清晰裁图'})
+        png = None
+        stage = 'before_observe'
+        try:
+            before = await observe(page)
+            stage = 'dimensions'
+            dimensions = await asyncio.wait_for(page.evaluate('() => [Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)]'), timeout=15)
+            if dimensions[1] > image.height * 1.15 and all(before.get(k) == state.get(k) for k in keys):
+                stage = 'screenshot'
+                png = await page.screenshot(full_page=True, scale='css', timeout=15000)
+                stage = 'after_observe'
+                after = await observe(page)
+        except (TimeoutError, ScreenshotTimeoutError) as error:
+            # Every read in this optional locator chain may time out. The
+            # already synchronized viewport remains the executable evidence.
+            viewport['overview_unavailable'] = {'reason': stage + '_timeout', 'error': str(error)}
+            observation['visual_evidence'] = visuals
+            return visuals
+        if png is not None and all(before.get(k) == after.get(k) for k in keys):
+            full = root / ('visual-' + oid[:16] + '-full-original.png')
+            with full.open('xb') as stream:
+                stream.write(png)
+            full_image = Image.open(BytesIO(png)).convert('RGB')
+            # Long pages remain an overview; the viewport remains pixel-clear.
+            ratio = min(1, 2400 / max(full_image.size))
+            overview = full_image.resize((max(1, round(full_image.width*ratio)), max(1, round(full_image.height*ratio))))
+            path = root / ('visual-' + oid[:16] + '-overview.png')
+            with path.open('xb') as stream:
+                overview.save(stream, format='PNG')
+            import json
+            def exclusive(path, data):
+                with path.open('x', encoding='utf-8') as stream:
+                    json.dump(data, stream, ensure_ascii=False, sort_keys=True, indent=2)
+                return {'path': str(path.resolve()), 'sha256': file_sha(path)}
+            before_ref = exclusive(root / ('visual-' + oid[:16] + '-full-before.json'), before)
+            after_ref = exclusive(root / ('visual-' + oid[:16] + '-full-after.json'), after)
+            visuals.insert(0, {'ref': oid + '-overview', 'observation_id': oid,
+                'scope': 'full_page_overview', 'path': str(path.resolve()), 'sha256': file_sha(path),
+                'source': {'path': str(full.resolve()), 'sha256': file_sha(full)},
+                'source_rect': [0, 0, full_image.width, full_image.height], 'scale': ratio,
+                'document_identity': before.get('document_identity'),
+                'before_state': before_ref, 'after_state': after_ref,
+                'completion_evidence': False, 'note': '整体定位图；细节和完成引用使用当前清晰图或有来源的清晰裁图'})
     observation['visual_evidence'] = visuals
     return visuals
 

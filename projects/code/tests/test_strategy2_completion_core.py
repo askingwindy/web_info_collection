@@ -15,6 +15,7 @@ class CompletionCoreTests(substrate.SessionHarness):
     # collecting the existing runlog TestCase classes a second time.
     def setUp(self):
         super().setUp()
+        self.surface.state['capture_readiness'] = {'document_ready': 'complete', 'fonts_ready': True, 'images_ready': True}
         self.task = substrate.build_url_task(
             url=self.page.url, task_version='completion-core',
             ending_policy=substrate.COMPLETE_VERSION)
@@ -198,6 +199,36 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertTrue(reading['model_has_seen'])
         self.assertTrue(all(row['evidence_only'] for row in prompts[1]['historical_evidence']))
 
+        # A frozen checked input presents its visible boolean state, not the
+        # unrelated HTML value="on" string.
+        from webcollect.screenshot_effect import input_facts
+        self.surface.state['elements'][0].update(native_role='checkbox', inputable=True, visible=True)
+        self.surface.state['values'][0].update(checked=True, input_type='checkbox', value_visible=False)
+        await session._observe()
+        current_state = load_json(session.current['evidence']['state']['path'])
+        cid = self.surface.state['values'][0]['element_id']
+        fact = input_facts(current_state)[cid]
+        checked_requirement = [{'id': 'checked', 'kind': 'input', 'description': '保留选中状态', 'expected_checked': True}]
+        checked_checks = [{'requirement_id': 'checked', 'status': 'VERIFIED',
+            'evidence': [{'node': cid, 'source': fact['identity'], 'input_field': 'checked', 'actual': True}]}]
+        session.final_requirement_ids = ['checked']
+        shown, gaps = verify_final_presentation(session, checked_checks, checked_requirement)
+        self.assertEqual(gaps, [])
+        self.assertTrue(shown[0]['checked_visible'])
+        self.assertNotIn('value_visible', shown[0])
+        from webcollect.postprocess import planned_terminal_narrative
+        checked_checks[0]['completion_mapping'] = 'bound_input_state'
+        checked_checks[0]['evidence'][0]['observation_id'] = session.current['observation_id']
+        checked_record = {'observations': {session.current['observation_id']: {
+            'state_path': session.current['evidence']['state']['path']}}, 'trajectory': [],
+            'terminal': {'goal_evidence': {'business_goal_status': 'VERIFIED',
+                'checks': checked_checks, 'final_visible_evidence': shown}}}
+        narrative = planned_terminal_narrative(checked_record, current_state, session.current['observation_id'])
+        self.assertIn('末帧仍可见输入状态：已勾选', narrative['completion_judgement'])
+        self.assertNotIn('完成时当前页面可见「已勾选」', narrative['completion_judgement'])
+        checked_checks[0]['evidence'][0]['actual'] = False
+        self.assertTrue(verify_final_presentation(session, checked_checks, checked_requirement)[1])
+
     async def test_later_same_form_input_and_submission_invalidate_old_result(self):
         sent_prompts = []
 
@@ -325,6 +356,17 @@ class CompletionCoreTests(substrate.SessionHarness):
         input_checks, input_gaps = verify_completion(session, input_application, [input_requirement])
         self.assertEqual(input_gaps, [])
         self.assertEqual(input_checks[0]['evidence'][0]['actual'], '20')
+        # A frozen, captured default may be submitted without a redundant edit.
+        saved_rows, saved_requirements = session.trajectory, session.requirements
+        session.trajectory = [row for row in session.trajectory if row['operation_id'] != 'input']
+        session.requirements = [input_requirement, *requirement]
+        default_checks, default_gaps = verify_completion(session, application, requirement)
+        self.assertEqual(default_gaps, [])
+        self.assertEqual(default_checks[0]['evidence'][0]['result_execution_binding']['submission']['input_refs'][0]['input_origin'], 'frozen_visible_state')
+        session.requirements = [{**input_requirement, 'expected_value': '999'}, *requirement]
+        _, default_gaps = verify_completion(session, application, requirement)
+        self.assertIn('RESULT_INPUT_REQUIRED', {gap['kind'] for gap in default_gaps})
+        session.trajectory, session.requirements = saved_rows, saved_requirements
         calculation_requirement = {'id': 'cross-check', 'kind': 'content', 'description': '核对利润率数值'}
         calculation_answer = {'requirement_id': 'cross-check', 'observed_result': '用实际输入按页面公式核算为40%，与本次结果一致',
             'evidence': [{'observation': result, 'quote': formula}],
@@ -353,6 +395,10 @@ class CompletionCoreTests(substrate.SessionHarness):
             self.assertIn('RESULT_EVIDENCE_SUPERSEDED', {gap['kind'] for gap in gaps})
             self.assertFalse(any(item['observation'] == result
                                  for item in session._candidate_results()))
+            historical = [{**requirement[0], 'evidence_scope': 'historical'}]
+            historical_checks, historical_gaps = verify_completion(session, application, historical)
+            self.assertEqual(historical_gaps, [])
+            self.assertEqual(len(historical_checks), 1)
             session.trajectory.pop()
 
         # An executed-route key frame the model never saw is attached as one
@@ -430,13 +476,14 @@ class CompletionCoreTests(substrate.SessionHarness):
             'element_id': 'live-advertisement', 'text': '广告倒计时变化，不是任务证据'})
         await session._observe()
         self.assertEqual(before_refresh, session._stall_progress_marker())
+        session._stall_seen_markers.add(session._stall_marker)
         session._stall_count = NO_PROGRESS_STALL_LIMIT - 1
         session.actual_dispatches += 1  # Dispatched without an established effect.
         session.position = 1          # Cursor bookkeeping is not business progress.
         await session._checkpoint('action_not_established')
         self.assertEqual(session.collection_ending['kind'], 'NO_PROGRESS_END')
         self.assertEqual(session.trajectory, [])
-        self.assertEqual(calls, 1)
+        self.assertEqual(calls, 0)  # Already stalled facts close before provider IO.
         # A business-attempt-shaped rejection is not a dispatch. Continue must
         # preserve this pending step, and repeated identical questions close
         # before issuing another provider request.
