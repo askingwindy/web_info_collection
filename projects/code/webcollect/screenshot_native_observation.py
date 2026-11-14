@@ -57,6 +57,11 @@ def action_availability(state, element, binding, value, probe, action):
             return result(UNAVAILABLE, 'UNSUPPORTED_NATIVE_INPUT')
         if action == 'type' and probe.get('focused') is not True:
             return result(UNAVAILABLE, 'TYPE_REQUIRES_CURRENT_FOCUS')
+        if action == 'type':
+            from .action_stability import native_input_missing
+            missing = native_input_missing(state, element, binding, value, probe, action)
+            if missing:
+                return {**result(INSUFFICIENT, 'INPUT_PRECONDITIONS_MISSING'), 'missing_requirements': missing}
     elif action == 'select':
         if binding.get('tag') != 'select':
             return result(UNAVAILABLE, 'NOT_NATIVE_SELECT')

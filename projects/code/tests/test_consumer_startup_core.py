@@ -5,7 +5,7 @@ import tempfile
 import sqlite3
 from contextlib import contextmanager
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from webcollect.candidate_consumer import run
 from webcollect.screenshot_plan import normalize_submit_plan, submit_plan_schema
@@ -41,6 +41,7 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
         validate({'unsuitable': {'reason': '自然不足五步'}}, submit_plan_schema(['back']))
 
     async def test_standalone_checks_scope_then_probes_once_and_stops_unavailable(self):
+        from webcollect.current_chain import CurrentChainError
         with tempfile.TemporaryDirectory() as directory:
             calls = []
             with patch('webcollect.candidate_consumer.startup_check', side_effect=lambda *a, **k: calls.append('scope') or {}), \
@@ -51,19 +52,56 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(probe.call_args.args[1], 'candidate-run:launch')
             self.assertEqual(result['stop_reason'], 'key_pool_unavailable')
             self.assertEqual(result['processed'], 0)
+            # A deterministic frozen-input fault precedes even account probes,
+            # and leaves both fixed candidates unclaimed for a corrected input.
+            pool = MagicMock()
+            rows = [{'candidate_id': 'first'}, {'candidate_id': 'second'}]
+            calls.clear()
+            def reject_sources(*args):
+                calls.append('sources')
+                raise CurrentChainError('out-of-chain source', context={'json_location': '$.nested'})
+            with patch('webcollect.candidate_consumer._cohort_rows', return_value=('batch', rows)), \
+                 patch('webcollect.candidate_consumer.startup_check', side_effect=lambda *a, **k: calls.append('scope') or {}), \
+                 patch('webcollect.candidate_consumer.preflight_cohort_sources', side_effect=reject_sources), \
+                 patch('webcollect.key_health.pool_available') as available, \
+                 patch('webcollect.key_health.probe_accounts') as probe, \
+                 patch('webcollect.candidate_consumer.consume', new_callable=AsyncMock) as consume:
+                result = await run(pool, object(), worker_id='frozen', request_prefix='fixed',
+                    cohort='cohort.json', registry='registry.sqlite3', output=Path(directory))
+            self.assertEqual(calls, ['scope', 'sources'])
+            available.assert_not_called()
+            probe.assert_not_called()
+            pool.claim_next.assert_not_called()
+            consume.assert_not_awaited()
+            self.assertEqual((result['processed'], result['unexamined']), (0, 2))
+            self.assertEqual(result['stop_reason'], 'engineering_failure')
+            self.assertEqual(result['stop_details']['evidence_context'], {'json_location': '$.nested'})
+            # Frozen source hashes imply the same original GET reference that
+            # claim_next consumes. Missing input must fail before claim/IO.
+            import json
+            from types import SimpleNamespace
+            from webcollect.batch_core import file_sha
+            from webcollect.planning import object_sha256
+            from webcollect.candidate_consumer import preflight_cohort_sources
+            receipt=Path(directory)/'original-get.json';receipt.write_text('{}')
+            ref={'path':str(receipt),'sha256':file_sha(receipt)}
+            sources=[{'entry_http':ref,'references':[ref]}]
+            database=Path(directory)/'frozen-pool.sqlite3'
+            with sqlite3.connect(database) as con:
+                con.execute('CREATE TABLE candidate_sources(candidate_id TEXT,created REAL,source_key TEXT,source TEXT)')
+                con.execute('INSERT INTO candidate_sources VALUES(?,?,?,?)',('fixed',1,'source',json.dumps(sources[0])))
+            fixed={'candidate_id':'fixed','sources_sha256':object_sha256(sources)}
+            with patch('webcollect.candidate_consumer.preflight_candidate_sources') as closure:
+                with self.assertRaisesRegex(CurrentChainError,'entry_http'):
+                    preflight_cohort_sources(SimpleNamespace(path=database),[fixed],'registry')
+                closure.assert_not_called()
+                preflight_cohort_sources(SimpleNamespace(path=database),[{**fixed,'entry_http':ref}],'registry')
+                closure.assert_called_once()
 
     async def test_available_pool_and_campaign_workers_never_probe(self):
         from webcollect.consumer_campaign import stop_engineering_failure, stopped
+        from webcollect.current_chain import CurrentChainError
         import json
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory) / 'campaign.json'
-            state.write_text(json.dumps({'deliveries': [], 'dispatch_stopped': False}))
-            stop_engineering_failure(state, {'error_type': 'OperationalError'})
-            stop_engineering_failure(state, {'error_type': 'another'})
-            self.assertTrue(stopped(state))
-            saved = json.loads(state.read_text())
-            self.assertEqual(saved['stop_reason'], 'ENGINEERING_FAILURE')
-            self.assertEqual(saved['stop_details']['error_type'], 'OperationalError')
         with tempfile.TemporaryDirectory() as directory:
             with patch('webcollect.candidate_consumer.startup_check', return_value={}), \
                  patch('webcollect.key_health.pool_available', side_effect=[True, False]), \
@@ -71,6 +109,55 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
                 result = await run(None, object(), worker_id='worker', request_prefix='launch', limit=1, output=Path(directory))
                 probe.assert_not_called()
                 self.assertEqual(result['stop_reason'], 'key_pool_unavailable')
+
+            # Unexpected programming faults during claim are engineering
+            # failures, never a sequence of candidate business skips.
+            broken_campaign=Path(directory)/'claim-input-campaign.json'
+            broken_campaign.write_text(json.dumps({'deliveries':[],'dispatch_stopped':False}))
+            pool=MagicMock();pool.claim_next.side_effect=KeyError('entry_http')
+            rows=[{'candidate_id':'fixed1','producer_batch':'batch'},{'candidate_id':'fixed2','producer_batch':'batch'}]
+            with patch('webcollect.candidate_consumer._cohort_rows',return_value=('batch',rows)), \
+                 patch('webcollect.candidate_consumer.preflight_cohort_sources'), \
+                 patch('webcollect.candidate_consumer.startup_check',return_value={}), \
+                 patch('webcollect.key_health.pool_available',return_value=True), \
+                 patch('webcollect.key_health.probe_accounts') as probe, \
+                 patch('webcollect.candidate_consumer.consume',new_callable=AsyncMock) as consume:
+                result=await run(pool,object(),worker_id='fixed',request_prefix='fixed',cohort='cohort.json',
+                    campaign=broken_campaign,registry='registry',output=Path(directory))
+            self.assertEqual(result['stop_reason'],'engineering_failure')
+            self.assertEqual(result['stop_details']['error_type'],'KeyError')
+            self.assertEqual(result['processed'],0)
+            pool.claim_next.assert_called_once();consume.assert_not_awaited();probe.assert_not_called()
+            self.assertEqual(json.loads(broken_campaign.read_text())['stop_reason'],'ENGINEERING_FAILURE')
+            # Continuous, non-cohort workers stop on a chain contract error.
+            # Preserve an already unresolved claim; stopping is not reconciliation.
+            state = Path(directory) / 'campaign.json'
+            state.write_text(json.dumps({'deliveries': [], 'dispatch_stopped': False}))
+            claim = {'claim_id': 'owned', 'candidate_id': 'first', 'state': 'consuming', 'stage': 'claimed'}
+            pool = MagicMock()
+            pool.claim_next.return_value = claim
+            pool.get_claim.return_value = {**claim, 'state': 'reconcile', 'stage': 'execution'}
+            with patch('webcollect.candidate_consumer.startup_check', return_value={}), \
+                 patch('webcollect.key_health.pool_available', return_value=True), \
+                 patch('webcollect.key_health.probe_accounts') as probe, \
+                 patch('webcollect.candidate_consumer.consume', new_callable=AsyncMock,
+                       side_effect=CurrentChainError('frozen source changed')) as consume, \
+                 patch('webcollect.runlog.for_claim'), \
+                 patch('webcollect.consumer_campaign.deliver', return_value={'state': 'queued'}), \
+                 patch('webcollect.candidate_batch.record_outcome'):
+                result = await run(pool, object(), worker_id='continuous', request_prefix='continuous',
+                                   campaign=state, output=Path(directory))
+            probe.assert_not_called()
+            pool.claim_next.assert_called_once()
+            consume.assert_awaited_once()
+            pool.finish.assert_not_called()
+            self.assertEqual(result['processed'], 1)
+            self.assertEqual(result['stop_reason'], 'engineering_failure')
+            self.assertTrue(stopped(state))
+            stop_engineering_failure(state, {'error_type': 'later_error'})
+            saved = json.loads(state.read_text())
+            self.assertEqual(saved['stop_reason'], 'ENGINEERING_FAILURE')
+            self.assertEqual(saved['stop_details']['error_type'], 'CurrentChainError')
             with patch('webcollect.candidate_consumer.startup_check', return_value={}), \
                  patch('webcollect.key_health.pool_available', return_value=False), \
                  patch('webcollect.key_health.probe_accounts') as probe:

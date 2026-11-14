@@ -771,38 +771,11 @@ class BatchLedger:
         return bool(con.execute('SELECT 1 FROM model_requests r WHERE r.id=? AND r.state=\'unknown\' AND '
             + self._answered_timeout_sql(), (request_id,)).fetchone())
 
-    def _timeout_retry_root(self, con, job, purpose, attempt, material):
-        fields = ('timeout_retry_of', 'timeout_retry_root', 'timeout_retry_number')
-        if not any(k in material for k in fields):
-            return None
-        if not all(k in material for k in fields):
-            raise ValueError('Incomplete timeout retry binding')
-        previous = con.execute('SELECT * FROM model_requests WHERE id=?',
-                               (material['timeout_retry_of'],)).fetchone()
-        if (not previous or previous['job_id'] != job['id'] or previous['purpose'] != purpose
-                or previous['attempt'] != attempt-1 or previous['state'] != 'unknown'):
-            raise OutcomeUnknown('Timeout retry must follow its original unresolved request')
-        detail = json.loads(previous['response'] or '{}').get('transport_error', {})
-        if detail.get('reason_type') != 'TimeoutError':
-            raise OutcomeUnknown('Only transport timeouts permit bounded retries')
-        old = json.loads(previous['request_json'])
-        root = old.get('timeout_retry_root') or previous['id']
-        count = con.execute("""SELECT COUNT(*) FROM model_requests WHERE job_id=? AND purpose=?
-            AND json_extract(request_json,'$.timeout_retry_of') IS NOT NULL""", (job['id'],purpose)).fetchone()[0]
-        if (count >= 3 or material['timeout_retry_root'] != root
-                or type(material['timeout_retry_number']) is not int or material['timeout_retry_number'] != count+1):
-            raise OutcomeUnknown('At most three timeout retries on the original request identity')
-        ignored = {*fields, 'cost_control'}
-        if {k:v for k,v in material.items() if k not in ignored} != {k:v for k,v in old.items() if k not in ignored}:
-            raise ValueError('Timeout retry must preserve payload, account and session')
-        return root
-
-    def session_http_usage(self, con, attempt_id, *, timeout_retry_root=None):
+    def session_http_usage(self, con, attempt_id):
         # Native calls carry their session on the request. Legacy ReAct uses
         # its original decision job. Each row represents one dispatch, including retries.
         answered = self._answered_timeout_sql()
-        pending = f"""(NOT ({answered}) AND (? IS NULL OR
-            COALESCE(json_extract(r.request_json,'$.timeout_retry_root'),r.id)<>?))"""
+        pending = f'(NOT ({answered}))'
         return con.execute(f"""SELECT COUNT(*) AS used, COUNT(json_extract(r.request_json,'$.dispatch_attempt_id')) AS native_calls,
             MIN(json_extract(r.request_json,'$.dispatch_max_requests')) AS min_cap,
             MAX(json_extract(r.request_json,'$.dispatch_max_requests')) AS max_cap,
@@ -814,8 +787,7 @@ class BatchLedger:
                    AND json_extract(r.request_json,'$.http_dispatch')=1)
                OR (j.kind IN ('react-decision','react-native-decision') AND json_extract(j.payload,'$.attempt_id')=?
                    AND ? AND COALESCE(json_extract(r.request_json,'$.http_dispatch'),1)=1)""",
-            (timeout_retry_root, timeout_retry_root, timeout_retry_root, timeout_retry_root,
-             attempt_id, attempt_id, self.config['mode']=='real')).fetchone()
+            (attempt_id, attempt_id, self.config['mode']=='real')).fetchone()
 
     def bind_model_session(self, session_id, *, consumer=False):
         """Select/recover once under the existing short SQLite write lock."""
@@ -856,11 +828,13 @@ class BatchLedger:
                 if old['state'] in ('reserved', 'unknown'):
                     raise OutcomeUnknown('Prior request may have been billed; no automatic resend')
                 return dict(old)
-            if consumer and con.execute(
+            if con.execute(
                     "SELECT 1 FROM model_requests WHERE job_id=? AND purpose=? AND state IN ('reserved','unknown')",
                     (job['id'], purpose)).fetchone():
-                raise OutcomeUnknown('Original consumer request unresolved; no replacement dispatch')
-            timeout_root = self._timeout_retry_root(con, job, purpose, attempt, request_json or {})
+                raise OutcomeUnknown('Original request unresolved; no replacement dispatch')
+            if any(k in (request_json or {}) for k in
+                   ('timeout_retry_of', 'timeout_retry_root', 'timeout_retry_number')):
+                raise OutcomeUnknown('Timeout retry metadata cannot authorize a new request')
             from .provider_recovery import holds, permits_probe
             if not consumer and holds(con) and not permits_probe(con,job['id'],request_json,attempt):
                 raise OutcomeUnknown('Unreconciled provider authorization failure in original ledger; no new request reserved')
@@ -877,8 +851,8 @@ class BatchLedger:
             if session_id is not None:
                 if not isinstance(session_id, str) or not session_id.strip():
                     raise ValueError('Invalid attempt identity')
-                prior = self.session_http_usage(con, session_id, timeout_retry_root=timeout_root)
-                if not consumer and prior['held']:
+                prior = self.session_http_usage(con, session_id)
+                if prior['held']:
                     raise OutcomeUnknown('Original attempt request/decision unresolved; no replacement dispatch')
                 if not consumer and self.real_glm and (react or prior['has_react']) and prior['used'] >= SessionGLMCallLimit.limit:
                     unresolved = self.session_http_usage(con, session_id)['unresolved']

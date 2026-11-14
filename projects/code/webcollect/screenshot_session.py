@@ -229,15 +229,15 @@ class ScreenshotPlanSession(RawSessionCore):
         """
         prompt = project_model_prompt(prompt)
         self._controls()
+        limit = int(getattr(self.choose, 'max_images', 2))
+        if limit < 1:
+            raise ReactStop('blocked', '模型图片配置至少须允许一张清晰视口图', 'program')
         visuals = await prepare_visuals(self.current, self.root, self.page,
-                                        first=prompt.get('phase') == 'first')
+                                        first=prompt.get('phase') == 'first' and limit >= 2)
         available = list(visuals)
         if self._inspection_visual and self._inspection_visual['observation_id'] == self.current['observation_id']:
             if not any(row['ref'] == self._inspection_visual['ref'] for row in available):
                 available.append(self._inspection_visual)
-        limit = int(getattr(self.choose, 'max_images', 2))
-        if limit < 1:
-            raise ReactStop('blocked', '模型图片配置至少须允许一张清晰视口图', 'program')
         key_visual = await self._key_evidence_visual()
         if key_visual is not None and not any(row['ref'] == key_visual['ref'] for row in available):
             if limit < 2:
@@ -411,14 +411,11 @@ class ScreenshotPlanSession(RawSessionCore):
 
     def _session_facts(self, state):
         """One factual projection for first planning and every checkpoint."""
-        from .screenshot_effect import input_facts
         observed_urls = {row.get('url') for row in self.observation_records.values()}
         return {'current_url': self.current['url'],
                 'page_directory': [{'page_id': f'p{index}', 'url': url,
                                     'observed': True}
                                    for index, url in enumerate(self.page_urls) if url in observed_urls],
-                'current_inputs': {cid: {k: v for k, v in row.items() if k != 'identity'}
-                                   for cid, row in input_facts(state).items()},
                 'known_business_state': self._known_business_inputs(state),
                 'historical_evidence': self._historical_evidence(),
                 'latest_attempt': _public_attempt(self.latest_attempt),
@@ -426,9 +423,23 @@ class ScreenshotPlanSession(RawSessionCore):
                 'last_effective_action': _public_effective(self.last_effective),
                 'confirmed_progress': self._public_confirmed_progress(),
                 'candidate_results': self._candidate_results(),
+                'tool_capabilities': self._tool_capabilities(),
                 'first_route_status': self.first_route_status,
                 'missing_requirements': [row['id'] for row in self.requirements
                                          if row['id'] not in self.verified_answers]}
+
+    def _tool_capabilities(self):
+        """Host support is separate from what this particular frame has shown."""
+        images = int(getattr(self.choose, 'max_images', 2))
+        return {'supported_actions': list(self._allowed_actions()),
+                'unsupported': ['file_upload', 'local_file_selection'],
+                'max_images': images,
+                'inspect': images >= 2,
+                'historical_image_with_current': images >= 2,
+                'instruction': '支持动作只表示宿主具有该能力；当前派发条件以controls.action_states与实际反馈为准。'
+                    '未观察到的控件或后续页面不等于不支持，不得仅凭尚未看见就报告unsuitable。'
+                    '不支持上传或本地文件选择，不得用type代替。历史图只有实际提供才算模型已见；'
+                    '单图配置保留当前视口，不能同时查看裁图或历史图，应在当前证据出现时登记。'}
 
     def _first_prompt(self):
         state = load_json(self.current['evidence']['state']['path'])
@@ -446,7 +457,8 @@ class ScreenshotPlanSession(RawSessionCore):
                        'instruction': ('逐字继承宿主指定目标，不能改写；工具不返回goal。'
                            if self._fixed_goal() else
                            '当前仅指定入口URL，三个目标字段为空是正常入口：你须依据实际页面与可用交互自主选择具体可验证、自然需要至少五个必要业务动作的目标，并在submit_plan.goal提交。'
-                           '可选择有意义的计算、查询或关联正文阅读；不得先选首屏浅阅读再靠无用途滚动、往返或验算凑步。确无可行目标才报告unsuitable。'),
+                           '先从真实控件、正文链接与可见内容选取自然完整路线，可选择有意义的计算、查询或关联正文阅读；不得先选首屏浅阅读再靠无用途滚动、往返或验算凑步。'
+                           '后续页面尚未观察不是unsuitable；可在同一首轮完整路线中声明未来语义目标，观察后只修订剩余步骤。不得先试做再换目标。确无可行目标才报告unsuitable。'),
                        'freeze': '首轮接受后冻结，后续只修订剩余路线，不能换目标'},
                    'requested_goal': _public_step(self.requested_goal),
                    'session_objective': _public_step((self.task['fragment'].get('session_objective') or {}).get('objective')),
@@ -458,8 +470,6 @@ class ScreenshotPlanSession(RawSessionCore):
                    'controls': controls,
                    'interaction_affordances': interaction_affordances(controls, self._body_ids()),
                    'allowed_actions': self._allowed_actions(),
-                   'tool_capabilities': {'file_upload': False,
-                       'instruction': '当前工具不支持文件上传或本地文件选择；自主目标不得依赖上传。固定目标需要上传时如实报告能力不足，不尝试以type替代。'},
                    'rules': FIRST_RULES,
                    'planning_range': {'minimum': BUSINESS_MINIMUM,
                                       'preferred_maximum': PREFERRED_MAXIMUM, 'maximum': None,
@@ -476,7 +486,10 @@ class ScreenshotPlanSession(RawSessionCore):
 
     def _frame_text(self):
         """当前观察的可见文本，用于机械校验计划叙述是否落在本帧。"""
-        return load_json(self.current['evidence']['state']['path']).get('visible_text') or ''
+        from .result_execution import visible_control_texts
+        state = load_json(self.current['evidence']['state']['path'])
+        return '\n'.join([state.get('visible_text') or '',
+            *(text for node in state.get('elements', []) for text in visible_control_texts(state, node))])
 
     def _bind_targets_feedback(self, plan):
         notes = []
@@ -914,91 +927,16 @@ class ScreenshotPlanSession(RawSessionCore):
                        requirements=reanchored, final_presentation_step=tail,
                        original_plan_preserved=True)
 
-    @staticmethod
-    def _result_rows(state):
-        """Visible result-region rows: bound result regions and status/output roles."""
-        bindings = {b['element_id']: b for b in state.get('capture_controls', [])}
-        rows = []
-        for element in state.get('elements', []):
-            text = (element.get('text') or '').strip()
-            if (element.get('visible') is True and text
-                    and (bindings.get(element['element_id'], {}).get('result_region_selector')
-                         or element.get('native_role') in ('status', 'alert', 'output'))):
-                rows.append({'control': element['element_id'], 'text': text})
-        return rows
-
     def _valid_result_rows(self, oid):
-        """Candidate locations share the exact frozen result semantics with completion."""
-        output = self._valid_calculation_result_rows(oid)
-        from .screenshot_plan import _navigation_result_binding, _verify_input_conversion, _input_requirement_matches, _evidence_nodes
-        from .result_execution import _rows
-        from .screenshot_effect import input_facts
-        state = _state_for_observation(self, oid)
-        observation = self.observation_records.get(oid)
-        if not state or not observation:
-            return output
-        for requirement in self.requirements:
-            kind = requirement.get('result_kind')
-            if kind not in ('navigation', 'input_conversion'):
-                continue
-            if requirement.get('evidence_scope') != 'historical' and observation.get('document_identity') != self.current.get('document_identity'):
-                continue
-            if kind == 'navigation':
-                if _navigation_result_binding(self, _rows(self), oid, state, requirement):
-                    output.extend({'control': n['element_id'], 'text': n.get('text') or '', 'requirement_id': requirement['id']}
-                        for n in _evidence_nodes(state) if n.get('visible') is True and len(n.get('text') or '') >= 8)
-            else:
-                for cid in _input_requirement_matches(self, observation, requirement['target']):
-                    actual = input_facts(state).get(cid, {}).get('value')
-                    answer = {'observed_result': actual, 'evidence': [{'observation': oid, 'control': cid}]}
-                    check, _ = _verify_input_conversion(self, answer, requirement, trusted_capture=True)
-                    if check:
-                        output.append({'control': cid, 'text': actual, 'requirement_id': requirement['id']})
-        return output
-
-    def _valid_calculation_result_rows(self, oid):
-        """Causal current-document results not superseded by later edits."""
-        observation = self.observation_records.get(oid)
-        if (not observation or not observation.get('capture_verified')
-                or (observation.get('document_identity') != self.current.get('document_identity')
-                    and not any(r.get('kind') == 'result' and r.get('evidence_scope') == 'historical' and r.get('result_kind', 'calculation') == 'calculation' for r in self.requirements))):
-            return []
-        state = _state_for_observation(self, oid)
-        if state is None:
-            return []
-        from .result_execution import _rows, result_execution_binding, submission_row
-        from .screenshot_effect import input_edit_row
-        from .screenshot_plan import _post_submit_causality, _result_superseded
-        rows = _rows(self)
-        input_rows = [row for row in rows if input_edit_row(self, row)]
-        submit_rows = []
-        for row in rows:
-            before = _state_for_observation(self, row.get('before_observation_id'))
-            if before is not None and submission_row(row, before):
-                submit_rows.append(row)
-        output = []
-        for row in self._result_rows(state):
-            node = next(element for element in state.get('elements', [])
-                        if element['element_id'] == row['control'])
-            binding = result_execution_binding(self, oid, state, node)
-            causality = None if binding is not None else _post_submit_causality(
-                self, submit_rows, input_rows, oid, state, node)
-            if binding is None and causality is None:
-                # A pre-existing number is not this attempt's result. Applying
-                # the same causal gate as completion avoids premature checkpoints.
-                continue
-            proof = {'result_execution_binding': binding,
-                     'post_submit_causality': causality}
-            historical = any(r.get('kind') == 'result' and r.get('evidence_scope') == 'historical' and r.get('result_kind', 'calculation') == 'calculation' for r in self.requirements)
-            if historical or not _result_superseded(self, rows, oid, state, node, proof):
-                output.append(row)
-        return output
+        """Candidate locations use the same obligations and verifier as complete."""
+        from .screenshot_plan import result_candidate_rows
+        return result_candidate_rows(self, oid)
 
     def _row_in_region(self, oid, cid, region):
-        from .screenshot_plan import _bbox_inside
+        from .screenshot_plan import _evidence_nodes, _region_has_node
         state = _state_for_observation(self, oid)
-        node = next((e for e in (state or {}).get('elements', []) if e['element_id'] == cid), {})
-        return bool(node.get('bbox') and _bbox_inside(node['bbox'], region['bbox']))
+        node = next((e for e in _evidence_nodes(state or {}) if e['element_id'] == cid), {})
+        return _region_has_node(region, node)
 
     def _candidate_content(self):
         if not any(r['kind'] == 'content' and r['id'] not in self.verified_answers
@@ -1018,15 +956,18 @@ class ScreenshotPlanSession(RawSessionCore):
             return []
         rows, seen = [], set()
         for oid in reversed(list(self.observation_records)):
-            if oid not in self.provided_observations:
+            if oid not in self.provided_observations and oid != self.current['observation_id']:
                 continue
             for row in self._valid_result_rows(oid):
-                key = (row['control'], row['text'])
+                key = (row.get('requirement_id'), row['control'], row['text'])
                 if key in seen:
                     continue
                 seen.add(key)
                 rows.append({'observation': oid, 'control': row['control'],
                              'text': row['text'], 'still_valid': True,
+                             **({'requirement_id': row['requirement_id']} if row.get('requirement_id') else {}),
+                             'verified_answer': False,
+                             'model_has_seen': oid in self.provided_observations,
                              'regions': [region for region in self.region_registries.get(oid, [])
                                  if self._row_in_region(oid, row['control'], region)],
                              'evidence_hint': '优先用对应region；短数值不要拼接邻居标签作quote',
@@ -1099,9 +1040,8 @@ class ScreenshotPlanSession(RawSessionCore):
         if len(frames) >= capacity and remaining[0].get('action') in ('back', 'open_url', 'click'):
             return 'evidence_batch_boundary'
         if row is not None and any(r['kind'] == 'result' for r in pending):
-            before = _state_for_observation(self, row.get('before_observation_id'))
-            old = {entry['text'] for entry in self._result_rows(before or {})}
-            if any(entry['text'] not in old for entry in self._result_rows(state)):
+            old = {entry['text'] for entry in self._valid_result_rows(row.get('before_observation_id'))}
+            if any(entry['text'] not in old for entry in self._valid_result_rows(oid)):
                 return 'key_evidence_visible'
         return None
 
@@ -1197,34 +1137,29 @@ class ScreenshotPlanSession(RawSessionCore):
                 'input_edits': edits, 'feedback': feedback}, sources
 
     def _known_business_inputs(self, state):
+        """One source-tagged input projection; historical capture is not a new sighting."""
+        from .screenshot_effect import input_facts
         known = {}
-        for observation in self.observation_records.values():
-            if observation.get('document_identity') == state.get('document_identity') and observation.get('capture_verified'):
-                original = load_json(observation['evidence']['state']['path'])
-                known.update(self._business_state(original)['inputs'])
-        results = {}
-        for observation in self.observation_records.values():
+        for oid, observation in self.observation_records.items():
             if observation.get('document_identity') != state.get('document_identity') or not observation.get('capture_verified'):
                 continue
             original = load_json(observation['evidence']['state']['path'])
-            bindings = {b['element_id']: b for b in original.get('capture_controls', [])}
-            results.update({e['element_id']: e.get('text') for e in original.get('elements', [])
-                           if e.get('visible') and (bindings.get(e['element_id'], {}).get('result_region_selector')
-                               or e.get('native_role') in ('status', 'alert', 'output'))})
-        public = []
-        for cid, fact in known.items():
-            for oid, observation in reversed(list(self.observation_records.items())):
-                if observation.get('document_identity') != state.get('document_identity') or not observation.get('capture_verified'):
-                    continue
-                original = load_json(observation['evidence']['state']['path'])
-                value = next((row for row in original.get('values', []) if row['element_id'] == cid), None)
-                if value is None:
-                    continue
-                node = next((row for row in original.get('elements', []) if row['element_id'] == cid), {})
-                public.append({'control': cid, 'label': node.get('text') or '', 'display_value': value.get('display_value'),
-                    'value_visible': value.get('value_visible') is True, 'source_observation': oid, 'still_valid': True})
-                break
-        return {'url': state.get('url'), 'inputs': public, 'results': results}
+            elements = {row['element_id']: row for row in original.get('elements', [])}
+            for cid, fact in input_facts(original).items():
+                visible = fact.get('value_visible') is True
+                row = {key: deepcopy(value) for key, value in fact.items()
+                       if key not in ('identity', 'value') or key == 'value' and visible}
+                row.update(control=cid, label=elements.get(cid, {}).get('text') or '',
+                           source_observation=oid, current_frame=oid == self.current['observation_id'],
+                           model_has_seen=oid in self.provided_observations)
+                # Focus and selection describe only their capture frame. They
+                # never license dispatch against a historical control.
+                if oid != self.current['observation_id']:
+                    for key in ('focused', 'selection_start', 'selection_end', 'all_text_selected'):
+                        row.pop(key, None)
+                known[cid] = row
+        return {'url': state.get('url'), 'inputs': list(known.values()),
+                'dispatch_source': '仅当前controls可作为动作目标；历史输入事实不证明当前焦点或几何条件'}
 
     def _historical_evidence(self):
         """Distinct provided historical sources, without duplicate inputs/answers."""

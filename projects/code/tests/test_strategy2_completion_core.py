@@ -443,6 +443,121 @@ class CompletionCoreTests(substrate.SessionHarness):
             'observation_id': entered, 'document_identity': 'another-document',
             'control_id': 'submit', 'binding': {}, 'text': '计算', 'role': 'button', 'labels': []}}}), [])
 
+        # The same causal contract applies to visible text values, not textarea
+        # placeholder text. Exercise the existing invalidation contract on this
+        # carrier as well as the numeric status above.
+        from webcollect.result_execution import result_execution_binding, visible_result_texts
+        self.surface.state['values'][0]['value'] = 'hello world'
+        self.surface.state['elements'].append({'element_id': 'converted', 'text': '结果将在这里显示',
+            'native_role': 'textarea', 'element_type': 'input', 'bbox': [20, 300, 700, 360],
+            'visible': True, 'enabled': True, 'inputable': True, 'clickable': True, 'parent_id': 'root'})
+        self.surface.state['capture_controls'].append({'element_id': 'converted', 'selector': '#converted',
+            'tag': 'textarea', 'index': 0, 'form_selector': '#calculator'})
+        self.surface.state['values'].append({'element_id': 'converted', 'value': '旧输出',
+            'display_value': '旧输出', 'value_visible': True})
+        await session._observe()
+        text_before = session.current['observation_id']
+        self.surface.state['values'][0]['value'] = 'new text'
+        self.surface.state['values'][-1].update(value='NEW TEXT', display_value='NEW TEXT')
+        await session._observe()
+        text_after = session.current['observation_id']
+        session.trajectory.append({'operation_id': 'text-input', 'action': 'type', 'arguments': {'text': 'new text'},
+            'target': {'control_id': 'control-0'}, 'before_observation_id': text_before,
+            'after_observation_id': text_after, 'effective': True})
+        input_req = {'id': 'text-input', 'kind': 'input', 'description': '转换指定文本',
+            'target': {'control': 'control-0'}, 'expected_value': 'new text'}
+        text_req = {'id': 'text-result', 'kind': 'result', 'description': '查看转换后的文本',
+            'result_kind': 'input_conversion', 'target': {'control': 'converted'},
+            'evidence_route': {'source_type': 'page_result', 'depends_on': ['text-input'], 'observation_steps': [1]}}
+        session._controls()
+        bind_plan_targets({'requirements': [input_req, text_req]}, session.current)
+        session.requirements = [input_req, text_req]
+        session.provided_observations.add(text_after)
+        text_answer = {'answers': [{'requirement_id': 'text-result', 'observed_result': 'NEW TEXT',
+            'evidence': [{'observation': text_after, 'control': 'converted'}]}]}
+        converted = next(n for n in self.surface.state['elements'] if n['element_id'] == 'converted')
+        state = load_json(session.current['evidence']['state']['path'])
+        self.assertEqual(visible_result_texts(state, converted), ['NEW TEXT'])
+        self.assertEqual(result_execution_binding(session, text_after, state, converted)['mechanism'], 'edit')
+        self.assertTrue(any(r['requirement_id'] == 'text-result' for r in session._valid_result_rows(text_after)))
+        text_checks, text_gaps = verify_completion(session, text_answer, [text_req])
+        self.assertEqual(text_gaps, [])
+        self.assertEqual(verify_final_presentation(session, text_checks, [text_req])[1], [])
+        # Frozen dependency mismatch cannot accept a different stage's output.
+        session.requirements[0]['expected_value'] = 'other stage'
+        self.assertEqual(verify_completion(session, text_answer, [text_req])[0], [])
+        session.requirements[0]['expected_value'] = 'new text'
+        hidden = deepcopy(state)
+        hidden['values'][-1]['value_visible'] = False
+        self.assertEqual(visible_result_texts(hidden, converted), [])
+        self.assertIsNone(result_execution_binding(session, text_after, hidden, converted))
+        # A visible copied input and an unchanged old output are not conversions.
+        self.surface.state['values'][-1].update(value='new text', display_value='new text')
+        await session._observe()
+        echo = session.current['observation_id']
+        session.trajectory[-1]['after_observation_id'] = echo
+        echo_state = load_json(session.current['evidence']['state']['path'])
+        self.assertIsNone(result_execution_binding(session, echo, echo_state, converted))
+        self.surface.state['values'][-1].update(value='NEW TEXT', display_value='NEW TEXT')
+        await session._observe()
+        button_result = session.current['observation_id']
+        session.trajectory.append({'operation_id': 'text-convert-submit', 'action': 'click', 'arguments': {},
+            'target': {'control_id': 'submit'}, 'before_observation_id': echo,
+            'after_observation_id': button_result, 'effective': True})
+        session.provided_observations.add(button_result)
+        state = load_json(session.current['evidence']['state']['path'])
+        self.assertEqual(result_execution_binding(session, button_result, state, converted)['mechanism'], 'submit')
+        # Default result obligations use the same visible value and causality;
+        # they do not require guessing a distinct automatic-conversion kind.
+        default_text_req = {**text_req, 'result_kind': 'calculation'}
+        default_text_req.pop('target')
+        text_answer['answers'][0]['evidence'][0]['observation'] = button_result
+        checks, gaps = verify_completion(session, text_answer, [default_text_req])
+        self.assertEqual(gaps, [])
+        self.assertEqual(verify_final_presentation(session, checks, [default_text_req])[1], [])
+
+        # A matching element ID/text is insufficient when the output binding
+        # has changed. Current relevant errors also invalidate stale output;
+        # errors in an independent form do not.
+        output_binding = self.surface.state['capture_controls'][-1]
+        output_binding['selector'] = '#unrelated-output'
+        await session._observe()
+        current_state = load_json(session.current['evidence']['state']['path'])
+        self.assertIsNone(result_execution_binding(session, session.current['observation_id'], current_state, converted))
+        output_binding['selector'] = '#converted'
+        self.surface.state['capture_controls'][0]['validation_message'] = '输入错误'
+        await session._observe()
+        current_state = load_json(session.current['evidence']['state']['path'])
+        self.assertIsNone(result_execution_binding(session, session.current['observation_id'], current_state, converted))
+        self.surface.state['capture_controls'][0].pop('validation_message')
+        self.surface.state['elements'].append({'element_id': 'unrelated-error', 'text': '输入错误',
+            'native_role': 'input', 'visible': True, 'bbox': [10, 600, 100, 630]})
+        self.surface.state['capture_controls'].append({'element_id': 'unrelated-error', 'tag': 'input',
+            'selector': '#other-error', 'form_selector': '#other', 'validation_message': '输入错误'})
+        await session._observe()
+        current_state = load_json(session.current['evidence']['state']['path'])
+        self.assertIsNotNone(result_execution_binding(session, session.current['observation_id'], current_state, converted))
+
+        # Enter may submit and normalize its input in one real dispatch. The
+        # submit obligation is fulfilled even though an edit is also observed.
+        enter_before = session.current['observation_id']
+        self.surface.state['values'][0]['value'] = 'New text'
+        self.surface.state['values'][-1].update(value='ENTER RESULT', display_value='ENTER RESULT')
+        await session._observe()
+        enter_after = session.current['observation_id']
+        session.trajectory.append({'operation_id': 'enter-submit', 'action': 'hotkey', 'arguments': {'keys': ['enter']},
+            'target': {'control_id': 'control-0'}, 'before_observation_id': enter_before,
+            'after_observation_id': enter_after, 'effective': True})
+        session.working_goal = '输入文本后按下Enter提交转换'
+        current_state = load_json(session.current['evidence']['state']['path'])
+        self.assertEqual(result_execution_binding(session, enter_after, current_state, converted)['mechanism'], 'submit')
+        from webcollect.screenshot_plan import explicit_submission_required
+        self.assertTrue(explicit_submission_required(session))
+        session.working_goal = '查看点击率计算结果'
+        self.assertFalse(explicit_submission_required(session))
+        session.working_goal = '点击目录，阅读计算方法'
+        self.assertFalse(explicit_submission_required(session))
+
     async def test_valid_complete_wins_at_stall_threshold(self):
         async def choose(prompt):
             return {'arguments': {'decision': 'complete', 'reason': '可见事实已完整',
@@ -650,6 +765,22 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(narrative_grounding_gaps([{'rationale': '当前帧可见「金额100元」'}], frame), [])
         self.assertEqual(narrative_grounding_gaps([{'rationale': '看到「搜索结果…下一页」'}], frame), [])
         self.assertEqual(narrative_grounding_gaps([{'rationale': '看到「搜索结果…不存在」'}], frame)[0]['missing_fragment'], '不存在')
+        # Selected native display text is visible evidence; raw option values,
+        # unselected options and concatenated labels are not visible quotes.
+        from types import SimpleNamespace
+        from webcollect.result_execution import visible_control_texts
+        state={'visible_text':'正文','elements':[{'element_id':'choice','native_role':'select','visible':True}],
+            'capture_controls':[{'element_id':'choice','tag':'select','options':[{'value':'0','label':'精准'},{'value':'1','label':'拆分'}]}],
+            'values':[{'element_id':'choice','value':'0','display_value':'精准','value_visible':True}]}
+        path=self.root/'selected-display.json';path.write_text(__import__('json').dumps(state))
+        fake=SimpleNamespace(current={'evidence':{'state':{'path':str(path)}}})
+        visible=ScreenshotPlanSession._frame_text(fake)
+        self.assertIn('精准',visible);self.assertNotIn('拆分',visible)
+        self.assertEqual(visible_control_texts(state,state['elements'][0]),['精准'])
+        self.assertEqual(narrative_grounding_gaps([{'rationale':'当前选中「精准」'}],visible),[])
+        self.assertEqual(narrative_grounding_gaps([{'rationale':'当前显示「精准/拆分」'}],visible)[0]['quote'],'精准/拆分')
+        state['values'][0]['value_visible']=False
+        self.assertEqual(visible_control_texts(state,state['elements'][0]),[])
 
     async def test_paraphrased_observed_result_reports_a_verbatim_gap(self):
         async def choose(prompt):
@@ -743,7 +874,14 @@ class CompletionCoreTests(substrate.SessionHarness):
                 for anchor in requirement.get('evidence_route', {}).get('existing_evidence', []):
                     if anchor.get('observation') == '首帧':
                         anchor['observation'] = fresh.current['observation_id']
-            await fresh._first_plan_round()
+            # A single-image request cannot send an overview. It must never
+            # perform its optional second live observation before the model.
+            from unittest.mock import AsyncMock, patch
+            submit.max_images = 1
+            with patch('webcollect.browser.observe', new_callable=AsyncMock,
+                       side_effect=AssertionError('single-image overview must not observe')) as optional:
+                await fresh._first_plan_round()
+            optional.assert_not_awaited()
             return fresh
 
         redundant_plan = {

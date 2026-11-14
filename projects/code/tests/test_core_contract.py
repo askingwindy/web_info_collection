@@ -376,7 +376,7 @@ class CliEntriesSmoke(unittest.TestCase):
                     '--history-set', str(root / 'manifest'), '--worker-id', 'fixed',
                     '--request-prefix', 'fixed', '--limit', '1']
             with patch.object(cli, 'CandidatePool') as pool, patch.object(cli, 'BatchLedger'), \
-                    patch.object(cli, 'run', new_callable=Mock) as run, patch.object(cli.asyncio, 'run', return_value={}), \
+                    patch.object(cli, 'run', new_callable=Mock) as run, patch.object(cli.asyncio, 'run', return_value={}) as execute, \
                     redirect_stdout(StringIO()):
                 # Replace the async entry itself: no coroutine, probe, browser or ledger IO.
                 run.side_effect = lambda *a, **kw: kw
@@ -384,8 +384,10 @@ class CliEntriesSmoke(unittest.TestCase):
                 self.assertEqual(run.call_args.kwargs['session_objective'], {
                     'path': str(objective.resolve()),
                     'sha256': hashlib.sha256(objective.read_bytes()).hexdigest()})
-                cli.main(args)
+                self.assertEqual(cli.main(args), 0)
                 self.assertIsNone(run.call_args.kwargs['session_objective'])
+                execute.return_value = {'processed': 0, 'stop_reason': 'engineering_failure'}
+                self.assertEqual(cli.main(args), 2)
                 pool.reset_mock(); run.reset_mock()
                 objective.write_text('not JSON')
                 with self.assertRaises(json.JSONDecodeError):

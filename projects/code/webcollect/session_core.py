@@ -790,6 +790,8 @@ class RawSessionCore:
                       'actual_actions_delta':0, 'effective_steps_delta':0})
         self._consume('max_observations')
         selector = index = None
+        requested_key = None
+        control = None
         if focus_control_id is not None:
             control = self.current['controls'].get(focus_control_id)
             if control is None:
@@ -797,18 +799,51 @@ class RawSessionCore:
             # One probe per control per document: a repeated focus produces no
             # new evidence and burned five decision rounds in a real run.
             if (focus_control_id, self._probe_key(self.current)) in self.focus_history:
+                acquired = (control.get('probe') or {}).get('element_id') == focus_control_id
                 return self._rejected('observe',
-                    '重复定向观察被拒绝：该控件在当前文档下已有探针，再 focus 不会产生新证据。'
-                    '若其动作仍为 INSUFFICIENT，按 reason 换路径：MISSING_READABLE_LABEL_EVIDENCE 表示输入/选择缺渲染标签，'
-                    '改用带标签的相邻控件或 inspect(kind="html")；页面变化后可做整页 observe。')
+                    '重复定向观察被拒绝：' + ('当前帧已取得该控件的真实探针。' if acquired else
+                    '当前帧仅已尝试，尚未取得该控件的匹配探针。') +
+                    '相同状态与绑定再次观察没有新依据；请按实际缺项修订路径，事实变化后再观察，无法继续则如实未完成结束。',
+                    data={'target_probe': {'control_id': focus_control_id, 'acquired': acquired}})
             selector, index = control['binding'].get('selector'), control['binding'].get('index', 0)
-        captured = await self._capture_observation(selector, index)
-        html = await self.page.content()
-        observation = self._accept(captured, html, focus_control_id)
-        if focus_control_id is not None:
-            self.focus_history.add((focus_control_id, self._probe_key(observation)))
+            requested_key = self._probe_key(self.current)
+        for refresh in (0, 1):
+            source_document = self.current.get('document_identity') if self.current else None
+            old_binding = deepcopy(control.get('binding') or {}) if control else {}
+            if focus_control_id is not None:
+                # Record the attempted source frame separately from any proof
+                # actually obtained in the fresh frame.
+                self.focus_history.add((focus_control_id, requested_key))
+            captured = await self._capture_observation(selector, index)
+            html = await self.page.content()
+            observation = self._accept(captured, html, focus_control_id)
+            probe = captured['state'].get('target') or {}
+            acquired = focus_control_id is not None and probe.get('element_id') == focus_control_id
+            if acquired:
+                self.focus_history.add((focus_control_id, self._probe_key(observation)))
+            fresh = observation['controls'].get(focus_control_id) if focus_control_id is not None else None
+            fresh_binding = (fresh or {}).get('binding') or {}
+            if (focus_control_id is not None and not acquired and refresh == 0 and control and fresh
+                    and source_document == observation.get('document_identity')
+                    and fresh_binding.get('selector') and old_binding.get('selector') != fresh_binding['selector']
+                    and all(old_binding.get(key) == fresh_binding.get(key) for key in ('tag', 'href'))
+                    and control.get('element', {}).get('native_role') == fresh.get('element', {}).get('native_role')):
+                self.event('target-probe-binding-refresh', control_id=focus_control_id,
+                    old_binding=old_binding, new_binding=fresh_binding, dispatched=False,
+                    retry=1, reason='same captured node; positional selector changed; no probe acquired')
+                self._consume('max_observations')
+                control = fresh
+                selector, index = fresh_binding['selector'], fresh_binding.get('index', 0)
+                requested_key = self._probe_key(observation)
+                continue
+            if focus_control_id is not None:
+                self.event('target-probe-result', control_id=focus_control_id,
+                    probe_acquired=acquired, dispatched=False, refreshed_binding=refresh > 0)
+            break
         return self._ok('observe', summary='新观察 ' + observation['observation_id'][:12],
-                        data={'observation': self._compact(observation)})
+                        data={'observation': self._compact(observation),
+                              **({'target_probe': {'control_id': focus_control_id, 'acquired': acquired}}
+                                 if focus_control_id is not None else {})})
 
     def _accept(self, captured, html, focus_control_id=None):
         n = self.used['max_observations']
@@ -1361,14 +1396,25 @@ class RawSessionCore:
                             action_scope = None
                         break
                     except ValueError as error:
-                        if scope_refresh:
+                        from .action_stability import ActionScopeError
+                        failure_data = self._deltas(executed)
+                        failure_data['action_precondition'] = (error.feedback() if isinstance(error, ActionScopeError) else
+                            {'action': row['action'], 'control_id': cid, 'action_dispatched': False,
+                             'dispatch_status': 'NOT_DISPATCHED', 'missing_requirements': [str(error)],
+                             'recovery': 'observe_or_revise'})
+                        self.event('action-scoped-evidence-failed', **failure_data['action_precondition'])
+                        # A targeted probe for this exact state is already
+                        # authoritative. Repeating it cannot repair editability,
+                        # focus or value paint, and _observe would reject it.
+                        has_current_probe = bool(cid and (control.get('probe') or {}).get('element_id') == cid)
+                        if scope_refresh or has_current_probe:
                             return self._need_observation('act', '动作级局部证据不足：' + str(error),
-                                                          data=self._deltas(executed))
+                                                          data=failure_data)
                         refresh_key = (self._probe_key(self.current), row['action'], cid)
                         refreshed = getattr(self, '_scope_refresh_history', set())
                         if refresh_key in refreshed:
                             return self._need_observation('act', '同一观察下动作证据仍不足：' + str(error),
-                                                          data=self._deltas(executed))
+                                                          data=failure_data)
                         refreshed.add(refresh_key)
                         self._scope_refresh_history = refreshed
                         old_binding = dict(control['binding']) if cid else None
@@ -1437,7 +1483,7 @@ class RawSessionCore:
                     self._consume('max_observations')
                     previous_controls=self.current['controls']
                     fresh = self._accept(observation, observation['html'], cid)
-                    if cid:
+                    if cid and (fresh['controls'].get(cid, {}).get('probe') or {}).get('element_id') == cid:
                         self.focus_history.add((cid, self._probe_key(fresh)))
                     data.update(refreshed_observation_id=fresh['observation_id'],
                                 drift_fields=drift, observation=self._compact(fresh))
@@ -1623,9 +1669,16 @@ class RawSessionCore:
                 raise ValueError('一次动作打开多个页面，需单独适配并记录')
             if new_pages:
                 from .plan_evidence import verify_popup
+                from .screenshot_execution import navigation_carrier
+                opened = next(iter(new_pages))
+                raw['popup_diagnostic'] = {'source_node': operation.get('evidence', {}).get('anchor_element_id'),
+                    'link_carrier': navigation_carrier(state, operation.get('evidence', {}).get('anchor_element_id')),
+                    'opened_url_before_verification': opened.url, 'landing_verified': False}
                 try:
-                    raw['popup_provenance'] = await verify_popup(self.page,next(iter(new_pages)),operation,state,form_watcher=form_watcher)
+                    raw['popup_provenance'] = await verify_popup(self.page,opened,operation,state,form_watcher=form_watcher)
+                    raw['popup_diagnostic']['landing_verified'] = True
                 finally:
+                    raw['popup_diagnostic']['opened_url_after_verification'] = opened.url
                     if form_watcher and form_watcher.get('popup_proof'):
                         raw['popup_provenance'] = deepcopy(form_watcher['popup_proof'])
                 if True:

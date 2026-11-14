@@ -40,9 +40,11 @@ def _control_row(cid, control, allowed):
     text = (element.get('text') or '').strip()
     if text:
         row['text'] = text[:60]
-    for key in ('value', 'input_type', 'focused', 'selection_start', 'selection_end', 'all_text_selected', 'checked', 'value_visible'):
+    for key in ('value', 'input_type', 'focused', 'selection_start', 'selection_end', 'all_text_selected', 'checked', 'value_visible', 'readonly'):
         if key in value and value[key] is not None and (key != 'value' or value.get('value_visible') is True):
             row[key] = str(value[key])[:60] if key == 'value' else value[key]
+    if (control.get('binding') or {}).get('tag') == 'select' and value.get('value_visible') is True:
+        row['display_value'] = str(value.get('display_value') or '')[:60]
     if element.get('state') == 'focused' or element.get('focused') is True or (control.get('probe') or {}).get('focused') is True:
         row['focused'] = True
     for key in ('enabled', 'state'):
@@ -180,7 +182,11 @@ def interaction_affordances(rows, body_ids=None, limit=4):
             group['examples'].append(label[:30])
     ranked = [{'kind': kind, **groups[kind]} for kind in _AFFORDANCE_ORDER if kind in groups]
     return {'projected_controls': len(rows), 'kinds': [row['kind'] for row in ranked],
-            'groups': ranked}
+            'groups': ranked,
+            'not_observed_kinds': [kind for kind in _AFFORDANCE_ORDER if kind not in groups],
+            'scope': '当前已投影控件；未观察到的交互不等于页面或后续页面不支持',
+            'dispatch_status_source': 'controls.action_states；PROVEN已证明当前可派发，UNAVAILABLE明确当前不满足条件',
+            'unproven_actions': 'INSUFFICIENT或缺失状态表示尚未证明当前可派发；不代表宿主不支持，也不许可直接派发'}
 
 
 def _region_tier(element, quote):
@@ -314,7 +320,7 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
     if first and page is not None:
         import asyncio
         from .browser import observe
-        from playwright.async_api import TimeoutError as ScreenshotTimeoutError
+        from playwright.async_api import TimeoutError as ScreenshotTimeoutError, Error as BrowserError
         state = load_json(observation['evidence']['state']['path'])
         keys = ('url', 'document_identity', 'scroll', 'elements', 'values', 'visible_text', 'text_blocks', 'scroll_containers')
         png = None
@@ -332,6 +338,15 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
             # Every read in this optional locator chain may time out. The
             # already synchronized viewport remains the executable evidence.
             viewport['overview_unavailable'] = {'reason': stage + '_timeout', 'error': str(error)}
+            observation['visual_evidence'] = visuals
+            return visuals
+        except BrowserError as error:
+            # This optional locator has no authority over the already verified
+            # viewport. Keep unsupported geometry local to the unused overview;
+            # formal capture/target proofs and other engineering errors stay strict.
+            if 'UNSUPPORTED_GEOMETRY:' not in str(error):
+                raise
+            viewport['overview_unavailable'] = {'reason': stage + '_unsupported_geometry', 'error': str(error)}
             observation['visual_evidence'] = visuals
             return visuals
         if png is not None and all(before.get(k) == after.get(k) for k in keys):

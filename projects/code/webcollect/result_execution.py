@@ -1,7 +1,7 @@
 """Deterministic result and page feedback from already captured observations.
 
-A semantic result container is necessary, but never sufficient: an input and
-submission from this attempt must precede the result. No answer is calculated.
+A visible carrier is never sufficient: this attempt's real input or submission
+must establish the result's cause. No answer is calculated.
 """
 import re
 from .batch_core import load_json
@@ -13,12 +13,16 @@ _ESCAPE = re.compile(r'\\u[0-9a-fA-F]{4}')
 _SUBMIT = re.compile(r'计算|計算|提交|生成|转换|轉換|换算|換算|求解|搜索|calculate|compute|submit|convert|solve|search', re.I)
 
 
-def page_feedback(state):
+def page_feedback(state, *, scope=None):
     elements={e['element_id']:e for e in state.get('elements',[])}
     bindings={b['element_id']:b for b in state.get('capture_controls',[])}
     invalid=[]; unreadable=[]
     for cid,e in elements.items():
         if e.get('visible') is not True:continue
+        if scope is not None:
+            from .screenshot_effect import business_scope
+            if business_scope(state, cid) != scope:
+                continue
         b=bindings.get(cid,{})
         role=e.get('native_role');text=e.get('text') or ''
         if b.get('validation_message') or b.get('aria_invalid')=='true':
@@ -116,12 +120,115 @@ def frozen_input_refs(session, oid, form):
     return output
 
 
+def visible_control_texts(state, node):
+    """Painted native display value only; option inventory is not visible text."""
+    if node.get('visible') is not True:
+        return []
+    value = next((v for v in state.get('values', []) if v.get('element_id') == node.get('element_id')), {})
+    selected = node.get('native_role') == 'select' or _binding(state, node.get('element_id')).get('tag') == 'select'
+    text = value.get('display_value') if selected else value.get('value')
+    return [text] if value.get('value_visible') is True and isinstance(text, str) and text.strip() else []
+
+
+def visible_result_texts(state, node):
+    """Captured visible carriers only; editable controls use values, never labels."""
+    if node.get('visible') is not True:
+        return []
+    cid = node['element_id']
+    binding = _binding(state, cid)
+    if node.get('inputable') or node.get('native_role') in ('input', 'textarea', 'select') or binding.get('tag') in ('input', 'textarea', 'select'):
+        return visible_control_texts(state, node)
+    texts = [str(node.get('text') or '').strip()]
+    flat = lambda value: re.sub(r'\s+', '', str(value or ''))
+    for block in state.get('text_blocks', []):
+        if block.get('element_id') != cid:
+            continue
+        visible = str(block.get('visible_text') or '')
+        for text in [visible, *(block.get('complete_sentences') or [])]:
+            if text and flat(text) in flat(visible) and flat(text) in flat(state.get('visible_text')):
+                texts.append(str(text).strip())
+    return list(dict.fromkeys(text for text in texts if text))
+
+
+def _changed_result_binding(s, oid, state, node):
+    """Prove output update from another input, with actual edit/submit mechanism."""
+    from .screenshot_effect import business_scope, input_edit_row, input_facts
+    texts = visible_result_texts(state, node)
+    scope = business_scope(state, node['element_id'])
+    if not texts or not scope:
+        return None
+    if any(page_feedback(state, scope=scope)[key] for key in ('validation_feedback', 'unreadable_critical_ui')):
+        return None
+    def identity(captured, cid):
+        binding = _binding(captured, cid)
+        if not binding.get('selector') or not binding.get('tag'):
+            return None
+        return (captured.get('document_identity'), cid, binding['selector'],
+                binding['tag'], binding.get('index', 0), business_scope(captured, cid))
+    result_identity = identity(state, node['element_id'])
+    if result_identity is None:
+        return None
+    order = {key: i for i, key in enumerate(s.observation_records)}
+    inputs = []
+    output = None
+    for row in _rows(s):
+        if order.get(row.get('after_observation_id'), 10**9) > order.get(oid, -1):
+            continue
+        before = _state(s, row.get('before_observation_id'))
+        after = _state(s, row.get('after_observation_id'))
+        if not before or not after or before.get('document_identity') != state.get('document_identity') or after.get('document_identity') != state.get('document_identity'):
+            continue
+        cid = (row.get('target') or {}).get('control_id')
+        if business_scope(before, cid) != scope:
+            continue
+        edit = input_edit_row(s, row)
+        submit = submission_row(row, before)
+        if not edit and not submit:
+            continue
+        output = None  # Any newer relevant input/submission invalidates the old result.
+        if edit:
+            inputs.append({'operation_id': row.get('operation_id'), 'node': cid,
+                'form_selector': scope, 'after_observation_id': row['after_observation_id']})
+        matching = [r for r in inputs if r['node'] != node['element_id']]
+        if submit and not matching:
+            matching = [r for r in frozen_input_refs(s, row['before_observation_id'], scope) if r['node'] != node['element_id']]
+        if not matching or cid == node['element_id']:
+            continue
+        old_node = next((e for e in before.get('elements', []) if e['element_id'] == node['element_id']), {})
+        new_node = next((e for e in after.get('elements', []) if e['element_id'] == node['element_id']), {})
+        if (identity(after, node['element_id']) != result_identity
+                or old_node and identity(before, node['element_id']) != result_identity):
+            continue
+        old = visible_result_texts(before, old_node) if old_node else []
+        new = visible_result_texts(after, new_node) if new_node else []
+        if new != texts or new == old:
+            continue
+        source_values = {str(f.get('value')) for key, f in input_facts(after).items()
+                         if key in {r['node'] for r in matching}}
+        if any(text in source_values for text in texts):
+            continue  # A copied input is not evidence of conversion.
+        feedback = page_feedback(after, scope=scope)
+        if feedback['validation_feedback'] or feedback['unreadable_critical_ui']:
+            continue
+        output = {'policy': RESULT_EXECUTION_POLICY, 'result_region_selector': _binding(state, node['element_id']).get('result_region_selector'),
+            'result_node': node['element_id'], 'result_observation_id': oid,
+            'mechanism': 'submit' if submit else 'edit', 'result_value_change_required': True,
+            'submission': {'operation_id': row.get('operation_id'), 'node': cid,
+                'before_observation_id': row['before_observation_id'], 'after_observation_id': row['after_observation_id'],
+                'scope': scope, 'input_refs': matching}, 'additional_model_calls': 0}
+    return output
+
+
 def result_execution_binding(s, oid, state, node):
     """Bind a real result node to this attempt's input and submit, not a table."""
+    changed = _changed_result_binding(s, oid, state, node)
+    if changed:
+        from .screenshot_plan import explicit_submission_required
+        if changed.get('mechanism') != 'edit' or not explicit_submission_required(s):
+            return changed
     binding=_binding(state,node['element_id'])
     if (not binding.get('result_region_selector') or node.get('inputable')
-            or node.get('native_role') in ('input','select','textarea','h1','h2','h3','label','button')
-            or page_feedback(state)['validation_feedback'] or page_feedback(state)['unreadable_critical_ui']):return None
+            or node.get('native_role') in ('input','select','textarea','h1','h2','h3','label','button')):return None
     order={key:i for i,key in enumerate(s.observation_records)}
     inputs=[];submit=None
     from .collection_strategy import enabled
@@ -144,7 +251,11 @@ def result_execution_binding(s, oid, state, node):
         matching=[i for i in inputs if form and i['form_selector']==form] if screenshot else [i for i in inputs if not form or i['form_selector']==form]
         if is_submit and not matching and screenshot:
             matching = frozen_input_refs(s, row['before_observation_id'], form)
-        if is_submit and matching and not page_feedback(after)['validation_feedback']:
+        current_feedback = page_feedback(state, scope=form)
+        after_feedback = page_feedback(after, scope=form)
+        if (is_submit and matching and not current_feedback['validation_feedback']
+                and not current_feedback['unreadable_critical_ui']
+                and not after_feedback['validation_feedback'] and not after_feedback['unreadable_critical_ui']):
             # The result must already be captured after submission. Scrolling
             # to a previously unseen static tax table cannot establish causality.
             result_selector=binding['result_region_selector']
@@ -193,5 +304,5 @@ def completion_result_summary(evidence, *, final_observation_id):
     if not rows:return None
     final_result='；'.join((str(r['field'])+'：' if r['field'] else '')+r['visible_result'] for r in rows)
     return {'policy':RESULT_EXECUTION_POLICY,'final_result':final_result,
-            'completion_judgement':'本次输入已提交；各事项由所列原观察中的实际结果支持：'+final_result+'。',
+            'completion_judgement':'本次操作结果已核验；各事项由所列原观察中的实际结果支持：'+final_result+'。',
             'basis':rows,'is_ai_review':False}

@@ -20,9 +20,20 @@ PROJECT_RULES = 'candidate-project-2'
 POOL_CHECKPOINT = ('webcollect/candidate-project', 'manifest')
 
 
-def _require(condition, message):
+class CurrentChainError(ValueError):
+    """A deterministic chain/input failure, never a reason to retry dispatch."""
+
+    def __init__(self, message, *, context=None):
+        self.message = message
+        self.context = dict(context or {})
+        detail = ('; context=' + json.dumps(self.context, ensure_ascii=False, sort_keys=True)
+                  if self.context else '')
+        super().__init__('CURRENT_CHAIN: ' + message + detail)
+
+
+def _require(condition, message, *, context=None):
     if not condition:
-        raise ValueError('CURRENT_CHAIN: ' + message)
+        raise CurrentChainError(message, context=context)
 
 
 def _path(value):
@@ -370,11 +381,15 @@ def current_evidence_roots(scope):
     return [_physical(scope['manifest']['path']).parent.parent, *(_physical(root) for root in scope['current_result_roots'])]
 
 
-def require_evidence_path(path, roots):
+def require_evidence_path(path, roots, *, context=None):
     """A path frozen into historical evidence resolves through the retained
     project-layout symlinks; the roots and byte-hash checks fence it."""
+    recorded = str(path)
     path = _physical(path)
-    _require(any(path.is_relative_to(_physical(root)) for root in roots), 'historical/out-of-chain observation reference rejected')
+    _require(any(path.is_relative_to(_physical(root)) for root in roots),
+             'historical/out-of-chain observation reference rejected',
+             context={**(context or {}), 'path': recorded, 'resolved_path': str(path),
+                      'allowed_roots': [str(_physical(root)) for root in roots]})
     return path
 
 
@@ -408,10 +423,24 @@ def assert_current_evidence(scope, value):
                 relocations[(str(old),item['original_sha256'])]=current
             for entry in item.values():find_relocations(entry)
     find_relocations(value)
-    def walk(item):
+    def walk(item, location='$', reference_chain=()):
+        context = {'json_location': location, 'reference_chain': list(reference_chain)}
+        if isinstance(item, dict) and set(item) == {'path', 'sha256'}:
+            context['path'] = item['path']
+        try:
+            walk_item(item, location, reference_chain, context)
+        except CurrentChainError as error:
+            if error.context:
+                raise
+            raise CurrentChainError(error.message, context=context) from error
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise CurrentChainError('invalid current evidence: ' + str(error),
+                                    context={**context, 'error_type': type(error).__name__}) from error
+
+    def walk_item(item, location, reference_chain, context):
         if isinstance(item, list):
-            for entry in item:
-                walk(entry)
+            for index, entry in enumerate(item):
+                walk(entry, f'{location}[{index}]', reference_chain)
         elif isinstance(item, dict):
             if item.get('schema_version') in ('candidate-research-replay-2', 'candidate-research-replay-3',
                                               'candidate-research-replay'):
@@ -441,9 +470,9 @@ def assert_current_evidence(scope, value):
                 # as observations; every other reference still uses current roots.
                 return
             if item.get('schema_version') in ('webcollect-task-history-scope-1', 'qc-cumulative-set-1'):
-                raise ValueError('CURRENT_CHAIN: historical population reference rejected')
+                raise CurrentChainError('historical population reference rejected', context=context)
             if set(item) == {'path', 'sha256'}:
-                path = require_evidence_path(item['path'], roots)
+                path = require_evidence_path(item['path'], roots, context=context)
                 if not path.is_file() and (str(path),item['sha256']) in relocations:
                     path=relocations[(str(path),item['sha256'])]
                     _require(_ref(path)['sha256']==item['sha256'],'relocated frame bytes changed')
@@ -452,10 +481,12 @@ def assert_current_evidence(scope, value):
                     # already resolved to this roots-fenced file, so bytes decide.
                     _require(_ref(path)['sha256'] == item['sha256'], 'current observation reference changed')
                 if path.suffix == '.json' and str(path) not in visited:
-                    visited.add(str(path)); walk(load_json(path))
+                    visited.add(str(path))
+                    walk(load_json(path), '$', (*reference_chain,
+                         {'path': str(path), 'json_location': location}))
             else:
-                for entry in item.values():
-                    walk(entry)
+                for key, entry in item.items():
+                    walk(entry, f'{location}.{key}', reference_chain)
     walk(value)
     return True
 

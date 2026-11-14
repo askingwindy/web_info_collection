@@ -137,6 +137,21 @@ class OfflineSurface:
         state['visible_text'] += '\n' + '\n'.join(e.get('text', '') for e in state['elements'])
         for value in state['values']:
             value['display_value'] = value['value']
+        # Synthetic capture keeps the current production evidence shape.
+        # These are fixture witnesses, never browser/production receipts.
+        state['capture_readiness'] = {'document_ready': 'complete', 'fonts_ready': True, 'images_ready': True}
+        state['geometry_witnesses'] = []
+        for row in state['elements']:
+            left, top, right, bottom = row['bbox']
+            coordinate = [30, top + 10]
+            state['geometry_witnesses'].append({
+                'element_id': row['element_id'], 'bbox': row['bbox'], 'rendered_bbox': row['bbox'],
+                'samples': [{'ancestor': True, 'point': [x, y]}
+                            for x in (left + .5, (left + right) / 2, right - .5)
+                            for y in (top + .5, (top + bottom) / 2, bottom - .5)],
+                'dispatch_point': {'schema_version': 'click-dispatch-point',
+                                   'coordinate': coordinate, 'hit_valid': True},
+                'synthetic': True})
         binding = next((b for b in state['capture_controls'] if b['selector'] == selector), None)
         if binding:
             eid = binding['element_id']
@@ -291,7 +306,7 @@ class SessionHarness(unittest.IsolatedAsyncioTestCase):
                        sort_keys=True, default=str).encode()).hexdigest()}
 
     async def _fake_before(self, page, evidence, selector=None, index=0, **kw):
-        observation = await self.surface.capture(page, selector, index)
+        observation = await self.surface.capture(page, selector, index, **kw)
         if kw.get('include_html'):
             observation['html'] = await page.content()
         return observation
@@ -473,28 +488,38 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertEqual(hits[0]['reusedRequestId'], finished[0]['requestId'])
         self.assertEqual(len(self.f.opener.calls), 1)
 
-    def test_timeout_retry_gets_its_own_request_id_and_records(self):
-        _, job, gateway, runlog = self._gateway()
-        original = self.f.opener.open
-
-        def send(request, timeout):
-            if len(self.f.opener.calls) == 0:
-                self.f.opener.calls.append(request)
-                raise TimeoutError()
-            return original(request, timeout)
-
-        self.f.opener.open = send
+    def test_timeout_retains_one_unknown_and_blocks_replacement(self):
+        ledger, job, gateway, runlog = self._gateway()
+        self.f.opener.error = TimeoutError()
         self.fixture.response(self.fixture.message())
-        self.fixture.call(gateway, job, attempt_id='claim-1')
+        with self.assertRaises(OutcomeUnknown):
+            self.fixture.call(gateway, job, attempt_id='claim-1')
+        # A second call, or a direct reservation using a new attempt number,
+        # must not bypass the unresolved provider result.
+        self.f.opener.error = None
+        with self.assertRaises(OutcomeUnknown):
+            self.fixture.call(gateway, job, attempt_id='claim-1')
         rows = self._calls(runlog)
         retries = [row for row in rows if row['event'] == 'timeout_retry_scheduled']
         started = [row for row in rows if row['event'] == 'request_started']
         finished = [row for row in rows if row['event'] == 'request_finished']
-        self.assertEqual([row['state'] for row in finished], ['unknown', 'succeeded'])
-        self.assertEqual(len(started), 2)
-        self.assertEqual(retries[0]['retryNumber'], 1)
-        self.assertEqual(len({row['requestId'] for row in started}), 2)
-        self.assertEqual(len(self.f.opener.calls), 2)
+        self.assertEqual([row['state'] for row in finished], ['unknown'])
+        self.assertEqual(len(started), 1)
+        self.assertEqual(retries, [])
+        with ledger.connect() as con:
+            original = dict(con.execute('SELECT * FROM model_requests').fetchone())
+        material = json.loads(original['request_json'])
+        with self.assertRaises(OutcomeUnknown):
+            ledger.reserve_request(job, original['purpose'], 1, request_json=material)
+        with self.assertRaises(OutcomeUnknown):
+            ledger.reserve_request(job, original['purpose'], 1, request_json={**material,
+                'timeout_retry_of': original['id'], 'timeout_retry_root': original['id'],
+                'timeout_retry_number': 1})
+        self.assertEqual(len(self._ledger_request_ids(ledger)), 1)
+        self.assertEqual(len(self.f.opener.calls), 1)
+        self.assertEqual(original['state'], 'unknown')
+        self.assertEqual(finished[0]['requestId'], original['id'])
+        self.assertIsNone(finished[0]['inputTokens'])
 
     def test_invalid_response_still_records_its_usage(self):
         from webcollect.screenshot_plan import decision_tools, normalize_decision
@@ -944,6 +969,38 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         self.assertEqual(affordances['projected_controls'], len(first['controls']))
         self.assertIn('input', affordances['kinds'])
         self.assertTrue(all(row['number'] == index for index, row in enumerate(first['controls'], 1)))
+
+        # A positional selector can move while the same physical control ID
+        # survives. Recover the probe once from the newly captured binding,
+        # without consuming any business action or declaring a null probe seen.
+        probe_session, _ = self._session('binding-probe', self._choose([]))
+        await probe_session._open_entry()
+        cid='control-0';old=probe_session.current['controls'][cid]['binding']['selector']
+        source=next(b for b in self.surface.state['capture_controls'] if b['element_id']==cid)
+        source['selector']=old+'-moved'
+        actions=len(self.surface.executed);observations=len(probe_session.observations)
+        result=await probe_session._observe(cid)
+        self.assertTrue(result['data']['target_probe']['acquired'])
+        self.assertEqual(probe_session.current['controls'][cid]['probe']['element_id'],cid)
+        self.assertEqual(len(probe_session.observations)-observations,2)
+        self.assertEqual(len(self.surface.executed),actions)
+        self.assertEqual(probe_session.actual_dispatches,0)
+        repeated=await probe_session._observe(cid)
+        self.assertEqual(repeated['status'],'rejected')
+        self.assertTrue(repeated['data']['target_probe']['acquired'])
+        self.assertNotIn('inspect',repeated['summary'])
+        unavailable, _ = self._session('unavailable-probe', self._choose([]))
+        await unavailable._open_entry()
+        async def no_target(selector,index):
+            return await self.surface.capture(self.page,selector='#not-present')
+        with patch.object(unavailable,'_capture_observation',side_effect=no_target):
+            missing=await unavailable._observe(cid)
+        self.assertFalse(missing['data']['target_probe']['acquired'])
+        repeated=await unavailable._observe(cid)
+        self.assertEqual(repeated['status'],'rejected')
+        self.assertFalse(repeated['data']['target_probe']['acquired'])
+        self.assertIn('仅已尝试',repeated['summary'])
+        self.assertNotIn('inspect',repeated['summary'])
 
     async def test_runlog_does_not_change_the_business_result(self):
         # Both runs must start from the same page surface: the first session's

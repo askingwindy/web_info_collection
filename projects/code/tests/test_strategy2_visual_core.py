@@ -118,6 +118,33 @@ class Strategy2VisualCore(unittest.TestCase):
         wrong = deepcopy(proof);wrong['submit_events'][0]['default_prevented']=True
         with self.assertRaisesRegex(ValueError,'NATIVE_SUBMIT_UNPROVEN'):
             validate_native_form_popup(wrong,operation,state,landed)
+        # Explicit child IDs and semantic target binding share the same native
+        # carrier, while the actual click target stays the observed child.
+        from webcollect.screenshot_execution import navigation_carrier
+        from webcollect.plan_evidence import verify_popup
+        linked={'url':'https://example.org/list','document_identity':'list-doc',
+            'elements':[{'element_id':'link','native_role':'a','visible':True,'clickable':True},
+                {'element_id':'heading','native_role':'h3','visible':True,'clickable':True,'parent_id':'link'}],
+            'capture_controls':[{'element_id':'link','tag':'a','selector':'a','href':'https://example.org/article','target':'_blank'},
+                {'element_id':'heading','tag':'h3','selector':'a > h3','href':None}]}
+        self.assertEqual(navigation_carrier(linked,'heading')['link_node'],'link')
+        origin=object()
+        class Opened:
+            url='https://example.org/article'
+            async def opener(self):return origin
+            async def wait_for_load_state(self,*args,**kwargs):pass
+        click={'action_type':'click','evidence':{'anchor_element_id':'heading'}}
+        earned=asyncio.run(verify_popup(origin,Opened(),click,linked))
+        self.assertEqual(earned['source_node'],'heading')
+        self.assertEqual(earned['link_carrier']['link_node'],'link')
+        self.assertEqual(click['evidence']['anchor_element_id'],'heading')
+        aria_link=deepcopy(linked);aria_link['elements'][0]['native_role']='button'
+        self.assertEqual(navigation_carrier(aria_link,'heading')['link_node'],'link')
+        direct={'action_type':'click','evidence':{'anchor_element_id':'link'}}
+        self.assertEqual(asyncio.run(verify_popup(origin,Opened(),direct,aria_link))['clicked_href'],Opened.url)
+        wrong_opened=Opened();wrong_opened.url='https://example.org/other'
+        with self.assertRaisesRegex(ValueError,'POPUP_LANDING_UNPROVEN'):
+            asyncio.run(verify_popup(origin,wrong_opened,click,linked))
         from webcollect.screenshot_plan import first_plan_admission, normalize_submit_plan
         route_plan = {'goal': '读取结果并根据页面依据核对',
             'requirements': [
@@ -263,6 +290,20 @@ class Strategy2VisualCore(unittest.TestCase):
             affordances = interaction_affordances(rows, body_ids)
             self.assertEqual(affordances['kinds'], ['body_link', 'chrome_link'])
             self.assertEqual(affordances['groups'][0]['examples'], ['月球'])
+            self.assertIn('input', affordances['not_observed_kinds'])
+            self.assertNotIn('body_link', affordances['not_observed_kinds'])
+            self.assertIn('未观察到', affordances['scope'])
+            self.assertEqual(affordances['dispatch_status_source'].split('；')[0], 'controls.action_states')
+            from webcollect.screenshot_session import ScreenshotPlanSession
+            from types import SimpleNamespace
+            session = ScreenshotPlanSession.__new__(ScreenshotPlanSession)
+            session.choose = SimpleNamespace(max_images=1)
+            session._allowed_actions = lambda: ['click', 'scroll']
+            capabilities = session._tool_capabilities()
+            self.assertFalse(capabilities['inspect'])
+            self.assertFalse(capabilities['historical_image_with_current'])
+            self.assertEqual(capabilities['supported_actions'], ['click', 'scroll'])
+            self.assertIn('file_upload', capabilities['unsupported'])
             self.assertEqual(controls_projection(reading, ['click', 'scroll'], limit=1)[0]['control'],
                              'link-body')
             # A region-only scroll target legally declares no text; absence is no
@@ -342,6 +383,31 @@ class Strategy2VisualCore(unittest.TestCase):
                 self.assertEqual(stage_visuals[0]['overview_unavailable']['reason'], stage + '_timeout')
                 self.assertEqual(stage_visuals[0]['source'], obs['evidence']['image'])
                 self.assertEqual(verify_visuals(stage_obs, stage_visuals), [stage_visuals[0]['path']])
+            # Known geometry limitations in this optional overview do not
+            # invalidate the original viewport or create whole-page evidence.
+            from playwright.async_api import Error as BrowserError
+            for stage in ('before_observe', 'after_observe'):
+                limited = deepcopy(obs)
+                limited.pop('visual_evidence', None)
+                limited_root = root / (stage + '-unsupported')
+                limited_root.mkdir()
+                error = BrowserError('Page.evaluate: Error: UNSUPPORTED_GEOMETRY: rotation cannot supply target truth')
+                failures = [error] if stage == 'before_observe' else [deepcopy(state), error]
+                with patch('webcollect.browser.observe', new=AsyncMock(side_effect=failures)):
+                    retained = asyncio.run(prepare_visuals(limited, limited_root, page, first=True))
+                self.assertEqual(len(retained), 1)
+                self.assertEqual(retained[0]['scope'], 'viewport')
+                self.assertEqual(retained[0]['source'], obs['evidence']['image'])
+                self.assertEqual(retained[0]['overview_unavailable']['reason'], stage + '_unsupported_geometry')
+                self.assertEqual(verify_visuals(limited, retained), [retained[0]['path']])
+                self.assertFalse(any(limited_root.glob('*full-*.json')))
+            other = deepcopy(obs)
+            other.pop('visual_evidence', None)
+            other_root = root / 'other-browser-error'
+            other_root.mkdir()
+            with patch('webcollect.browser.observe', new=AsyncMock(side_effect=BrowserError('other snapshot defect'))):
+                with self.assertRaisesRegex(BrowserError, 'other snapshot defect'):
+                    asyncio.run(prepare_visuals(other, other_root, page, first=True))
             broken = deepcopy(obs)
             broken.pop('visual_evidence', None)
             broken_root = root / 'program-error'
@@ -358,6 +424,59 @@ class Strategy2VisualCore(unittest.TestCase):
                 crop_visual(obs, root, [0, 0, 20, 20], image_ref='unseen-image')
 
     def test_atomic_input_focus_select_value_and_observed_effect_chain(self):
+        from webcollect.action_stability import action_scoped_projection, ActionScopeError
+        empty_scope = {
+            'screen_resolution': [200, 100],
+            'capture_readiness': {'document_ready': 'complete', 'fonts_ready': True, 'images_ready': True},
+            'elements': [{'element_id': 'empty', 'native_role': 'input', 'bbox': [10, 10, 190, 50],
+                          'visible': True, 'enabled': True, 'inputable': True}],
+            'capture_controls': [{'element_id': 'empty', 'tag': 'input', 'input_type': 'search'}],
+            'values': [{'element_id': 'empty', 'value': '', 'focused': True,
+                        'readonly': False, 'value_visible': False}],
+            'geometry_witnesses': [{'element_id': 'empty', 'samples': [{'ancestor': True}] * 9}],
+            'target': {'element_id': 'empty', 'hit_valid': True, 'focused': True}}
+        self.assertEqual(action_scoped_projection(empty_scope, 'empty', 'type')['value']['value'], '')
+        hidden_value = deepcopy(empty_scope); hidden_value['values'][0]['value'] = 'secret'
+        with self.assertRaises(ActionScopeError) as failure:
+            action_scoped_projection(hidden_value, 'empty', 'type')
+        self.assertEqual(failure.exception.feedback()['dispatch_status'], 'NOT_DISPATCHED')
+        self.assertEqual(failure.exception.missing, ['visible_existing_value_or_proven_empty_editor'])
+        self.assertNotIn('unique_focus', failure.exception.missing)
+        self.assertEqual(failure.exception.feedback()['recovery'], 'observe_or_revise_without_repeating_focus')
+        protected = deepcopy(empty_scope); protected['capture_controls'][0]['input_type'] = 'password'
+        with self.assertRaisesRegex(ActionScopeError, 'unprotected_input'):
+            action_scoped_projection(protected, 'empty', 'type')
+        edges = deepcopy(empty_scope); edges['geometry_witnesses'][0]['samples'] = [{'ancestor': False}] * 9
+        edges['geometry_witnesses'][0]['samples'][4] = {'ancestor': True}
+        edges['capture_controls'][0].update(selector='#empty',element_id='empty')
+        edges['target'].update(bbox=[10,10,190,50],coordinate=[100,30])
+        self.assertEqual(action_scoped_projection(edges,'empty','type')['value']['value'],'')
+        self.assertEqual(action_availability(edges,edges['elements'][0],edges['capture_controls'][0],
+            edges['values'][0],edges['target'],'type')['status'],'PROVEN')
+        unreadable=deepcopy(edges);unreadable['values'][0]['value']='existing hidden value'
+        self.assertEqual(action_availability(unreadable,unreadable['elements'][0],unreadable['capture_controls'][0],
+            unreadable['values'][0],unreadable['target'],'type')['status'],'INSUFFICIENT')
+        with self.assertRaises(ActionScopeError):action_scoped_projection(unreadable,'empty','type')
+        occluded=deepcopy(edges);occluded['target']['hit_valid']=False
+        with self.assertRaises(ActionScopeError):action_scoped_projection(occluded,'empty','type')
+        self.assertEqual(action_availability(occluded,occluded['elements'][0],occluded['capture_controls'][0],
+            occluded['values'][0],occluded['target'],'type')['status'],'UNAVAILABLE')
+        center=deepcopy(edges);center['geometry_witnesses'][0]['samples'][4]['ancestor']=False
+        with self.assertRaisesRegex(ValueError,'hit samples'):action_scoped_projection(center,'empty','type')
+        disabled=deepcopy(edges);disabled['elements'][0]['enabled']=False
+        with self.assertRaisesRegex(ValueError,'not visible/enabled'):action_scoped_projection(disabled,'empty','type')
+        unfocused = deepcopy(empty_scope); unfocused['values'][0]['focused'] = False
+        with self.assertRaisesRegex(ActionScopeError, 'unique_focus'):
+            action_scoped_projection(unfocused, 'empty', 'type')
+        readonly = deepcopy(empty_scope); readonly['values'][0]['readonly'] = True
+        with self.assertRaisesRegex(ActionScopeError, 'editable'):
+            action_scoped_projection(readonly, 'empty', 'type')
+        hidden = deepcopy(empty_scope); hidden['elements'][0]['visible'] = False
+        with self.assertRaisesRegex(ValueError, 'not visible/enabled'):
+            action_scoped_projection(hidden, 'empty', 'type')
+        missing_probe = deepcopy(empty_scope); missing_probe.pop('target')
+        with self.assertRaisesRegex(ActionScopeError, 'visible_existing_value_or_proven_empty_editor'):
+            action_scoped_projection(missing_probe, 'empty', 'type')
         # Explicit wait time belongs inside the atomic deadline. Scale only
         # the event-loop timer, retaining the production 20/65s decisions.
         import asyncio
@@ -389,7 +508,8 @@ class Strategy2VisualCore(unittest.TestCase):
         c = control()
         state = {'screen_resolution': [200, 100], 'document_identity': 'doc-current',
                  'url': 'https://example.test/form', 'scroll': [0, 0],
-                 'elements': [c['element']], 'values': [c['value']], 'visible_text': ''}
+                 'elements': [c['element']], 'values': [c['value']], 'visible_text': '',
+                 'geometry_witnesses':[{'element_id':'input1','samples':[{'ancestor':True}]*9}]}
         probe = {'element_id': 'input1', 'focused': False, 'hit_valid': True,
                  'bbox': c['element']['bbox'], 'coordinate': [50, 40],
                  'visible_label_evidence': c['readable_labels']}
@@ -401,6 +521,7 @@ class Strategy2VisualCore(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'TYPE_REQUIRES_CURRENT_FOCUS'):
             compile_step(task, [], step, obs)
         probe['focused'] = True
+        c['value']['focused'] = True
         c['actions']['type'] = action_availability(state, c['element'], c['binding'], c['value'], probe, 'type')
         rows = compile_step(task, [], step, obs)
         self.assertEqual([row['action'] for row in rows], ['type'])

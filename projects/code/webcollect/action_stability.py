@@ -24,6 +24,61 @@ CLICK_POINT_VERSION = 'click-dispatch-point'
 BACK_OBSERVED_VERSION = 'back-observed-document'
 
 
+class ActionScopeError(ValueError):
+    """A pre-dispatch failure with the actual missing conditions."""
+    def __init__(self, missing, *, node, action):
+        self.missing = list(missing)
+        self.node = node
+        self.action = action
+        super().__init__('Action-scoped input missing: ' + ', '.join(self.missing))
+
+    def feedback(self):
+        return {'action': self.action, 'control_id': self.node,
+                'action_dispatched': False, 'dispatch_status': 'NOT_DISPATCHED',
+                'missing_requirements': self.missing,
+                'recovery': ('establish_unique_focus' if 'unique_focus' in self.missing else
+                             'observe_or_revise_without_repeating_focus')}
+
+
+def native_input_missing(state, element, binding, value, probe, action):
+    """Shared keyboard-receiver facts; empty editors have no glyphs to read."""
+    node = element.get('element_id')
+    textarea = element.get('native_role') == 'textarea' and binding.get('tag') == 'textarea'
+    select_key = action == 'hotkey' and element.get('native_role') == 'select' and binding.get('tag') == 'select'
+    missing = []
+    if not (element.get('native_role') in ('input', 'combobox') or textarea or select_key):
+        missing.append('native_input_role')
+    if action == 'type' and (not element.get('inputable') or value.get('readonly') is not False):
+        missing.append('editable')
+    if ([v.get('element_id') for v in state.get('values', []) if v.get('focused')] != [node]
+            or (probe or {}).get('focused') is not True):
+        missing.append('unique_focus')
+    geometry = next((g for g in state.get('geometry_witnesses', []) if g.get('element_id') == node), {})
+    samples = geometry.get('samples', [])
+    box, viewport = element.get('bbox') or [], state.get('screen_resolution') or []
+    inside = (len(box) == 4 and len(viewport) == 2
+              and 0 <= box[0] < box[2] <= viewport[0] and 0 <= box[1] < box[3] <= viewport[1])
+    if not inside:
+        missing.append('target_viewport')
+    if (len(samples) != 9 or samples[4].get('ancestor') is not True
+            or (probe or {}).get('element_id') != node or probe.get('hit_valid') is not True):
+        missing.append('target_geometry')
+    empty_editor = (value.get('value') == '' and value.get('readonly') is False
+        and element.get('inputable') is True and element.get('visible') is True and element.get('enabled') is True
+        and (textarea or binding.get('tag') == 'input' and binding.get('input_type') in
+             ('text', 'search', 'url', 'tel', 'email', 'number'))
+        and inside and len(samples) == 9 and samples[4].get('ancestor') is True
+        and (probe or {}).get('element_id') == node and probe.get('hit_valid') is True
+        and not missing)
+    # Focus and an exposed receiving point prove empty native input, not a
+    # readable existing value. Edge samples never grant result-text evidence.
+    if value.get('value_visible') is not True and not empty_editor:
+        missing.append('visible_existing_value_or_proven_empty_editor')
+    if binding.get('input_type') == 'password' or value.get('input_type') == 'password':
+        missing.append('unprotected_input')
+    return missing
+
+
 def action_scoped_projection(state, node, action, *, click_validation=None):
     """Target-level identity proof: unique node, visible/enabled, in-viewport
     box, loaded readiness and hit/obstruction samples; focus+value for inputs.
@@ -60,13 +115,9 @@ def action_scoped_projection(state, node, action, *, click_validation=None):
     if action == 'click' and not element.get('clickable'):
         raise ValueError('Action-scoped click target is not clickable')
     if action in ('type', 'hotkey'):
-        native_textarea = element.get('native_role') == 'textarea' and binding.get('tag') == 'textarea'
-        native_select_key = action == 'hotkey' and element.get('native_role') == 'select' and binding.get('tag') == 'select'
-        if (not (element.get('native_role') in ('input', 'combobox') or native_textarea or native_select_key)
-                or (action == 'type' and (not element.get('inputable') or value.get('readonly')))
-                or not value.get('value_visible')
-                or [v['element_id'] for v in state.get('values', []) if v.get('focused')] != [node]):
-            raise ValueError('Action-scoped input requires an editable uniquely focused input')
+        missing = native_input_missing(state, element, binding, value, state.get('target'), action)
+        if missing:
+            raise ActionScopeError(missing, node=node, action=action)
     target = state.get('target')
     if target and (target.get('element_id') != node or target.get('hit_valid') is False):
         raise ValueError('Action-scoped target hit or identity changed')

@@ -946,8 +946,7 @@ class ModelGateway:
             if isinstance(material, dict):
                 qc_binding = {name:material[name] for name in ('pair_id','focal_sample_id','neighbor_sample_id')
                               if isinstance(material.get(name), str)}
-        timeout_retry = {}
-        timeout_retries = invalid_attempts = 0
+        invalid_attempts = 0
         protocol_failures = set()
         # The purpose freezes observation, history and schema. A recurring error
         # within this call has no new browser evidence, regardless of answer prose.
@@ -965,7 +964,7 @@ class ModelGateway:
             else:
                 signature = re.sub(r'\b\d+\b', '#', str(error).splitlines()[0][:350])
             return object_sha256({'type': type(error).__name__, 'error': signature})
-        for attempt in (count() if consumer else range(attempts + 3)):
+        for attempt in (count() if consumer else range(attempts)):
             if consumer:
                 self.ledger.heartbeat(job)
             dispatch_policy = (native_context or {}).get('dispatch_policy')
@@ -1000,7 +999,7 @@ class ModelGateway:
                         self.ledger.heartbeat(job)
                     request = self.ledger.reserve_request(job, purpose, attempt, request_json={
                         'system':system,'text':text,'correction':correction,'account_id':self._account_id(),
-                        'accounting_mode':'tokens-1', **timeout_retry,
+                        'accounting_mode':'tokens-1',
                         **({'field_repair': {'source_request_id': field_repair['source_request_id'],
                             'allowed_paths': field_repair['paths'], 'tools': field_repair['tools']}} if field_repair else {}),
                         **({'transport_policy':QC_TRANSPORT_POLICY,
@@ -1279,7 +1278,8 @@ class ModelGateway:
                                            response={'provider_error': detail, 'failure_diagnostic': {'source': 'provider_http_error', **detail}, **transport_receipt})
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
             except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
-                # Retain each timeout as UNKNOWN; retry only within this active call.
+                # A timeout does not prove that the provider stopped or did not
+                # charge. Preserve the original request and stop this call.
                 root=error.reason if isinstance(error,urllib.error.URLError) else error
                 detail={'error_type':type(error).__name__,'reason_type':type(root).__name__}
                 for key in ('errno','verify_code'):
@@ -1287,34 +1287,6 @@ class ModelGateway:
                     if type(value) is int:detail[key]=value
                 self._settle_failure(job,rid, state='unknown', error=type(error).__name__,
                                            response={'transport_error': detail, **transport_receipt})
-                producer_discovery = job['kind'] in ('ai-search-plan','ai-application-site-classification-1','ai-grounded-entry-ids-1')
-                retry_allowed = (not consumer and not qc_transport and isinstance(root, TimeoutError) and timeout_retries < 3
-                                 and not producer_discovery and not dispatch_policy)
-                if retry_allowed and native_context:
-                    with self.ledger.connect() as con:
-                        used = self.ledger.session_http_usage(con, native_context['attempt_id'])['used']
-                    cap = native_context['max_requests']
-                    if (cap is not None and used >= cap) or (self.ledger.real_glm and used >= SessionGLMCallLimit.limit):
-                        retry_allowed = False
-                if retry_allowed:
-                    delay = (5, 10, 20)[timeout_retries]
-                    timeout_retries += 1
-                    timeout_retry = {'timeout_retry_of':rid,
-                        'timeout_retry_root':timeout_retry.get('timeout_retry_root', rid),
-                        'timeout_retry_number':timeout_retries}
-                    if self.runlog is not None:
-                        self.runlog.model_call(event='timeout_retry_scheduled', requestId=rid,
-                            jobId=job['id'], retryNumber=timeout_retries,
-                            retryOf=timeout_retry['timeout_retry_root'],
-                            delaySeconds=delay, originalOutcome='unknown')
-                    with self.ledger.transaction() as con:
-                        self.ledger.event(con, 'model_timeout_retry_scheduled', {
-                            'job_id':job['id'], **timeout_retry, 'delay_seconds':delay,
-                            'original_outcome':'UNKNOWN'})
-                    for _ in range(delay):
-                        self.ledger.heartbeat(job)
-                        time.sleep(1)
-                    continue
                 raise OutcomeUnknown('Provider outcome/charge UNKNOWN; request retained: ' + rid) from None
             except (BudgetStop, sqlite3.Error):
                 raise
@@ -1356,7 +1328,6 @@ class ModelGateway:
                             'reason': 'repeated_protocol_error_same_observation'})
                     raise ValueError('consumer_protocol_no_progress: repeated protocol error on unchanged observation') from None
                 protocol_failures.add(failure_key)
-                timeout_retry = {}
                 if qc_transport or (not consumer and invalid_attempts >= attempts):
                     break
                 if native_context:

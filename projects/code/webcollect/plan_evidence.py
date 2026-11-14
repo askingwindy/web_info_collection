@@ -513,12 +513,14 @@ async def verify_popup(origin,opened,operation,state,form_watcher=None):
     """Earned links or witnessed native form submits; uncertainty stays blocked."""
     if await opened.opener()!=origin:raise ValueError('POPUP_SOURCE_UNPROVEN')
     cid=operation.get('evidence',{}).get('anchor_element_id') or operation.get('evidence',{}).get('focused_element_id')
-    binding=next((b for b in state.get('capture_controls',[]) if b['element_id']==cid),{})
-    href=binding.get('href')
+    from .screenshot_execution import navigation_carrier
+    carrier = navigation_carrier(state, cid)
+    href = carrier['href'] if carrier else None
     await opened.wait_for_load_state('domcontentloaded',timeout=30000)
     if operation['action_type']=='click' and href and urlsplit(href).scheme in ('http','https') and same_url(href,opened.url):
         return {'source_url':state['url'],'source_document':state.get('document_identity'),
             'source_node':cid,'clicked_href':href,'opener_verified':True,'landed_url':opened.url,
+            'link_carrier':carrier,
             'atomic_actions':1,'new_page_first_frame':'following synchronized observation'}
     if not form_watcher:raise ValueError('POPUP_LANDING_UNPROVEN')
     requests=[]

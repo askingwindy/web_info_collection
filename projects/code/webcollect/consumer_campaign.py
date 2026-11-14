@@ -225,8 +225,36 @@ def main():
     (a.output / 'key-health-probes.json').write_text(json.dumps(probes, indent=2) + '\n')
     processes = {}
     launched_workers = []
+    engineering_failure = None
+
+    def stop_failed_workers(closed_sites=()):
+        nonlocal engineering_failure
+        if engineering_failure is not None:
+            return
+        failures = []
+        for worker in roster['workers']:
+            process = processes.get(worker['number'])
+            if process is None or worker['application_id'] in closed_sites:
+                continue
+            returncode = process.poll()
+            if returncode not in (None, 0):
+                failures.append({'worker_number': worker['number'], 'generation': worker['generation'],
+                                 'pid': process.pid, 'returncode': returncode})
+        if not failures:
+            return
+        # Close this coordinator's launch path before touching shared state.
+        # A failed stop write must never make an exited worker restartable.
+        engineering_failure = {'worker_exits': failures}
+        try:
+            stop_engineering_failure(state, engineering_failure)
+        except Exception as error:
+            engineering_failure['stop_write_error'] = type(error).__name__ + ': ' + str(error)
+        (a.output / 'worker-failure.json').write_text(
+            json.dumps(engineering_failure, ensure_ascii=False, indent=2) + '\n')
 
     def launch(worker, application):
+        if engineering_failure is not None:
+            return
         generation = worker.get('generation', 0) + 1
         ws = worker['scope']
         identity = f"{a.prefix}-w{worker['number']}-g{generation}"
@@ -258,6 +286,10 @@ def main():
                 if target_reached(current) and not current.get('dispatch_stopped'):
                     current.update(dispatch_stopped=True, stop_reason='ORDINARY_TARGET_REACHED')
                     write_state(state,current)
+            if not dispatch_closed:
+                stop_failed_workers(closed_sites)
+            if engineering_failure is not None:
+                engineering_drain = dispatch_closed = True
             if a.target_stop_mode == 'cancel' and not engineering_drain:
                 for worker in roster['workers']:
                     if worker['application_id'] in closed_sites and worker['number'] not in cancelled_sites:
@@ -276,18 +308,29 @@ def main():
                 if all(process.poll() is not None for process in processes.values()):break
             else:
                 for worker, application in zip(roster['workers'], applications):
-                    if application not in closed_sites and processes[worker['number']].poll() is not None:
+                    returncode = processes[worker['number']].poll()
+                    if application not in closed_sites and returncode is not None:
+                        if returncode != 0:
+                            stop_failed_workers(closed_sites)
+                            break
                         launch(worker, application)
             time.sleep(0.2)
     except KeyboardInterrupt:
         interrupted=True
     finally:
-        with locked(state) as current:
-            current['dispatch_stopped'] = True
-            if interrupted and not current.get('stop_reason'):current['stop_reason']='INTERRUPTED_BY_USER'
-            elif target_cancelled and not current.get('stop_reason'):
-                current.update(stop_reason='TARGET_REACHED', worker_shutdown_reason='TARGET_REACHED')
-            write_state(state, current)
+        try:
+            with locked(state) as current:
+                current['dispatch_stopped'] = True
+                if interrupted and not current.get('stop_reason'):current['stop_reason']='INTERRUPTED_BY_USER'
+                elif target_cancelled and not current.get('stop_reason'):
+                    current.update(stop_reason='TARGET_REACHED', worker_shutdown_reason='TARGET_REACHED')
+                elif engineering_failure is not None and not current.get('stop_reason'):
+                    current.update(stop_reason='ENGINEERING_FAILURE', stop_details=engineering_failure)
+                write_state(state, current)
+        except Exception as error:
+            if engineering_failure is None:
+                raise
+            engineering_failure['closeout_stop_write_error'] = type(error).__name__ + ': ' + str(error)
         if not interrupted and not target_cancelled:
             try:
                 while any(process.poll() is None for process in processes.values()):
@@ -337,10 +380,11 @@ def main():
             exported=len(current['deliveries'])
             counted=target_count(current)
             ordinary=sum(row.get('ordinary_target_eligible') is True for row in current['deliveries'])
-            stop_reason=current.get('stop_reason')
+            stop_reason=current.get('stop_reason') or ('ENGINEERING_FAILURE' if engineering_failure is not None else None)
             pending_count=len(current.get('pending_deliveries',[]))
         (a.output / 'launch-result.json').write_text(json.dumps({
             'returncodes':[process.returncode for process in processes.values()],
+            'worker_failure':engineering_failure,
             'saved_closeout_errors':closeout_errors,
             'target_reached':reached(state), 'interrupted':interrupted,
             'target_cancelled':target_cancelled, 'stop_reason':stop_reason,

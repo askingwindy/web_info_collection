@@ -364,6 +364,48 @@ def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=No
     return paths
 
 
+def preflight_candidate_sources(registry, sources):
+    """Validate the same evidence closure as execution, before browser dispatch."""
+    from .current_chain import CurrentChainError, assert_current_evidence, scope_for_registry
+    if not isinstance(sources, list) or not sources:
+        raise CurrentChainError('candidate source evidence is missing')
+    for source in sources:
+        try:
+            verify_evidence(source['references'])
+        except (KeyError, TypeError, ValueError, OSError) as error:
+            raise CurrentChainError('invalid candidate source evidence: ' + str(error)) from error
+    assert_current_evidence(scope_for_registry(registry), sources)
+
+
+def preflight_cohort_sources(pool, rows, registry):
+    """Read only the frozen cohort's inputs; do not claim, probe or navigate."""
+    from .current_chain import CurrentChainError
+    from .planning import object_sha256
+    with closing(sqlite3.connect(pool.path.as_uri() + '?mode=ro', uri=True)) as con:
+        for row in rows:
+            sources = [json.loads(source[0]) for source in con.execute(
+                'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created,source_key',
+                (row['candidate_id'],))]
+            if row.get('sources_sha256') and object_sha256(sources) != row['sources_sha256']:
+                raise CurrentChainError('frozen candidate sources changed: ' + row['candidate_id'])
+            try:
+                if row.get('sources_sha256'):
+                    # This is the exact reference consumed by claim_next, not
+                    # a new visit. Validate it before any worker account/browser IO.
+                    reference = row['entry_http']
+                    verify_evidence([reference])
+                    if not any(source.get('entry_http') == reference for source in sources):
+                        raise ValueError('entry_http is not an original candidate source')
+                preflight_candidate_sources(registry, sources)
+            except CurrentChainError as error:
+                error.candidate_id = row['candidate_id']
+                raise
+            except (KeyError, TypeError, ValueError, OSError) as error:
+                fault = CurrentChainError('invalid frozen candidate claim input: ' + str(error))
+                fault.candidate_id = row['candidate_id']
+                raise fault from error
+
+
 @asynccontextmanager
 async def entry_session(ledger, pool, claim, root):
     """One owned page from the first accounted visit through formal close-out."""
@@ -664,6 +706,18 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         'isolated_unknown':isolated_unknown}, expected_stage='claimed')
     if not won:
         return finish_or_reconcile(pool, claim)
+    from .current_chain import CurrentChainError
+    try:
+        preflight_candidate_sources(registry, current.get('sources'))
+    except CurrentChainError as error:
+        # The elected executor has only performed local input checks.
+        # No observation job, browser or model request has been dispatched here.
+        pool.finish(claim, state='failed', stage='input_preflight',
+                    reason=type(error).__name__ + ': ' + str(error))
+        error.no_dispatch_proof = {'claim_id': claim['claim_id'],
+            'proof': 'source_preflight_before_observation', 'browser_calls': 0,
+            'model_calls': 0, 'formal_attempts': 0}
+        raise
     root.mkdir(parents=True, exist_ok=False)
     if objective_binding is not None:
         # A user goal is input metadata, not an out-of-chain observation. Freeze
@@ -781,7 +835,13 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
                 return reconciled
             from .navigation import NavigationTimeoutError
             entry_timeout = stage=='observation' and isinstance(error, NavigationTimeoutError)
-            state='failed' if entry_timeout else ('reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError,TimeoutError)) else 'failed')
+            no_dispatch = None
+            if isinstance(error, CurrentChainError):
+                original = pool.get_claim(claim['claim_id'])
+                no_dispatch = known_unstarted_historical_claim(original, original.get('binding') or {})
+                if no_dispatch:
+                    error.no_dispatch_proof = no_dispatch
+            state='failed' if entry_timeout or no_dispatch else ('reconcile' if stage=='execution' or isinstance(error,(OutcomeUnknown,asyncio.CancelledError,TimeoutError)) else 'failed')
             pool.finish(claim,state=state,stage=stage,reason=type(error).__name__+': '+str(error))
             from .navigation import NavigationHTTPError
             if stage=='observation' and isinstance(error,NavigationHTTPError) and error.status==403:
@@ -847,6 +907,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         raise ValueError('Recovery requires an explicit producer batch')
     from .candidate_batch import report, record_outcome
     stop_reason = 'processing_limit'
+    stop_details = None
     poll = processed = 0
     bounded = limit is not None or rows is not None or target is not None
     delay = poll_seconds or 2
@@ -857,10 +918,40 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         with events.open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'at':time.time(), 'event':event, **value}, ensure_ascii=False) + '\n')
 
+    from .current_chain import CurrentChainError
+
+    def stop_dispatch(error, *, phase, claim=None, diagnostic=None):
+        nonlocal stop_reason, stop_details
+        stop_reason = 'engineering_failure'
+        if stop_details is None:
+            stop_details = {'error_type': type(error).__name__, 'reason': str(error), 'phase': phase,
+                'claim_id': claim.get('claim_id') if claim else None,
+                'candidate_id': claim.get('candidate_id') if claim else getattr(error, 'candidate_id', None),
+                'evidence_context': getattr(error, 'context', None),
+                'no_dispatch_proof': getattr(error, 'no_dispatch_proof', None)}
+            if diagnostic:
+                stop_details['diagnostic'] = diagnostic
+        if campaign:
+            try:
+                from .consumer_campaign import stop_engineering_failure
+                stop_engineering_failure(campaign, stop_details)
+            except Exception as stop_error:
+                # This worker still stops; report that sibling fencing failed.
+                stop_details['campaign_stop_error'] = type(stop_error).__name__ + ': ' + str(stop_error)
+        record('engineering_failure', details=stop_details)
+
     # Campaigns probe centrally before launching workers. A standalone run owns
     # the same startup responsibility, with a stable launch identity so an
     # interrupted/UNKNOWN probe is never replayed on restart.
-    kwargs.update(startup_check(ledger, pool=pool, **kwargs))
+    try:
+        kwargs.update(startup_check(ledger, pool=pool, **kwargs))
+        if rows is not None:
+            preflight_cohort_sources(pool, rows, kwargs['registry'])
+    except Exception as error:
+        stop_dispatch(error, phase='startup_preflight')
+        return {'denominator': len(rows) if rows is not None else None, 'processed': 0,
+                'results': [], 'skipped': [], 'unexamined': len(rows) if rows is not None else None,
+                'stop_reason': stop_reason, 'stop_details': stop_details, 'events': str(events)}
     from .key_health import probe_accounts, pool_available
     if not campaign and not await asyncio.to_thread(pool_available, ledger):
         probes = await asyncio.to_thread(probe_accounts, ledger, 'candidate-run:' + request_prefix)
@@ -888,7 +979,11 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         claim = None
         selected = rows[poll] if rows is not None else None
         try:
-            kwargs.update(startup_check(ledger, pool=pool, before_claim=True, **kwargs))
+            try:
+                kwargs.update(startup_check(ledger, pool=pool, before_claim=True, **kwargs))
+            except Exception as error:
+                stop_dispatch(error, phase='before_claim_preflight')
+                break
             row_batch = selected.get('producer_batch',producer_batch) if selected else producer_batch
             request_id = f'{request_prefix}/{poll}'
             def claim_next():
@@ -937,7 +1032,6 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 raise
             except Exception as error:
                 import traceback
-                import sqlite3
                 diagnostic = {'error_type':type(error).__name__,
                     'stage':claim.get('stage'), 'stage_source':'claim_snapshot',
                     'stack':[{'file':frame.filename, 'line':frame.lineno, 'function':frame.name}
@@ -945,9 +1039,9 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                     'sqlite_errorcode':getattr(error, 'sqlite_errorcode', None),
                     'sqlite_errorname':getattr(error, 'sqlite_errorname', None)}
                 record('candidate_error', claim_id=claim['claim_id'], diagnostic=diagnostic)
-                if campaign and isinstance(error, sqlite3.Error):
-                    from .consumer_campaign import stop_engineering_failure
-                    stop_engineering_failure(campaign, {'claim_id':claim['claim_id'], **diagnostic})
+                engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError))
+                if engineering:
+                    stop_dispatch(error, phase='candidate_execution', claim=claim, diagnostic=diagnostic)
                 runlog.info('failed', claimId=claim['claim_id'],
                     errorType=type(error).__name__, reason=str(error)[:200])
                 try:
@@ -957,6 +1051,9 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                         current=pool.get_claim(claim['claim_id'])
                     result={'state':current['state'],'stage':current['stage'],
                             'reason':current.get('reason') or str(error), 'error_diagnostic':diagnostic}
+                    if engineering:
+                        result.update(failure_class='program', engineering_failure=True,
+                                      no_dispatch_proof=getattr(error, 'no_dispatch_proof', None))
                 except sqlite3.Error as settlement_error:
                     # Keep the original failure; no successful settlement is asserted.
                     result={'state':'reconcile', 'stage':claim.get('stage'),
@@ -976,21 +1073,31 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             runlog.info('candidate_finished', state=result.get('state'),
                 saved=bool(result.get('saved')), stage=result.get('stage'))
             if bounded:results.append(result)
+            if stop_reason == 'engineering_failure':
+                break
         except Exception as error:
             record('consumer_error',claim_id=claim.get('claim_id') if claim else None,
                    error_type=type(error).__name__,reason=str(error))
-            # Original claims/requests remain fenced. A failed candidate never
-            # restarts under a new identity here; the loop takes independent work.
+            engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError))
+            if engineering:
+                stop_dispatch(error, phase='consumer_loop', claim=claim)
+            # Original claims/requests remain fenced. A known shared engineering
+            # fault must not consume the next candidate under the same inputs.
             if claim and claim.get('claim_id'):
                 processed += 1
                 if bounded:results.append({'state':'reconcile','claim_id':claim['claim_id'],'reason':str(error)})
             elif selected:
                 skipped.append({'candidate_id':selected['candidate_id'],'reason':str(error)})
                 poll += 1
+            if stop_reason == 'engineering_failure':
+                break
             await asyncio.sleep(delay)
     if rows is not None:
         return {'denominator':len(rows),'processed':processed,'results':results,'skipped':skipped,
-                'unexamined':len(rows)-poll,'stop_reason':stop_reason,'stop_details':None}
+                'unexamined':len(rows)-poll,'stop_reason':stop_reason,'stop_details':stop_details}
+    if stop_reason == 'engineering_failure':
+        return {'processed':processed,'results':results,'stop_reason':stop_reason,
+                'stop_details':stop_details,'events':str(events)}
     if target is not None:
         return {'processing_limit':limit,'processed':processed,'stop_reason':stop_reason,'results':results,
                 'summary':report(pool,producer_batch,target=target,basis=target_basis)}
@@ -1203,6 +1310,8 @@ def main(argv=None):
             categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
             collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
     print(json.dumps(result,ensure_ascii=False))
+    return 2 if isinstance(result, dict) and result.get('stop_reason') == 'engineering_failure' else 0
 
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    raise SystemExit(main())
