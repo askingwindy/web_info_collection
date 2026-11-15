@@ -90,10 +90,15 @@ def submission_row(row, before_state):
     return is_submission(row.get('action'), row.get('arguments'), binding, element)
 
 
-def frozen_input_refs(session, oid, form):
-    """A real submission may use a frozen, visible default without a fake edit."""
+def frozen_input_refs(session, oid, form, *, verify_input=None):
+    """A real submission may use a frozen, visible default without a fake edit.
+
+    verify_input lets a 策略 2 template pass its own input verifier; the default
+    keeps the historical monolith implementation for existing callers.
+    """
     from copy import copy
-    from .screenshot_plan import _verify_input
+    if verify_input is None:
+        from .screenshot_plan import _verify_input as verify_input
     from .screenshot_effect import business_scope
     before = _state(session, oid)
     if not before or not form:
@@ -108,7 +113,7 @@ def frozen_input_refs(session, oid, form):
         # Here we prove the actual state at submission, not historical completion.
         expected = {**requirement, 'evidence_scope': 'current'}
         answer = {'evidence': [{'observation': oid, 'control': cid} for cid in session.observation_records[oid]['controls']]}
-        check, _ = _verify_input(prefix, answer, expected, trusted_capture=True)
+        check, _ = verify_input(prefix, answer, expected, trusted_capture=True)
         if not check:
             continue
         proof = check['evidence'][0]
@@ -219,12 +224,18 @@ def _changed_result_binding(s, oid, state, node):
     return output
 
 
-def result_execution_binding(s, oid, state, node):
-    """Bind a real result node to this attempt's input and submit, not a table."""
+def result_execution_binding(s, oid, state, node, *, explicit_submission=None):
+    """Bind a real result node to this attempt's input and submit, not a table.
+
+    explicit_submission lets a 策略 2 template pass its own predicate; the
+    default keeps the historical monolith implementation for existing callers.
+    """
     changed = _changed_result_binding(s, oid, state, node)
     if changed:
-        from .screenshot_plan import explicit_submission_required
-        if changed.get('mechanism') != 'edit' or not explicit_submission_required(s):
+        required = explicit_submission
+        if required is None:
+            from .screenshot_plan import explicit_submission_required as required
+        if changed.get('mechanism') != 'edit' or not required(s):
             return changed
     binding=_binding(state,node['element_id'])
     if (not binding.get('result_region_selector') or node.get('inputable')

@@ -1,15 +1,40 @@
 """Record operator-approved uncapped discovery and named source quarantines on the original project ledger."""
 import argparse
 import json
+import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from webcollect.batch_core import BatchLedger, load_json
+from webcollect.batch_core import BatchLedger, BudgetStop, load_json
 from webcollect.application_identity import canonical_key
 from webcollect.current_chain import check_project_guard, check_project_pool, read_chain_scope
 from webcollect.planning import object_sha256
 from .site_pool import SitePool
+
+
+def check_producer_stop():
+    marker = os.environ.get('WEBCOLLECT_PRODUCER_STOP_FILE')
+    if marker and Path(marker).is_file():
+        raise BudgetStop('producer_stop_requested; current work retained')
+
+
+def claim_producer_job(ledger, kind, *, job_id, **kwargs):
+    """Wait only for a local slot before dispatch; never retry a model call."""
+    waiting = False
+    while True:
+        check_producer_stop()
+        try:
+            return ledger.claim(kind, job_id=job_id, **kwargs)
+        except BudgetStop as error:
+            if str(error) != 'max_concurrent_jobs reached; queued work retained':
+                raise
+            if not waiting:
+                with ledger.transaction() as con:
+                    ledger.event(con, 'producer_capacity_wait', {'job_id': job_id, 'kind': kind})
+                waiting = True
+            time.sleep(1)
 
 
 def isolation_host(uri,registry):

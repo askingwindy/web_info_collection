@@ -6,6 +6,7 @@ close-out, candidate-pool v2 claiming, and the documented CLI entries.
 All checks are offline; no real GLM, browser or production database is used.
 """
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -32,7 +33,29 @@ class PlanProtocolContract(unittest.TestCase):
         self.assertEqual(RESULT_COMPLETION_PROTOCOL, 'result-completion')
         self.assertEqual(REACT_PROTOCOL, 'react-native')
         self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan'))
-        self.assertEqual(DEFAULT_STRATEGY, STRATEGY_BANDED_REACT)
+        # 策略1完全冻结：新任务缺省策略2；身份表保留react供历史只读解析。
+        self.assertEqual(DEFAULT_STRATEGY, STRATEGY_SCREENSHOT_PLAN)
+        import webcollect.screenshot_plan as screenshot_plan_module
+        from webcollect.collection_strategy import Strategy1Forbidden, select
+        frozen = {'task_id': 't', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
+        with self.assertRaises(Strategy1Forbidden):
+            freeze(frozen, STRATEGY_BANDED_REACT)
+        freeze(frozen)  # freeze default stamps 策略2 for new tasks
+        self.assertEqual(strategy_id(frozen), STRATEGY_SCREENSHOT_PLAN)
+        self.assertIs(select(frozen), screenshot_plan_module)
+        # Absent-marker fragments keep their historical react identity; they are
+        # never silently migrated to 策略 2, and selecting them is refused.
+        unmarked = {'task_id': 'h', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
+        self.assertEqual(strategy_id(unmarked), STRATEGY_BANDED_REACT)
+        with self.assertRaises(Strategy1Forbidden):
+            select(unmarked)
+        sealed = {'fragment': {'collection_strategy': {'id': 'webcollect-collection-banded-react-1'}}}
+        self.assertEqual(strategy_id(sealed), STRATEGY_BANDED_REACT)
+        unknown = {'fragment': {'collection_strategy': {'id': 'no-such-strategy'}}}
+        with self.assertRaises(ValueError):
+            strategy_id(unknown)
+        with self.assertRaises(ValueError):
+            freeze({'fragment': {}, 'workflow_proposal': {'spec': {}}}, 'no-such-strategy')
         from webcollect.dynamic_regions import VERSION, SUGGESTION_VERSION
         from webcollect.plan_protocol import DYNAMIC_REGIONS_PROTOCOL, SEARCH_SUGGESTIONS_PROTOCOL
         script = (Path(__file__).parents[1] / 'webcollect/snapshot.js').read_text()
@@ -40,6 +63,32 @@ class PlanProtocolContract(unittest.TestCase):
         self.assertEqual(SUGGESTION_VERSION, SEARCH_SUGGESTIONS_PROTOCOL)
         self.assertIn(f"const dynamicVersion='{VERSION}';", script)
         self.assertIn(f"const suggestionVersion='{SUGGESTION_VERSION}';", script)
+        # 策略2拆分为三个独立模板包：路由解析按冻结模板名分发；历史封存任务
+        # （无模板标记）解析到单体实现，保证重放/读回按原实现只读。
+        from webcollect import screenshot_planners
+        from webcollect.screenshot_templates import (generic as generic_template,
+                                                      long_reading as long_reading_template,
+                                                      operation as operation_template)
+        self.assertEqual(screenshot_planners.TEMPLATE_NAMES,
+                         ('operation', 'long_reading', 'generic'))
+        self.assertEqual([operation_template.TEMPLATE_NAME, long_reading_template.TEMPLATE_NAME,
+                          generic_template.TEMPLATE_NAME],
+                         ['operation', 'long_reading', 'generic'])
+        self.assertEqual(len({id(screenshot_planners.template_module(name))
+                              for name in screenshot_planners.TEMPLATE_NAMES}), 3)
+        self.assertIs(screenshot_planners.template_module(None), screenshot_plan_module)
+        with self.assertRaisesRegex(ValueError, 'Unknown screenshot template'):
+            screenshot_planners.template_module('no-such-template')
+        # 模板包相互隔离：包内源码不得引用其它模板包（from ..）、不得引用
+        # webcollect.screenshot_templates.*、也不得引用单体 screenshot_plan/
+        # screenshot_session；包内只允许 .plan/.session/.observation/.execution。
+        for path in sorted((Path(__file__).parents[1] / 'webcollect/screenshot_templates').glob('*/*.py')):
+            for line in path.read_text(encoding='utf-8').splitlines():
+                stripped = line.lstrip()
+                self.assertIsNone(re.match(r'from \.\.[.\w]*', stripped), (path.name, line))
+                self.assertFalse(stripped.startswith('from webcollect.screenshot_templates'), (path.name, line))
+                self.assertNotIn('from .screenshot_plan import', stripped, (path.name, line))
+                self.assertNotIn('from .screenshot_session import', stripped, (path.name, line))
 
     def test_saved_research_requires_frozen_production_comparison(self):
         from contextlib import contextmanager
@@ -205,6 +254,102 @@ class StrategyResultContract(unittest.TestCase):
         self.assertEqual(task['fragment']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
         self.assertEqual(task['workflow_proposal']['spec']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
         self.assertNotIn('plan_protocol', task['fragment'])
+        # Assembling a StrategyResult for an absent-marker task keeps the
+        # historical 'react' label; sealed records are never relabeled as
+        # screenshot_plan by the new-task default.
+        from webcollect.batch_core import file_sha
+        from webcollect.collection_strategy import strategy_result
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            terminal = root / 'terminal.json'
+            terminal.write_text(json.dumps({'collection_ending': {}, 'goal_evidence': {}}))
+            receipt = root / 'receipt.json'
+            receipt.write_text(json.dumps({'terminal': {'path': str(terminal),
+                                                        'sha256': file_sha(terminal)}}))
+            result = strategy_result({'fragment': {}, 'workflow_proposal': {'spec': {}}},
+                                     summary={'effective_steps': 0},
+                                     raw_receipt={'path': str(receipt), 'sha256': file_sha(receipt)})
+            self.assertEqual(result['strategy'], {'id': STRATEGY_BANDED_REACT})
+        # 模板冻结与派发解析：生成期在策略冻结旁盖章模板名；执行侧
+        # （collect_runtime._react_collection 同一解析函数）按标记取对应模板
+        # 包的Session/chooser；历史S2任务（有策略标记、无模板标记）仍解析到
+        # 单体实现，封存收据重放不受拆分影响。
+        from unittest.mock import patch
+        import webcollect.screenshot_plan as screenshot_plan_module
+        from webcollect.plan_protocol import ENDING_POLICY as S2_ENDING_POLICY
+        from webcollect.screenshot_planners import (freeze_template, select_template,
+                                                    task_template_name, template_module)
+        from webcollect.screenshot_templates import generic as generic_template
+        from webcollect.session_core import build_url_task
+        freeze_template(task, 'generic')
+        self.assertEqual(task_template_name(task), 'generic')
+        freeze_template(task, 'generic')  # idempotent when unchanged
+        with self.assertRaisesRegex(ValueError, 'already frozen differently'):
+            freeze_template(task, 'operation')
+        with self.assertRaisesRegex(ValueError, 'Unknown screenshot template'):
+            freeze_template({'fragment': {}}, 'no-such-template')
+        s2 = build_url_task(url='https://example.org/tool', task_version='tpl-dispatch',
+                            ending_policy=S2_ENDING_POLICY)
+        freeze(s2, STRATEGY_SCREENSHOT_PLAN)
+        freeze_template(s2, 'generic')
+        module = template_module(task_template_name(s2))
+        self.assertIs(module, generic_template)
+        self.assertEqual(module.Session.__module__, 'webcollect.screenshot_templates.generic.session')
+        self.assertEqual(module.screenshot_chooser.__module__, 'webcollect.screenshot_templates.generic.plan')
+        historical_s2 = {'fragment': {'collection_strategy': {'id': STRATEGY_SCREENSHOT_PLAN}}}
+        self.assertIsNone(task_template_name(historical_s2))
+        self.assertIs(template_module(task_template_name(historical_s2)), screenshot_plan_module)
+        # 确定性模板选择：目标方向 + 页面结构；无模型调用、无域名规则。
+        calculator_state = {'elements': [
+            {'element_id': 'a', 'native_role': 'input', 'visible': True, 'text': '单价'},
+            {'element_id': 'b', 'native_role': 'input', 'visible': True, 'text': '数量'}],
+            'capture_controls': [{'element_id': 'a', 'selector': '#price'},
+                                 {'element_id': 'b', 'selector': '#qty'}],
+            'text_blocks': [], 'visible_text': '计算器'}
+        article_state = {'elements': [
+            {'element_id': 's', 'native_role': 'input', 'visible': True, 'text': ''},
+            *[{'element_id': 'h%d' % index, 'native_role': 'h2', 'visible': True}
+              for index in range(3)]],
+            'capture_controls': [{'element_id': 's', 'selector': '#search-input'}],
+            'text_blocks': [{'visible_text': '章节' + str(index) + '：' + '正文内容' * 40}
+                            for index in range(3)],
+            'visible_text': '词条正文' * 400}
+        name, info = select_template(goal='输入单价与数量后核对计算结果', state=calculator_state)
+        self.assertEqual((name, info['source']), ('operation', 'page_match'))
+        self.assertEqual(info['signals']['inputs'], 2)
+        name, info = select_template(goal='搜索后阅读《月食》全文正文', state=article_state)
+        self.assertEqual((name, info['source']), ('long_reading', 'page_match'))
+        self.assertEqual(info['signals']['search_inputs'], 1)
+        # 仅站点搜索框不把阅读任务判成operation；标题/编号本身不把页面判成operation。
+        name, info = select_template(goal='搜索并阅读词条正文', state=article_state)
+        self.assertEqual(name, 'long_reading')
+        name, info = select_template(goal='查看第3章第5节的标题与编号', state=article_state)
+        self.assertEqual(name, 'long_reading')
+        name, info = select_template(goal='查看第3章第5节的标题与编号', state={'elements': []})
+        self.assertEqual((name, info['source']), ('generic', 'generic_fallback'))
+        # 空目标按页面结构定向。
+        name, info = select_template(goal=None, state=calculator_state)
+        self.assertEqual(name, 'operation')
+        name, info = select_template(goal=None, state=article_state)
+        self.assertEqual(name, 'long_reading')
+        # 已确认站点模板优先；confirmed generic 不覆盖明确的结构匹配。
+        with patch('webcollect.screenshot_planners.confirmed_templates', return_value=['operation']):
+            name, info = select_template(pool=object(), application_id='app-1',
+                                         goal='输入数量后核对计算结果', state=calculator_state)
+            self.assertEqual((name, info['source']), ('operation', 'confirmed_site'))
+            name, info = select_template(pool=object(), application_id='app-1',
+                                         goal='搜索后阅读《月食》全文正文', state=article_state)
+            self.assertEqual((name, info['source']), ('long_reading', 'confirmed_site_mismatch'))
+            self.assertEqual(info['confirmed'], ['operation'])
+            name, info = select_template(pool=object(), application_id='app-1',
+                                         goal='随便看看', state={'elements': []})
+            self.assertEqual((name, info['source']), ('generic', 'confirmed_site_mismatch'))
+        with patch('webcollect.screenshot_planners.confirmed_templates', return_value=['generic']):
+            name, info = select_template(goal='输入数量后核对计算结果', state=calculator_state)
+            self.assertEqual((name, info['source']), ('operation', 'page_match'))
+            name, info = select_template(pool=object(), application_id='app-2',
+                                         goal='随便看看', state={'elements': []})
+            self.assertEqual((name, info['source']), ('generic', 'confirmed_site'))
 
     def test_finalize_replaces_transient_end_with_actual_outcome(self):
         result = {'result_contract': RESULT_CONTRACT,
@@ -431,6 +576,15 @@ class CliEntriesSmoke(unittest.TestCase):
                     'sha256': hashlib.sha256(objective.read_bytes()).hexdigest()})
                 self.assertEqual(cli.main(args), 0)
                 self.assertIsNone(run.call_args.kwargs['session_objective'])
+                # 策略1冻结：CLI缺省策略2；显式react在argparse层exit 2，
+                # 未触达CandidatePool构造或任何浏览器/模型路径。
+                self.assertEqual(run.call_args.kwargs['collection_strategy'], STRATEGY_SCREENSHOT_PLAN)
+                pool.reset_mock(); run.reset_mock()
+                from contextlib import redirect_stderr
+                with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as exited:
+                    cli.main(args + ['--collection-strategy', 'react'])
+                self.assertEqual(exited.exception.code, 2)
+                pool.assert_not_called(); run.assert_not_called()
                 execute.return_value = {'processed': 0, 'stop_reason': 'engineering_failure'}
                 self.assertEqual(cli.main(args), 2)
                 pool.reset_mock(); run.reset_mock()

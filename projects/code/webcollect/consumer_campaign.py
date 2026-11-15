@@ -48,7 +48,14 @@ def stop_engineering_failure(path, details):
 
 
 def target_count(state, application_id=None):
-    """A delivery counts toward the target iff ordinary_target_eligible."""
+    """Site targets count DISTINCT formally saved candidate pages, not exports."""
+    pages = state.get('saved_pages') or []
+    return len({row['candidate_id'] for row in pages if row.get('candidate_id')
+                and (application_id is None or row.get('application_id') == application_id)})
+
+
+def exported_count(state, application_id=None):
+    """Old export-side counting: a delivery counts iff ordinary_target_eligible."""
     return sum(row.get('ordinary_target_eligible') is True for row in state['deliveries']
                if application_id is None or row.get('application_id') == application_id)
 
@@ -97,7 +104,29 @@ def deliver(path, pool, claim):
     """Queue close-out immediately; exporter IO never holds the dispatch lock."""
     with pool.pool.connect() as con:
         application_id = con.execute('SELECT application_id FROM data_candidates WHERE candidate_id=?', (claim['candidate_id'],)).fetchone()[0]
+    # 站点停止口径是"正式保存的不同页面数"：交付排队前先按原保存收据登记
+    # 本页（verified_saved 为空或读取失败时跳过登记，不影响导出队列）。
+    saved = None
+    try:
+        from .candidate_consumer import verified_saved
+        saved = verified_saved(pool.get_claim(claim['claim_id']))
+    except Exception:
+        saved = None
     with locked(path) as state:
+        if saved is not None:
+            pages = state.setdefault('saved_pages', [])
+            if not any(row.get('candidate_id') == claim['candidate_id'] for row in pages):
+                pages.append({'candidate_id':claim['candidate_id'], 'claim_id':claim['claim_id'],
+                              'application_id':application_id, 'sample_id':saved['sample_id'],
+                              'template_name':saved.get('template_name')})
+            if (site_reached(state, application_id)
+                    and not state.setdefault('site_target_log', {}).get(application_id)):
+                state['site_target_log'][application_id] = True
+                state.setdefault('site_target_at', {})[application_id] = datetime.now(timezone.utc).isoformat()
+                write_state(path, state)
+                print('site_target_reached applicationId={} savedPages={} target={} inFlight=unknown'.format(
+                    application_id, target_count(state, application_id),
+                    state.get('site_targets', {}).get(application_id)), file=sys.stderr, flush=True)
         if any(row['claim_id'] == claim['claim_id'] for row in state['deliveries']):
             return {'state':'exported', 'claim_id':claim['claim_id']}
         pending = state.setdefault('pending_deliveries', [])
@@ -378,7 +407,7 @@ def main():
             publish_pending(state,pool)
         with locked(state) as current:
             exported=len(current['deliveries'])
-            counted=target_count(current)
+            counted=exported_count(current)
             ordinary=sum(row.get('ordinary_target_eligible') is True for row in current['deliveries'])
             stop_reason=current.get('stop_reason') or ('ENGINEERING_FAILURE' if engineering_failure is not None else None)
             pending_count=len(current.get('pending_deliveries',[]))

@@ -76,6 +76,67 @@ class CandidateStorageCore(unittest.TestCase):
             claim = pool.claim_next('offline-consumer', 'offline-consumer/0')
             self.assertEqual(claim['candidate_id'], candidate_id)
             self.assertEqual(claim['snapshot'], candidate)
+            # 站点模板登记：只数正式保存（candidate_results effective=1）的不同
+            # 页面；同页重存不重复计数，第二模板须各自满三页才登记。
+            from webcollect import template_sites
+            from webcollect.planning import canonical
+            claims = [claim]
+            for index in (1, 2):
+                pool.put({'schema_version': 'webcollect-data-candidate-2',
+                          'candidate_kind': 'target', 'entry_url': f'https://example.org/page{index}',
+                          'requested_goal': {'kind': 'edit', 'entity': 'fields',
+                                             'parameters': {'quantity': 10 + index}}}, {'origin': 'codex_session',
+                          'run_id': 'offline-project-producer', 'references': [source_ref]})
+                claims.append(pool.claim_next('offline-consumer', f'offline-consumer/{index}'))
+            with pool.pool.connect() as con:
+                application_id = con.execute('SELECT application_id FROM data_candidates WHERE candidate_id=?',
+                                             (candidate_id,)).fetchone()[0]
+            self.assertFalse(template_sites.ensure_table(pool))  # pool init created it
+            self.assertEqual(template_sites.confirmed_templates(pool, application_id), [])
+            for index, row_claim in enumerate(claims):
+                with pool.transaction() as con:
+                    con.execute('INSERT INTO candidate_results VALUES(?,?,?,?,?,NULL,?)',
+                        (row_claim['candidate_id'], row_claim['claim_id'], f'sample-{index}',
+                         canonical({'sample_id': f'sample-{index}', 'template_name': 'long_reading'}),
+                         'pending_review', 1))
+            progress = template_sites.record_save(pool, claims[2],
+                {'sample_id': 'sample-2', 'template_name': 'long_reading'})
+            self.assertEqual(progress, {'application_id': application_id, 'template_name': 'long_reading',
+                'pages': 3, 'reached_three': True, 'registered': True,
+                'sample_ids': ['sample-0', 'sample-1', 'sample-2']})
+            self.assertEqual(template_sites.confirmed_templates(pool, application_id), ['long_reading'])
+            with pool.transaction() as con:  # same page again: one ineffective replay row
+                con.execute('INSERT INTO candidate_results VALUES(?,?,?,?,?,NULL,?)',
+                    (claims[2]['candidate_id'], claims[2]['claim_id'] + '-research', 'sample-2r',
+                     canonical({'sample_id': 'sample-2r', 'template_name': 'long_reading'}),
+                     'pending_review', 0))
+            repeat = template_sites.record_save(pool, claims[2],
+                {'sample_id': 'sample-2r', 'template_name': 'long_reading'})
+            self.assertEqual((repeat['pages'], repeat['registered']), (3, False))
+            self.assertEqual(template_sites.record_save(pool, claims[0],
+                {'sample_id': 'sample-0', 'template_name': 'operation'})['registered'], False)
+            self.assertEqual(template_sites.distinct_saved_pages(pool, application_id, 'operation'), 0)
+            self.assertEqual(template_sites.record_save(pool, claims[0], {'sample_id': 'sample-0'})['template_name'], None)
+            with pool.pool.connect(write=True) as con:  # fixture-only drop for tolerance
+                con.execute('BEGIN IMMEDIATE')
+                con.execute('DROP TABLE template_sites')
+                con.commit()
+            self.assertEqual(template_sites.confirmed_templates(pool, application_id), [])
+            # An existing pool regains the additive table on the next open.
+            reopened = CandidatePool(launch_scope['pool'])
+            with reopened.pool.connect() as con:
+                self.assertTrue(con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='template_sites'").fetchone())
+            with pool.pool.connect(write=True) as con:  # module-level ensure recreates too
+                con.execute('BEGIN IMMEDIATE')
+                con.execute('DROP TABLE template_sites')
+                con.commit()
+            self.assertTrue(template_sites.ensure_table(pool))
+            # The saved pages still count; a later save re-registers the template.
+            re_registered = template_sites.record_save(pool, claims[1],
+                {'sample_id': 'sample-1', 'template_name': 'long_reading'})
+            self.assertEqual((re_registered['pages'], re_registered['registered']), (3, True))
+            self.assertEqual(template_sites.confirmed_templates(pool, application_id), ['long_reading'])
             original_source = source.read_bytes()
             (output / 'temporary-run-log.txt').write_text('Disposable collection output')
             shutil.rmtree(output)
@@ -83,6 +144,7 @@ class CandidateStorageCore(unittest.TestCase):
             launch_scope = load_json(scope_path)
             chain = read_chain_scope(launch_scope['history_set'])
             self._check_registry_concurrency(launch_scope, chain, temporary)
+            self._check_producer_capacity_preserves_unsettled_jobs(temporary)
             readonly_pool = CandidatePool(launch_scope['pool'], readonly=True)
             self.assertTrue(check_project_pool(chain, readonly_pool.pool))
             for role in ('producer', 'consumer'):
@@ -140,6 +202,52 @@ class CandidateStorageCore(unittest.TestCase):
                 context = site_context(registry, 'https://example.org/', candidate_id='new')
                 self.assertEqual(context['executions'][0]['evidence_error']['classification'], 'DIGEST_MISMATCH')
 
+
+    def _check_producer_capacity_preserves_unsettled_jobs(self, temporary):
+        import os
+        import time
+        from unittest.mock import Mock
+        from webcollect.batch_core import BudgetStop, OutcomeUnknown
+        from site_planner.producer_authority import claim_producer_job
+        from site_planner.producer_business_content import _purpose_holds
+        from site_planner.discovery_agent import model_tool_decision
+        ledger = BatchLedger(temporary / 'capacity.sqlite3', offline_config(), initialize=True)
+        payload = {'scope': 'old-scope', 'source_uris': ['https://example.org/unsettled']}
+        frozen = {'protocol': 'native-tool-1', 'input': payload, 'tools': [],
+                  'system': 'original', 'reasoning_effort': 'low'}
+        old_id = ledger.enqueue('ai-target-page-purpose-1', frozen)
+        ledger.claim('ai-target-page-purpose-1', job_id=old_id)
+        with ledger.transaction() as con:
+            con.execute('UPDATE jobs SET lease=? WHERE id=?', (time.time()-10, old_id))
+            for state in ('unknown', 'reserved'):
+                con.execute('INSERT INTO model_requests(id,job_id,purpose,attempt,state,reserved_tokens,reserved_cost,started) VALUES(?,?,?,?,?,?,?,?)',
+                            ('old-'+state, old_id, state, 1, state, 0, 0, time.time()-20))
+            original_job = dict(con.execute('SELECT * FROM jobs WHERE id=?', (old_id,)).fetchone())
+            original_requests = [dict(r) for r in con.execute('SELECT * FROM model_requests ORDER BY id')]
+        fresh = ledger.enqueue('site-discovery-page', {'uri': 'https://example.org/fresh'})
+        first = ledger.claim('site-discovery-page', job_id=fresh)
+        self.assertIsNotNone(first)
+        waiting = ledger.enqueue('site-discovery-page', {'uri': 'https://example.org/next'})
+        with self.assertRaisesRegex(BudgetStop, 'max_concurrent_jobs'):
+            ledger.claim('site-discovery-page', job_id=waiting)
+        self.assertEqual(ledger.get(waiting)['attempts'], 0)
+        with patch('site_planner.producer_authority.time.sleep', side_effect=lambda _: ledger.finish(first, result={})):
+            second = claim_producer_job(ledger, 'site-discovery-page', job_id=waiting)
+        self.assertEqual(second['id'], waiting)
+        self.assertEqual({r['request_id'] for r in _purpose_holds(ledger)[payload['source_uris'][0]]},
+                         {'old-unknown', 'old-reserved'})
+        gateway = Mock()
+        with self.assertRaises(OutcomeUnknown):
+            model_tool_decision(ledger, gateway, 'ai-target-page-purpose-1', payload, [], system='original')
+        gateway.call_tool.assert_not_called()
+        stop = temporary / 'producer.stop'
+        stop.write_text('stop after current work')
+        with patch.dict(os.environ, {'WEBCOLLECT_PRODUCER_STOP_FILE': str(stop)}):
+            with self.assertRaisesRegex(BudgetStop, 'producer_stop_requested'):
+                claim_producer_job(ledger, 'site-discovery-page', job_id=waiting)
+        with ledger.connect() as con:
+            self.assertEqual(dict(con.execute('SELECT * FROM jobs WHERE id=?', (old_id,)).fetchone()), original_job)
+            self.assertEqual([dict(r) for r in con.execute('SELECT * FROM model_requests ORDER BY id')], original_requests)
 
     def _check_registry_concurrency(self, launch, chain, temporary):
         from webcollect.runtime import RuntimeStore

@@ -420,6 +420,9 @@ class TemplateSession(ReactSession):
 @contextmanager
 def enabled(rows):
     """Process-local adapter; concurrent workers and ordinary imports unaffected."""
+    # 策略1完全冻结：模板适配器（替换策略1会话）拒绝启用，纵深防御。
+    from .collection_strategy import Strategy1Forbidden
+    raise Strategy1Forbidden()
     from . import react_session
     old=react_session.ReactSession
     if old is not ReactSession: raise RuntimeError('A different session adapter is already active')

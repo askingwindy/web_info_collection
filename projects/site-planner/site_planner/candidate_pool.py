@@ -53,6 +53,12 @@ V2_DDL = [
     'CREATE INDEX candidate_batch_rows_batch ON candidate_batch_rows(run_id,batch)',
     'CREATE INDEX data_candidates_application ON data_candidates(application_id)',
 ]
+# Additive per-site confirmed-template registry (webcollect.template_sites).
+# Purely new rows; no existing table, index or data is touched. IF NOT EXISTS
+# keeps the create idempotent for pools that already gained the table.
+TEMPLATE_SITES_DDL = '''CREATE TABLE IF NOT EXISTS template_sites(template_name TEXT NOT NULL, application_id TEXT NOT NULL,
+  site_url TEXT, sample_ids TEXT NOT NULL, confirmed_at TEXT NOT NULL,
+  PRIMARY KEY(template_name, application_id))'''
 
 
 def normalize(value):
@@ -174,6 +180,7 @@ class CandidatePool:
                             con.execute(sql)
                         for sql in V2_DDL:
                             con.execute(sql)
+                        con.execute(TEMPLATE_SITES_DDL)
                         con.execute('INSERT INTO candidate_meta VALUES(1,?)', (EXTENSION2,))
                     elif row[0] == EXTENSION:
                         columns = {r[1] for r in con.execute('PRAGMA table_info(candidate_claims)')}
@@ -203,6 +210,18 @@ class CandidatePool:
             self._concurrency_contract(con)
             check=con.execute('PRAGMA foreign_key_check').fetchone()
             if check: raise ValueError('Candidate pool foreign-key integrity failed')
+        # Existing pools gain the additive template_sites table on first open:
+        # read-check first, then one short CREATE IF NOT EXISTS transaction so
+        # concurrently running workers never hold the write lock unnecessarily.
+        if not readonly and 'template_sites' not in tables:
+            with self.pool.connect(write=True) as con:
+                con.execute('BEGIN IMMEDIATE')
+                try:
+                    con.execute(TEMPLATE_SITES_DDL)
+                    con.commit()
+                except BaseException:
+                    con.rollback()
+                    raise
 
     @staticmethod
     def _concurrency_contract(con):

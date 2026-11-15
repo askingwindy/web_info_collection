@@ -146,7 +146,8 @@ def check_entry(ledger, batch, url, output, *, cached_only=False, recheck=None):
         return _checked_receipt(ledger,jid,uri,original['result'])
     if cached_only or original['state'] != 'queued' or original['attempts']:
         raise OutcomeUnknown('Original entry HTTP check unsettled; no repeat dispatch: ' + jid)
-    job = ledger.claim(kind, job_id=jid)
+    from .producer_authority import claim_producer_job
+    job = claim_producer_job(ledger, kind, job_id=jid)
     if not job:
         original = ledger.get(jid)
         if original['state'] == 'done':

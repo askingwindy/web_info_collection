@@ -274,7 +274,8 @@ def build_candidate_task(capability, task_version, budgets=None, collection_stra
         raise ValueError('Candidate capability supports none of the react actions')
     from .plan_protocol import ENDING_POLICY as CLOSE_POLICY, PLAN_PROTOCOL, ACTION_STABILITY_PROTOCOL as FOCUS_PROTOCOL
     from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, STRATEGY_BANDED_REACT
-    strategy = collection_strategy or STRATEGY_BANDED_REACT
+    # 新任务缺省策略2；显式react在freeze处构造期即被拒绝（早于浏览器/模型）。
+    strategy = collection_strategy or STRATEGY_SCREENSHOT_PLAN
     if strategy == STRATEGY_SCREENSHOT_PLAN:
         # 策略 2 explicitly selected: no conditional-plan protocol, so no band /
         # finish_when / predicate-enum gates apply; the screenshot session owns
@@ -344,6 +345,11 @@ def build_capability_task(capability, pilot_identity, task_version, budgets=None
     task['capability_version'] = capability['version']
     task['fragment']['entry_mode'] = 'capability'
     task['workflow_proposal']['evidence'] = [deepcopy(ref) for ref in (capability.get('evidence') or [])]
+    # 新任务一律冻结策略2（与build_candidate_task同一freeze路径）；策略1在
+    # freeze处拒绝。策略标记先入spec，再按惯例重算task_id。
+    from .collection_strategy import freeze as freeze_strategy, STRATEGY_SCREENSHOT_PLAN
+    freeze_strategy(task, STRATEGY_SCREENSHOT_PLAN)
+    task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
     if pilot_identity:
         from .production_identity import validate_identity
         validate_identity(task)
@@ -1080,8 +1086,9 @@ class RawSessionCore:
             def _tail_accounted(raw):
                 if no_effect_proven(raw,self.observation_records):return True
                 if not screenshot_task:return False
-                from .screenshot_plan import tail_effect_observed
-                return tail_effect_observed(raw,self)
+                # 模板包各自实现尾部核算；历史任务（无模板标记）解析到单体实现。
+                from .screenshot_planners import template_module, task_template_name
+                return template_module(task_template_name(self.task)).tail_effect_observed(raw,self)
             tail_known=(tail_known and len(dispatched)==self.actual_dispatches
                 and len(omitted)==tail_dispatches
                 and all(_tail_accounted(raw) for raw in omitted))

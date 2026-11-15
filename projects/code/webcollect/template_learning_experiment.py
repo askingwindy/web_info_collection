@@ -88,6 +88,9 @@ def audit(cohort_path, directory):
 
 
 async def capture(cohort_path, directory, worker):
+    # 策略1完全冻结：历史模板学习实验入口拒绝任何执行（其余代码仅保留历史）。
+    from .collection_strategy import Strategy1Forbidden
+    raise Strategy1Forbidden()
     from . import candidate_consumer
     from site_planner.candidate_pool import CandidatePool
     cohort=load_json(cohort_path);rows=cohort['selected']

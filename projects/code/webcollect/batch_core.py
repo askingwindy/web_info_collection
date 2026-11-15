@@ -492,8 +492,11 @@ class BatchLedger:
                     raise ValueError('Only a bound collection decision may share its parent slot')
                 if con.execute("SELECT 1 FROM job_parents p JOIN jobs j ON j.id=p.job_id WHERE p.parent_id=? AND j.state='running'",(parent_job['id'],)).fetchone():
                     raise BudgetStop('Parent already has an active decision; no parallel child')
+            # Expired owners cannot dispatch under _owned(). Keep their jobs,
+            # visits and UNKNOWN requests untouched, but do not reserve a slot.
             running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
-                                  'AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)').fetchone()[0]
+                                  'AND j.lease>? AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)',
+                                  (time.time(),)).fetchone()[0]
             job_limit = None if kind in CONSUMER_KINDS else self._job_concurrency_limit(con)
             if parent_job is None and job_limit is not None and running >= job_limit:
                 raise BudgetStop('max_concurrent_jobs reached; queued work retained')

@@ -36,6 +36,10 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
+    from .collection_strategy import Strategy1Forbidden
+    if isinstance(error, Strategy1Forbidden):
+        # 策略1冻结的入口拒绝是确定性工程拒绝，不是站点或模型问题。
+        return 'program'
     if getattr(error, 'evidence_classification', None) is not None:
         # Missing/changed host-side feedback bytes are not model semantics.
         return 'program'
@@ -94,7 +98,14 @@ def source_identity():
               'key_health.py', 'model_gateway.py', 'model_credentials.py',
               'candidate_consumer.py', 'consumer_campaign.py',
               'collection_strategy.py', 'screenshot_plan.py', 'screenshot_session.py',
-              'session_core.py', 'screenshot_execution.py', 'screenshot_observation.py']
+              'session_core.py', 'screenshot_execution.py', 'screenshot_observation.py',
+              'screenshot_planners.py']
+    # 策略2模板包源文件随收据绑定（沿用既有文件摘要机制，不新增SHA框架）：
+    # 各模板包实际执行的plan/session/observation/execution都进入源码摘要。
+    for package_dir in sorted((base / 'screenshot_templates').glob('*')):
+        if package_dir.is_dir():
+            names += ['screenshot_templates/' + package_dir.name + '/' + path.name
+                      for path in sorted(package_dir.glob('*.py'))]
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -467,11 +478,21 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     from .collection_strategy import enabled as screenshot_strategy
     from .react_protocol import VERSION as NATIVE_REACT
     if screenshot_strategy(task):
-        # 策略 2 显式选择：截图会话与专属chooser，不挂策略1 band/finish_when门禁。
-        from .screenshot_session import ScreenshotPlanSession as Session
-        from .screenshot_plan import screenshot_chooser as chooser_factory
+        # 策略 2 显式选择：按冻结模板派发到对应模板包的会话与chooser，不挂
+        # 策略1 band/finish_when门禁；历史封存任务（无模板标记）解析到单体
+        # 实现，保证已封存收据的重放/读回仍按原实现执行。
+        from .screenshot_planners import template_module, task_template_name
+        module = template_module(task_template_name(task))
+        Session = module.Session
+        chooser_factory = module.screenshot_chooser
     else:
-        from .react_session import ReactSession as Session, react_chooser as chooser_factory
+        # 策略1完全冻结：历史/显式react任务在浏览器、模型请求与任何采集动作
+        # 之前明确拒绝（本分支位于site_context/chooser/new_page/Session构造之前）。
+        if runlog is not None:
+            runlog.warn('strategy_rejected', strategy='react',
+                        entry='collect_runtime._react_collection', reason='STRATEGY1_FORBIDDEN')
+        from .collection_strategy import Strategy1Forbidden
+        raise Strategy1Forbidden()
     if runlog is not None:
         runlog.attach(attemptId=attempt['attempt_id'], sampleId=attempt['sample_id'],
                       siteId=attempt.get('site_id'))

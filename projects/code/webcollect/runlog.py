@@ -18,8 +18,8 @@ import uuid
 
 
 LEVELS = ('INFO', 'DEBUG')
-IDENTITY_KEYS = ('sessionId', 'strategy', 'workerId', 'siteId', 'candidateId',
-                 'claimId', 'attemptId', 'sampleId')
+IDENTITY_KEYS = ('sessionId', 'strategy', 'template_name', 'workerId', 'siteId',
+                 'candidateId', 'claimId', 'attemptId', 'sampleId')
 _SENSITIVE_KEYS = frozenset({'authorization', 'cookie', 'api_key', 'api-key', 'token',
                              'password', 'credential', 'credentials', 'reasoning_content'})
 
@@ -106,6 +106,7 @@ class SessionLog:
         self._warned = set()
         self._lock = threading.Lock()
         self._fields = {'sessionId': self.session_id, 'strategy': strategy,
+                        'template_name': None,
                         'workerId': self.worker_id, 'siteId': site_id,
                         'candidateId': candidate_id, 'claimId': claim_id,
                         'attemptId': attempt_id, 'sampleId': sample_id}

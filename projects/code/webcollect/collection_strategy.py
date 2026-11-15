@@ -15,8 +15,24 @@ from copy import deepcopy
 STRATEGY_BANDED_REACT = 'react'
 # 策略 2: screenshot understanding + remaining-plan revision loop.
 STRATEGY_SCREENSHOT_PLAN = 'screenshot_plan'
-DEFAULT_STRATEGY = STRATEGY_BANDED_REACT
+# 新任务缺省且只能使用策略 2；策略 1 已完全冻结（见 Strategy1Forbidden）。
+DEFAULT_STRATEGY = STRATEGY_SCREENSHOT_PLAN
 STRATEGIES = (STRATEGY_BANDED_REACT, STRATEGY_SCREENSHOT_PLAN)
+# Sealed fragments frozen before the marker existed belong to the react chain;
+# their identity stays react (read-only) and is never migrated to 策略 2.
+_ABSENT_MARKER_STRATEGY = STRATEGY_BANDED_REACT
+
+
+class Strategy1Forbidden(RuntimeError):
+    """策略 1 完全冻结：任何入口在浏览器/模型/采集动作之前拒绝执行。"""
+
+    MESSAGE = ('STRATEGY1_FORBIDDEN: 策略1(react)已完全冻结，禁止执行；'
+               '历史任务保持只读，不会迁移或重跑 / collection strategy 1 is '
+               'frozen; execution refused before any browser, model or '
+               'collection action')
+
+    def __init__(self, message=None):
+        super().__init__(message or self.MESSAGE)
 
 # Internal result contract shared by both strategies.
 RESULT_CONTRACT = 'strategy-result'
@@ -36,8 +52,12 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
     """Stamp a new task with its frozen strategy identity before first dispatch.
 
     Must run before the task id hash is finalized (same place the other
-    fragment extensions are applied); never called on replay.
+    fragment extensions are applied); never called on replay. 策略 1 is
+    completely frozen: an explicit react strategy is refused here, at task
+    construction, before any browser, model or collection action.
     """
+    if strategy == STRATEGY_BANDED_REACT:
+        raise Strategy1Forbidden()
     if strategy not in STRATEGIES:
         raise ValueError('Unknown collection strategy: ' + str(strategy))
     record = {'id': strategy, 'result_contract': RESULT_CONTRACT}
@@ -55,15 +75,16 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
 
 
 def strategy_id(task):
-    """Frozen strategy of this attempt; default keeps the react chain.
+    """Frozen strategy of this attempt; absent markers keep the react reading.
 
-    Absent markers default to the react chain and sealed pre-rename ids keep
-    their historical strategy reading; anything else is unknown.
+    Sealed fragments without the marker stay react (their historical identity,
+    never silently migrated to 策略 2) and sealed pre-rename ids keep their
+    historical strategy reading; anything else is unknown.
     """
     record = (task.get('fragment') or {}).get(FIELD) or {}
     value = record.get('id') if isinstance(record, dict) else record
     if value is None:
-        return DEFAULT_STRATEGY
+        return _ABSENT_MARKER_STRATEGY
     if value in STRATEGIES:
         return value
     if value in LEGACY_STRATEGY_IDS:
@@ -76,12 +97,16 @@ def enabled(task):
 
 
 def select(task):
-    """Static strategy table; no discovery, plugins or service registry."""
-    from . import collection_strategy
+    """Static strategy table; no discovery, plugins or service registry.
+
+    策略 1 is completely frozen: a non-策略2 task is refused here instead of
+    returning the react module. Historical sealed react fragments keep their
+    read-only parsing elsewhere; they never reach an executing session.
+    """
     if enabled(task):
         from . import screenshot_plan
         return screenshot_plan
-    return collection_strategy._banded_strategy_module()
+    raise Strategy1Forbidden()
 
 
 def _banded_strategy_module():
@@ -148,7 +173,10 @@ def strategy_result(task, *, summary, raw_receipt, evidence_refs=(), usage_refs=
         else 'no_path' if summary.get('stop_reason') in ('blocked', 'no_path')
         else 'unknown')
     return {'result_contract': RESULT_CONTRACT,
-            'strategy': deepcopy((task.get('fragment') or {}).get(FIELD) or {'id': DEFAULT_STRATEGY}),
+            # Absent markers keep the historical react label; sealed records
+            # are never relabeled as screenshot_plan.
+            'strategy': deepcopy((task.get('fragment') or {}).get(FIELD)
+                                 or {'id': _ABSENT_MARKER_STRATEGY}),
             'binding': {key: task.get(key) for key in ('task_id', 'task_version', 'site_uri') if key in task},
             'goal': {'goal_status': goal_status,
                      'evidence': deepcopy(goal_evidence) if goal_evidence else None},

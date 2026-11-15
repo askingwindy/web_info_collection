@@ -1,5 +1,7 @@
 # WebCollect
 
+2026-11-15 生产者并发名额只统计租约仍有效的 running 根作业；过期行、UNKNOWN 与 reserved 原账保留，不通过全局恢复释放名额。模型/HTTP 派发前遇到临时满额会等待同一个未派发作业，不能因此退出或另建请求重发。设置 `WEBCOLLECT_PRODUCER_STOP_FILE` 后，创建该文件可在当前模型调用结算后停止后续派发。当前双站 5000 页运行的 20 槽补位协调器与实际状态见 `results/site-workers/20261115-152557-muxtly-wiki-5000-fd804f/latest-active.json`；补位仅选择有证据且不涉及未决请求的独立来源。
+
 2026-11-15 生产者支持在 `--seeds-file` 的来源对象中显式填写 `excluded_entry_patterns`（匹配 URL 解码后的完整入口身份）。命中的首页、分类或导航页仍可供发现下级链接，但不进入目标观察/业务判定或发布；真实落地 URL 再检查一次。`site_workers producer` 在规划时分列 `cumulative_new`、`excluded_existing`、`eligible_cumulative_new`，只用排除后的累计量计算 `--pages-per-site` 缺额；原发布事务上限补偿已存在的排除行，旧候选不删除、不改账。普通不带排除规则的启动方式保持原口径。后台运行须由独立会话启动外层协调器，重定向 stdin/stdout/stderr 并保存 PID；`--launch` 本身仍在前台等待。运行前核对原 scope、角色账本配置及生产者会话绑定，不能仅凭 dry-run 成功判断可启动。
 
 2026-11-12 已按[Wiki 阅读与调用优化方案](docs/策略2Wiki阅读与证据标注Token优化方案-20261112.md)集中完成工程、prompt、tool、schema及标注接线：首次路线连续执行，真实偏差时一次补齐尾部，重复请求先于发送收口，弹层滚动与完整正文证据贯通。受影响19条核心用例最新均通过，维护总量50；隔离计算7步／2次intent、弹层阅读5步／3次intent均经正常保存、候选回写和导出，32项检查通过。真实模型与采集未运行，历史包114个哈希仍一致；[实施证据与限制](verify_results/strategy2-wiki-plan-implementation-20261112-r01/report.md)区分局部失败复验、字符代理和真实效果。下方旧记录按各自时间理解。

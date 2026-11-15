@@ -919,6 +919,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     try:
         unit=0
         while new_count()<target and (max_batches is None or batches<max_batches):
+            from .producer_authority import check_producer_stop
+            check_producer_stop()
             key='grounded-unit/'+str(unit)
             prior_prepared=pool.pool.checkpoint(run,'grounded-unit/'+str(unit-1)+'/prepared') if site_expansion and unit else None
             expansion=(prior_prepared or {}).get('expansion',{'queue':[],'visited':[],'offered':[]})

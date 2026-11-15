@@ -43,7 +43,8 @@ def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), outp
         return old['result']
     if old['state'] != 'queued' or old['attempts']:
         raise OutcomeUnknown('Original model job unresolved; no automatic replacement: ' + jid)
-    job = ledger.claim(purpose, job_id=jid)
+    from .producer_authority import claim_producer_job
+    job = claim_producer_job(ledger, purpose, job_id=jid)
     if not job:
         raise OutcomeUnknown('Original model job unresolved: ' + jid)
     try:
@@ -128,7 +129,8 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
                 original_hosts={isolation_host(uri,registry) for uri in original_urls}
                 if current_hosts and original_hosts and current_hosts.isdisjoint(original_hosts):continue
             raise OutcomeUnknown('Original model request unresolved for this source scope: '+unresolved['id'])
-    job = ledger.claim(purpose, job_id=jid)
+    from .producer_authority import claim_producer_job
+    job = claim_producer_job(ledger, purpose, job_id=jid)
     if not job:
         raise OutcomeUnknown('Original tool selection already claimed: ' + jid)
     try:

@@ -212,6 +212,8 @@ class DiscoveryBrowser:
             self.context=None
 
     async def _read(self, uri):
+        from .producer_authority import check_producer_stop
+        check_producer_stop()
         from .pipeline import reserve_visit_async
         from webcollect.site_failure_stop import SiteFailureStore
         if self.image_screen:

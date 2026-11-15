@@ -348,7 +348,8 @@ def homepage_document(ledger, batch, uri, output, *, allowed_hosts=(), redirect_
         if failure:
             raise ValueError(f"Recorded homepage HTTP {failure['response_status']} for {failure['target_uri']} (visit {failure['id']})")
         raise OutcomeUnknown('Original homepage GET unsettled; reconcile original request: '+jid)
-    job=ledger.claim('application-evidence-get',job_id=jid)
+    from .producer_authority import claim_producer_job
+    job=claim_producer_job(ledger,'application-evidence-get',job_id=jid)
     if not job: raise OutcomeUnknown('Original homepage GET held by another producer')
     visit=None; metrics={}
     try:

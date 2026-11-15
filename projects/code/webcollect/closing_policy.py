@@ -362,8 +362,9 @@ def validate_record(record):
             or marker.get('kind') == 'AGENT_COMPLETE_VERIFIED':
         # 策略 2 owns its ending semantics: no plan pages/result-completion
         # policies apply; the verified completion receipt is replayed instead.
-        from .screenshot_plan import validate_ending_marker
-        validate_ending_marker(record)
+        # 按任务冻结的模板包重放；历史封存任务（无模板标记）解析到单体实现。
+        from .screenshot_planners import template_module, task_template_name
+        template_module(task_template_name(record['task'])).validate_ending_marker(record)
     validate_plan_page_bindings(record)
     validate_result_completion(record)
     band = marker.get('attempt_band')
@@ -411,7 +412,9 @@ def validate_record(record):
         tail = [r for r in dispatched if r not in verified]
         screenshot_tail = ((record['task'].get('fragment', {}) or {}).get('collection_strategy') or {}).get('id') == 'screenshot_plan'
         if screenshot_tail:
-            from .screenshot_plan import tail_effect_observed as _observed
+            # 按任务冻结的模板包核算尾部效果；无标记的历史任务解析到单体实现。
+            from .screenshot_planners import template_module, task_template_name
+            _observed = template_module(task_template_name(record['task'])).tail_effect_observed
             from types import SimpleNamespace
             session = SimpleNamespace(observation_records=record['observations'],
                                     trajectory=record['trajectory'],

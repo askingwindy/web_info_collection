@@ -283,9 +283,10 @@ def _verified_progress_return(record, outward, returning):
                     (record.get('terminal', {}).get('goal_evidence') or {}).get('checks', [])
                     if c.get('status') == 'VERIFIED' and c.get('requirement_id')}
     if 'click' in (outward.get('action'), returning.get('action')):
-        # Requirements are frozen in the first screenshot plan.
-        from .screenshot_plan import _replay_session
-        _, frozen_requirements = _replay_session(record)
+        # Requirements are frozen in the first screenshot plan; the task's frozen
+        # template owns the replay (historical unmarked tasks → monolith).
+        from .screenshot_planners import template_module, task_template_name
+        _, frozen_requirements = template_module(task_template_name(record['task']))._replay_session(record)
         requirements = {r.get('id'): r for r in frozen_requirements}
         final_checks = {rid: c for rid, c in final_checks.items() if requirements.get(rid, {}).get('kind') == 'content'}
     receipt = record.get('receipt') or {}

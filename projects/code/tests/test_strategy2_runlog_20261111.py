@@ -343,6 +343,26 @@ class SessionLogUnitTests(unittest.TestCase):
         self.assertEqual(rows[0]['sessionId'], 'claim-1')
         self.assertIsNone(rows[0]['sampleId'])
         self.assertEqual(rows[0]['attemptId'], 'a1')
+        # template_name is an identity key: attach flows it onto stderr lines and
+        # runtime.jsonl (and via the gateway identity into model-calls.jsonl).
+        from webcollect.runlog import IDENTITY_KEYS, for_claim
+        self.assertIn('template_name', IDENTITY_KEYS)
+        self.assertEqual(IDENTITY_KEYS.index('template_name'),
+                         IDENTITY_KEYS.index('strategy') + 1)
+        log.attach(template_name='operation')
+        stderr_template, stdout_template = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(stderr_template), contextlib.redirect_stdout(stdout_template):
+            log.info('template_selected', template_name='operation', reason='离线断言')
+        template_line = stderr_template.getvalue().strip()
+        self.assertIn('template_name=operation', template_line)
+        template_row = _rows(self.root / 'logs' / 'w1' / 'runtime.jsonl')[-1]
+        self.assertEqual(template_row['template_name'], 'operation')
+        claim_log = for_claim(self.root, 'w2', {'claim_id': 'CL-7', 'candidate_id': 'C-7'},
+                              STRATEGY_SCREENSHOT_PLAN)
+        claim_log.attach(template_name='long_reading')
+        claim_log.info('claim', claimId='CL-7')
+        claim_row = _rows(self.root / 'logs' / 'w2' / 'runtime.jsonl')[-1]
+        self.assertEqual(claim_row['template_name'], 'long_reading')
 
     def test_model_calls_and_debug_are_separate_and_debug_is_gated(self):
         log = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
@@ -1162,6 +1182,75 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         for key in ('stop_reason', 'strategy_end_reason', 'goal_status',
                     'effective_steps', 'actual_actions', 'host_failure', 'unknown'):
             self.assertEqual(without[key], with_log[key], key)
+
+        # 模板包会话走同一离线基底：业务结果与单体一致，展示日志新增
+        # first_plan_result / completion_result，且 template_name 身份随行。
+        from webcollect.screenshot_templates import (generic as generic_template,
+                                                      long_reading as long_reading_template,
+                                                      operation as operation_template)
+        self.surface.state['values'] = deepcopy(initial_values)
+        self.surface.state['elements'][-1]['text'] = initial_result
+        template_log = SessionLog(self.root, 'w3', 'claim-tpl', STRATEGY_SCREENSHOT_PLAN,
+                                  claim_id='claim-tpl', attempt_id=self.attempt_id)
+        template_log.attach(template_name='operation')
+        template_evidence = self.root / 'template-op' / 'evidence' / 'S000001_sample_000202'
+        template_session = operation_template.Session(self.task, template_evidence / 'raw',
+            self._choose([]), self.page, steps_directory=template_evidence,
+            attempt_id=self.attempt_id, runlog=template_log)
+        template_summary = await template_session.run()
+        for key in ('stop_reason', 'strategy_end_reason', 'goal_status', 'effective_steps',
+                    'actual_actions', 'host_failure', 'unknown'):
+            self.assertEqual(template_summary[key], with_log[key], key)
+        template_rows = _rows(self.root / 'logs' / 'w3' / 'runtime.jsonl')
+        template_events = {row['event'] for row in template_rows}
+        self.assertIn('first_plan_result', template_events)
+        self.assertIn('completion_result', template_events)
+        self.assertEqual({row['template_name'] for row in template_rows}, {'operation'})
+        first_plan_row = next(row for row in template_rows if row['event'] == 'first_plan_result')
+        self.assertTrue(first_plan_row['accepted'])
+        self.assertEqual(first_plan_row['steps'], 7)
+        completion_row = next(row for row in template_rows if row['event'] == 'completion_result')
+        self.assertEqual(completion_row['endReason'], template_summary['strategy_end_reason'])
+        self.assertEqual(completion_row['effectiveSteps'], template_summary['effective_steps'])
+
+        # 构造级隔离：临时改写一个模板包的规则/提示词，另一个模板包按其自身
+        # plan 派生的请求负载保持不变（同一会话基底，无真实模型）。
+        async def first_prompt_of(module, name):
+            session = module.Session(self.task, self.root / ('iso-' + name) / 'raw',
+                self._choose([]), self.page, steps_directory=self.root / ('iso-' + name),
+                attempt_id=self.attempt_id)
+            await session._open_entry()
+            return session._first_prompt()
+
+        operation_prompt = await first_prompt_of(operation_template, 'op')
+        long_reading_prompt = await first_prompt_of(long_reading_template, 'lr')
+        self.assertEqual(operation_prompt['system'], operation_template.plan.SYSTEM_PROMPT)
+        self.assertEqual(long_reading_prompt['system'], long_reading_template.plan.SYSTEM_PROMPT)
+        self.assertNotEqual(operation_prompt['system'], long_reading_prompt['system'])
+        self.assertNotEqual(operation_template.plan.SYSTEM_PROMPT,
+                            long_reading_template.plan.SYSTEM_PROMPT)
+        self.assertNotEqual(generic_template.plan.SYSTEM_PROMPT,
+                            long_reading_template.plan.SYSTEM_PROMPT)
+        original_route = operation_template.plan.FIRST_RULES['route']
+        try:
+            operation_template.plan.FIRST_RULES['route'] = 'MUTATED-OP-RULE'
+            mutated_operation = await first_prompt_of(operation_template, 'op2')
+            stable_long_reading = await first_prompt_of(long_reading_template, 'lr2')
+            self.assertEqual(mutated_operation['rules']['route'], 'MUTATED-OP-RULE')
+            self.assertEqual(stable_long_reading['rules']['route'],
+                             long_reading_template.plan.FIRST_RULES['route'])
+            self.assertNotIn('MUTATED-OP-RULE', stable_long_reading['rules']['route'])
+        finally:
+            operation_template.plan.FIRST_RULES['route'] = original_route
+        original_lr_route = long_reading_template.plan.FIRST_RULES['route']
+        try:
+            long_reading_template.plan.FIRST_RULES['route'] = 'MUTATED-LR-RULE'
+            mutated_long_reading = await first_prompt_of(long_reading_template, 'lr3')
+            stable_operation = await first_prompt_of(operation_template, 'op3')
+            self.assertEqual(mutated_long_reading['rules']['route'], 'MUTATED-LR-RULE')
+            self.assertNotIn('MUTATED-LR-RULE', stable_operation['rules']['route'])
+        finally:
+            long_reading_template.plan.FIRST_RULES['route'] = original_lr_route
 
     async def test_cancelled_session_logs_cancellation_and_keeps_raw(self):
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,

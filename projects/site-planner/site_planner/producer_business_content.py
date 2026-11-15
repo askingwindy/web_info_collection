@@ -209,7 +209,7 @@ def _purpose_holds(ledger):
     with ledger.connect() as con:
         originals = con.execute(
             "SELECT r.id,r.job_id,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
-            "WHERE r.state='unknown' AND j.kind='ai-target-page-purpose-1'")
+            "WHERE r.state IN ('unknown','reserved') AND j.kind='ai-target-page-purpose-1'")
         for original in originals:
             for uri in json.loads(original['payload']).get('input', {}).get('source_uris', []):
                 held.setdefault(entry_identity(uri), []).append(

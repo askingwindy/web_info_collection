@@ -806,8 +806,9 @@ def _planning_prompt_of(task):
         return PLAN_SYSTEM
     from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
     if strategy_id(task) == STRATEGY_SCREENSHOT_PLAN:
-        from .screenshot_plan import SYSTEM_PROMPT
-        return SYSTEM_PROMPT
+        # 模板包拥有各自的SYSTEM_PROMPT；历史任务（无模板标记）仍读单体实现。
+        from .screenshot_planners import template_module, task_template_name
+        return template_module(task_template_name(task)).SYSTEM_PROMPT
     from .session_core import SYSTEM_PROMPT
     return SYSTEM_PROMPT
 
@@ -826,12 +827,18 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     """
     from datetime import datetime, timedelta, timezone
     from .session_core import build_url_task, build_capability_task, REACT_VERSION, SYSTEM_PROMPT, GOAL_BUDGETS
-    from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
+    from .collection_strategy import (Strategy1Forbidden, STRATEGY_BANDED_REACT,
+                                      STRATEGY_SCREENSHOT_PLAN)
     from .planning import validate_capability
     if not isinstance(url, str) or not url.strip():
         raise ValueError('react-url generator requires the entry URL')
     if site_filter is not None and site_filter != url:
         raise ValueError('react-url entry differs from the site filter')
+    # 策略1完全冻结：新任务缺省策略2；显式react在任何提示词选择、协议挂载
+    # 或模型任务入队之前拒绝；未知值沿由freeze的ValueError报错。
+    strategy = (react_candidate or {}).get('collection_strategy') or STRATEGY_SCREENSHOT_PLAN
+    if strategy == STRATEGY_BANDED_REACT:
+        raise Strategy1Forbidden()
     sources = generation_source_identity()
     if ledger.config['mode'] == 'real' and history_registry is None:
         raise ValueError('Real generation must consult the existing production registry')
@@ -871,9 +878,10 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     else:
         from .plan_protocol import (ENDING_POLICY as CLOSE_POLICY, PLAN_PROTOCOL,
                                     ACTION_STABILITY_PROTOCOL as FOCUS_PROTOCOL)
-        from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
+        # 策略1冻结后此分支不可达（函数顶部已拒绝react）：缺标记/缺省一律按
+        # 策略2构建，不再挂条件计划协议。
         banded_candidate = react_candidate is not None and \
-            (react_candidate or {}).get('collection_strategy') != STRATEGY_SCREENSHOT_PLAN
+            (react_candidate or {}).get('collection_strategy') == STRATEGY_BANDED_REACT
         task = build_url_task(url=url, task_version=task_version, site_category=site_category,
                               **({'ending_policy':CLOSE_POLICY,'plan_protocol':PLAN_PROTOCOL,
                                   'action_stability_protocol':FOCUS_PROTOCOL} if banded_candidate
@@ -921,23 +929,17 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         # same entry under a new claim is a new transparent task version.
         task['workflow_proposal']['spec']['candidate_claim'] = bound_claim['claim_id']
         task['workflow_proposal']['spec']['consumer_projection'] = 'table2-entry'
-        from .session_core import configure_candidate_protocols
-        from .plan_protocol import (PLAN_PROTOCOL, RESULT_EXECUTION_POLICY,
-                                    RESULT_COMPLETION_PROTOCOL)
-        from .collection_strategy import (STRATEGY_SCREENSHOT_PLAN, STRATEGY_BANDED_REACT,
-                                          freeze as freeze_strategy)
-        if (react_candidate or {}).get('collection_strategy') == STRATEGY_SCREENSHOT_PLAN:
-            # 显式选择策略2：冻结策略ID，不挂条件计划协议，策略2会话自带循环。
-            freeze_strategy(task, STRATEGY_SCREENSHOT_PLAN)
-        else:
-            for part in (task['fragment'],task['workflow_proposal']['spec']):
-                part['plan_protocol']=PLAN_PROTOCOL
-                part['result_execution_policy']=RESULT_EXECUTION_POLICY
-                part['result_completion_protocol']=RESULT_COMPLETION_PROTOCOL
-            configure_candidate_protocols(task)
-            # New strategy-1 tasks freeze their result-completion route before
-            # the task-id hash; historical unmarked tasks keep their old reading.
-            freeze_strategy(task, STRATEGY_BANDED_REACT)
+        from .collection_strategy import freeze as freeze_strategy
+        # 显式与缺省均为策略2：只冻结策略ID，不挂策略1条件计划协议，策略2
+        # 会话自带循环；未知值沿用freeze的ValueError报错。
+        freeze_strategy(task, strategy)
+        # 策略2模板在策略冻结处一并冻结：新任务必须携带消费者选定的模板名
+        # （直接调用generate的一方同样必须传入）；历史封存任务无此标记。
+        from .screenshot_planners import freeze_template
+        template_name = react_candidate.get('template_name')
+        if strategy == STRATEGY_SCREENSHOT_PLAN and not template_name:
+            raise ValueError('template_name required for screenshot_plan generation')
+        freeze_template(task, template_name)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
         from .session_core import validate_task as validate_react

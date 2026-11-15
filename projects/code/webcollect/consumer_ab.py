@@ -184,6 +184,9 @@ def worker(roster, slot_name_value, *, config, ledger_path, registry, policy_pat
     A slot with existing state is read-only: the restart verifies the original
     receipt and never dispatches a new collection.
     """
+    # 策略1完全冻结：历史AB实验worker入口拒绝任何执行（其余代码仅保留历史）。
+    from webcollect.collection_strategy import Strategy1Forbidden
+    raise Strategy1Forbidden()
     import asyncio
     from site_planner.candidate_pool import CandidatePool
     from webcollect.batch_core import BatchLedger, BudgetStop, OutcomeUnknown
@@ -370,6 +373,9 @@ def launch(roster, *, config, ledger_path, registry, policy_path, history_set,
     {slot name: reference-file path} map; a slot frozen with its own objective
     in the roster always wins over any shared value.
     """
+    # 策略1完全冻结：在任何worker子进程启动之前拒绝整个launch。
+    from webcollect.collection_strategy import Strategy1Forbidden
+    raise Strategy1Forbidden()
     import os
     python = python or sys.executable
     roster_path = Path(experiment_dir) / 'roster.json'

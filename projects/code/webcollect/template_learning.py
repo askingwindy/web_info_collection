@@ -497,6 +497,9 @@ class LearningSession(TemplateSession):
 
 @contextmanager
 def enabled(library):
+    # 策略1完全冻结：学习适配器（替换策略1会话）拒绝启用，纵深防御。
+    from .collection_strategy import Strategy1Forbidden
+    raise Strategy1Forbidden()
     from . import react_session
     old=react_session.ReactSession
     old_build=react_session.build_url_task

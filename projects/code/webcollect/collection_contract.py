@@ -184,10 +184,17 @@ def _state_for_observation(session, oid):
     return load_json(observation['evidence']['state']['path'])
 
 
-def first_plan_admission(plan, *, minimum=BUSINESS_MINIMUM, goal=''):
-    """首轮资格：必要业务动作数与原目标义务（wait 不计）。"""
+def first_plan_admission(plan, *, minimum=BUSINESS_MINIMUM, goal='',
+                         wire_schema=None, allowed_tool_actions=None):
+    """首轮资格：必要业务动作数与原目标义务（wait 不计）。
+
+    wire_schema/allowed_tool_actions allow a 策略 2 template session to inject
+    its own wire schema and allowed-action source; the default keeps importing
+    the historical monolith so existing callers behave unchanged.
+    """
     from jsonschema import Draft202012Validator
-    from .screenshot_plan import submit_plan_schema, _allowed_all
+    if wire_schema is None or allowed_tool_actions is None:
+        from .screenshot_plan import submit_plan_schema as wire_schema, _allowed_all as allowed_tool_actions
     wire = deepcopy(plan)
     for row in wire.get('requirements', []):
         row.pop('source_type', None)
@@ -195,7 +202,7 @@ def first_plan_admission(plan, *, minimum=BUSINESS_MINIMUM, goal=''):
         if isinstance(route, dict):
             route.pop('source_type', None)
             route.pop('observation_steps', None)
-    errors = list(Draft202012Validator(submit_plan_schema(_allowed_all())).iter_errors(wire))
+    errors = list(Draft202012Validator(wire_schema(allowed_tool_actions())).iter_errors(wire))
     if errors:
         error = errors[0]
         return False, {'kind': 'PLAN_FIELDS_INVALID', 'field_paths': ['.'.join(map(str, error.absolute_path))],

@@ -3,7 +3,9 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import sqlite3
+import io
 from contextlib import contextmanager
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -196,6 +198,62 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
                                    campaign='campaign.json', output=Path(directory))
                 probe.assert_not_called()
                 self.assertEqual(result['stop_reason'], 'key_pool_unavailable')
+
+            # 站点目标按"正式保存的不同页面"计数（deliver 登记的 saved_pages），
+            # 与交付导出数（exported_count）分开；三次保存时翻转到达。
+            from webcollect.consumer_campaign import deliver, exported_count, site_reached, target_count
+            save_state = {'deliveries': [{'application_id': 'appA', 'ordinary_target_eligible': True}] * 5,
+                          'saved_pages': [], 'site_targets': {'appA': 3}, 'dispatch_stopped': False}
+            self.assertEqual(target_count(save_state, 'appA'), 0)
+            self.assertEqual(exported_count(save_state, 'appA'), 5)  # exports alone never reach the target
+            self.assertFalse(site_reached(save_state, 'appA'))
+            save_state['saved_pages'] = [{'candidate_id': 'c1', 'application_id': 'appA'},
+                                         {'candidate_id': 'c2', 'application_id': 'appA'},
+                                         {'candidate_id': 'c2', 'application_id': 'appA'},
+                                         {'candidate_id': 'c9', 'application_id': 'appB'}]
+            self.assertEqual(target_count(save_state, 'appA'), 2)
+            self.assertFalse(site_reached(save_state, 'appA'))
+            save_state['saved_pages'].append({'candidate_id': 'c3', 'application_id': 'appA'})
+            self.assertTrue(site_reached(save_state, 'appA'))
+            self.assertFalse(site_reached(save_state, 'appB'))
+
+            class MiniCandidateDB:
+                from contextlib import contextmanager
+                def __init__(self, path):
+                    self.path = Path(path)
+                @contextmanager
+                def connect(self, write=False, timeout=90):
+                    connection = sqlite3.connect(self.path)
+                    try:
+                        yield connection
+                    finally:
+                        connection.close()
+
+            mini = Path(directory) / 'mini-pool.sqlite3'
+            with sqlite3.connect(mini) as con:
+                con.execute('CREATE TABLE data_candidates(candidate_id TEXT PRIMARY KEY, application_id TEXT)')
+                con.execute("INSERT INTO data_candidates VALUES('c1','appA')")
+            mini_pool = SimpleNamespace(pool=MiniCandidateDB(mini), get_claim=lambda cid: {'claim_id': cid})
+            campaign_state = Path(directory) / 'saved-campaign.json'
+            campaign_state.write_text(json.dumps({'deliveries': [], 'dispatch_stopped': False,
+                                                  'site_targets': {'appA': 1}}))
+            receipt = {'sample_id': 's1', 'template_name': 'operation'}
+            stderr = io.StringIO()
+            import contextlib
+            with patch('webcollect.candidate_consumer.verified_saved', return_value=receipt), \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(deliver(campaign_state, mini_pool, {'claim_id': 'CL1', 'candidate_id': 'c1'}),
+                                 {'state': 'queued', 'claim_id': 'CL1'})
+                deliver(campaign_state, mini_pool, {'claim_id': 'CL1', 'candidate_id': 'c1'})
+            written = json.loads(campaign_state.read_text())
+            # dedup by candidate_id: one saved_pages row, one target line, export queued once
+            self.assertEqual(written['saved_pages'], [{'candidate_id': 'c1', 'claim_id': 'CL1',
+                'application_id': 'appA', 'sample_id': 's1', 'template_name': 'operation'}])
+            self.assertEqual(written['site_target_log'], {'appA': True})
+            self.assertIn('appA', written['site_target_at'])
+            self.assertEqual(len(written['pending_deliveries']), 1)
+            self.assertEqual(stderr.getvalue().count('site_target_reached applicationId=appA'), 1)
+            self.assertTrue(site_reached(written, 'appA'))
 
     def test_unknown_probe_is_not_replayed_in_same_launch(self):
         from webcollect.key_health import probe_accounts
