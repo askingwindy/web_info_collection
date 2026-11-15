@@ -128,9 +128,9 @@ def projection(state, *, protect=()):
     # A target within an animated image remains clickable, with stable original
     # label/href/geometry/hit samples. Its changing image pixels are allowed.
     for e in result.get('elements',[]):
-        if e.get('text') and e['element_id'] in meta.get('ancestor_text_outside',{}):e['text']=meta['ancestor_text_outside'][e['element_id']]
+        if e.get('text') and e['element_id'] not in keep and e['element_id'] in meta.get('ancestor_text_outside',{}):e['text']=meta['ancestor_text_outside'][e['element_id']]
     for block in result.get('text_blocks',[]):
-        if block.get('element_id') in meta.get('ancestor_text_outside',{}):
+        if block.get('element_id') not in keep and block.get('element_id') in meta.get('ancestor_text_outside',{}):
             block['visible_text']=meta['ancestor_text_outside'][block['element_id']]
     if len(allowed)==sum(r.get('eligible') is True for r in meta.get('regions',[])):
         result['visible_text']=meta.get('visible_text_outside',state.get('visible_text',''))
@@ -156,8 +156,6 @@ def projection(state, *, protect=()):
         if p.get('element_id') not in removed and not (p.get('kind')=='empty-native-pseudo-graphic-1'
             and any(r.get('native_image_paint',{}).get('kind')=='empty-native-pseudo-graphic-1'
                 and r['bbox']==p.get('bbox') for r in allowed if r.get('native_image_paint')))]
-    failed=[i for i in result.get('capture_images',[]) if not (i.get('complete') and i.get('natural_width',0)>0 and i.get('natural_height',0)>0)]
-    if 'capture_readiness' in result:result['capture_readiness']['images_ready']=not failed
     return result
 
 

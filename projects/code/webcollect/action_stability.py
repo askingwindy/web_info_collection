@@ -79,10 +79,34 @@ def native_input_missing(state, element, binding, value, probe, action):
     return missing
 
 
+def relevant_images_ready(state, node, box):
+    """Raw readiness remains evidence; only images affecting this region gate it."""
+    if (state.get('capture_readiness') or {}).get('images_ready') is False and not state.get('capture_images'):
+        return False
+    for image in state.get('capture_images', []):
+        if image.get('complete') and image.get('natural_width', 0) > 0 and image.get('natural_height', 0) > 0:
+            continue
+        bounds = image.get('bbox')
+        relevant = image.get('element_id') == node
+        if isinstance(bounds, list) and len(bounds) == 4:
+            relevant = relevant or (bounds[0] < bounds[2] and bounds[1] < bounds[3]
+                and bounds[0] < box[2] and bounds[2] > box[0]
+                and bounds[1] < box[3] and bounds[3] > box[1])
+        else:
+            # Missing geometry cannot prove an incomplete image irrelevant.
+            relevant = True
+        if relevant:
+            return False
+    return True
+
+
 def action_scoped_projection(state, node, action, *, click_validation=None):
     """Target-level identity proof: unique node, visible/enabled, in-viewport
     box, loaded readiness and hit/obstruction samples; focus+value for inputs.
     Volatile unrelated DOM (suggestions, announcements) never enters it."""
+    from .dynamic_regions import projection
+    raw = state
+    state = projection(raw, protect=[node])
     def unique(rows):
         found = [r for r in rows if r.get('element_id') == node]
         if len(found) != 1:
@@ -104,7 +128,7 @@ def action_scoped_projection(state, node, action, *, click_validation=None):
             or not (0 <= box[0] < box[2] <= viewport[0] and 0 <= box[1] < box[3] <= viewport[1])):
         raise ValueError('Action-scoped target outside current viewport; scroll it fully into view first')
     if (readiness.get('document_ready') != 'complete'
-            or readiness.get('fonts_ready') is not True or readiness.get('images_ready') is not True):
+            or readiness.get('fonts_ready') is not True or not relevant_images_ready(raw, node, box)):
         raise ValueError('Action-scoped dispatch frame not fully loaded')
     point_policy = action == 'click' and click_validation == CLICK_POINT_VERSION
     if click_validation is not None and not point_policy:
@@ -133,8 +157,18 @@ def action_scoped_projection(state, node, action, *, click_validation=None):
              ('url', 'document_identity', 'scroll', 'screen_resolution', 'device_pixel_ratio')}
     basis['element'] = {k: element.get(k) for k in ('element_id', 'native_role', 'text', 'bbox',
                                                     'visible', 'enabled', 'clickable', 'inputable')}
+    basis['target_labels'] = deepcopy((target or {}).get('visible_label_evidence', []))
+    basis['target_values'] = [deepcopy(v) for v in state.get('values', []) if v.get('element_id') == node]
     basis['binding'] = {k: binding.get(k) for k in ('tag', 'selector', 'index', 'href',
                                                     'input_type', 'form_index')}
+    form = binding.get('form_index')
+    related = [b for b in state.get('capture_controls', [])
+               if form is not None and b.get('form_index') == form]
+    related_ids = {b.get('element_id') for b in related}
+    basis['form_controls'] = [{k: b.get(k) for k in
+        ('element_id', 'tag', 'selector', 'index', 'href', 'input_type', 'form_index')} for b in related]
+    basis['form_values'] = [deepcopy(v) for v in state.get('values', [])
+                            if v.get('element_id') in related_ids]
     if point_policy:
         # Nine-point bounding-box probes stay in the raw snapshot as diagnostic
         # evidence. Actual clickability follows the exact dispatched point and
@@ -153,15 +187,13 @@ def action_scoped_scope(state, node, action, *, version=ACTION_SCOPED_VERSION):
         raise ValueError('Unknown action-scoped policy')
     if action not in ('click', 'type', 'hotkey') or not node:
         raise ValueError('Action-scoped node proof supports click/type/hotkey on a target')
-    from .dynamic_regions import projection as content_projection
-    projected = content_projection(state, protect=[node])
-    geometry = next((g for g in projected.get('geometry_witnesses', []) if g.get('element_id') == node), {})
+    geometry = next((g for g in state.get('geometry_witnesses', []) if g.get('element_id') == node), {})
     validation = CLICK_POINT_VERSION if action == 'click' and (
         geometry.get('dispatch_point') or {}).get('schema_version') == CLICK_POINT_VERSION else None
     return {'schema_version': version, 'action': action,
             'purpose': 'action_scoped_dispatch', 'node': node,
             **({'click_validation': validation} if validation else {}),
-            'basis': action_scoped_projection(projected, node, action, click_validation=validation)}
+            'basis': action_scoped_projection(state, node, action, click_validation=validation)}
 
 
 def document_scope(state, action, *, version=ACTION_SCOPED_VERSION):
@@ -272,9 +304,12 @@ def _action_scoped_pair(before, after, png_before, png_after, scope):
         valid = False
         if purpose == 'action_scoped_dispatch' and action in ('click', 'type', 'hotkey') and scope.get('node'):
             try:
-                valid = (action_scoped_projection(before, scope['node'], action,
+                node = scope['node']
+                if action_scoped_projection(before, node, action, click_validation=scope.get('click_validation')) != scope['basis']:
+                    raise RuntimeError('ACTION_SCOPE_ORIGINAL_INVARIANT_BROKEN')
+                valid = (action_scoped_projection(before, node, action,
                                                   click_validation=scope.get('click_validation'))
-                         == action_scoped_projection(after, scope['node'], action,
+                         == action_scoped_projection(after, node, action,
                                                       click_validation=scope.get('click_validation'))
                          == scope['basis'])
             except ValueError:
@@ -327,6 +362,9 @@ def validate_dynamic_scope(before, after, scope):
 
 
 def reading_projection(state, node):
+    from .dynamic_regions import projection
+    raw = state
+    state = projection(raw, protect=[node])
     mains = [e for e in state.get('elements', []) if e.get('element_id') == node
              and e.get('native_role') == 'main' and e.get('visible')]
     if len(mains) != 1:
@@ -336,7 +374,7 @@ def reading_projection(state, node):
     ready = state.get('capture_readiness', {})
     if (not selector or len(vp) != 2 or len(box) != 4
             or ready.get('document_ready') != 'complete'
-            or not ready.get('fonts_ready') or not ready.get('images_ready')):
+            or not ready.get('fonts_ready') or not relevant_images_ready(raw, node, box)):
         raise ValueError('Reading region not fully loaded')
     clip = [max(0, box[0]), max(0, box[1]), min(vp[0], box[2]), min(vp[1], box[3])]
     if clip[0] >= clip[2] or clip[1] >= clip[3]:
@@ -353,8 +391,6 @@ def reading_projection(state, node):
 
 def reading_scope(state):
     """Read-only document-basis proof of the rendered main region."""
-    from .dynamic_regions import projection as content_projection
-    state = content_projection(state)
     mains = [e for e in state.get('elements', []) if e.get('native_role') == 'main' and e.get('visible')]
     if len(mains) != 1:
         raise ValueError('Reading scroll requires one rendered main region')

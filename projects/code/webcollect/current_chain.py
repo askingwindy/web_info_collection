@@ -79,7 +79,7 @@ def _manifest(path):
 def _meta(registry):
     registry = _path(registry)
     _require(registry.is_file(), 'dedicated current-chain registry missing')
-    with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         _require('current_chain_meta' in tables and 'current_chain_results' in tables,
                  'unmarked/legacy registry cannot enter the current chain')
@@ -145,7 +145,7 @@ def initialize_chain(manifest_path, registry, *, chain_id, current_result_roots,
     registry.parent.mkdir(parents=True, exist_ok=True)
     from .runtime import SCHEMA
     from .storage import ensure_registry_schema
-    with closing(sqlite3.connect(registry)) as con:
+    with closing(sqlite3.connect(registry, timeout=90)) as con:
         ensure_registry_schema(con)
         con.executescript(SCHEMA)
         con.execute('CREATE TABLE current_chain_meta (id INTEGER PRIMARY KEY CHECK(id=1), binding_json TEXT NOT NULL)')
@@ -168,7 +168,7 @@ def read_chain_scope(manifest_path):
 
 def read_chain_history(manifest_path):
     scope = read_chain_scope(manifest_path)
-    with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         # Pin membership and task/attempt identity to one SQLite read snapshot;
         # peer consumers may append while original files are being checked.
         con.execute('BEGIN')
@@ -224,24 +224,32 @@ def is_current_registry(registry):
     path = Path(registry).resolve()
     if not path.is_file():
         return False
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='current_chain_meta'").fetchone() is not None
 
 
 def registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):
     assert_registry_scope(scope, registry)
-    from .task_admission import registry_snapshot as original_snapshot
-    snapshot = original_snapshot(registry, exclude_scope=exclude_scope, own_tasks=own_tasks)
-    # Every current task must originate from a plan explicitly bound to this
-    # chain. Copying old tasks into a new database cannot import old history.
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
-        for row in snapshot['rows']:
-            plans = [load for (raw,) in con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=?',
-                     (row['scope_id'],)) for load in [json.loads(raw)]]
-            _require(any(any(same_chain(plan.get(key, {}).get('history_scope'), scope) for key in
-                            ('generation', 'observed_workflow_generation')) and row['task'] in plan.get('tasks', [])
-                         for plan in plans), 'task was not registered by a plan bound to this current chain')
-    return snapshot
+    from .registry_db import history_rows
+    from .task_admission import snapshot_rows
+    raw_rows, raw_plans = history_rows(registry, include_plans=True)
+    rows = snapshot_rows(raw_rows, exclude_scope=exclude_scope, own_tasks=own_tasks)
+    # Validate each plan once, retaining the original task equality semantics.
+    # This remains a fresh read on every call, including newly registered tasks.
+    expected_identity = _chain_identity(scope)
+    allowed = {}
+    for scope_id, raw in raw_plans:
+        plan = json.loads(raw)
+        if any(isinstance(bound := plan.get(key, {}).get('history_scope'), dict)
+               and bound.get('schema_version') == SCOPE_SCHEMA
+               and _chain_identity(bound) == expected_identity
+               for key in ('generation', 'observed_workflow_generation')):
+            allowed.setdefault(scope_id, []).extend(plan.get('tasks', []))
+    for row in rows:
+        _require(row['task'] in allowed.get(row['scope_id'], []),
+                 'task was not registered by a plan bound to this current chain')
+    rows.sort(key=object_sha256)
+    return {'registry': str(Path(registry).resolve()), 'rows': rows, 'sha256': object_sha256(rows)}
 
 
 def _physical(value):
@@ -511,7 +519,7 @@ def append_current_result(manifest_path, annotation_path, *, site_uri, task_key)
     annotation = load_json(path); sample_id = annotation.get('sample_id')
     _require(isinstance(sample_id, str) and path.name == 'annotation.json' and path.parent.name == sample_id,
              'actual current annotation/sample identity required')
-    with closing(sqlite3.connect(scope['registry'])) as con:
+    with closing(sqlite3.connect(scope['registry'], timeout=90)) as con:
         _require(con.execute('SELECT 1 FROM m4_attempts WHERE sample_id=? AND task_key=?',
                              (sample_id, task_key)).fetchone() is not None,
                  'result has no original current-chain attempt')

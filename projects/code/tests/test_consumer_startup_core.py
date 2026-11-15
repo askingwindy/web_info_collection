@@ -15,6 +15,8 @@ from jsonschema import validate, ValidationError
 class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
     def test_empty_requirement_metadata_is_losslessly_normalized(self):
         raw = {'goal': '计算', 'requirements': [{'id': 'r1', 'kind': 'input', 'description': '设置数量', 'id2': '',
+                                                 'evidence_scope': 'current',
+                                                 'acceptance': {'mode': 'presence', 'subject': '数量', 'source_quote': '计算'},
                                                  'target': {'visible_label': '数量', 'role': 'input'}, 'expected_value': '10',
                                                  'evidence_route': {'source_type': 'input_state', 'observation_steps': [1]}}],
                'steps': [{'action': 'back', 'purpose': f'返回{index}', 'rationale': '查看前页',
@@ -158,6 +160,35 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(state.read_text())
             self.assertEqual(saved['stop_reason'], 'ENGINEERING_FAILURE')
             self.assertEqual(saved['stop_details']['error_type'], 'CurrentChainError')
+            # A registry busy read that escaped consume is transient: the claim
+            # settles reconcile and the same worker keeps claiming; the batch
+            # is not stopped and no engineering failure is recorded.
+            state = Path(directory) / 'transient-campaign.json'
+            state.write_text(json.dumps({'deliveries': [], 'dispatch_stopped': False}))
+            claim = {'claim_id': 'busy', 'candidate_id': 'page', 'state': 'consuming', 'stage': 'claimed'}
+            pool = MagicMock()
+            pool.claim_next.side_effect = [claim, {'state': 'EMPTY'}]
+            pool.get_claim.side_effect = [{**claim, 'state': 'consuming'},
+                                          {**claim, 'state': 'reconcile', 'stage': 'claimed'}]
+            with patch('webcollect.candidate_consumer.startup_check', return_value={}), \
+                 patch('webcollect.key_health.pool_available', return_value=True), \
+                 patch('webcollect.key_health.probe_accounts') as probe, \
+                 patch('webcollect.candidate_consumer.consume', new_callable=AsyncMock,
+                       side_effect=sqlite3.OperationalError('database is locked')) as consume, \
+                 patch('webcollect.runlog.for_claim'), \
+                 patch('webcollect.consumer_campaign.deliver', return_value={'state': 'queued'}), \
+                 patch('webcollect.candidate_batch.record_outcome'):
+                result = await run(pool, object(), worker_id='busy', request_prefix='busy',
+                                   campaign=state, output=Path(directory), limit=2, stop_when_empty=True)
+            self.assertIsInstance(result, list)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(pool.claim_next.call_count, 2)
+            pool.finish.assert_called_once()
+            self.assertEqual(pool.finish.call_args.kwargs.get('state'), 'reconcile')
+            self.assertEqual(result[0]['failure_class'], 'transient')
+            self.assertNotIn('engineering_failure', result[0])
+            self.assertFalse(stopped(state))
+            self.assertNotIn('stop_reason', json.loads(state.read_text()))
             with patch('webcollect.candidate_consumer.startup_check', return_value={}), \
                  patch('webcollect.key_health.pool_available', return_value=False), \
                  patch('webcollect.key_health.probe_accounts') as probe:

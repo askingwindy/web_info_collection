@@ -407,8 +407,16 @@ def preflight_cohort_sources(pool, rows, registry):
 
 
 @asynccontextmanager
-async def entry_session(ledger, pool, claim, root):
+async def entry_session(ledger, pool, claim, root, *, session_soft_seconds=None, session_hard_seconds=None):
     """One owned page from the first accounted visit through formal close-out."""
+    import time as _time
+    limits = ledger.config.get('session_limits') or {}
+    soft = int(session_soft_seconds or limits.get('soft_seconds') or 1800)
+    hard = int(session_hard_seconds or (soft + int(limits.get('closeout_grace_seconds') or 120)))
+    if hard <= soft:
+        raise ValueError('Session hard deadline must leave a closeout grace after the soft deadline')
+    host_limits = {'soft_seconds': soft, 'hard_seconds': hard,
+                   'started_monotonic': _time.monotonic()}
     from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
     from .browser import capture
     from .navigation import BatchNavigation, NavigationTimeoutError
@@ -445,7 +453,7 @@ async def entry_session(ledger, pool, claim, root):
                     pool._fence(con, claim)
                 with phase(root/'phases.jsonl', 'entry_navigation', scope={'claim_id':claim['claim_id']}):
                     try:
-                        await BatchNavigation(ledger, job).goto(page, uri, purpose='candidate-entry:'+claim['claim_id'], timeout_ms=30000)
+                        entry_response = await BatchNavigation(ledger, job).goto(page, uri, purpose='candidate-entry:'+claim['claim_id'], timeout_ms=30000)
                     except PlaywrightTimeoutError as error:
                         # BatchNavigation has already settled this explicit visit as failed.
                         raise NavigationTimeoutError(uri, 'candidate-entry:'+claim['claim_id'], 30) from error
@@ -459,8 +467,6 @@ async def entry_session(ledger, pool, claim, root):
                     except ValueError as rejected:
                         access_rejection = rejected
                         raise
-                    if not application_matches(uri, captured['state']['url'], claim.get('application_registry')):
-                        raise ValueError('Candidate entry landed outside the evidence-backed application')
                     html = await page.content()
                     prefix = 'first'
                     with (root/(prefix+'.png')).open('xb') as image:
@@ -468,6 +474,12 @@ async def entry_session(ledger, pool, claim, root):
                     anchor = {'image': {'path': str(root/(prefix+'.png')), 'sha256': file_sha(root/(prefix+'.png'))},
                         'state': exclusive(root/(prefix+'-state.json'),captured['state']),
                         'capture': exclusive(root/(prefix+'-capture.json'),captured['capture'])}
+                    entry_http_reference = None
+                    if captured['state']['url'] != uri:
+                        from .navigation import capture_http_chain
+                        entry_http = await capture_http_chain(entry_response,uri,captured['state']['url'],
+                            source_url=uri,operation_id='candidate-entry:'+claim['claim_id'],page=page)
+                        entry_http_reference = exclusive(root/'first-entry-http.json',entry_http)
                     from .consumer_page_policy import full_image
                     image_failure=full_image(captured['state'])
                     if image_failure:
@@ -484,8 +496,9 @@ async def entry_session(ledger, pool, claim, root):
                         ledger.event(con, 'candidate_entry_attempt', {'claim_id':claim['claim_id'],
                             'attempt_id':attempt['attempt_id'], 'job_id':jid, 'visit_ids':visits})
                 yield {'browser':browser, 'context':context, 'page':page, 'anchor':anchor,
-                    'claim_id':claim['claim_id'], 'entry_observation':{'captured':captured,'html':html},
-                    'bind_attempt':bind_attempt}
+                    'claim_id':claim['claim_id'], 'entry_http':entry_http_reference,
+                    'entry_observation':{'captured':captured,'html':html},
+                    'host_limits':host_limits, 'bind_attempt':bind_attempt}
             finally:
                 try:
                     if context is not None:
@@ -608,9 +621,35 @@ async def consume(pool, claim, ledger, **kwargs):
         return {'state':claim.get('state'), 'dispatched':False}
     pool.heartbeat(claim)
     loop = asyncio.get_running_loop()
-    owner = asyncio.current_task()
+    caller = asyncio.current_task()
     stop = threading.Event()
     lost = []
+    lease_cancelled = False
+    runlog = kwargs.get('runlog')
+
+    def receipt(event, **fields):
+        if runlog is not None:
+            runlog.info(event, claimId=claim['claim_id'], taskName=owner.get_name(), **fields)
+
+    def cancel_for_lease(error):
+        # Queued callbacks own this claim's child, never the worker poller.
+        nonlocal lease_cancelled
+        receipt('lease_cancel_requested', errorType=type(error).__name__, reason=str(error)[:200])
+        if stop.is_set() or owner.done():
+            receipt('lease_cancel_ignored', reason='claim_task_finished')
+            return
+        try:
+            current = pool.get_claim(claim['claim_id'])
+            if current['state'] != 'consuming':
+                receipt('lease_cancel_ignored', reason='claim_already_settled', claimState=current['state'])
+                return
+        except Exception:
+            # Unreadable ownership is not permission to continue dispatch.
+            pass
+        lost.append(error)
+        lease_cancelled = owner.cancel('candidate_lease_lost')
+        receipt('lease_cancel_applied', cancelled=lease_cancelled)
+
     def renew_claim():
         current = claim
         while not stop.wait(2):
@@ -625,35 +664,47 @@ async def consume(pool, claim, ledger, **kwargs):
                 if (getattr(error, 'sqlite_errorcode', 0) & 255) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
                     if current and current.get('expires', 0) > time.time():
                         continue
-                lost.append(error)
-                loop.call_soon_threadsafe(owner.cancel)
+                loop.call_soon_threadsafe(cancel_for_lease, error)
                 return
             except Exception as error:
-                lost.append(error)
-                loop.call_soon_threadsafe(owner.cancel)
+                loop.call_soon_threadsafe(cancel_for_lease, error)
                 return
+
+    async def claim_work():
+        try:
+            thread.start()
+            return await _consume(pool, claim, ledger, **kwargs)
+        finally:
+            # Invalidate callbacks before the child wakes its caller. A daemon
+            # observes stop after its short transaction; no blocking join.
+            stop.set()
+            receipt('claim_task_finished', reason='lease_monitor_stopped')
+
     thread = threading.Thread(target=renew_claim, daemon=True)
-    thread.start()
+    owner = asyncio.create_task(claim_work(), name='candidate:' + claim['claim_id'])
     try:
-        return await _consume(pool, claim, ledger, **kwargs)
+        return await owner
     except asyncio.CancelledError:
-        if lost:
+        # Genuine worker cancellation remains cancellation even when racing a
+        # lease callback. Never clear cancellation state or swallow the signal.
+        if lease_cancelled and not caller.cancelling():
+            receipt('claim_cancelled', reason='candidate_lease_lost')
             raise ValueError('Candidate lease lost; original claim remains fenced') from lost[0]
+        receipt('claim_cancelled', reason='worker_or_external_cancel')
         try:
             settle_cancelled_claim(pool, claim)
-        except Exception:
-            pass  # Lost ownership or unverifiable receipt remains for explicit reconciliation.
+        except Exception as error:
+            receipt('cancel_closeout_unresolved', errorType=type(error).__name__, reason=str(error)[:200])
         raise
     finally:
         stop.set()
-        # The daemon observes stop after its current short transaction; never
-        # hold cancellation hostage to a busy database or executor.
 
 
 async def _consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
                   session_soft_seconds=None, session_hard_seconds=None, collection_strategy=None, runlog=None):
     """Exactly one original claim, one goal and at most one saved result."""
-    # Historical duration arguments are accepted but no longer stop consumption.
+    # 会话软时限/收尾宽限经host_limits贯通到session与网关；软时限后停止
+    # 新增业务动作与模型请求，未决请求保留UNKNOWN。
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
     current=pool.get_claim(claim['claim_id'])
     if current['token']!=claim['token'] or current['snapshot']!=claim['snapshot']:
@@ -747,7 +798,8 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         for source in claim.get('sources',[]):
             verify_evidence(source['references'])
         from .task_generation import generate, execute
-        session = await stack.enter_async_context(entry_session(ledger, pool, claim, root))
+        session = await stack.enter_async_context(entry_session(ledger, pool, claim, root,
+            session_soft_seconds=session_soft_seconds, session_hard_seconds=session_hard_seconds))
         from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
         route = first_frame_disposition(load_json(session['anchor']['state']['path']))
         if route:
@@ -761,7 +813,7 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
             return {'state':'failed', 'disposition':disposition, 'reason':reason, 'formal_attempts':0}
         hints = _entry_hints(claim)
         record = capability(claim, session['anchor'], claim_ref, ledger.config['mode'],
-            category=hints['category'], name=hints['name'])
+            category=hints['category'], name=hints['name'],entry_http=session.get('entry_http'))
         # Consumer evidence belongs to this claim/attempt. Table1's site
         # identity, category, page inventory and availability are producer-owned.
         catalog = root/'catalog.json'
@@ -1039,7 +1091,10 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                     'sqlite_errorcode':getattr(error, 'sqlite_errorcode', None),
                     'sqlite_errorname':getattr(error, 'sqlite_errorname', None)}
                 record('candidate_error', claim_id=claim['claim_id'], diagnostic=diagnostic)
-                engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError))
+                # A registry busy read that outlived its bounded wait is transient:
+                # settle this claim and keep consuming instead of stopping the batch.
+                from .registry_db import is_locked
+                engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError)) and not is_locked(error)
                 if engineering:
                     stop_dispatch(error, phase='candidate_execution', claim=claim, diagnostic=diagnostic)
                 runlog.info('failed', claimId=claim['claim_id'],
@@ -1054,6 +1109,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                     if engineering:
                         result.update(failure_class='program', engineering_failure=True,
                                       no_dispatch_proof=getattr(error, 'no_dispatch_proof', None))
+                    elif is_locked(error):
+                        result.update(failure_class='transient')
                 except sqlite3.Error as settlement_error:
                     # Keep the original failure; no successful settlement is asserted.
                     result={'state':'reconcile', 'stage':claim.get('stage'),
@@ -1078,7 +1135,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         except Exception as error:
             record('consumer_error',claim_id=claim.get('claim_id') if claim else None,
                    error_type=type(error).__name__,reason=str(error))
-            engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError))
+            from .registry_db import is_locked
+            engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError)) and not is_locked(error)
             if engineering:
                 stop_dispatch(error, phase='consumer_loop', claim=claim)
             # Original claims/requests remain fenced. A known shared engineering

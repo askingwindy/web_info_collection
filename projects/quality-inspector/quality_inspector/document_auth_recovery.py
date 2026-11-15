@@ -370,7 +370,7 @@ def run(receipt_path, proof_path, output):
         if Path(value['raw_lane_receipt']).exists() and _recorded_requests(value):
             _verify_activation(receipt_path, value)
             _reconcile_known_success(value)
-            pipeline._ledger(value).recover()  # expired reservations become UNKNOWN; no resend
+            pipeline._ledger(value).recover(job_id=value['original_job_id'])  # expired reservations become UNKNOWN; no resend
             state = lane.status(value['raw_lane_receipt'], output)
             return _accounting(value, state, output)
         value = _activate(receipt_path, proof_path)
@@ -387,7 +387,7 @@ def status(receipt_path, output):
         if not Path(value['raw_lane_receipt']).is_file(): raise ValueError('Recovery has not passed its authentication gate')
         _verify_activation(receipt_path, value)
         _reconcile_known_success(value)
-        pipeline._ledger(value).recover()
+        pipeline._ledger(value).recover(job_id=value['original_job_id'])
         state = lane.status(value['raw_lane_receipt'], output)
         return _accounting(value, state, output)
 

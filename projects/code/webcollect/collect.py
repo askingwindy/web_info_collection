@@ -29,7 +29,7 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
     """
     protection={'protected_selectors':protected_selectors} if protected_selectors else {}
     started=time.monotonic()
-    timing={'policy':'complete-full-refresh','started_at':now(),'attempt_limit':3,
+    timing={'policy':'complete-full-refresh','started_at':now(),'attempt_limit':2,
             'timeout_seconds':12,'quiet_window_ms':1000,'retry_wait_ms':250,
             'natural_wait_requested_ms':0,'natural_wait_observed_ms':0.0,'attempts':[]}
 
@@ -54,16 +54,16 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
                 'image_path':str(image),'image_sha256':hashlib.sha256(observation['png']).hexdigest()}
 
     async def refresh():
-        for number in range(1,4):
+        for number in range(1,3):
             attempt={'attempt':number,'started_at':now()};timing['attempts'].append(attempt)
             try:
-                observation=await capture(page,selector,index,assertions=assertions,**protection)
+                observation=await capture(page,selector,index,retries=1,assertions=assertions,**protection)
             except EvidenceStale as error:
                 from .batch_core import save_json
                 folder=Path(evidence)/'terminal_candidates';folder.mkdir(exist_ok=True)
                 save_json(folder/('capture-rejection-'+str(number)+'.json'),{'diagnostic_only':True,
                     'action_executed':False,'capture':getattr(error,'capture',None)})
-                if number==3:raise
+                if number==2:raise
                 await natural_wait(250)
                 continue
             attempt['screenshot_sha256']=observation['capture']['screenshot_sha256']
@@ -76,11 +76,11 @@ async def capture_complete(page, evidence, selector=None, index=0, assertions=No
                 raise
             await natural_wait(1000)
             try:
-                preflight=await verify_execution_state(page,observation['state'],selector,index,assertions=assertions,**protection)
+                preflight=await verify_execution_state(page,observation['state'],selector,index,retries=0,assertions=assertions,**protection)
             except EvidenceStale as error:
                 attempt.update(status='stale_rejected',reason=str(error),finished_at=now(),rejection=getattr(error,'capture',None))
                 attempt['diagnostic']=reject_candidate(number,observation,attempt)
-                if number==3:raise
+                if number==2:raise
                 await natural_wait(250)
                 continue
             attempt.update(status='accepted',state_preflight=preflight,finished_at=now())
@@ -101,24 +101,25 @@ async def capture_before_action(page, evidence, selector=None, index=0, *, inclu
     """One total caller-controlled deadline for capture and verification; no actions."""
     started=time.monotonic()
     budget=float(options.pop('timeout',12))
+    options.pop('retries', None)
     if budget <= 0:raise ValueError('Action evidence timeout must be positive')
     timing={'timeout_seconds':budget,'stage':'capture','attempts':[],
             'action_executed':False,'started_at':time.time()}
     def remaining():return max(.001,budget-(time.monotonic()-started))
     async def bounded_refresh():
-        for number in range(1,4):
+        for number in range(1,3):
             observation=None
             attempt={'attempt':number};timing['attempts'].append(attempt)
             try:
                 timing['stage']='capture';phase=time.monotonic()
-                try:observation=await capture(page,selector,index,timeout=remaining(),**options)
+                try:observation=await capture(page,selector,index,retries=1,timeout=remaining(),**options)
                 finally:attempt['capture_seconds']=time.monotonic()-phase
                 if include_html:
                     # Read the already-required HTML before the final preflight;
                     # the caller can then dispatch without another browser await.
                     observation['html']=await page.content()
                 timing['stage']='verify_execution_state';phase=time.monotonic()
-                try:observation['action_state_preflight']=await verify_execution_state(page,observation['state'],selector,index,timeout=remaining(),**options)
+                try:observation['action_state_preflight']=await verify_execution_state(page,observation['state'],selector,index,retries=0,timeout=remaining(),**options)
                 finally:attempt['verification_seconds']=time.monotonic()-phase
                 return observation
             except EvidenceStale as error:
@@ -132,7 +133,7 @@ async def capture_before_action(page, evidence, selector=None, index=0, *, inclu
                     'state':observation['state'] if observation else None})
                 if observation:
                     with (folder/(name+'.png')).open('xb') as stream:stream.write(observation['png'])
-                if number==3:raise
+                if number==2:raise
                 timing['stage']='stale_retry_wait'
                 await asyncio.sleep(.25)
     try:

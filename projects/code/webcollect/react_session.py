@@ -446,6 +446,10 @@ class ReactSession(RawSessionCore):
             prompt = self._prompt()
         except ValueError as error:
             raise ReactStop('blocked', str(error), 'program') from error
+        if self.host_limits and '_dispatch_deadline' not in prompt:
+            # 策略1非计划分支同样执行会话软时限：软时限后不再发起新的模型请求。
+            prompt['_dispatch_deadline'] = (self.host_limits['started_monotonic']
+                                            + self.host_limits['soft_seconds'])
         self._last_model_intent=self.event('model-intent', prompt=self._strip_prompt(prompt))
         self._consume('max_decisions')
         if not self.native:
@@ -753,7 +757,8 @@ def _legacy_chooser(ledger, task, attempt_id, *, parent_job=None):
             if gateway is None:
                 gateway = ModelGateway(ledger)
             response = await asyncio.to_thread(gateway.call, job, REACT_VERSION,
-                _json.dumps(prompt, ensure_ascii=False), REACT_DECISION,
+                _json.dumps({k: v for k, v in prompt.items() if k != '_dispatch_deadline'},
+                            ensure_ascii=False), REACT_DECISION,
                 images=list(dict.fromkeys(images)), attempts=3,
                 output_limit=min(4096,ledger.config['model']['max_completion_tokens']),
                 tools=[decision_tool], tool_choice={'type': 'function',

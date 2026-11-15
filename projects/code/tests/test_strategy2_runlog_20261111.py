@@ -226,7 +226,9 @@ class OfflineSurface:
 class FakePage:
     def __init__(self, surface):
         self.surface = surface
-        self.context = type('Ctx', (), {'pages': []})()
+        self.context = type('Ctx', (), {'pages': [],
+            'on': lambda self, event, callback: None,
+            'remove_listener': lambda self, event, callback: None})()
         self.context.pages = [self]
 
     @property
@@ -520,6 +522,16 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertEqual(original['state'], 'unknown')
         self.assertEqual(finished[0]['requestId'], original['id'])
         self.assertIsNone(finished[0]['inputTokens'])
+        # A new explicit job must not recover an unrelated historical lease.
+        with ledger.transaction() as con:
+            con.execute('UPDATE jobs SET lease=0 WHERE id=?', (job['id'],))
+        retained_job = ledger.get(job['id'])
+        fresh_id = ledger.enqueue('test', {'new_unrelated_job': True})
+        self.assertIsNotNone(ledger.claim('test', job_id=fresh_id))
+        self.assertEqual(ledger.get(job['id']), retained_job)
+        with ledger.connect() as con:
+            retained_request = dict(con.execute('SELECT * FROM model_requests WHERE id=?', (original['id'],)).fetchone())
+        self.assertEqual(retained_request, original)
 
     def test_invalid_response_still_records_its_usage(self):
         from webcollect.screenshot_plan import decision_tools, normalize_decision
@@ -538,7 +550,8 @@ class GatewayRunlogTests(unittest.TestCase):
                 self.f.response(self.f.message(name='plan_decision', arguments=json.dumps(original_arguments)))
             else:
                 payload = json.loads(request.data)
-                self.assertEqual(payload['tool_choice'], 'auto')
+                self.assertEqual(payload['tool_choice'],
+                                 {'type': 'function', 'function': {'name': 'repair_tool_arguments'}})
                 self.assertEqual(len(payload['tools']), 1)
                 self.assertEqual(payload['tools'][0]['function']['name'], 'repair_tool_arguments')
                 self.assertEqual(list(payload['tools'][0]['function']['parameters']['properties']), ['field_0'])
@@ -581,8 +594,8 @@ class GatewayRunlogTests(unittest.TestCase):
         from webcollect.screenshot_plan import submit_plan_schema, decision_schema
         from webcollect.model_gateway import schema_errors_feedback
         multi = {'goal': '读取两项正文', 'final_presentation_step': 1,
-            'requirements': [{'id': f'r{index}', 'kind': 'content', 'description': f'正文{index}',
-                              'evidence_route': {'observation_steps': [1]}} for index in range(2)],
+            'requirements': [{'id': f'r{index}', 'kind': 'content', 'description': f'正文{index}'}
+                             for index in range(2)],
             'steps': [{'action': 'click', 'target': {'text': '正文'}, 'purpose': f'打开正文{index}',
                        'rationale': '正文入口可见', 'expected_result': '正文进入视口'} for index in range(5)]}
         multi_schema = submit_plan_schema(['click'])
@@ -590,9 +603,9 @@ class GatewayRunlogTests(unittest.TestCase):
         multi_repair = field_repair_plan(multi_errors[0], multi, multi_schema, 'submit_plan',
                                          validation_errors=multi_errors)
         self.assertEqual(multi_repair['paths'], [
-            ['requirements', 0, 'evidence_route', 'source_type'],
-            ['requirements', 1, 'evidence_route', 'source_type']])
-        merged = merge_field_repair(multi_repair, {'field_0': 'page_content', 'field_1': 'page_content'})
+            ['requirements', 0, 'evidence_scope'],
+            ['requirements', 1, 'evidence_scope']])
+        merged = merge_field_repair(multi_repair, {'field_0': 'current', 'field_1': 'current'})
         Draft202012Validator(multi_schema).validate(merged)
         # continue携带替换计划是独立语义错误；反馈必须同时指出它和具体缺失target，
         # 不能先做一个注定仍失败的局部补丁，也不能只回传整段False schema。
@@ -638,6 +651,108 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertEqual(active_repair['paths'], [['remaining_plan', 1, 'target']])
         with self.assertRaises(ValidationError):
             merge_field_repair(active_repair, {'field_0': {'control': None}})
+
+        self.f.opener.open = original_open
+
+        # F output_exhausted/refused分别处理：length不执行截断参数，只允许
+        # 一次紧凑重提（实质变化），第二笔仍失败则有界结束，无第三笔请求；
+        # refused有界结束不重发。
+        self.serial += 1
+        ledger2, job2, gateway2, _ = self._gateway()
+        self.f.opener.raw = {'id': 'offline-length', 'model': 'offline-model-version',
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 50,
+                      'prompt_tokens_details': {'cached_tokens': 0}},
+            'choices': [{'finish_reason': 'length', 'message': {'content': '{"answer": 4'}}]}
+        before_length_calls = len(self.f.opener.calls)
+        material = {'goal': '保留目标', 'inputs': {'title': '原值', 'n': 7},
+                    'depends_on': [1], 'evidence': ['frame-1'],
+                    'facts': list(range(80))}
+        padded_tools = deepcopy(self.f.tools)
+        padded_tools[0]['function']['parameters']['title'] = 'annotation ' * 100
+        padded_system = 'trusted policy' + '\n' * 1000 + 'preserve evidence'
+        def compact_call(gateway, job, **kw):
+            return gateway.call_tool(job, 'tools', json.dumps(material, indent=40), padded_tools,
+                system=padded_system, reasoning_effort='low', attempts=5, attempt_id='claim-1', **kw)
+        with self.assertRaises(ValueError):
+            compact_call(gateway2, job2)
+        self.assertEqual(len(self.f.opener.calls) - before_length_calls, 2)
+        correction_payload = json.loads(self.f.opener.calls[before_length_calls + 1].data.decode())
+        self.assertIn('紧凑', correction_payload['messages'][-1]['content'][-1]['text'])
+        first_payload = json.loads(self.f.opener.calls[before_length_calls].data)
+        self.assertLess(len(self.f.opener.calls[before_length_calls + 1].data),
+                        len(self.f.opener.calls[before_length_calls].data))
+        self.assertEqual(json.loads(correction_payload['messages'][-1]['content'][0]['text']), material)
+        self.assertLess(len(correction_payload['messages'][0]['content']), len(first_payload['messages'][0]['content']))
+        self.assertNotIn('title', correction_payload['tools'][0]['function']['parameters'])
+        from webcollect.model_gateway import compact_retry_context
+        annotated = deepcopy(padded_tools)
+        annotated_schema = annotated[0]['function']['parameters']
+        annotated_schema['properties']['title'] = {'const': {'title': 'literal'},
+                                                   'default': {'$comment': 'literal'}}
+        immutable_image={'type':'image_url','image_url':{'url':'data:image/png;base64,'+'A'*100000}}
+        _, cleaned_parts, cleaned = compact_retry_context(padded_system,
+            [{'type': 'text', 'text': json.dumps(material, indent=40)},immutable_image], annotated)
+        self.assertEqual(cleaned_parts[-1],immutable_image)
+        self.assertEqual(cleaned[0]['function']['parameters']['properties']['title'],
+                         annotated_schema['properties']['title'])
+        with ledger2.connect() as con:
+            settled = [json.loads(row[0]) for row in
+                       con.execute('SELECT response FROM model_requests ORDER BY rowid')]
+        self.assertEqual([row['failure_diagnostic']['source'] for row in settled],
+                         ['output_exhausted', 'output_exhausted'])
+        # Already compact input cannot authorize a second paid length request.
+        _, compact_job, compact_gateway, _ = self._gateway()
+        before = len(self.f.opener.calls)
+        with self.assertRaisesRegex(ValueError, 'no lossless compact'):
+            self.f.call(compact_gateway, compact_job, attempts=5, attempt_id='claim-1')
+        self.assertEqual(len(self.f.opener.calls) - before, 1)
+        # Different failure kinds still share the same two-request decision budget;
+        # no plan normalizer is installed in either direction.
+        for finishes in (('length', 'tool_calls'), ('tool_calls', 'length')):
+            mixed_ledger, _, mixed_gateway, _ = self._gateway()
+            mixed_job = mixed_ledger.claim('collection', job_id=mixed_ledger.enqueue('collection', {'offline': True}))
+            before = len(self.f.opener.calls)
+            def mixed_open(request, timeout):
+                index = len(self.f.opener.calls) - before
+                finish = finishes[min(index, 1)]
+                self.f.opener.raw['choices'] = [{'finish_reason': finish,
+                    'message': ({'content': '{'} if finish == 'length' else
+                                self.f.message(arguments='{"answer":"invalid"}'))}]
+                return original_open(request, timeout)
+            self.f.opener.open = mixed_open
+            with self.assertRaises(ValueError):
+                compact_call(mixed_gateway, mixed_job)
+            self.assertEqual(len(self.f.opener.calls) - before, 2)
+        self.f.opener.open = original_open
+        # The 40-call gate is inside each reservation, including a correction
+        # after the 40th call returned a settled schema failure.
+        from webcollect.batch_core import SessionGLMCallLimit
+        cap_ledger, _, cap_gateway, _ = self._gateway()
+        cap_job = cap_ledger.claim('collection', job_id=cap_ledger.enqueue('collection', {'offline': True}))
+        for index in range(39):
+            request = cap_ledger.reserve_request(cap_job, 'seed-' + str(index), 0,
+                request_json={'protocol': 'native-tools', 'http_dispatch': True,
+                              'dispatch_attempt_id': 'claim-1', 'dispatch_max_requests': 40})
+            cap_ledger.settle_request(request['id'], state='invalid_response',
+                usage={'input_tokens': 1, 'output_tokens': 1, 'cached_input_tokens': 0}, response={})
+        self.f.response(self.f.message(arguments='{"answer":"invalid"}'))
+        before = len(self.f.opener.calls)
+        with self.assertRaises(SessionGLMCallLimit):
+            self.f.call(cap_gateway, cap_job, attempts=5, attempt_id='claim-1')
+        self.assertEqual(len(self.f.opener.calls) - before, 1)
+        with cap_ledger.connect() as con:
+            self.assertEqual(cap_ledger.session_http_usage(con, 'claim-1')['used'], 40)
+        self.serial += 1
+        _ledger3, job3, gateway3, _ = self._gateway()
+        self.f.opener.raw = {'id': 'offline-refused', 'model': 'offline-model-version',
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 5,
+                      'prompt_tokens_details': {'cached_tokens': 0}},
+            'choices': [{'finish_reason': 'stop',
+                         'message': {'content': '不能协助该请求', 'refusal': 'content policy'}}]}
+        before_refused_calls = len(self.f.opener.calls)
+        with self.assertRaises(ValueError):
+            self.f.call(gateway3, job3, attempts=2, attempt_id='claim-1')
+        self.assertEqual(len(self.f.opener.calls) - before_refused_calls, 1)
 
     def test_debug_level_records_sanitized_wire_in_and_out(self):
         _, job, gateway, runlog = self._gateway(level='DEBUG')
@@ -706,7 +821,11 @@ class ChooserRunlogTests(SessionHarness):
                                endpoint='https://provider.invalid/chat/completions',
                                api_key_env='WEBCOLLECT_OFFLINE_TEST_KEY', reserve_cost_micros=100_000,
                                supports_vision=True, image_tokens_per_image=1200,
-                               request_overhead_tokens=128)
+                               request_overhead_tokens=128,reasoning_effort='low')
+        self.task['fragment']['reasoning_effort_profile']={'first_plan':'high','branch':'max'}
+        self.task['workflow_proposal']['spec']['reasoning_effort_profile']={'first_plan':'high','branch':'max'}
+        self.task['task_id']='react-'+object_sha256({'url':self.task['initial_url'],
+            'spec':self.task['workflow_proposal']['spec']})[:24]
         ledger = BatchLedger(self.root / 'chooser.sqlite3', config, initialize=True)
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                             level='DEBUG', claim_id='claim-1')
@@ -714,9 +833,11 @@ class ChooserRunlogTests(SessionHarness):
                 'final_presentation_step': 6,
                 'requirements': [
                     {'id': f'i{i}', 'kind': 'input', 'description': f'{label}设为{value}',
-                     'target': {'text': label}, 'expected_value': value,
-                     'evidence_route': {'source_type': 'input_state', 'observation_steps': [pos]}}
-                    for i, label, value, pos in [(0, '数量', '20', 3), (1, '成本', '60', 6)]],
+                     'target': {'text': label}, 'expected_value': value, 'evidence_scope': 'current',
+                     'acceptance': {'mode': 'presence', 'subject': label, 'source_quote': f'{label}为{value}'}}
+                    for i, label, value, pos in [(0, '数量', '20', 3), (1, '成本', '60', 6)]]
+                + [{'id': 'r0', 'kind': 'result', 'description': '核对修改后的两个输入值',
+                    'acceptance': {'mode': 'presence', 'subject': '输入值', 'source_quote': '核对输入值'}}],
                 'steps': []}
         for label, value in [('数量', '20'), ('成本', '60')]:
             for action, extra, purpose in [
@@ -744,6 +865,7 @@ class ChooserRunlogTests(SessionHarness):
             self.assertIsNone(prompt['goal'])
             self.assertIn('goal', prompt['tools'][0]['function']['parameters']['allOf'][0]['else']['required'])
             await session._first_plan_round()
+        self.assertEqual(json.loads(self.opener.calls[0].data)['reasoning_effort'],'high')
         self.assertIsNone(session.initial_feedback)
         self.assertEqual(session.frozen_goal, plan['goal'])
         self.assertEqual(len(session.plan['steps']), 6)
@@ -789,6 +911,10 @@ class ChooserRunlogTests(SessionHarness):
         self.assertEqual(fixed.frozen_goal, fixed_goal)
         self.assertEqual(fixed._branch_prompt('checkpoint')['goal'], fixed_goal)
         self.assertEqual(fixed.actual_dispatches, 0)
+        self.opener.raw['choices'][0]['message']['tool_calls'][0]['function'].update(
+            name='plan_decision',arguments=json.dumps({'decision':'continue','reason':'继续既定必要步骤'}))
+        await choose(fixed._branch_prompt('checkpoint'))
+        self.assertEqual(json.loads(self.opener.calls[-1].data)['reasoning_effort'],'max')
 
 
 class ScreenshotSessionRunlogTests(SessionHarness):
@@ -857,6 +983,8 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         return {'goal': '修改数量为20并查看本次利润率结果',
                 'requirements': [
                     {'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果',
+                     'evidence_scope': 'current',
+                     'acceptance': {'mode': 'presence', 'subject': '利润率结果', 'source_quote': '查看本次利润率结果'},
                      'evidence_route': {'source_type': 'page_result', 'observation_steps': [8]}}],
                 'final_presentation_step': 8, 'steps': steps}
 
@@ -1023,17 +1151,16 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                             claim_id='claim-1', attempt_id=self.attempt_id)
 
+        entered = asyncio.Event()
+
         async def choose(prompt):
-            if prompt.get('phase') == 'first':
-                return {'name': 'submit_plan', 'arguments': self._plan(),
-                        'tool_call_id': 'first', 'assistant_message': {'role': 'assistant'},
-                        'request_id': 'mock'}
-            await asyncio.sleep(30)
+            entered.set()
+            await asyncio.Future()
             raise AssertionError('unreachable')
 
         session, evidence = self._session('cancelled', choose, runlog=runlog)
         task = asyncio.ensure_future(session.run())
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(entered.wait(), timeout=5)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task

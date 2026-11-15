@@ -10,7 +10,8 @@ def terminal_proof(task, records, final_binding):
         raise ValueError('Controlled fragment requires 5-8 actual actions and saved ending')
     if 'candidate_binding' in task:
         from .candidate_navigation import verify_path
-        verify_path(task, [r['state'] for r in records], [r['operation'] for r in records])
+        verify_path(task, [r['state'] for r in records], [r['operation'] for r in records],
+                    proofs=[r.get('popup_provenance') or r.get('http_navigation') for r in records])
     seen = set()
     for raw in actions:
         if not raw.get('ended_at') or raw.get('execution_error'):

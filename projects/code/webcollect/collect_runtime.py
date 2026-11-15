@@ -4,6 +4,7 @@ An interrupted browser trajectory is retained as a failed attempt. Resume never
 stitches it to another session or reuses its allocated sample ID.
 """
 import asyncio
+import time
 import threading
 from contextlib import asynccontextmanager
 import hashlib
@@ -35,8 +36,14 @@ def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
     if isinstance(error, CollectionFailure):
         return error.failure_class
-    if isinstance(error, sqlite3.OperationalError):
+    if getattr(error, 'evidence_classification', None) is not None:
+        # Missing/changed host-side feedback bytes are not model semantics.
         return 'program'
+    if isinstance(error, sqlite3.OperationalError):
+        # A registry read that still timed out after its bounded busy wait is
+        # a transient conflict, not a deterministic engineering fault.
+        from .registry_db import is_locked
+        return 'transient' if is_locked(error) else 'program'
     from .agent_controller import ControllerStop
     if isinstance(error, ControllerStop):
         return {'UNRESOLVED':'interrupted', 'DUPLICATE':'duplicate', 'EXECUTION_FAILED':'model',
@@ -391,6 +398,56 @@ def react_close_event(store, attempt, kind, now, payload):
                      task_key=attempt['task_key'], attempt_id=attempt['attempt_id'])
 
 
+async def _run_owned_session(session, host_limits):
+    """The watchdog owns its session task through cancellation and raw close."""
+    if not host_limits:
+        return await session.run()
+    run_task = asyncio.create_task(session.run())
+    try:
+        remaining = host_limits['hard_seconds'] - (time.monotonic() - host_limits['started_monotonic'])
+        done, _ = await asyncio.wait({run_task}, timeout=max(0.0, remaining))
+        if not done:
+            run_task.cancel('consumer_session_hard_deadline')
+            # The hard cutoff cannot await a session that suppresses cancellation.
+            # Use the same bounded drain as an external/user cancellation.
+            raise asyncio.CancelledError('consumer_session_hard_deadline')
+        return await run_task
+    except asyncio.CancelledError as cancel_error:
+        # asyncio.wait does not propagate parent cancellation to its children.
+        # Drain our own session before the caller snapshots its raw receipt into
+        # the attempt outcome. Awaiting run_task may already have cancelled it.
+        if not run_task.done() and not run_task.cancelling():
+            run_task.cancel()
+        grace = max(0.0, host_limits['hard_seconds'] - host_limits['soft_seconds'])
+        remaining = host_limits['hard_seconds'] - (time.monotonic() - host_limits['started_monotonic'])
+        join_seconds = max(0.0, min(10.0, grace, remaining))
+        done, _ = await asyncio.wait({run_task}, timeout=join_seconds)
+        diagnostic = None
+        if not done:
+            diagnostic = ('session-cancel-closeout-timeout.json',
+                {'attempt_id': session.attempt_id, 'join_limit_seconds': join_seconds,
+                 'session_still_pending': True, 'raw_receipt_present': bool(getattr(session, '_raw_receipt', None)),
+                 'not_business_success_evidence': True})
+        else:
+            try:
+                run_task.result()
+            except asyncio.CancelledError:
+                pass
+            except BaseException as close_error:
+                diagnostic = ('session-cancel-closeout-error.json',
+                    {'attempt_id': session.attempt_id, 'error_type': type(close_error).__name__,
+                     'error': str(close_error), 'not_business_success_evidence': True})
+        if diagnostic:
+            try:
+                write_json(session.root.parent / diagnostic[0], diagnostic[1])
+            except Exception as diagnostic_error:
+                cancel_error.add_note('cancel closeout diagnostic failed: '
+                    + type(diagnostic_error).__name__ + ': ' + str(diagnostic_error))
+
+
+        raise
+
+
 async def _react_collection(context, task, attempt, sample, evidence, output, store, *,
                             ledger, parent_job, registry, manifest, index, navigation=None,
                             page=None, entry_observation=None, host_limits=None, runlog=None):
@@ -426,14 +483,12 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     meter_identity = {'attempt_id': attempt['attempt_id'], 'sample_id': attempt['sample_id']}
     entry_host = verify_public_url(task['initial_url'])
     allowed_hosts = {verify_public_url(task['site_uri']), entry_host, *task.get('allowed_hosts', [])}
+    session = None
     def url_check(url):
-        if 'candidate_binding' in task:
-            from .candidate_contract import same_application, guard_claim
-            guard_claim(task)
-            if not same_application(task, url):
-                raise ValueError('Candidate navigation left the evidence-backed application')
-        else:
-            verify_public_url(url, allowed_hosts)
+        # candidate_navigation是唯一导航许可判定入口：首帧、派发前、落地后
+        # 与封存共用同一规则（E）。
+        from .candidate_navigation import check_url
+        check_url(task, url, allowed_hosts, page_urls=session.page_urls if session is not None else None)
         require_public_task_state({'url': url})
     def frame_guard(ref):
         from .planning import verify_evidence
@@ -471,8 +526,25 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
         phase_ledger=phase_ledger, host_limits=host_limits,
         **({'entry_observation': entry_observation} if entry_observation is not None else {}),
         **({'runlog': runlog} if screenshot_strategy(task) else {}))
-    with telemetry_phase(phase_ledger, 'react_session_run', scope=meter_identity):
-        summary = await session.run()
+    # 会话软时限由session/网关在内部执行（停止新增业务动作与模型请求）；
+    # 硬时限=软时限+收尾宽限，到点取消封存收尾，未决请求保留UNKNOWN。
+
+    hard_deadline_hit = False
+    try:
+        with telemetry_phase(phase_ledger, 'react_session_run', scope=meter_identity):
+            summary = await _run_owned_session(session, host_limits)
+    except asyncio.CancelledError as error:
+        if error.args and error.args[0] == 'consumer_session_hard_deadline':
+            # 宽限期内仍未收尾：有界结束并按interrupted/unknown收账；用户停止
+            # （无该标记）原样上抛。
+            hard_deadline_hit = True
+            summary = {'host_failure': True, 'stop_reason': 'blocked', 'stop_summary':
+                       'consumer_session_hard_deadline', 'unknown': True,
+                       'failure_class': 'interrupted', 'raw_receipt': None}
+            if getattr(session, '_raw_receipt', None) is not None:
+                summary = session._strategy_summary(session._raw_receipt)
+        else:
+            raise
     raw_receipt = summary['raw_receipt']
     stop_data = {'stop_details': summary['stop_details']} if 'stop_details' in summary else {}
     def _event_now():
@@ -497,7 +569,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                                                        'rejected', root_cause)
             await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'],
                 'rejected', failure_class=failure_class, root_cause=root_cause,
-                evidence=_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence])
+                evidence=[ref for ref in (_evidence(failure) + [feedback_ref, raw_receipt, *extra_evidence]) if ref])
         except Exception as error:
             if not screenshot_strategy(task):
                 raise
@@ -532,6 +604,10 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt,
                 **({'strategy_result': final_result} if final_result else {}),
                 **stop_data}
+    if hard_deadline_hit:
+        # 宽限期耗尽的有界结束：按interrupted/unknown结算，未决请求保留UNKNOWN。
+        return await finish_failure('interrupted', 'consumer_session_hard_deadline',
+                                    strategy_save_status='not_saved', strategy_eligibility='unresolved')
     ending=summary.get('collection_ending')
     prefix_end=None
     verified_session=None
@@ -1091,7 +1167,9 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             try:
                                 await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                                     'rejected', failure_class='interrupted', root_cause='runner_cancelled',
-                                    evidence=_evidence(failure))
+                                    evidence=_evidence(failure) + (
+                                        _evidence(evidence / 'raw' / 'raw-receipt.json')
+                                        if (evidence / 'raw' / 'raw-receipt.json').is_file() else []))
                             except ValueError as cancellation_error:
                                 if not str(cancellation_error).startswith(('worker/lease fencing不匹配',
                                         '租约已过期', 'attempt已结束', '已终结attempt不可覆盖')):
@@ -1110,7 +1188,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         raise
                     except Exception as error:
                         if isinstance(error, sqlite3.OperationalError) and runlog is not None:
-                            runlog.info('failed', failureClass='program',
+                            runlog.info('failed', failureClass=classify_failure(error),
                                 errorType=type(error).__name__, rootCause=_root_cause(error))
                         # If success already committed, never reinterpret it as a failed attempt.
                         committed = next(row for row in store.attempt_ledger()['attempts']

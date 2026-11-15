@@ -28,7 +28,8 @@ class BudgetStop(ValueError):
 
 class SessionGLMCallLimit(BudgetStop):
     code = 'glm_session_call_limit'
-    limit = 25
+    # 会话实际模型HTTP请求上限（含修复与补证），对消费者会话同样生效。
+    limit = 40
 
     def __init__(self, attempt_id, used):
         self.details = {'code': self.code, 'attempt_id': attempt_id, 'used': used, 'limit': self.limit}
@@ -100,11 +101,21 @@ def validate_config(value, *, credentials=False, require_model=False):
     import os
     from urllib.parse import urlsplit
     if (not isinstance(value, dict) or not {'run_id', 'mode', 'budget', 'model'} <= set(value)
-            or set(value) - {'schema_version', 'run_id', 'mode', 'budget', 'model', 'site_failure_guard'}):
+            or set(value) - {'schema_version', 'run_id', 'mode', 'budget', 'model', 'site_failure_guard', 'session_limits'}):
         raise ValueError('Expected exact batch-config fields')
     if 'site_failure_guard' in value:
         from .site_failure_stop import validate_binding
         validate_binding(value['site_failure_guard'])
+    if 'session_limits' in value:
+        # 一次解析有效配置：会话软时限/收尾宽限在此冻结，chooser、gateway、
+        # boundary与日志共用同一份；缺省用工程默认（1800s软时限+120s宽限）。
+        limits = value['session_limits']
+        if (not isinstance(limits, dict)
+                or set(limits) - {'soft_seconds', 'closeout_grace_seconds'}
+                or any(type(v) is not int or v < 1 for v in limits.values())):
+            raise ValueError('session_limits requires positive integer soft_seconds/closeout_grace_seconds')
+        if limits.get('soft_seconds', 1800) < 1 or limits.get('closeout_grace_seconds', 120) < 1:
+            raise ValueError('session_limits values must be positive')
     if value.get('schema_version') not in (None, 'batch-config', 'webcollect-batch-config-1') or value['mode'] not in ('real', 'synthetic'):
         raise ValueError('Invalid batch schema/mode')
     if not isinstance(value['run_id'], str) or not value['run_id'].strip():
@@ -392,27 +403,57 @@ class BatchLedger:
                         (identity, kind, canonical(payload), time.time(), time.time()))
         return identity
 
-    def recover(self):
-        with self.transaction() as con:
-            rows = con.execute("SELECT * FROM jobs WHERE state='running' AND lease<?", (time.time(),)).fetchall()
-            for row in rows:
-                unknown = con.execute("SELECT id FROM model_requests WHERE job_id=? AND state='reserved'", (row['id'],)).fetchall()
-                con.execute("UPDATE model_requests SET state='unknown',error='lease_expired_after_dispatch' WHERE job_id=? AND state='reserved'", (row['id'],))
-                if con.execute("SELECT 1 FROM sqlite_master WHERE name='top_level_visits'").fetchone():
-                    con.execute("UPDATE top_level_visits SET state='unknown',error_type='LeaseExpired',error_message='Dispatch reservation survived worker interruption; counted conservatively' WHERE job_id=? AND state='reserved_for_dispatch'",(row['id'],))
-                con.execute('UPDATE jobs SET state=?,owner=NULL,lease=NULL,error=?,updated=? WHERE id=?',
-                            ('review_required' if unknown or row['kind'] in ('collection','frozen-plan') else 'queued',
-                             'Expired lease; unknown charge/collection side effects require reconciliation' if unknown or row['kind'] in ('collection','frozen-plan') else None,
-                             time.time(), row['id']))
-                self.event(con, 'lease_expired', {'job_id': row['id'], 'unknown_requests': len(unknown)})
+    def _recover_expired(self, con, *, job_id=None, kind=None):
+        """Recover only the selected scope while holding the claim/write lock."""
+        query = "SELECT * FROM jobs WHERE state='running' AND lease<?"
+        params = [time.time()]
+        if job_id is not None:
+            query += ' AND id=?'; params.append(job_id)
+        if kind is not None:
+            query += ' AND kind=?'; params.append(kind)
+        rows = con.execute(query, params).fetchall()
+        has_visits = con.execute("SELECT 1 FROM sqlite_master WHERE name='top_level_visits'").fetchone()
+        for row in rows:
+            unknown = con.execute("SELECT id FROM model_requests WHERE job_id=? AND state IN ('reserved','unknown')", (row['id'],)).fetchall()
+            con.execute("UPDATE model_requests SET state='unknown',error='lease_expired_after_dispatch' WHERE job_id=? AND state='reserved'", (row['id'],))
+            unknown_visit = False
+            if has_visits:
+                unknown_visit = bool(con.execute("SELECT 1 FROM top_level_visits WHERE job_id=? AND state IN ('reserved_for_dispatch','unknown') LIMIT 1", (row['id'],)).fetchone())
+                con.execute("UPDATE top_level_visits SET state='unknown',error_type='LeaseExpired',error_message='Dispatch reservation survived worker interruption; counted conservatively' WHERE job_id=? AND state='reserved_for_dispatch'", (row['id'],))
+            review = bool(unknown or unknown_visit or row['kind'] in ('collection','frozen-plan'))
+            con.execute('UPDATE jobs SET state=?,owner=NULL,lease=NULL,error=?,updated=? WHERE id=?',
+                        ('review_required' if review else 'queued',
+                         'Expired lease; unknown charge/collection side effects require reconciliation' if review else None,
+                         time.time(), row['id']))
+            self.event(con, 'lease_expired', {'job_id': row['id'], 'unknown_requests': len(unknown)})
         return len(rows)
 
-    def claim(self, kind, *, job_id=None, domain=None, parent_job=None):
-        self.recover()
+    def recover(self, *, job_id=None):
+        """Explicit reconciliation; without job_id this is ledger-wide management.
+
+        Ordinary claims never invoke ledger-wide recovery. A caller recovering
+        one retained job must pass its exact identity.
+        """
         with self.transaction() as con:
+            return self._recover_expired(con, job_id=job_id)
+
+    def claim(self, kind, *, job_id=None, domain=None, parent_job=None):
+        with self.transaction() as con:
+            if parent_job is not None:
+                self._owned(con, parent_job)
+                if kind not in ('fragment-decision','react-decision','react-native-decision') or parent_job['kind'] != 'collection':
+                    raise ValueError('Only a bound collection decision may share its parent slot')
+                requested = con.execute('SELECT payload FROM jobs WHERE id=? AND kind=?', (job_id, kind)).fetchone()
+                if requested is not None and json.loads(requested['payload']).get('parent_job_id') != parent_job['id']:
+                    raise ValueError('Only a bound collection decision may share its parent slot')
+            # Only an explicitly requested identity authorizes expiry recovery.
+            # Queue claims select queued work; historical running jobs belong to
+            # an explicit recovery operation, even when they share this kind.
+            if job_id is not None:
+                self._recover_expired(con, job_id=job_id, kind=kind)
             query = "SELECT * FROM jobs WHERE kind=? AND state='queued'"
             params = [kind]
-            if job_id:
+            if job_id is not None:
                 query += ' AND id=?'; params.append(job_id)
             row = con.execute(query + ' ORDER BY created,id LIMIT 1', params).fetchone()
             if not row:
@@ -442,6 +483,9 @@ class BatchLedger:
             con.execute('CREATE TABLE IF NOT EXISTS job_parents ('
                         'job_id TEXT PRIMARY KEY REFERENCES jobs(id), parent_id TEXT NOT NULL REFERENCES jobs(id), '
                         'parent_owner TEXT NOT NULL)')
+            prior_parent = con.execute('SELECT parent_id,parent_owner FROM job_parents WHERE job_id=?', (row['id'],)).fetchone()
+            if prior_parent is not None and (parent_job is None or tuple(prior_parent) != (parent_job['id'], parent_job['owner'])):
+                raise ValueError('Retained decision parent binding cannot be replaced')
             if parent_job is not None:
                 self._owned(con,parent_job)
                 if kind not in ('fragment-decision','react-decision','react-native-decision') or parent_job['kind']!='collection' or json.loads(row['payload']).get('parent_job_id')!=parent_job['id']:
@@ -462,7 +506,7 @@ class BatchLedger:
             con.execute("UPDATE jobs SET state='running',owner=?,lease=?,attempts=attempts+1,updated=? WHERE id=?",
                         (owner, time.time() + self.config['budget']['lease_seconds'], time.time(), row['id']))
             if parent_job is not None:
-                con.execute('INSERT INTO job_parents VALUES(?,?,?)',(row['id'],parent_job['id'],parent_job['owner']))
+                con.execute('INSERT OR IGNORE INTO job_parents VALUES(?,?,?)',(row['id'],parent_job['id'],parent_job['owner']))
             self.event(con, 'job_claimed', {'job_id': row['id'], 'kind': kind})
             return {**dict(row), 'payload': json.loads(row['payload']), 'owner': owner}
 
@@ -854,7 +898,7 @@ class BatchLedger:
                 prior = self.session_http_usage(con, session_id)
                 if prior['held']:
                     raise OutcomeUnknown('Original attempt request/decision unresolved; no replacement dispatch')
-                if not consumer and self.real_glm and (react or prior['has_react']) and prior['used'] >= SessionGLMCallLimit.limit:
+                if ((consumer and native_http) or (self.real_glm and (react or prior['has_react']))) and prior['used'] >= SessionGLMCallLimit.limit:
                     unresolved = self.session_http_usage(con, session_id)['unresolved']
                     if unresolved:
                         raise OutcomeUnknown('Original session dispatch unresolved at the GLM call limit: ' + unresolved)

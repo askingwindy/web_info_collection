@@ -85,22 +85,22 @@ def registry_snapshot(registry, *, exclude_scope=None, own_tasks=()):
     """Freeze immutable tasks, not counters/status changed by this same capture."""
     path = Path(registry).resolve()
     _require(path.is_file(), 'existing original registry required')
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
-        con.row_factory = sqlite3.Row
-        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        _require('m4_tasks' in tables, 'original M4 history table missing')
-        columns = {row[1] for row in con.execute('PRAGMA table_info(m4_tasks)')}
-        scope = 'scope_id' if 'scope_id' in columns else 'NULL AS scope_id'
-        campaign = 'campaign_id' if 'campaign_id' in columns else 'NULL AS campaign_id'
-        rows = []
-        for row in con.execute('SELECT ' + scope + ',' + campaign + ',task_json FROM m4_tasks'):
-            task = json.loads(row['task_json'])
-            if exclude_scope and row['scope_id'] == exclude_scope:
-                _require(any(task == own for own in own_tasks), 'resume scope contains an unbound task')
-                continue
-            rows.append({'scope_id': row['scope_id'], 'campaign_id': row['campaign_id'], 'task': task})
+    from .registry_db import history_rows
+    raw_rows, _ = history_rows(path)
+    rows = snapshot_rows(raw_rows, exclude_scope=exclude_scope, own_tasks=own_tasks)
     rows.sort(key=object_sha256)
     return {'registry': str(path), 'rows': rows, 'sha256': object_sha256(rows)}
+
+
+def snapshot_rows(raw_rows, *, exclude_scope=None, own_tasks=()):
+    rows = []
+    for row in raw_rows:
+        task = json.loads(row['task_json'])
+        if exclude_scope and row['scope_id'] == exclude_scope:
+            _require(any(task == own for own in own_tasks), 'resume scope contains an unbound task')
+            continue
+        rows.append({'scope_id': row['scope_id'], 'campaign_id': row['campaign_id'], 'task': task})
+    return rows
 
 
 def context(history_scope, customer_history, registry, *, exclude_scope=None, own_tasks=()):

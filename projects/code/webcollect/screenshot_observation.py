@@ -238,7 +238,7 @@ def region_registry(state, limit=12):
             ranked = dict(owner, native_role=block.get('tag') or owner.get('native_role'))
             candidates.append((ranked, row))
     for e in elements:
-        quote = (e.get('text') or '').strip()
+        quote = (e.get('visible_text') if 'visible_text' in e else e.get('text') or '').strip()
         if (e.get('element_id') in block_ids or e.get('visible') is not True or not e.get('bbox') or incidental(e)
                 or e.get('native_role') in ('input', 'select', 'textarea', 'button')
                 or not quote or len(quote) > 400):

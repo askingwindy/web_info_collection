@@ -5,7 +5,6 @@ Ark reference: https://docs.volcengine.com/docs/ark/chat-api?lang=zh
 Prices/model names are explicit configuration, never inferred from chat access.
 """
 from copy import deepcopy
-from itertools import count
 import base64
 import json
 from pathlib import Path
@@ -23,6 +22,15 @@ from urllib.parse import urlsplit
 from jsonschema import Draft202012Validator
 
 from .batch_core import OutcomeUnknown, ModelRateWait, SessionGLMCallLimit, BudgetStop, CONSUMER_KINDS, _integer, validate_config, file_sha, save_json
+
+
+class ProviderFinishIncomplete(ValueError):
+    """Provider stopped before a complete answer; kind is output_exhausted/refused."""
+
+    def __init__(self, kind, detail=''):
+        super().__init__(kind + (': ' + detail if detail else ''))
+        self.kind = kind
+        self.detail = detail
 from .planning import object_sha256
 from .plan_protocol import WIKI_READING_COMPLETION
 from .runlog import now_iso
@@ -30,6 +38,58 @@ from .runlog import now_iso
 
 QC_TRANSPORT_POLICY = 'qc-wall-deadline-1'
 QC_KINDS = ('ai-visual', 'ai-difference', 'ai-documents')
+
+
+def compact_retry_context(system, parts, tools):
+    """Compress representation only; never select or truncate evidence/inputs.
+
+    JSON strings retain every value (including whitespace inside string values),
+    and schema descriptions, constraints and dependency declarations survive.
+    If the existing representation is already compact, fail closed.
+    """
+    compact_system = re.sub(r'\n[ \t]*\n(?:[ \t]*\n)+', '\n\n', system)
+    compact_parts = deepcopy(parts)
+    for part in compact_parts:
+        if part.get('type') == 'text':
+            try:
+                value = json.loads(part['text'])
+            except (ValueError, TypeError):
+                continue
+            part['text'] = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    def schema_annotations(value):
+        if isinstance(value, list):
+            return [schema_annotations(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        # Property names may literally be title/$comment; preserve those maps.
+        out = deepcopy(value)
+        out.pop('title', None)
+        out.pop('$comment', None)
+        for key in ('properties', '$defs', 'definitions', 'patternProperties', 'dependentSchemas'):
+            if isinstance(out.get(key), dict):
+                out[key] = {name: schema_annotations(item) for name, item in out[key].items()}
+        for key in ('items', 'additionalProperties', 'contains', 'not', 'if', 'then', 'else',
+                    'propertyNames', 'unevaluatedProperties', 'unevaluatedItems'):
+            if isinstance(out.get(key), dict):
+                out[key] = schema_annotations(out[key])
+        for key in ('allOf', 'anyOf', 'oneOf', 'prefixItems'):
+            if isinstance(out.get(key), list):
+                out[key] = [schema_annotations(item) for item in out[key]]
+        return out
+    compact_tools = deepcopy(tools)
+    for tool in compact_tools or []:
+        function = tool.get('function', {})
+        if isinstance(function.get('parameters'), dict):
+            function['parameters'] = schema_annotations(function['parameters'])
+    # Images are immutable required evidence. Their base64 size must not
+    # dilute the meaningful text/schema compression ratio.
+    before = json.dumps([system, [part for part in parts if part.get('type')=='text'], tools], ensure_ascii=False)
+    after = json.dumps([compact_system, [part for part in compact_parts if part.get('type')=='text'], compact_tools], ensure_ascii=False)
+    # Leave room for the short correction instruction and demand a material
+    # reduction; merely shaving a separator cannot justify another paid call.
+    if len(before) - len(after) < max(512, len(before) // 20):
+        raise ValueError('output_exhausted: no lossless compact request available')
+    return compact_system, compact_parts, compact_tools
 
 
 def _qc_resolve_child(channel, host, port):
@@ -791,7 +851,9 @@ class ModelGateway:
                    'plan_normalizer':plan_normalizer}
         return self._call(job, purpose + ':native-tools', text, {'type': 'object'},
                           images=images, attempts=attempts, output_limit=output_limit,
-                          tools=deepcopy(list(tools)), tool_choice='auto',
+                          tools=deepcopy(list(tools)), tool_choice=(
+                              {'type': 'function', 'function': {'name': 'register_evidence'}}
+                              if set(declared) == {'register_evidence'} else 'auto'),
                           synthetic_response=synthetic_response, native_context=context)
 
     def call_message(self, job, purpose, text, schema, *, system, images=(), attempts=1,
@@ -925,7 +987,9 @@ class ModelGateway:
                 raise OutcomeUnknown('Original request unresolved; no credential selection or replacement')
         if self.config['mode'] == 'real':
             session_id = (native_context or {}).get('attempt_id') or job['id']
-            if native_context and self.ledger.real_glm and not consumer:
+            if native_context and self.ledger.real_glm:
+                # 会话实际模型HTTP请求上限（含修复与补证）对消费者会话同样
+                # 生效；未决请求保持UNKNOWN，不因限额自动重发。
                 with self.ledger.connect() as con:
                     prior = self.ledger.session_http_usage(con, session_id)
                 if prior['held']:
@@ -964,7 +1028,9 @@ class ModelGateway:
             else:
                 signature = re.sub(r'\b\d+\b', '#', str(error).splitlines()[0][:350])
             return object_sha256({'type': type(error).__name__, 'error': signature})
-        for attempt in (count() if consumer else range(attempts)):
+        # One decision has at most two HTTP reservations across *all* correction
+        # kinds, including ReAct without a plan normalizer.
+        for attempt in range(2 if consumer else min(attempts, 2)):
             if consumer:
                 self.ledger.heartbeat(job)
             dispatch_policy = (native_context or {}).get('dispatch_policy')
@@ -988,7 +1054,9 @@ class ModelGateway:
                         raise ValueError('Local provider DNS preflight failed before reservation/HTTP dispatch') from None
             while True:
                 try:
-                    deadline = None if consumer else (native_context or {}).get('dispatch_deadline')
+                    # 会话软时限对消费者决策同样生效：软时限后不再发起新的
+                    # 模型HTTP请求（未决请求保留UNKNOWN，不重发）。
+                    deadline = (native_context or {}).get('dispatch_deadline')
                     if deadline is not None and time.monotonic() >= deadline:
                         raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
                     if qc_transport:
@@ -1066,12 +1134,16 @@ class ModelGateway:
                 else:
                     payload = {'model': model['model'], 'messages': [
                         {'role': 'system', 'content': system}, {'role': 'user', 'content': parts}]}
+                    if correction and not native_context:
+                        payload['messages'][-1]['content'] = deepcopy(parts) + [{'type':'text','text':correction}]
                     if native_context:
                         payload['messages'] = [{'role':'system','content':system}] + native_context['history'] + [user_message]
                         if correction:
                             payload['messages'][-1]['content'] = deepcopy(parts) + [{'type':'text','text':correction}]
                         if not native_context.get('plain_json'):
-                            payload.update(tools=field_repair['tools'] if field_repair else tools, tool_choice='auto')
+                            payload.update(tools=field_repair['tools'] if field_repair else tools,
+                                tool_choice=({'type': 'function', 'function': {'name': 'repair_tool_arguments'}}
+                                             if field_repair else tool_choice or 'auto'))
                             if field_repair:
                                 payload['messages'][0]['content'] += '\n本轮仅调用repair_tool_arguments修复列出的精确字段。原工具其余字段已冻结，不重新生成计划。'
                         payload.update(native_generation_options(model, output_limit=output_limit,
@@ -1148,8 +1220,12 @@ class ModelGateway:
                 if native_context and len(raw['choices']) != 1:
                     raise ValueError('Tool protocol requires exactly one completion choice')
                 choice = raw['choices'][0]
+                if choice.get('finish_reason') == 'length':
+                    # output_exhausted与refused分别处理：不执行截断参数，
+                    # 不原条件通用重发；唯一允许的纠正是可构造的紧凑重提。
+                    raise ProviderFinishIncomplete('output_exhausted', str(choice.get('finish_reason')))
                 if choice.get('finish_reason') not in ('stop', 'tool_calls') or choice['message'].get('refusal'):
-                    raise ValueError('Incomplete/refused response')
+                    raise ProviderFinishIncomplete('refused', str(choice['message'].get('refusal') or choice.get('finish_reason')))
                 tool_calls = choice['message'].get('tool_calls') or []
                 tool_name = None
                 if native_context and not native_context.get('plain_json'):
@@ -1297,6 +1373,7 @@ class ModelGateway:
                 # or invalid, keep its full reservation and do not retry automatically.
                 valid_usage = usage is not None and all(type(usage.get(k)) is int and usage[k]>=0
                     for k in ('input_tokens', 'output_tokens', 'cached_input_tokens')) and usage['cached_input_tokens']<=usage['input_tokens']
+                finish_incomplete = error if isinstance(error, ProviderFinishIncomplete) else None
                 self._settle_failure(job,rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
                                            response={'result': parsed, 'provider_response': raw, **transport_receipt,
@@ -1304,9 +1381,12 @@ class ModelGateway:
                                                **({'plan_normalization': normalization_record}
                                                   if normalization_record is not None else {}),
                                                'failure_diagnostic': {
-                                                   'source': 'no_provider_response' if raw is None else 'response_validation',
+                                                   'source': (finish_incomplete.kind if finish_incomplete
+                                                              else 'no_provider_response' if raw is None else 'response_validation'),
                                                    'error_type': type(error).__name__,
-                                                   'schema_errors': schema_errors_feedback(native_validation_errors or [error]),
+                                                   'schema_errors': [] if finish_incomplete else schema_errors_feedback(native_validation_errors or [error]),
+                                                   **({'provider_detail': finish_incomplete.detail[:200]}
+                                                      if finish_incomplete else {}),
                                                    **({'local_cause': str(error)[:350]}
                                                       if raw is None and isinstance(error, (AssertionError, KeyError)) else {})}},
                                            error=type(error).__name__)
@@ -1317,7 +1397,7 @@ class ModelGateway:
                 invalid_attempts += 1
                 if field_repair:
                     raise ValueError('bounded_field_repair_failed: patch retained; no further correction dispatch') from None
-                if native_context and native_context.get('plan_normalizer') and invalid_attempts >= 2:
+                if invalid_attempts >= 2:
                     raise ValueError('bounded_plan_correction_failed: raw replies retained; no further correction dispatch') from None
                 failure_key = protocol_failure_key(error)
                 if consumer and failure_key in protocol_failures:
@@ -1330,30 +1410,48 @@ class ModelGateway:
                 protocol_failures.add(failure_key)
                 if qc_transport or (not consumer and invalid_attempts >= attempts):
                     break
+                if finish_incomplete is not None and finish_incomplete.kind == 'refused':
+                    # 拒答不是可修复的协议缺陷：有界结束，不重发。
+                    break
+                if finish_incomplete is not None:
+                    system, parts, tools = compact_retry_context(system, parts, tools)
+                    user_message = {'role': 'user', 'content': parts}
+                    correction = json.dumps({'protocol_error': 'output_exhausted',
+                        'instruction': 'Return a concise complete response. Preserve all goals, specified inputs, dependencies and evidence references.'},
+                        ensure_ascii=False)
                 if native_context:
-                    path = list(getattr(error, 'absolute_path', ()))
-                    errors = schema_errors_feedback(native_validation_errors or [error])
-                    # The strategy-2 normalizer lists every missing required field
-                    # across all steps; merge so one correction carries the full
-                    # precise path set instead of only the deepest failure.
-                    normalizer_missing = (normalization_record or {}).get('missing') or []
-                    known = {tuple(row.get('field_path', [])) for row in errors}
-                    errors = errors + [{'field_path': row['path'].split('.'),
-                                         'detail': "missing required field '" + row['field'] + "'"}
-                                        for row in normalizer_missing
-                                        if tuple(row['path'].split('.')) not in known][:12]
-                    if not field_repair_used and name in ('submit_plan', 'plan_decision') and isinstance(arguments, dict):
-                        field_repair = field_repair_plan(error, arguments, native_context['declared'][name], name,
-                                                        validation_errors=native_validation_errors)
-                        if field_repair:
-                            field_repair_used = True
-                            field_repair['source_request_id'] = rid
-                    correction = json.dumps({'protocol_error':type(error).__name__,
-                        'errors':errors,
-                        'rejected_tool_arguments': original_arguments,
-                        **({'allowed_repair_paths': field_repair['paths'],
-                            'repair_instruction': 'Return only repair_tool_arguments fields. Preserve every unlisted original argument; no action was dispatched.'} if field_repair else {}),
-                        'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
+                    if finish_incomplete is not None:
+                        # output_exhausted：唯一允许的纠正是同一观察的紧凑重提
+                        # （实质变化、不丢必要目标/输入/依赖/证据），第二笔仍
+                        # 失败则有界结束；不执行截断参数，不原条件通用重发。
+                        correction = json.dumps({'protocol_error': 'output_exhausted',
+                            'instruction': '上一回答在完成前被截断。重新提交同一观察的紧凑版本：'
+                                           '保持必要目标、指定输入、阶段依赖与证据引用完整，'
+                                           '压缩步数与文本长度，不新增内容；没有动作被派发。'}, ensure_ascii=False)
+                    else:
+                        path = list(getattr(error, 'absolute_path', ()))
+                        errors = schema_errors_feedback(native_validation_errors or [error])
+                        # The strategy-2 normalizer lists every missing required field
+                        # across all steps; merge so one correction carries the full
+                        # precise path set instead of only the deepest failure.
+                        normalizer_missing = (normalization_record or {}).get('missing') or []
+                        known = {tuple(row.get('field_path', [])) for row in errors}
+                        errors = errors + [{'field_path': row['path'].split('.'),
+                                             'detail': "missing required field '" + row['field'] + "'"}
+                                            for row in normalizer_missing
+                                            if tuple(row['path'].split('.')) not in known][:12]
+                        if not field_repair_used and name in ('submit_plan', 'plan_decision') and isinstance(arguments, dict):
+                            field_repair = field_repair_plan(error, arguments, native_context['declared'][name], name,
+                                                            validation_errors=native_validation_errors)
+                            if field_repair:
+                                field_repair_used = True
+                                field_repair['source_request_id'] = rid
+                        correction = json.dumps({'protocol_error':type(error).__name__,
+                            'errors':errors,
+                            'rejected_tool_arguments': original_arguments,
+                            **({'allowed_repair_paths': field_repair['paths'],
+                                'repair_instruction': 'Return only repair_tool_arguments fields. Preserve every unlisted original argument; no action was dispatched.'} if field_repair else {}),
+                            'instruction':'Correct these fields using the same observation and declared Schema; no action was dispatched.'}, ensure_ascii=False)
             else:
                 # Local settlement is outside response parsing/format correction.
                 response = {'result': parsed, 'provider_response': raw, **transport_receipt,

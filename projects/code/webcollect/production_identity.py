@@ -255,7 +255,8 @@ def actual_proof(task, raw_records, *, final_state=None):
         states.append(final_state)
     if 'candidate_binding' in task:
         from .candidate_navigation import verify_path
-        verify_path(task,states,[row['operation'] for row in rows])
+        verify_path(task,states,[row['operation'] for row in rows],
+                    proofs=[row.get('popup_provenance') or row.get('http_navigation') for row in rows])
     identity = validate_identity(task, observed_states=states)
     return {'version': VERSION, **identity, 'effective_actions': len(actions),
             'preparation_actions': sum(row.get('operation_origin') == 'preparation' for row in actions),

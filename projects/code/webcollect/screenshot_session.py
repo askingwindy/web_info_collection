@@ -21,7 +21,7 @@ from .screenshot_plan import (SYSTEM_PROMPT,
     FIRST_RULES, BRANCH_RULES, BUSINESS_MINIMUM, PREFERRED_MAXIMUM, NON_BUSINESS_ACTIONS,
     DECISIONS, READY_ENDING, RAW_ONLY_ENDINGS, NO_PROGRESS_STALL_LIMIT, submit_plan_tools,
     decision_tools, decision_schema, normalize_submit_plan, normalize_decision,
-    first_plan_admission, business_actions, verify_completion, verify_final_presentation, _verify_input, narrative_grounding_gaps, supported_actions, evidence_route_gaps, first_frame_redundancy, _state_for_observation)
+    first_plan_admission, business_actions, compile_contract, verify_completion, verify_final_presentation, _verify_input, narrative_grounding_gaps, supported_actions, evidence_route_gaps, first_frame_redundancy, _state_for_observation)
 from .screenshot_observation import (controls_projection, interaction_affordances, body_element_ids,
     region_registry, prepare_visuals, verify_visuals, crop_visual)
 from .session_core import RawSessionCore, ReactStop
@@ -133,6 +133,11 @@ class ScreenshotPlanSession(RawSessionCore):
             self.stop_details = error.details
             self.stop_reason, self.stop_summary = 'budget', str(error)
             self.state = 'closed_by_host'
+        except BudgetStop as error:
+            # 软时限后的网关拒绝（consumer_session_soft_deadline）是预算结束，
+            # 不是工程故障；未决请求保留 UNKNOWN。
+            self.stop_reason, self.stop_summary = 'budget', str(error)
+            self.state = 'closed_by_host'
         except ReactStop as error:
             stop = error
             if self.stop_reason is None:
@@ -238,22 +243,25 @@ class ScreenshotPlanSession(RawSessionCore):
         if self._inspection_visual and self._inspection_visual['observation_id'] == self.current['observation_id']:
             if not any(row['ref'] == self._inspection_visual['ref'] for row in available):
                 available.append(self._inspection_visual)
-        key_visual = await self._key_evidence_visual()
+        key_visual = None if prompt.get('phase') == 'first' else await self._key_evidence_visual()
+        evidence_only_request = False
         if key_visual is not None and not any(row['ref'] == key_visual['ref'] for row in available):
             if limit < 2:
+                # 单图配置：必要历史图以纯证据登记请求单独提供，不占用动作
+                # 决策的当前图名额；随后的动作决策继续使用当前图。
+                available = [key_visual]
+                evidence_only_request = True
                 self.event('screenshot-history-supplement', observation_id=key_visual['observation_id'],
-                           requirement_id=key_visual.get('requirement_id'), dropped='IMAGE_LIMIT',
+                           requirement_id=key_visual.get('requirement_id'), scheduled=True,
+                           mode='single_image_evidence_only',
+                           reprovided=key_visual['observation_id'] in self.provided_observations,
                            dispatched=False)
-                prompt['history_supplement_unavailable'] = {'kind': 'IMAGE_LIMIT',
-                    'configured_images': limit, 'required_images': 2,
-                    'requirement_id': key_visual.get('requirement_id'),
-                    'observation': key_visual['observation_id'],
-                    'message': '当前图与必要历史图不能同时容纳；未提供该历史图，不得声称已经看过。可在当前关键阅读段登记证据；无法提供必要历史图时如实报告能力缺项'}
-                key_visual = None
             else:
                 available.append(key_visual)
-        viewport = next(row for row in available if row['scope'] == 'viewport'
-                        and row['observation_id'] == self.current['observation_id'])
+        viewport = next((row for row in available if row['scope'] == 'viewport'
+                        and row['observation_id'] == self.current['observation_id']), None)
+        if viewport is None and not evidence_only_request:
+            raise ReactStop('blocked', '当前清晰视口图必须提供', 'program')
 
         def priority(row):
             if row is viewport:
@@ -267,6 +275,19 @@ class ScreenshotPlanSession(RawSessionCore):
         visuals = sorted(available, key=priority)[:limit]
         if key_visual is not None and key_visual not in visuals:
             key_visual = None
+        if key_visual is not None and 'choices' in prompt:
+            # 必要历史图请求只作纯证据登记：不提供业务动作工具（无
+            # remaining_plan/continue），动作决策在下一请求重新使用当前图。
+            evidence_only_request = True
+            prompt['choices'] = []
+            prompt.pop('pending_steps', None)
+            prompt.pop('remaining_plan', None)
+            if 'next_checkpoint' in prompt:
+                prompt['next_checkpoint']['allowed_decisions'] = list(prompt['choices'])
+            prompt['evidence_only_request'] = {
+                'observation': key_visual['observation_id'],
+                'requirement_id': key_visual.get('requirement_id'),
+                'message': '仅调用register_evidence提交引用；status为registered/insufficient/not_relevant。局部不足不结束任务。'}
         prompt['_images'] = [row['path'] for row in visuals]
         prompt['visual_evidence'] = deepcopy(visuals)
         observation_ids = list(dict.fromkeys(row['observation_id'] for row in visuals))
@@ -283,14 +304,15 @@ class ScreenshotPlanSession(RawSessionCore):
                 history.append({'observation': oid, 'url': self.observation_records[oid].get('url'),
                     'provided_this_request': True, 'evidence_only': True,
                     'regions': deepcopy(self.region_registries.get(oid, []))})
-        if observation_ids[0] != self.current['observation_id']:
-            raise ReactStop('blocked', '当前清晰视口图必须提供', 'program')
-        if len(observation_ids) > 1 and 'choices' in prompt:
+        if set(observation_ids) - {self.current['observation_id']} and 'choices' in prompt:
             # A historical key frame is citable in the very request that carries
             # it; the host-side response validator rebuilds its enum after the
             # successful request, so only the wire tools need this extension.
             prompt['tools'] = decision_tools(prompt['choices'], prompt.get('allowed_actions'),
                                              sorted(self._referenceable_observations() | set(observation_ids)))
+        if evidence_only_request:
+            from .screenshot_plan import register_evidence_tools
+            prompt['tools'] = register_evidence_tools(sorted(self._referenceable_observations() | set(observation_ids)))
         provided_paths = []
         for oid in observation_ids:
             provided_paths.extend(verify_visuals(self.observation_records[oid],
@@ -356,6 +378,10 @@ class ScreenshotPlanSession(RawSessionCore):
                          'planned_evidence_complete', 'possible_goal_evidence', 'result_reading_or_plan_end',
                          'submission_checkpoint', 'navigation_checkpoint') else 'route_deviation')
         prompt['call_purpose'] = call_kind
+        if self.host_limits:
+            # 软时限后不再发起新的模型HTTP请求（网关按该deadline拒绝派发）；
+            # 该字段只进派发上下文，不进入请求正文或模型意图存档。
+            prompt['_dispatch_deadline'] = self.host_limits['started_monotonic'] + self.host_limits['soft_seconds']
         prompt = project_model_prompt(prompt)
         self._last_model_intent = self.event('model-intent', prompt=_stripped(prompt),
                                              canonical_visual_evidence=deepcopy(visuals))
@@ -398,6 +424,7 @@ class ScreenshotPlanSession(RawSessionCore):
             self.history_supplement_keys.add((key_visual['requirement_id'], key_visual['observation_id']))
         self.event('model-observations-provided', model_intent=self._last_model_intent,
                    observation_ids=observation_ids)
+        self._last_evidence_only_request = evidence_only_request
         return response
 
     # ------------------------------------------------------------------ first plan
@@ -422,6 +449,8 @@ class ScreenshotPlanSession(RawSessionCore):
                 'latest_attempt_is_current_step': self.latest_attempt_is_current_step,
                 'last_effective_action': _public_effective(self.last_effective),
                 'confirmed_progress': self._public_confirmed_progress(),
+                'partial_coverage': [{**deepcopy(answer), 'status': 'PARTIAL_NOT_COMPLETE'}
+                    for rid, answer in getattr(self, '_partial_answers', {}).items() if rid not in self.verified_answers],
                 'candidate_results': self._candidate_results(),
                 'tool_capabilities': self._tool_capabilities(),
                 'first_route_status': self.first_route_status,
@@ -439,7 +468,8 @@ class ScreenshotPlanSession(RawSessionCore):
                 'instruction': '支持动作只表示宿主具有该能力；当前派发条件以controls.action_states与实际反馈为准。'
                     '未观察到的控件或后续页面不等于不支持，不得仅凭尚未看见就报告unsuitable。'
                     '不支持上传或本地文件选择，不得用type代替。历史图只有实际提供才算模型已见；'
-                    '单图配置保留当前视口，不能同时查看裁图或历史图，应在当前证据出现时登记。'}
+                    '单图配置下动作决策只用当前视口图，必要历史图由宿主以纯证据登记请求单独提供（该请求无业务动作工具），'
+                    '应优先在关键证据离开当前视口前登记。'}
 
     def _first_prompt(self):
         state = load_json(self.current['evidence']['state']['path'])
@@ -521,6 +551,7 @@ class ScreenshotPlanSession(RawSessionCore):
             plan = deepcopy(plan)
             plan['goal'] = fixed_goal
             self.event('screenshot-plan-goal-bound', goal=fixed_goal, source='host_fixed_goal')
+        plan, contract_derivation = compile_contract(plan, fixed_goal or plan.get('goal'))
         ok, feedback = first_plan_admission(
             plan, goal=fixed_goal or str(plan.get('goal') or ''))
         if ok and feedback['kind'] == 'accepted':
@@ -604,18 +635,23 @@ class ScreenshotPlanSession(RawSessionCore):
         self.frozen_goal = fixed_goal or plan['goal']
         if self.working_goal is None:
             self.working_goal = self.frozen_goal
-        self.requirements = deepcopy(requirements)
-        self.final_requirement_ids = deepcopy(plan.get('final_requirement_ids'))
-        self.plan = {'steps': plan['steps'], 'final_presentation_step': plan['final_presentation_step']}
+        # 编译显式业务范围；不生成未来观察或展示步号。
+        # 实际来源与因果仅由捕获和派发收据建立。
+        compiled, derivation = plan, contract_derivation
+        self.event('screenshot-contract-compiled', derivation=derivation)
+        self.requirements = deepcopy(compiled['requirements'])
+        self.final_requirement_ids = deepcopy(compiled.get('final_requirement_ids'))
+        self.plan = {'steps': compiled['steps'], 'final_presentation_step': compiled.get('final_presentation_step')}
         self.position = 0
-        self._plan_accept_route_state(plan['steps'], plan['final_presentation_step'])
+        self._plan_accept_route_state(compiled['steps'], compiled.get('final_presentation_step'))
         self.initial_feedback = None
         self.plan_event = self.event('screenshot-plan', phase='first',
             goal=self.frozen_goal, requested_goal=deepcopy(self.requested_goal),
             session_objective=deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
             requirements=deepcopy(self.requirements), steps=deepcopy(self.plan['steps']),
             final_presentation_step=self.plan['final_presentation_step'],
-            final_requirement_ids=deepcopy(self.final_requirement_ids), admission=feedback)
+            final_requirement_ids=deepcopy(self.final_requirement_ids),
+            contract_derivation=derivation, admission=feedback)
         if getattr(self, 'runlog', None) is not None:
             self._runlog('plan_accepted', observationId=self.current['observation_id'],
                 plannedSteps=len(self.plan['steps']), requirements=len(self.requirements),
@@ -643,6 +679,27 @@ class ScreenshotPlanSession(RawSessionCore):
             if source and source.get('document_identity') != self.current['document_identity']:
                 return True
         return False
+
+    def _navigation_destination_gap(self, step, control_ids):
+        """已知不允许的目的地在派发前反馈，交回规划器修订路线。"""
+        from urllib.parse import urljoin
+        from .candidate_navigation import destination_allowed, excluded_article
+        href = None
+        if step.get('action') in ('click', 'double_click', 'right_click') and control_ids:
+            binding = (self.current.get('controls', {}).get(control_ids[0]) or {}).get('binding') or {}
+            href = binding.get('href')
+        if not isinstance(href, str) or not href or href.startswith(('javascript:', '#', 'mailto:', 'tel:')):
+            return None
+        target = urljoin(self.current.get('url') or '', href)
+        if target.rstrip('/') == (self.current.get('url') or '').rstrip('/'):
+            return None
+        if not excluded_article(self.task, target) and destination_allowed(self.task, target, self.page_urls, source=_state_for_observation(self, self.current['observation_id']), operation={**step, 'control_id': control_ids[0]}):
+            return None
+        return {'kind': 'NAVIGATION_DESTINATION_NOT_PERMITTED',
+                'destination': target,
+                'message': '该链接的目的地不在本任务许可的导航范围内（精确导航关系不授予目的地域名权限）。'
+                           '请改用范围内目标或按原目标另选真实路径；无范围内路径则give_up，不重试同一路径',
+                'dispatched': False}
 
     def _action_identity(self, step, control_ids, state):
         control = ((self.current.get('controls') or {}).get(control_ids[0]) or {}) if control_ids else {}
@@ -723,6 +780,12 @@ class ScreenshotPlanSession(RawSessionCore):
                 'kind': 'TARGET_NOT_UNIQUELY_BOUND',
                 'message': '当前观察中目标未唯一绑定；请修订剩余计划或改选有据目标',
                 'step_position': self.position, 'matches': len(matches or [])})
+            return
+        navigation_gap = self._navigation_destination_gap(step, matches or [])
+        if navigation_gap is not None:
+            # 已知不允许的目的地在派发前反馈给规划器（E），而不是派发后
+            # 终止整个attempt。
+            await self._checkpoint('navigation_scope', feedback=navigation_gap)
             return
         state = load_json(self.current['evidence']['state']['path'])
         new_basis = self._granted_new_basis
@@ -902,30 +965,10 @@ class ScreenshotPlanSession(RawSessionCore):
     def _reanchor_routes(self):
         """A revise replaced the tail: pending evidence and the ending frame bind
         to the last new step; the sealed first plan keeps its original route."""
-        tail = len(self.route_map)
-        reanchored = {}
-        for requirement in self.requirements:
-            rid = requirement['id']
-            if rid in self.verified_answers:
-                continue
-            positions = self._route_positions(rid)
-            # Empty positions mean the route steps were replaced by this revise.
-            if all(index <= self.position for index in positions):
-                opportunities = [index + 1 for index, step in enumerate(self.plan['steps'])
-                    if index >= self.position and step.get('action') in
-                    ('scroll', 'click', 'open_url', 'back')] if requirement['kind'] == 'content' else []
-                self.route_overrides[rid] = sorted(set(
-                    [index for index in positions if index <= self.position] + opportunities + [tail]))
-                reanchored[rid] = tail
-        presentation_moved = False
-        presentation = self._final_presentation_position()
-        if presentation is not None and presentation <= self.position:
-            self.final_presentation_override = tail
-            presentation_moved = True
-        if reanchored or presentation_moved:
-            self.event('screenshot-route-reanchor', position=self.position,
-                       requirements=reanchored, final_presentation_step=tail,
-                       original_plan_preserved=True)
+        # Tail revisions are execution hypotheses. Evidence is selected from
+        # actual observations, never reanchored to a future tail position.
+        self.route_overrides = {}
+        self.final_presentation_override = None
 
     def _valid_result_rows(self, oid):
         """Candidate locations use the same obligations and verifier as complete."""
@@ -1058,20 +1101,19 @@ class ScreenshotPlanSession(RawSessionCore):
             rid = requirement['id']
             if rid in self.verified_answers or requirement['kind'] == 'input':
                 continue
-            for position in reversed(self._route_positions(rid)):
-                if position > self.position:
-                    continue  # future route step; its frame does not exist yet
-                oid = self.route_frames.get(position)
-                if (not oid or oid == self.current['observation_id']
-                        or (rid, oid) in self.history_supplement_keys):
-                    continue
-                observation = self.observation_records.get(oid)
-                if not observation or not observation.get('capture_verified'):
+            for oid, observation in reversed(list(self.observation_records.items())):
+                if (oid == self.current['observation_id']
+                        or (rid, oid) in self.history_supplement_keys
+                        or not observation.get('capture_verified')):
                     continue
                 state = _state_for_observation(self, oid)
                 if state is None:
                     continue
-                if requirement['kind'] == 'result' and not self._valid_result_rows(oid):
+                if requirement['kind'] == 'result':
+                    if not self._valid_result_rows(oid):
+                        continue
+                elif not any(_reading_region_relevant(requirement, region)
+                             for region in self.region_registries.get(oid, [])):
                     continue
                 visual = (await prepare_visuals(observation, self.root))[0]
                 return {**visual, 'requirement_id': rid}
@@ -1172,8 +1214,8 @@ class ScreenshotPlanSession(RawSessionCore):
                 continue
             regions = []
             for region in self.region_registries.get(oid, []):
-                key = _stable_region_key(observation, region)
-                if key in seen or region.get('quote') in verified:
+                key = (oid, region.get('region_id'))
+                if key in seen:
                     continue
                 seen.add(key)
                 regions.append(deepcopy(region))
@@ -1253,6 +1295,7 @@ class ScreenshotPlanSession(RawSessionCore):
                         for key in ('value', 'checked') if key in facts[matches[0]]}
         return object_sha256({
             'goal_inputs': inputs,
+            'coverage_units': sorted(getattr(self, '_coverage_units', set())),
             'reading_ranges': sorted(getattr(self, '_reading_progress', set())),
             'verified_evidence': {rid: sorted(set((proof.get('quote') or '', proof.get('url') or '')
                 for proof in check.get('evidence', [])))
@@ -1356,24 +1399,37 @@ class ScreenshotPlanSession(RawSessionCore):
             return
         arguments = response.get('arguments') or {}
         allowed_actions = self._allowed_actions()
-        decision, record = normalize_decision(arguments, prompt['choices'], allowed_actions, pending_steps=prompt['pending_steps'])
-        self.event('screenshot-decision', reason=reason, decision=decision,
-                   normalization=record, position=self.position)
-        if getattr(self, 'runlog', None) is not None:
-            self._runlog('checkpoint', observationId=self.current['observation_id'],
-                decision=decision.get('decision'), reason=reason, position=self.position,
-                effectiveSteps=len(self.trajectory))
-        from jsonschema import Draft202012Validator
-        errors = list(Draft202012Validator(decision_schema(prompt['choices'], allowed_actions,
-                           sorted(self._referenceable_observations()))).iter_errors(decision))
-        if errors:
-            self.event('screenshot-decision-rejected', reason='invalid_fields', message=errors[0].message)
-            self.completion_feedback = {'kind': 'DECISION_FIELDS_INVALID', 'message': errors[0].message}
-            # A checkpoint whose every reply repeats an out-of-choices decision
-            # must count into the same no-progress guard as every other reply;
-            # an unguarded early return would loop model requests forever.
-            self._stall_check(decision, feedback)
-            return
+        evidence_only = getattr(self, '_last_evidence_only_request', False)
+        if evidence_only:
+            from .screenshot_plan import register_evidence_schema
+            from jsonschema import Draft202012Validator
+            errors = list(Draft202012Validator(register_evidence_schema(
+                sorted(self._referenceable_observations()))).iter_errors(arguments))
+            if errors:
+                self.event('screenshot-evidence-registration', status='insufficient',
+                           reason=errors[0].message, dispatched=False)
+                self._last_evidence_only_request = False
+                return
+            decision = arguments
+        else:
+            decision, record = normalize_decision(arguments, prompt['choices'], allowed_actions, pending_steps=prompt.get('pending_steps', []))
+            self.event('screenshot-decision', reason=reason, decision=decision,
+                       normalization=record, position=self.position)
+            if getattr(self, 'runlog', None) is not None:
+                self._runlog('checkpoint', observationId=self.current['observation_id'],
+                    decision=decision.get('decision'), reason=reason, position=self.position,
+                    effectiveSteps=len(self.trajectory))
+            from jsonschema import Draft202012Validator
+            errors = list(Draft202012Validator(decision_schema(prompt['choices'], allowed_actions,
+                               sorted(self._referenceable_observations()))).iter_errors(decision))
+            if errors:
+                self.event('screenshot-decision-rejected', reason='invalid_fields', message=errors[0].message)
+                self.completion_feedback = {'kind': 'DECISION_FIELDS_INVALID', 'message': errors[0].message}
+                # A checkpoint whose every reply repeats an out-of-choices decision
+                # must count into the same no-progress guard as every other reply;
+                # an unguarded early return would loop model requests forever.
+                self._stall_check(decision, feedback)
+                return
         choice = decision.get('decision')
         # Every decision can contribute independently verified evidence. Invalid
         # supplements cannot erase a previously verified answer for that item.
@@ -1381,8 +1437,16 @@ class ScreenshotPlanSession(RawSessionCore):
         self._revalidate_progress()
         supplement_gaps = []
         if supplied:
-            merged = deepcopy(self.verified_answers)
-            merged.update({row['requirement_id']: deepcopy(row) for row in supplied})
+            merged = deepcopy(getattr(self, '_partial_answers', {}))
+            merged.update(deepcopy(self.verified_answers))
+            for row in supplied:
+                rid = row['requirement_id']
+                previous = merged.get(rid, {})
+                answer = deepcopy(row)
+                if previous.get('evidence') and any(r['id'] == rid and r['kind'] == 'content' for r in self.requirements):
+                    refs = previous['evidence'] + answer.get('evidence', [])
+                    answer['evidence'] = list({object_sha256(ref): ref for ref in refs}.values())
+                merged[rid] = answer
             ids = set(merged)
             subset = [row for row in self.requirements if row['id'] in ids]
             supplied_ids = [row['requirement_id'] for row in supplied]
@@ -1391,8 +1455,7 @@ class ScreenshotPlanSession(RawSessionCore):
             checks, supplement_gaps = verify_completion(self,
                 {'answers': list(merged.values()) + duplicates}, subset)
             verified = {row['requirement_id'] for row in checks if row.get('status') == 'VERIFIED'}
-            self.verified_answers.update({row['requirement_id']: deepcopy(row)
-                                          for row in supplied if row['requirement_id'] in verified})
+            self.verified_answers.update({rid: deepcopy(merged[rid]) for rid in verified})
             self.verified_checks.update({row['requirement_id']: row for row in checks
                                          if row.get('status') == 'VERIFIED'})
             self.verified_requirement_ids = sorted(self.verified_answers)
@@ -1400,6 +1463,13 @@ class ScreenshotPlanSession(RawSessionCore):
                        verified_requirement_ids=self.verified_requirement_ids)
         if supplement_gaps:
             self.completion_feedback = {'kind': 'PROGRESS_EVIDENCE_GAPS', 'gaps': supplement_gaps}
+        if getattr(self, '_last_evidence_only_request', False):
+            self.event('screenshot-evidence-registration',
+                       status=('registered' if supplied and not supplement_gaps else
+                               'insufficient' if supplied else 'not_relevant'),
+                       gaps=supplement_gaps, dispatched=False)
+            self._last_evidence_only_request = False
+            return
         if choice == 'complete':
             # Completion uses a fresh synchronized host observation, not the
             # viewport captured before a potentially long model request.
@@ -1418,7 +1488,7 @@ class ScreenshotPlanSession(RawSessionCore):
             self.completion_feedback = {'kind': 'COMPLETION_EVIDENCE_GAPS', 'gaps': gaps,
                 'verified_requirement_ids': self.verified_requirement_ids,
                 'verified_answers': deepcopy(list(self.verified_answers.values())),
-                'message': '已核验答案与原引用已保留；只补缺项。current事项在后续相关输入、提交或跳页后会失效；historical仅保留有真实阶段因果的原捕获。末帧只核验首轮指定展示事项。'}
+                'message': '已核验答案与原引用已保留；只补缺项。current事项在后续相关输入、提交或跳页后会失效；historical仅保留有真实阶段因果的原捕获。末帧核验全部最终结论；过程义务保留真实历史证明。'}
             self.event('screenshot-completion-rejected', gaps=gaps, dispatched=False,
                        verified_requirement_ids=self.verified_requirement_ids)
             self._runlog('completion_gaps', observationId=self.current['observation_id'],
@@ -1428,6 +1498,10 @@ class ScreenshotPlanSession(RawSessionCore):
         # progress. Frozen input state and independently verified evidence establish
         # progress; capture IDs and unrelated page text never do.
         if self._stall_check(decision, feedback):
+            blocked = getattr(self, '_repair_path_feedback', None)
+            self._repair_path_feedback = None
+            if blocked and self.state not in ('closed_by_host', 'complete'):
+                return await self._checkpoint('repair_path_blocked', blocked)
             return
         if choice == 'complete':
             return await self._checkpoint(reason, self.completion_feedback)
@@ -1618,12 +1692,29 @@ class ScreenshotPlanSession(RawSessionCore):
         """Account each checkpoint once; only genuinely new state resets stalls."""
         stall_marker = self._track_stall_marker(count_revisit=not self._stall_request_pending)
         self._stall_request_pending = False
+        def stable_target(target):
+            if not isinstance(target, dict):
+                return target
+            cid = target.get('control')
+            cid = self.current.get('provided_control_numbers', {}).get(str(cid), cid)
+            control = self.current.get('controls', {}).get(cid) or {}
+            binding = control.get('binding') or (target.get('_source') or {}).get('binding') or {}
+            return {key: binding.get(key, target.get(key)) for key in ('selector', 'index', 'tag', 'href', 'text', 'role')
+                    if binding.get(key, target.get(key)) is not None}
+        steps = decision.get('remaining_plan') or decision.get('steps') or []
+        route = [{**{key: step[key] for key in ('action', 'value', 'expected_value', 'keys', 'direction') if key in step},
+                  **{key: stable_target(step[key]) for key in ('target', 'end_target') if key in step}} for step in steps]
         key = object_sha256({'facts': stall_marker,
             'missing': sorted(row['id'] for row in self.requirements
                               if row['id'] not in self.verified_checks),
-            'decision': decision.get('decision')})
+            'gap': self._completion_gap_projection,
+            'repair_path': route or decision.get('decision')})
         self.no_progress_keys[key] = self.no_progress_keys.get(key, 0) + 1
-        if ((decision.get('decision') == 'complete' and self.no_progress_keys[key] >= 2)
+        if decision.get('decision') == 'revise' and self.no_progress_keys[key] == 2:
+            self._repair_path_feedback = {'kind': 'REPAIR_PATH_BLOCKED', 'dispatched': False,
+                'message': '同一事项缺项、相关事实与修复路径已连续两次没有新增证据；该路径已阻断。仅可选择当前工具能执行的另一业务路径；不存在另一可行路径则give_up，不修改冻结事项。'}
+            return True
+        if ((self.no_progress_keys[key] >= 2)
                 or self._stall_count >= NO_PROGRESS_STALL_LIMIT):
             self._close_stall()
             return True
@@ -1674,7 +1765,8 @@ def file_sha_of(path):
 
 
 def _stripped(prompt):
-    return {key: value for key, value in prompt.items() if key not in ('system', 'tools', '_images', '_history')}
+    return {key: value for key, value in prompt.items()
+            if key not in ('system', 'tools', '_images', '_history', '_dispatch_deadline')}
 
 
 def _public_target(target):
@@ -1759,8 +1851,8 @@ def project_model_prompt(prompt):
             continue
         regions = []
         for region in source.get('regions', []):
-            key = (source.get('url'), region.get('quote'))
-            if key in seen or region.get('quote') in verified_quotes:
+            key = (source.get('observation'), region.get('region_id'), region.get('quote'))
+            if key in seen:
                 continue
             seen.add(key)
             regions.append(region)
@@ -1768,6 +1860,30 @@ def project_model_prompt(prompt):
             history.append({key: source[key] for key in ('observation', 'url', 'evidence_only',
                 'model_has_seen', 'provided_this_request') if key in source} | {'regions': regions})
     result['historical_evidence'] = list(reversed(history))
+    # One source directory per request. Views retain source identities, never
+    # become an execution input or merge identical text from different sources.
+    catalog = {}
+    def catalog_regions(rows, observation):
+        for region in rows or []:
+            key = str(observation) + ':' + str(region.get('region_id'))
+            catalog.setdefault(key, {'observation': observation, **deepcopy(region)})
+    catalog_regions(result.get('regions'), result.get('current_observation'))
+    for source in result.get('historical_evidence') or []:
+        catalog_regions(source.get('regions'), source.get('observation'))
+        source['region_refs'] = [str(source.get('observation')) + ':' + str(r.get('region_id'))
+                                 for r in source.pop('regions', [])]
+    for candidate in result.get('candidate_results') or []:
+        catalog_regions(candidate.get('regions'), candidate.get('observation'))
+        candidate['region_refs'] = [str(candidate.get('observation')) + ':' + str(r.get('region_id'))
+                                    for r in candidate.pop('regions', [])]
+        candidate.pop('text', None)
+    if catalog:
+        result.pop('regions', None)
+        result['fact_directory'] = list(catalog.values())
+    for progress in result.get('confirmed_progress') or []:
+        for proof in progress.get('evidence') or []:
+            proof.pop('quote', None)
+        progress.pop('observed_result', None)
     rules = result.get('rules')
     if isinstance(rules, dict) and not any((r.get('evidence_route') or {}).get('source_type') == 'derived_check'
                                          for r in result.get('requirements', [])):

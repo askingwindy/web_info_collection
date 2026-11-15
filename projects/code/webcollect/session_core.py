@@ -228,11 +228,11 @@ def build_url_task(*, url, task_version, site_category=None, app_name=None, task
             raise ValueError('Unknown action stability protocol')
         for part in (spec, task['fragment']): part['action_stability_protocol'] = action_stability_protocol
     if effort_profile is not None:
-        if plan_protocol is None or decision_protocol != NATIVE_VERSION:
-            raise ValueError('reasoning effort profile requires a native conditional-plan task')
+        if decision_protocol != NATIVE_VERSION:
+            raise ValueError('reasoning effort profile requires a native decision task')
         frozen_profile = validate_effort_profile(effort_profile)
         for part in (spec, task['fragment']): part['reasoning_effort_profile'] = deepcopy(frozen_profile)
-    if plan_protocol is not None:
+    if plan_protocol is not None or effort_profile is not None:
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': spec})[:24]
     if trusted_prefix_protocol is not None:
         from .plan_protocol import TRUSTED_PREFIX_POLICY
@@ -427,8 +427,8 @@ def validate_task(task):
         if fragment.get('trusted_prefix_protocol') is not None or fragment.get('allow_controlled_exception'):
             raise ValueError('Complete-goal tasks cannot enable trusted-prefix or controlled-exception delivery')
     if fragment.get('reasoning_effort_profile') is not None:
-        if not native or not fragment.get('plan_protocol'):
-            raise ValueError('reasoning_effort_profile requires a native conditional-plan task')
+        if not native:
+            raise ValueError('reasoning_effort_profile requires a native decision task')
         if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
             raise ValueError('Invalid frozen reasoning effort profile')
     if fragment.get('plan_protocol') and fragment.get('ending_policy') != ENDING_POLICY:
@@ -436,8 +436,10 @@ def validate_task(task):
     if fragment.get('ending_policy') not in (None, ENDING_POLICY):
         raise ValueError('Unknown frozen ending policy')
     if 'glm_http_call_limit' in spec or 'glm_http_call_limit' in fragment:
+        # 读侧双接受：历史冻结值25与当前上限40都合法，仅改写仍被拒绝。
+        legacy_limits = (SessionGLMCallLimit.limit, 25)
         if not native or any(type(part.get('glm_http_call_limit')) is not int or
-                             part['glm_http_call_limit'] != SessionGLMCallLimit.limit for part in (fragment, spec)):
+                             part['glm_http_call_limit'] not in legacy_limits for part in (fragment, spec)):
             raise ValueError('Invalid signed ReAct GLM session limit')
     if native and (spec.get('decision_protocol') != fragment.get('decision_protocol')
                    or fragment.get('effective_action_rule') != EFFECTIVE_ACTION_RULE
@@ -629,7 +631,9 @@ class RawSessionCore:
         self.navigation_count = 0
         self.actual_dispatches = 0
         self.started = time.monotonic()
-        self.host_limits = None if self.task['fragment'].get('ending_policy') == ENDING_POLICY else deepcopy(host_limits)
+        # 会话软时限/收尾宽限对ending-policy任务同样生效（修复ENDING_POLICY
+        # 丢弃host_limits的接线）：软时限后停止新增业务动作与模型请求。
+        self.host_limits = deepcopy(host_limits) if host_limits else None
         self.page_urls = list(self.task['fragment']['page_urls'])
         self.dialogs = []
         self.excluded_links_seen = set()
@@ -906,7 +910,9 @@ class RawSessionCore:
             if self.current and self.current['url'] != observation['url'] and (not trigger or trigger['action_type'] not in NAV_ACTIONS):
                 raise ReactStop('no_path', 'NAVIGATION_WITHOUT_TRIGGER: observed URL changed without a recorded action', 'collector')
             try:
-                extend(self.task,self.page_urls,captured['state'],trigger)
+                extend(self.task,self.page_urls,captured['state'],trigger,
+                    source=(pending['source'] if pending and trigger is pending.get('operation') else getattr(self,'_navigation_source',None)),
+                    proof=getattr(self,'_navigation_proof',None))
             except ValueError as error:
                 raise ReactStop('no_path', str(error), 'collector') from error
         duplicate_hint = []
@@ -1603,6 +1609,7 @@ class RawSessionCore:
         self.dialogs.clear()
         dispatch_started = False
         form_watcher = None
+        http_watcher = None
         try:
             if observation.get('action_scope') and observation['action_scope']['action']!=operation['action_type']:
                 raise EvidenceStale('局部证据动作类型改变；本动作零派发')
@@ -1624,9 +1631,21 @@ class RawSessionCore:
             if operation['action_type']=='drag':
                 from .browser import verify_drag_destination
                 await verify_drag_destination(self.page,operation['evidence']['drag_destination'],arguments)
+            if self._left('max_seconds') <= 0:
+                raise ReactStop('budget', '会话软截止已到；本动作零派发')
             pages_before = set(self.page.context.pages)
+            from .candidate_navigation import exact_destination
+            from .navigation import arm_http_navigation
+            if exact_destination(state,operation):
+                http_watcher = arm_http_navigation(self.page)
             from .plan_evidence import arm_native_form, finish_native_form
             form_watcher = await arm_native_form(self.page, operation, state)
+            # Every awaited evidence operation may cross the session deadline.
+            # Recheck immediately before the first browser action side effect.
+            if self._left('max_seconds') <= 0:
+                raise ReactStop('budget', '会话软截止已到；本动作零派发')
+            if observation.get('action_deadline_monotonic', float('inf')) <= time.monotonic():
+                raise TimeoutError('派发前总取证期限已耗尽；本动作零派发')
             dispatch_started = True
             self.actual_dispatches += 1
             try:
@@ -1675,7 +1694,8 @@ class RawSessionCore:
                     'link_carrier': navigation_carrier(state, operation.get('evidence', {}).get('anchor_element_id')),
                     'opened_url_before_verification': opened.url, 'landing_verified': False}
                 try:
-                    raw['popup_provenance'] = await verify_popup(self.page,opened,operation,state,form_watcher=form_watcher)
+                    raw['popup_provenance'] = await verify_popup(self.page,opened,operation,state,
+                        form_watcher=form_watcher,http_watcher=http_watcher)
                     raw['popup_diagnostic']['landing_verified'] = True
                 finally:
                     raw['popup_diagnostic']['opened_url_after_verification'] = opened.url
@@ -1700,7 +1720,18 @@ class RawSessionCore:
                 from .browser import record_native_dialog
                 record_native_dialog(self.page, self.dialogs)
                 raw['opened_page_url'] = self.page.url
-        except ReactStop:
+            from .candidate_navigation import exact_destination
+            expected_url = exact_destination(state, operation)
+            if expected_url and self.page.url not in (state['url'], expected_url):
+                from .navigation import finish_http_navigation
+                raw['http_navigation'] = await finish_http_navigation(http_watcher,self.page,expected_url,
+                    source_url=state['url'],operation_id=operation['operation_id'])
+                if raw.get('popup_provenance'):
+                    raw['popup_provenance']['http_navigation'] = deepcopy(raw['http_navigation'])
+        except ReactStop as error:
+            if not dispatch_started:
+                raw.update(execution_error=str(error),phase='pre_dispatch',dispatched=False,action_executed=False)
+                self._write_raw(step_id,raw)
             raise
         except EvidenceStale as error:
             # Proved pre-dispatch staleness: nothing was sent for this primitive.
@@ -1736,8 +1767,11 @@ class RawSessionCore:
             raise ReactStop('blocked', '派发后结果未知（UNKNOWN），不自动补发：' + str(error),
                             'interrupted', unknown=True) from error
         finally:
+            from .navigation import close_http_navigation
+            close_http_navigation(http_watcher)
             if form_watcher:
-                form_watcher['context'].remove_listener('request', form_watcher['listener'])
+                from .plan_evidence import close_native_form
+                close_native_form(form_watcher)
                 raw['native_form_requests'] = deepcopy(form_watcher['request_log'])
                 self._write_raw(step_id, raw)
         raw['dispatched'] = True
@@ -1768,6 +1802,7 @@ class RawSessionCore:
                 'dispatches':self.actual_dispatches}
         self._navigation_trigger = raw['operation']
         self._navigation_source = before_state
+        self._navigation_proof = raw.get('popup_provenance') or raw.get('http_navigation')
         try:
             await self._observe()
         finally:
@@ -1852,25 +1887,26 @@ class RawSessionCore:
             raise ReactStop('blocked', 'NO_EFFECTIVE_ACTION: 已执行动作未产生可观察变化', 'collector',
                             operation=operation['operation_id'])
         # Keep the authorized page scope explicit; new URLs must be earned by
-        # an actual navigation from this session.
+        # an actual navigation from this session. Both branches share the
+        # candidate_navigation permission entry (E: 统一导航许可).
         if after['url'] not in self.page_urls:
             if 'candidate_binding' in self.task:
                 from .candidate_navigation import extend
                 try:
-                    extend(self.task, self.page_urls, after_state, raw['operation'])
+                    extend(self.task, self.page_urls, after_state, raw['operation'],
+                           source=before_state, proof=raw.get('popup_provenance') or raw.get('http_navigation'))
                 except ValueError as error:
                     raise ReactStop('no_path', str(error), 'collector',
                                     operation=operation['operation_id']) from error
             else:
-                from .collect import verify_public_url
-                entry_host = verify_public_url(self.task['initial_url'])
-                if verify_public_url(after['url'], {entry_host}) != entry_host:
+                from .candidate_navigation import admit_landing
+                landing = admit_landing(self.task, self.page_urls, after['url'], raw['operation'],
+                                        source=before_state, proof=raw.get('popup_provenance') or raw.get('http_navigation'))
+                if landing == 'out_of_scope':
                     raise ReactStop('no_path', '页面离开授权站点范围：' + after['url'], 'collector',
                                     operation=operation['operation_id'])
-                from .candidate_navigation import has_page_capacity
-                if not has_page_capacity(self.task, self.page_urls):
+                if landing == 'capacity':
                     raise ReactStop('blocked', '页面范围数量达到上限', 'collector')
-                self.page_urls.append(after['url'])
         cid = operation.get('evidence', {}).get('anchor_element_id')
         control = after['controls'].get(cid) if cid else None
         observed = {'state_changed': changed, 'changed_fields': changed_fields,'raw_changed_fields':raw_changed_fields,

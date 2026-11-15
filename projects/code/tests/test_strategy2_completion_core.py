@@ -39,9 +39,10 @@ class CompletionCoreTests(substrate.SessionHarness):
         await session._open_entry()
         session.frozen_goal = session._fixed_goal() or '阅读文章并回答原名及出生地'
         session.requirements = requirements or [
-            {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'},
-            {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地'}]
+            {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名', 'acceptance': {'mode': 'presence', 'subject': '阅读文章并回答人物原名', 'source_quote': '阅读文章并回答人物原名'}},
+            {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地', 'acceptance': {'mode': 'presence', 'subject': '阅读文章并回答人物出生地', 'source_quote': '阅读文章并回答人物出生地'}}]
         for row in session.requirements:
+            row.setdefault('evidence_scope', 'current')
             row.setdefault('evidence_route', {'source_type': {'input': 'input_state', 'result': 'page_result', 'content': 'page_content'}[row['kind']], 'observation_steps': [1]})
         session.plan = {'steps': [{'action': 'wait', 'duration_ms': 1}]}
         from webcollect.screenshot_execution import bind_plan_targets
@@ -57,6 +58,43 @@ class CompletionCoreTests(substrate.SessionHarness):
                 'evidence': [{'observation': oid, 'quote': self.texts[index]}]}
 
     async def test_incremental_answers_are_sealed_together_and_replay(self):
+        # Contract denominator is independent of answer regions. Article titles
+        # identify objects; only explicit list items define an enumerated scope.
+        from webcollect.collection_evidence import coverage_gaps
+        req = {'id': 'scope', 'kind': 'content', 'description': '完整阅读「人物」的正文', 'acceptance': {'mode': 'presence', 'subject': '完整阅读「人物」的正文', 'source_quote': '完整阅读「人物」的正文'}}
+        req['acceptance'] = {'mode': 'complete', 'subject': '人物', 'scope': '人物正文', 'source_quote': '完整阅读「人物」的正文'}
+        partial = [{'node': 'p1', 'quote': '人物', 'region_quote': '人物'}]
+        self.assertTrue(coverage_gaps(req, partial))
+        boundary = {'text': '人物甲生于广州乙生于北京', 'selector': 'article',
+                    'source': 'rendered_semantic_container', 'scope_closed': True, 'scope_source': {'basis': 'fixture_closed_scope', 'object_title': '人物'}, 'node_ranges': {'p1': [0, 7], 'p2': [7, 12]}}
+        proofs = [{'node': 'p1', 'quote': '人物甲生于广州', 'content_boundary': boundary},
+                  {'node': 'p2', 'quote': '乙生于北京', 'content_boundary': boundary}]
+        self.assertFalse(coverage_gaps(req, proofs))
+        wrong = deepcopy(req)
+        wrong['acceptance']['subject'] = '另一对象'
+        self.assertTrue(coverage_gaps(wrong, proofs))
+        repeated = {'text': '甲乙甲乙😀', 'selector': 'article', 'source': 'rendered_semantic_container', 'scope_closed': True, 'scope_source': {'basis': 'fixture_closed_scope', 'object_title': '人物'},
+                    'node_ranges': {'a': [0, 2], 'b': [2, 5]}}
+        repeated_proofs = [{'node': 'a', 'quote': '甲乙', 'content_boundary': repeated},
+                           {'node': 'b', 'quote': '甲乙😀', 'content_boundary': repeated}]
+        self.assertFalse(coverage_gaps(req, repeated_proofs))
+        self.assertTrue(coverage_gaps(req, [repeated_proofs[0], repeated_proofs[0]]))
+        self.assertTrue(coverage_gaps(req, proofs[:1]))
+        from webcollect.collection_evidence import complete_scope_fragment
+        title = {'element_id': 'title', 'visible': True, 'native_role': 'h1', 'text': '人物'}
+        self.assertTrue(complete_scope_fragment(req, {'content_boundaries': []}, title))
+        self.assertFalse(complete_scope_fragment(req, {}, {**title, 'inputable': True}))
+        early_title = {'node': 'p1', 'quote': '人物甲生于广州',
+                       'content_boundary': {**boundary, 'scope_closed': False, 'scope_source': {}}}
+        self.assertTrue(coverage_gaps(req, [early_title]))
+        self.assertFalse(coverage_gaps(req, [early_title, proofs[1]]))
+        wrong_object = {**early_title, 'content_boundary': {**early_title['content_boundary'], 'document_identity': 'other-document'}}
+        self.assertTrue(coverage_gaps(req, [wrong_object, proofs[1]]))
+
+        req['description'] = '完整列表「甲」「乙」'
+        self.assertTrue(coverage_gaps(req, [{'node': 'p1', 'quote': '甲', 'region_quote': '甲'}]))
+        req['description'] = '完整比较「甲」「乙」正文'
+        self.assertTrue(coverage_gaps(req, [{'node': 'p1', 'quote': '甲'}, {'node': 'p2', 'quote': '乙'}]))
         prompts = []
 
         async def choose(prompt):
@@ -79,10 +117,10 @@ class CompletionCoreTests(substrate.SessionHarness):
 
         self.surface.state['elements'][-1]['visible'] = False
         requirements = [
-            {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'},
-            {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地'},
+            {'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名', 'acceptance': {'mode': 'presence', 'subject': '阅读文章并回答人物原名', 'source_quote': '阅读文章并回答人物原名'}},
+            {'id': 'r2', 'kind': 'content', 'description': '阅读文章并回答人物出生地', 'acceptance': {'mode': 'presence', 'subject': '阅读文章并回答人物出生地', 'source_quote': '阅读文章并回答人物出生地'}},
             {'id': 'i1', 'kind': 'input', 'description': '保留数量10',
-             'target': {'control': 'control-0'}, 'expected_value': '10'}]
+             'target': {'control': 'control-0'}, 'expected_value': '10', 'acceptance': {'mode': 'presence', 'subject': '保留数量10', 'source_quote': '保留数量10'}}]
         session = await self._session(choose, requirements)
         captured_input = session.current['observation_id']
         for key in ('elements', 'values', 'capture_controls'):
@@ -121,7 +159,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(session.route_map, [None, None])
         r2_answer = session.verified_answers.pop('r2')
         session._reanchor_routes()
-        self.assertEqual(session.route_overrides, {'r2': [1, 2]})
+        self.assertEqual(session.route_overrides, {})
         session.verified_answers['r2'] = r2_answer
         session.route_overrides = {}
         goal_prompt = session._branch_prompt('result')
@@ -194,7 +232,8 @@ class CompletionCoreTests(substrate.SessionHarness):
         # Already verified reading text is retained once in confirmed_progress,
         # rather than duplicated as an additional historical region block.
         reading = next(row for row in prompts[1]['confirmed_progress'] if row['requirement_id'] == 'r1')
-        self.assertEqual(reading['observed_result'], self.texts[0])
+        self.assertNotIn('observed_result', reading)
+        self.assertTrue(any(self.texts[0] in row.get('quote', '') for row in prompts[1]['fact_directory']))
         self.assertEqual(reading['evidence'][0]['observation'], prompts[0]['current_observation'])
         self.assertTrue(reading['model_has_seen'])
         self.assertTrue(all(row['evidence_only'] for row in prompts[1]['historical_evidence']))
@@ -208,7 +247,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         current_state = load_json(session.current['evidence']['state']['path'])
         cid = self.surface.state['values'][0]['element_id']
         fact = input_facts(current_state)[cid]
-        checked_requirement = [{'id': 'checked', 'kind': 'input', 'description': '保留选中状态', 'expected_checked': True}]
+        checked_requirement = [{'id': 'checked', 'kind': 'input', 'description': '保留选中状态', 'expected_checked': True, 'acceptance': {'mode': 'presence', 'subject': '保留选中状态', 'source_quote': '保留选中状态'}}]
         checked_checks = [{'requirement_id': 'checked', 'status': 'VERIFIED',
             'evidence': [{'node': cid, 'source': fact['identity'], 'input_field': 'checked', 'actual': True}]}]
         session.final_requirement_ids = ['checked']
@@ -234,9 +273,11 @@ class CompletionCoreTests(substrate.SessionHarness):
 
         async def choose(prompt):
             sent_prompts.append(deepcopy(prompt))
+            if prompt.get('evidence_only_request'):
+                return {'arguments': {'status': 'not_relevant', 'reason': '无新引用', 'answers': []}}
             return {'arguments': {'decision': 'continue', 'reason': '记录当前观察'}}
 
-        requirement = [{'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果'}]
+        requirement = [{'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果', 'acceptance': {'mode': 'presence', 'subject': '查看本次输入对应的利润率计算结果', 'source_quote': '查看本次输入对应的利润率计算结果'}}]
         session = await self._session(choose, requirement)
         for binding in self.surface.state['capture_controls']:
             binding['form_selector'] = '#calculator'
@@ -313,12 +354,12 @@ class CompletionCoreTests(substrate.SessionHarness):
             session.region_registries[oid] = region_registry(load_json(session.observation_records[oid]['evidence']['state']['path']))
         session.requirements = [
             {'id': 'pending-input', 'kind': 'input', 'target': {'control': 'control-0'},
-             'expected_value': '999', 'description': '数量输入为999',
-             'evidence_route': {'source_type': 'input_state', 'observation_steps': [1, 2]}},
-            {'id': 'same-paragraph', 'kind': 'content', 'description': '阅读「人物原名」',
-             'evidence_route': {'source_type': 'page_content', 'observation_steps': [1, 2]}},
-            {'id': 'future-result', 'kind': 'result', 'description': '查看利润率结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [4]}}]
+             'expected_value': '999', 'description': '数量输入为999', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'input_state', 'observation_steps': [1, 2]}, 'acceptance': {'mode': 'presence', 'subject': '数量输入为999', 'source_quote': '数量输入为999'}},
+            {'id': 'same-paragraph', 'kind': 'content', 'description': '阅读「人物原名」', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_content', 'observation_steps': [1, 2]}, 'acceptance': {'mode': 'presence', 'subject': '阅读「人物原名」', 'source_quote': '阅读「人物原名」'}},
+            {'id': 'future-result', 'kind': 'result', 'description': '查看利润率结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [4]}, 'acceptance': {'mode': 'presence', 'subject': '查看利润率结果', 'source_quote': '查看利润率结果'}}]
         self.assertIsNone(session._progress_checkpoint_reason(None))
         session.plan, session.requirements = saved_plan, saved_requirements
         session.route_frames, session.route_map, session.position = saved_frames, saved_map, saved_position
@@ -349,7 +390,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         await session._observe()
         from webcollect.screenshot_execution import bind_plan_targets
         input_requirement = {'id': 'i1', 'kind': 'input', 'description': '数量为20',
-                             'target': {'control': 'control-0'}, 'expected_value': '20'}
+                             'target': {'control': 'control-0'}, 'expected_value': '20', 'acceptance': {'mode': 'presence', 'subject': '数量为20', 'source_quote': '数量为20'}}
         bind_plan_targets({'requirements': [input_requirement]}, session.observation_records[result])
         input_application = {'answers': [{'requirement_id': 'i1', 'observed_result': '20',
                              'evidence': [{'observation': result, 'control': 'control-0'}]}]}
@@ -367,7 +408,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         _, default_gaps = verify_completion(session, application, requirement)
         self.assertIn('RESULT_INPUT_REQUIRED', {gap['kind'] for gap in default_gaps})
         session.trajectory, session.requirements = saved_rows, saved_requirements
-        calculation_requirement = {'id': 'cross-check', 'kind': 'content', 'description': '核对利润率数值'}
+        calculation_requirement = {'id': 'cross-check', 'kind': 'content', 'description': '核对利润率数值', 'acceptance': {'mode': 'presence', 'subject': '核对利润率数值', 'source_quote': '核对利润率数值'}}
         calculation_answer = {'requirement_id': 'cross-check', 'observed_result': '用实际输入按页面公式核算为40%，与本次结果一致',
             'evidence': [{'observation': result, 'quote': formula}],
             'calculations': [{'expression': '20 / 0.5', 'source_requirement_ids': ['i1'],
@@ -406,41 +447,59 @@ class CompletionCoreTests(substrate.SessionHarness):
         # never rebinds current dispatch targets. The image limit keeps the
         # current viewport mandatory.
         session.route_map = [1, 2, 3]
-        session.route_frames = {2: entered, 3: result}
+        session.route_frames = {2: result, 3: result}
         session.position = 2
         session.requirements.append({'id': 'r2', 'kind': 'content',
-            'description': '阅读页面的公式说明', 'evidence_route': {
-                'source_type': 'page_content', 'observation_steps': [2]}})
+            'description': '阅读页面的公式说明', 'evidence_scope': 'current', 'evidence_route': {
+                'source_type': 'page_content', 'observation_steps': [2]}, 'acceptance': {'mode': 'presence', 'subject': '阅读页面的公式说明', 'source_quote': '阅读页面的公式说明'}})
         choose.max_images = 2
         visual = await session._key_evidence_visual()
         self.assertIsNotNone(visual)
-        self.assertEqual(visual['observation_id'], entered)
+        selected = visual['observation_id']
+        self.assertIn(formula, load_json(session.observation_records[selected]['evidence']['state']['path'])['visible_text'])
+        choose.max_images = 2
+        prompt = session._branch_prompt('result')
+        self.assertTrue(prompt['candidate_results'])
+        await session._decide(prompt)
+        prompt = sent_prompts[-1]
+        self.assertEqual(prompt['screenshots'][0], session.current['observation_id'])
+        self.assertIn(selected, prompt['screenshots'])
+        self.assertIn(selected, session.provided_observations)
+        # 携带必要历史图的请求本身也是纯证据登记请求：无业务动作工具（C）。
+        self.assertEqual(prompt['choices'], [])
+        historical = next(row for row in prompt['visual_evidence'] if row['observation_id'] == selected)
+        from webcollect.screenshot_observation import verify_visuals
+        self.assertEqual(verify_visuals(session.observation_records[selected], [historical]),
+                         [historical['path']])
+        # 单图配置：同一关键帧的(事项,帧)配对已消费后可按需重挂一次；必要
+        # 历史图以纯证据登记请求单独提供（该请求无业务动作工具），随后的
+        # 动作决策重新使用当前图。
+        session.history_supplement_keys.discard(('r2', selected))
         choose.max_images = 1
         limited_prompt = session._branch_prompt('history_capacity')
         await session._decide(limited_prompt)
         limited_prompt = sent_prompts[-1]
-        self.assertEqual(limited_prompt['history_supplement_unavailable']['kind'], 'IMAGE_LIMIT')
-        self.assertEqual(len(limited_prompt['_images']), 1)
+        selected_single = limited_prompt['evidence_only_request']['observation']
+        self.assertIn(formula, load_json(session.observation_records[selected_single]['evidence']['state']['path'])['visible_text'])
+        self.assertEqual(limited_prompt['_images'], [limited_prompt['visual_evidence'][0]['path']])
+        self.assertEqual(limited_prompt['choices'], [])
+        self.assertNotIn('remaining_plan',
+                         limited_prompt['tools'][0]['function']['parameters']['properties'])
+        # 该登记请求成功后配对再次消费：下一请求不再重复提供同一历史帧。
         choose.max_images = 2
-        prompt = session._branch_prompt('result')
-        self.assertTrue(any('40%' in row['text'] for row in prompt['candidate_results']))
-        await session._decide(prompt)
-        prompt = sent_prompts[-1]
-        self.assertEqual(prompt['screenshots'][0], session.current['observation_id'])
-        self.assertIn(entered, prompt['screenshots'])
-        self.assertIn(entered, session.provided_observations)
-        historical = next(row for row in prompt['visual_evidence'] if row['observation_id'] == entered)
-        from webcollect.screenshot_observation import verify_visuals
-        self.assertEqual(verify_visuals(session.observation_records[entered], [historical]),
-                         [historical['path']])
+        followup = session._branch_prompt('result')
+        await session._decide(followup)
+        followup = sent_prompts[-1]
+        self.assertEqual(followup['screenshots'][0], session.current['observation_id'])
+        self.assertNotIn(selected, followup['screenshots'])
         # Controls in the request all belong to the current frame; the historical
         # observation is referenceable as evidence, never as a dispatch target.
         self.assertTrue(all(row['control'] in session.current['controls'] for row in prompt['controls']))
         observation_enum = prompt['tools'][0]['function']['parameters']['properties']['answers'][
             'items']['properties']['evidence']['items']['properties']['observation']['enum']
-        self.assertIn(entered, observation_enum)
+        self.assertIn(result, observation_enum)
         self.assertEqual(session._bind_target({'target': {'control': 'submit', '_source': {
-            'observation_id': entered, 'document_identity': 'another-document',
+            'observation_id': result, 'document_identity': 'another-document',
             'control_id': 'submit', 'binding': {}, 'text': '计算', 'role': 'button', 'labels': []}}}), [])
 
         # The same causal contract applies to visible text values, not textarea
@@ -465,10 +524,10 @@ class CompletionCoreTests(substrate.SessionHarness):
             'target': {'control_id': 'control-0'}, 'before_observation_id': text_before,
             'after_observation_id': text_after, 'effective': True})
         input_req = {'id': 'text-input', 'kind': 'input', 'description': '转换指定文本',
-            'target': {'control': 'control-0'}, 'expected_value': 'new text'}
+            'target': {'control': 'control-0'}, 'expected_value': 'new text', 'evidence_scope': 'current', 'acceptance': {'mode': 'presence', 'subject': '转换指定文本', 'source_quote': '转换指定文本'}}
         text_req = {'id': 'text-result', 'kind': 'result', 'description': '查看转换后的文本',
-            'result_kind': 'input_conversion', 'target': {'control': 'converted'},
-            'evidence_route': {'source_type': 'page_result', 'depends_on': ['text-input'], 'observation_steps': [1]}}
+            'result_kind': 'input_conversion', 'target': {'control': 'converted'}, 'evidence_scope': 'current',
+            'evidence_route': {'source_type': 'page_result', 'depends_on': ['text-input'], 'observation_steps': [1]}, 'acceptance': {'mode': 'presence', 'subject': '查看转换后的文本', 'source_quote': '查看转换后的文本'}}
         session._controls()
         bind_plan_targets({'requirements': [input_req, text_req]}, session.current)
         session.requirements = [input_req, text_req]
@@ -558,12 +617,60 @@ class CompletionCoreTests(substrate.SessionHarness):
         session.working_goal = '点击目录，阅读计算方法'
         self.assertFalse(explicit_submission_required(session))
 
+        # B 引用制普通答案：宿主从原始捕获生成规范observed_result，模型不誊写正文。
+        reference = {'requirement_id': 'ref', 'evidence': [{'observation': result, 'quote': formula}]}
+        ref_checks, ref_gaps = verify_completion(session, {'answers': [reference]},
+            [{'id': 'ref', 'kind': 'content', 'description': '阅读页面的公式说明',
+              'evidence_scope': 'current', 'acceptance': {'mode': 'presence', 'subject': '阅读页面的公式说明', 'source_quote': '阅读页面的公式说明'}}])
+        self.assertEqual(ref_gaps, [])
+        self.assertEqual(ref_checks[0]['observed_result_source'], 'host_capture')
+        self.assertEqual(ref_checks[0]['observed_visible_text'], formula)
+
+        # B 覆盖谓词：比较缺一端、清单缺项不误判完成；分母来自合同列举项，
+        # 不由已采集内容反推。
+        from webcollect.collection_evidence import distinct_result_gaps
+        comparison = [{'id': 'cmp', 'kind': 'content',
+                       'description': '比较「40%」与「本工具核算方法」两段输出', 'evidence_scope': 'current', 'acceptance': {'mode': 'presence', 'subject': '比较「40%」与「本工具核算方法」两段输出', 'source_quote': '比较「40%」与「本工具核算方法」两段输出'}}]
+        comparison[0]['acceptance'] = {'mode': 'specified', 'subject': '比较两端', 'items': ['40%', '本工具核算方法'], 'source_quote': comparison[0]['description']}
+        one_side = {'requirement_id': 'cmp', 'evidence': [{'observation': result, 'quote': '40% 60% 80%'}]}
+        _, cmp_gaps = verify_completion(session, {'answers': [one_side]}, comparison)
+        self.assertIn('CONTENT_COVERAGE_INCOMPLETE', {gap['kind'] for gap in cmp_gaps})
+        both_sides = {'requirement_id': 'cmp', 'evidence': [
+            {'observation': result, 'quote': '40% 60% 80%'}, {'observation': result, 'quote': formula}]}
+        cmp_checks, cmp_gaps = verify_completion(session, {'answers': [both_sides]}, comparison)
+        self.assertEqual(cmp_gaps, [])
+        self.assertEqual(len(cmp_checks[0]['evidence']), 2)
+        listing = [{'id': 'list', 'kind': 'content',
+                    'description': '完整登记「40%」与「本工具核算方法」两段输出清单', 'evidence_scope': 'current', 'acceptance': {'mode': 'presence', 'subject': '完整登记「40%」与「本工具核算方法」两段输出清单', 'source_quote': '完整登记「40%」与「本工具核算方法」两段输出清单'}}]
+        listing[0]['acceptance'] = {'mode': 'specified', 'subject': '两段输出清单', 'items': ['40%', '本工具核算方法'], 'source_quote': listing[0]['description']}
+        partial = {'requirement_id': 'list', 'evidence': [{'observation': result, 'quote': formula}]}
+        _, list_gaps = verify_completion(session, {'answers': [partial]}, listing)
+        self.assertIn('CONTENT_COVERAGE_INCOMPLETE', {gap['kind'] for gap in list_gaps})
+        self.assertEqual(next(g for g in list_gaps if g['kind'] == 'CONTENT_COVERAGE_INCOMPLETE')['missing_terms'], ['40%'])
+        full_list = {'requirement_id': 'list', 'evidence': [
+            {'observation': result, 'quote': '40% 60% 80%'}, {'observation': result, 'quote': formula}]}
+        _, full_gaps = verify_completion(session, {'answers': [full_list]}, listing)
+        self.assertEqual(full_gaps, [])
+
+        # B 同值双来源：不同输出事项复制同一位置的同一答案被拒，不同节点
+        # 的同值事实各自保留。
+        result_reqs = [{'id': 'a', 'kind': 'result'}, {'id': 'b', 'kind': 'result'}]
+        copied = [{'requirement_id': 'a', 'status': 'VERIFIED', 'observed_visible_text': '42',
+                   'evidence': [{'observation_id': 'o1', 'node': 'n1', 'quote': '42'}]},
+                  {'requirement_id': 'b', 'status': 'VERIFIED', 'observed_visible_text': '42',
+                   'evidence': [{'observation_id': 'o1', 'node': 'n1', 'quote': '42'}]}]
+        distinct_gap, duplicates = distinct_result_gaps(copied, result_reqs, claimed={'a': '42', 'b': '42'})
+        self.assertEqual(duplicates, ['a', 'b'])
+        separate = deepcopy(copied)
+        separate[1]['evidence'][0]['node'] = 'n2'
+        self.assertEqual(distinct_result_gaps(separate, result_reqs, claimed={'a': '42', 'b': '42'}), [])
+
     async def test_valid_complete_wins_at_stall_threshold(self):
         async def choose(prompt):
             return {'arguments': {'decision': 'complete', 'reason': '可见事实已完整',
                 'answers': [self._answer(prompt['current_observation'], 0)]}}
 
-        session = await self._session(choose, [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'}])
+        session = await self._session(choose, [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名', 'acceptance': {'mode': 'presence', 'subject': '阅读文章并回答人物原名', 'source_quote': '阅读文章并回答人物原名'}}])
         session._stall_marker = session._stall_progress_marker()
         session._stall_count = NO_PROGRESS_STALL_LIMIT
         await session._checkpoint('plan_end')
@@ -581,6 +688,16 @@ class CompletionCoreTests(substrate.SessionHarness):
                     'purpose': f'等候结果{calls}', 'rationale': '页面暂时没有结果',
                     'expected_result': '页面出现结果'}]}}
 
+        route_session = await self._session(choose, name='S000001_sample_000219')
+        route = {'decision': 'revise', 'remaining_plan': [{'action': 'scroll', 'direction': 'down',
+            'rationale': '第一种措辞', 'purpose': '补同一正文缺项'}]}
+        self.assertFalse(route_session._stall_check(route, None))
+        reworded = deepcopy(route)
+        reworded['remaining_plan'][0]['rationale'] = '换一种措辞不改变业务路径'
+        self.assertTrue(route_session._stall_check(reworded, None))
+        self.assertEqual(route_session._repair_path_feedback['kind'], 'REPAIR_PATH_BLOCKED')
+        route_session._coverage_units = {'new-source-unit'}
+        self.assertFalse(route_session._stall_check(reworded, None))
         session = await self._session(choose)
         # The accepted first plan already received this frame. Its first text
         # read is part of the baseline, before simulating a no-effect dispatch.
@@ -786,7 +903,7 @@ class CompletionCoreTests(substrate.SessionHarness):
         async def choose(prompt):
             return {'arguments': {'decision': 'continue', 'reason': '记录当前观察'}}
 
-        requirement = [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名'}]
+        requirement = [{'id': 'r1', 'kind': 'content', 'description': '阅读文章并回答人物原名', 'acceptance': {'mode': 'presence', 'subject': '阅读文章并回答人物原名', 'source_quote': '阅读文章并回答人物原名'}}]
         session = await self._session(choose, requirement)
         await session._decide(session._branch_prompt('result'))
         oid = session.current['observation_id']
@@ -863,6 +980,8 @@ class CompletionCoreTests(substrate.SessionHarness):
         async def first_plan(plan, name):
             root = self.root / 'evidence' / name
             plan = deepcopy(plan)
+            for row in plan.get('requirements', []):
+                row['acceptance']['source_quote'] = plan['goal']
 
             async def submit(prompt):
                 return {'arguments': deepcopy(plan)}
@@ -888,7 +1007,8 @@ class CompletionCoreTests(substrate.SessionHarness):
             'goal': '修改成本为20并查看利润率',
             'final_presentation_step': 5,
             'requirements': [{'id': 'r1', 'kind': 'result', 'description': '查看本次利润率结果',
-                              'evidence_route': {'source_type': 'page_result', 'observation_steps': [5]}}],
+                              'evidence_scope': 'current',
+                              'evidence_route': {'source_type': 'page_result', 'observation_steps': [5]}, 'acceptance': {'mode': 'presence', 'subject': '查看本次利润率结果', 'source_quote': '查看本次利润率结果'}}],
             'steps': [
                 {'action': 'type', 'target': {'control': 'control-0'}, 'value': '10',
                  'expected_value': '10', 'purpose': '重复输入数量框已有值',
@@ -904,7 +1024,7 @@ class CompletionCoreTests(substrate.SessionHarness):
                  'expected_value': '20', 'purpose': '输入成本20',
                  'rationale': '本次计算使用成本20', 'expected_result': '成本显示为20'}]}
         rejected = await first_plan(redundant_plan, 'S000001_sample_000204')
-        self.assertEqual(rejected.initial_feedback['kind'], 'FIRST_FRAME_REDUNDANT_STEPS')
+        self.assertEqual(rejected.initial_feedback['kind'], 'FIRST_FRAME_REDUNDANT_STEPS', rejected.initial_feedback)
         self.assertEqual([row['step_index'] for row in rejected.initial_feedback['redundant']], [0])
         self.assertEqual(rejected.initial_feedback['effective_business'], 4)
         self.assertIsNone(rejected.plan)
@@ -915,12 +1035,12 @@ class CompletionCoreTests(substrate.SessionHarness):
             'final_presentation_step': 2,
             'requirements': [
                 {'id': 'i1', 'kind': 'input', 'description': '数量保持默认10',
-                 'target': {'control': 'control-0'}, 'expected_value': '10',
-                 'evidence_route': {'source_type': 'input_state', 'observation_steps': [1]}},
-                {'id': 'c1', 'kind': 'content', 'description': '阅读页面状态说明',
+                 'target': {'control': 'control-0'}, 'expected_value': '10', 'evidence_scope': 'current',
+                 'evidence_route': {'source_type': 'input_state', 'observation_steps': [1]}, 'acceptance': {'mode': 'presence', 'subject': '数量保持默认10', 'source_quote': '数量保持默认10'}},
+                {'id': 'c1', 'kind': 'content', 'description': '阅读页面状态说明', 'evidence_scope': 'current',
                  'evidence_route': {'source_type': 'page_content',
                                     'existing_evidence': [{'observation': '首帧',
-                                        'quote': '这里查看当前输入内容与页面状态。'}]}}],
+                                        'quote': '这里查看当前输入内容与页面状态。'}]}, 'acceptance': {'mode': 'presence', 'subject': '阅读页面状态说明', 'source_quote': '阅读页面状态说明'}}],
             'steps': [
                 {'action': 'click', 'target': {'control': 'control-0'}, 'purpose': '聚焦数量输入框',
                  'rationale': '确认默认值需要聚焦', 'expected_result': '数量输入框获得焦点'},
@@ -940,3 +1060,68 @@ class CompletionCoreTests(substrate.SessionHarness):
         self.assertEqual(anchored.verified_checks, {})
         self.assertFalse(anchored._goal_ready())
         self.assertEqual(anchored.actual_dispatches, 0)
+
+        # A 合同编译：模型可省略source_type/observation_steps/
+        # final_presentation_step；宿主生成执行预测并记录来源，未知保持未知。
+        derived_plan = deepcopy(anchored_plan)
+        derived_plan.pop('final_presentation_step')
+        for row in derived_plan['requirements']:
+            row['evidence_route'] = {}
+        derived = await first_plan(derived_plan, 'S000001_sample_000206')
+        self.assertIsNone(derived.initial_feedback)
+        self.assertIsNone(derived.plan.get('final_presentation_step'))
+        self.assertEqual([row['evidence_route']['source_type'] for row in derived.requirements],
+                         ['input_state', 'page_content'])
+        self.assertTrue(all('observation_steps' not in row['evidence_route'] for row in derived.requirements))
+        derivation_event = load_json(derived.plan_event['path'])
+        self.assertNotIn('final_presentation_step', derivation_event['contract_derivation'])
+
+        # E 派发前导航反馈：已知范围外目的地（如运行范围排除的文章）交回
+        # 规划器修订，不是派发后终止。
+        anchored.task['fragment']['skip_wechat_articles'] = True
+        binding = next(b for b in self.surface.state['capture_controls']
+                       if b['element_id'] == 'control-1')
+        binding['href'] = 'https://mp.weixin.qq.com/s/excluded-article'
+        await anchored._observe()
+        anchored._controls()
+        step = {'action': 'click', 'target': {'control': 'control-1'}}
+        anchored._bind_targets_feedback({'steps': [step]})
+        matches = anchored._bind_target(step)
+        self.assertEqual(matches, ['control-1'])
+        gap = anchored._navigation_destination_gap(step, matches)
+        self.assertEqual(gap['kind'], 'NAVIGATION_DESTINATION_NOT_PERMITTED')
+        self.assertEqual(gap['destination'], 'https://mp.weixin.qq.com/s/excluded-article')
+        binding['href'] = 'https://example.org/other-page'
+        await anchored._observe()
+        anchored._controls()
+        anchored._bind_targets_feedback({'steps': [step]})
+        self.assertIsNone(anchored._navigation_destination_gap(step, ['control-1']))
+        binding.pop('href')
+        anchored.task['fragment'].pop('skip_wechat_articles')
+
+        # Candidate scope follows exact action-bound navigation through replay;
+        # merely seeing another href must not register it or its whole host.
+        from webcollect.candidate_navigation import destination_allowed, extend, verify_path
+        candidate = deepcopy(anchored.task)
+        candidate['candidate_binding'] = {}
+        source = deepcopy(self.surface.state)
+        source['url'] = candidate['fragment']['page_urls'][0]
+        target = 'https://external.example/result'
+        source['capture_controls'][0]['href'] = target
+        cid = source['capture_controls'][0]['element_id']
+        operation = {'action_type': 'click', 'evidence': {'anchor_element_id': cid},
+                     'arguments': {}}
+        pages = list(candidate['fragment']['page_urls'])
+        extend(candidate, pages, source)
+        self.assertNotIn(target, pages)
+        self.assertTrue(destination_allowed(candidate, target, pages, source=source, operation=operation))
+        self.assertFalse(destination_allowed(candidate, target + '/unseen', pages))
+        landed = deepcopy(source)
+        landed['url'] = target
+        extend(candidate, pages, landed, operation, source=source)
+        self.assertTrue(destination_allowed(candidate, target, pages))
+        self.assertFalse(destination_allowed(candidate, 'https://external.example/unseen', pages))
+        self.assertEqual(verify_path(candidate, [source, landed], [operation]), pages)
+        with self.assertRaisesRegex(ValueError, 'SOURCE_UNPROVEN'):
+            extend(candidate, list(candidate['fragment']['page_urls']),
+                   {**landed, 'url': target + '/unknown-redirect'}, operation, source=source)

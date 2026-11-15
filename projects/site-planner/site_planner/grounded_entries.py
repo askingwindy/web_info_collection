@@ -21,7 +21,8 @@ from .application_discovery import Discovery, POLICY, site_context, classify_hom
 from .candidate_pool import CandidatePool, VERSION2, entry_identity, landing_key
 from .discovery_agent import model_tool_decision
 from .discovery_tools import reference, glm_search, search_channel_hold
-from .entry_selection import PAGE_TYPES, distribution, existing_candidate, order_sources
+from .entry_selection import (PAGE_TYPES, distribution, existing_candidate, order_sources,
+                              compile_entry_exclusions, entry_is_excluded)
 from .entry_access import wire_uri
 
 PROTOCOL = 'entry-tools'
@@ -463,6 +464,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     if application_new_target is not None and application_new_target < 1:
         raise ValueError('application_new_target must be positive')
     allowed_hosts=sorted(set(h.lower() for h in allowed_hosts))
+    entry_exclusions = compile_entry_exclusions(sources)
     def host_allowed(uri):
         if not allowed_hosts or urlsplit(uri).hostname in allowed_hosts:return True
         # Sealed historical batches carry their own frozen model_protocol;
@@ -710,6 +712,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     'site_origin':item['site_origin'],'page_origin':hit['page_origin'],
                     'selection_method':'caller_list' if hit['page_origin']=='caller_list' else entry_selection,
                     'ranking_reason':hit.get('ranking_reason'),'references':refs}
+                if entry_exclusions:
+                    source['excluded_entry_patterns'] = [pattern.pattern for pattern in entry_exclusions]
                 if True:
                     source['business_diagnostic']={k:hit.get(k) for k in ('business_role_hint','template_identity')}
                     source['business_diagnostic']['acceptance']='UNKNOWN: operation differences require consumer evidence'
@@ -1123,6 +1127,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 for document_key,document in documents.items():
                     aid=document.get('application_id',document_key)
                     for h in extract_links(document,aliases,strict=True):
+                        if entry_is_excluded(h['uri'], entry_exclusions):
+                            failures.append({'uri':h['uri'],'reason':'operator_entry_exclusion'});continue
                         if allowed_hosts and not host_allowed(h['uri']):
                             failures.append({'uri':h['uri'],'reason':'outside_allowed_hosts'});continue
                         if pool.consumption(h['uri'],kind='target' if goals else 'entry'):
@@ -1160,6 +1166,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 # Caller seeds are also legitimate first-party entries. Their page
                 # role remains UNKNOWN unless original HTML provides evidence.
                 for h in ([] if independent else eligible):
+                    if entry_is_excluded(h['uri'], entry_exclusions):continue
                     aid=pool.pool.application(h['uri'])['id']
                     if site_expansion and entry_identity(h['uri']) in offered:continue
                     if aid not in documents or h.get('context_only') or entry_identity(h['uri']) in historical:continue

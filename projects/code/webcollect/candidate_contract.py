@@ -286,15 +286,23 @@ def validate_observation(record):
         raise ValueError('Original Table1 delivery site ID changed')
     if binding.get('sources', claim.get('sources')) != claim.get('sources'):
         raise ValueError('Original frozen candidate sources changed')
-    if not observed['capture_verified'] or not observed['document_identity'] or not application_matches(claim['snapshot']['entry_url'],observed['url'],claim.get('application_registry')):
+    if not observed['capture_verified'] or not observed['document_identity']:
         raise ValueError('First observation lacks synchronized capture or proven application landing')
+    if observed['url'] != claim['snapshot']['entry_url']:
+        from .navigation import validate_http_chain
+        reference = binding.get('entry_http')
+        if not reference:
+            raise ValueError('First observation redirect lacks original entry HTTP chain')
+        verify_evidence([reference])
+        validate_http_chain(load_json(reference['path']),claim['snapshot']['entry_url'],observed['url'],
+            source_url=claim['snapshot']['entry_url'],operation_id='candidate-entry:'+claim['claim_id'])
     category = binding['candidate'].get('parent_category')
     if (category is not None and record['site_category']!=category) or record['site_uri']!=observed['url']:
         raise ValueError('Candidate classification/page binding differs')
     return binding
 
 
-def capability(claim, anchor, claim_reference, mode, *, category=None, name=None):
+def capability(claim, anchor, claim_reference, mode, *, category=None, name=None, entry_http=None):
     state=load_json(anchor['state']['path']); now=datetime.now(timezone.utc)
     candidate=claim['snapshot']
     result={'schema_version':'site-capability','capability_id':'candidate-observation-'+claim['claim_id'],
@@ -310,6 +318,9 @@ def capability(claim, anchor, claim_reference, mode, *, category=None, name=None
             **({'site_id_version':'table1-rowid-site-id-1','site_id':claim['site_id']}
                if claim.get('site_id') else {})}}
     result['candidate_observation']['sources'] = deepcopy(claim.get('sources', []))
+    if entry_http is not None:
+        result['candidate_observation']['entry_http'] = deepcopy(entry_http)
+        result['evidence'].append(deepcopy(entry_http))
     result['classification'] = {'status': 'pending' if result['site_category'] == 'UNKNOWN' else 'source_provided',
                                 'value': None if result['site_category'] == 'UNKNOWN' else result['site_category'],
                                 'sources': deepcopy(claim.get('sources', []))}
@@ -333,6 +344,13 @@ def validate_task_binding(task, record=None):
         raise ValueError('Frozen Table1 delivery site ID changed')
     if binding.get('sources', claim.get('sources')) != claim.get('sources'):
         raise ValueError('Frozen candidate sources changed')
+    if task.get('initial_url') != binding['candidate']['entry_url']:
+        from .navigation import validate_http_chain
+        reference=binding.get('entry_http')
+        if not reference:raise ValueError('Frozen candidate entry redirect lacks original HTTP chain')
+        verify_evidence([reference])
+        validate_http_chain(load_json(reference['path']),binding['candidate']['entry_url'],task['initial_url'],
+            source_url=binding['candidate']['entry_url'],operation_id='candidate-entry:'+binding['claim_id'])
     if task['fragment'].get('candidate_attempt')!=binding['claim_id']:
         raise ValueError('Candidate attempt boundary differs')
     from .session_core import is_react_task
@@ -367,7 +385,15 @@ def guard_reference(reference):
 
 def same_application(task, url):
     binding=task['candidate_binding']
-    return application_matches(binding['candidate']['entry_url'],url,binding.get('application_registry'))
+    if application_matches(binding['candidate']['entry_url'],url,binding.get('application_registry')):
+        return True
+    # An entry redirect earns one exact page, never the landing host.
+    if url != task.get('initial_url') or not binding.get('entry_http'):return False
+    from .navigation import validate_http_chain
+    reference=binding['entry_http']
+    verify_evidence([reference])
+    return validate_http_chain(load_json(reference['path']),binding['candidate']['entry_url'],url,
+        source_url=binding['candidate']['entry_url'],operation_id='candidate-entry:'+binding['claim_id'])
 
 
 def research_request_id(task):

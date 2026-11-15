@@ -779,8 +779,9 @@ class SiteFailureStore:
         existing = {fact['execution_key']: fact for fact in self.export_facts()['executions']}
         for identity, status, failure_class, reason, evidence, task in rows:
             # Existing historical entries remain unchanged; new program faults
-            # remain in RuntimeStore without creating a site failure.
-            if failure_class in ('program','configuration','model','interface','collector'):
+            # and local registry-wait conflicts remain in RuntimeStore without
+            # creating a site failure.
+            if failure_class in ('program','configuration','model','interface','collector','transient'):
                 continue
             state = 'unknown' if status == 'interrupted' or failure_class == 'interrupted' else 'failed'
             app = application_key(json.loads(task)); key = 'formal:' + identity

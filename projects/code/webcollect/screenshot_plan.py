@@ -27,16 +27,22 @@ from .batch_core import load_json, file_sha, OutcomeUnknown
 from .planning import object_sha256, verify_evidence
 from .agent_controller import exclusive
 
-BUSINESS_MINIMUM = 5
+# 合同编译/矛盾检查与证据覆盖/时效谓词的唯一实现在这两个纯函数模块；
+# 本模块只保留线协议（schema/normalizer/工具）与转发，不复制第二份规则。
+from .collection_contract import (BUSINESS_MINIMUM, NON_BUSINESS_ACTIONS, DERIVATION_OBLIGATION,
+    business_actions, evidence_route_gaps, result_requirements_feedback, requirement_scope_feedback,
+    first_plan_admission, compile_contract, _flat, _state_for_observation)
+from .collection_evidence import (coverage_gaps, distinct_result_gaps,
+    _evidence_nodes, _region_has_node, _bbox_inside, _visible_node_texts, _visible_control_values,
+    _result_tokens_visible, _result_superseded)
+
 PREFERRED_MAXIMUM = 8
 # Consecutive checkpoints without effective actions, changed business facts or
 # newly verified evidence end as no-progress; rewording is not new evidence.
 NO_PROGRESS_STALL_LIMIT = 8
-# The strategy's own frozen reasoning effort: the collection chain runs GLM at
-# high/high, and this protocol cannot mount a plan-protocol effort profile, so
-# the chooser pins the same effort on every first-plan and decision dispatch.
+# Fallback only: task's frozen per-phase profile takes precedence, then model
+# configuration. The chooser resolves this once for first-plan and branch calls.
 REASONING_EFFORT = 'high'
-NON_BUSINESS_ACTIONS = ('wait',)
 ACTION_NAMES = ('click', 'double_click', 'right_click', 'type', 'hotkey', 'select',
                 'scroll', 'drag', 'open_url', 'back', 'wait')
 
@@ -57,9 +63,13 @@ SYSTEM_PROMPT = (
     '动作必须自然必要，不凑步、不重复取已核验事实。当前控件编号仅对当前文档有效，未来目标用语义与前提表达。'
     '宿主逐步观察并执行已接受路线，新截图、导航和正文出现本身不要求重规划。仅真实偏差或未知选择需要修订。'
     '证据仅引用实际提供的观察及其region/control或可见逐字quote；历史控件只作证据，不能派发当前动作。'
-    '首轮可用evidence_scope=historical标记先后阶段事项（仍需真实动作与捕获）；默认current须保持当前。result_kind=navigation用于真实搜索提交/链接打开结果，默认calculation保留计算因果；转换到其它可编辑字段可用input_conversion，并用target冻结输出字段、evidence_route.depends_on引用该阶段input事项，必须由本次真实输入或提交导致其它输出值变化，文本与数值均支持；未观察到时不猜自动或按钮机制。final_requirement_ids首轮冻结末帧指定事项，其余累计核验，不能在结束时修改这些合同。'
+    '普通事实可历史取证；只有原目标明确要求结束保持才声明evidence_scope=current。'
+    'result_kind由宿主按合同与真实轨迹判定，未声明时保持未知并按普通页面结果核验，不默认当作计算结果；'
+    '输出字段可用target冻结；不提交结果机制预测，必要业务依赖引用对应input事项，'
+    '必须由本次真实输入或提交导致其它输出值变化，文本与数值均支持；未观察到时不猜自动或按钮机制。final_requirement_ids首轮冻结末帧指定事项，其余累计核验，不能在结束时修改这些合同。'
     '已核验事项复用，answers仅提交增量；候选片段不是已核验事实，缺项如实说明，不猜答案。'
-    '除真实推导外observed_result必须逐字来自可见文本；短名称须有唯一region锚点，表格须保持真实行列关系。'
+    '普通答案只提交requirement_id与evidence引用，宿主从原始捕获生成规范observed_result，模型不誊写正文；'
+    'quote仅在没有唯一region/control引用时作受限定位；仅真实推导的核对结论写observed_result。短名称须有唯一region锚点，表格须保持真实行列关系。'
     '原目标全部满足后停止无用途尾部；末帧必须展示原目标最终结果，不能以无关详情页或任意正文代替。'
     '未知派发效果不重复提交。只返回声明的工具调用。')
 
@@ -83,35 +93,43 @@ FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途
                            '不得先冻结再靠滚动、重复输入或额外验算凑步',
                'affordances': 'interaction_affordances.groups按kind给出count与examples，只统计当前帧实际投影到controls清单的控件；'
                               'examples是真实可见标签，可用于选定目标，但不能替代清单中的编号做绑定',
-               'requirements': '事项kind必须为input/result/content；input每项一个target与expected_value或布尔expected_checked，包含需保留的默认值；阶段完成后会离开的输入/result须首轮标evidence_scope=historical，仍需真实动作与捕获；仅业务要求持续保留的状态用current，省略时默认current。例：搜索→搜索结果→文章详情，搜索输入与navigation结果属于已完成阶段，应标historical；详情结论按原目标登记。result_kind为calculation/navigation/input_conversion（默认calculation）；input_conversion另给target冻结输出字段，evidence_route.depends_on冻结本阶段input。content为累计正文；final_requirement_ids只冻结哪些原事项须在末帧展示，不改变各事项的evidence_scope或免除阶段取证，不能只选输入逃开结论。有生产指定目标时原样继承不改写'}
+               'requirements': '事项kind必须为input/result/content；input每项一个target与expected_value或布尔expected_checked，包含需保留的默认值；'
+                           '每项acceptance明确mode、subject、source_quote原文；specified另列items，complete另列scope；只有明确结束保持才声明current。'
+                           '例：搜索→搜索结果→文章详情，搜索输入与navigation结果属于已完成阶段，应标historical；详情结论按原目标登记。'
+                           '不提交result_kind；因果来自真实产生操作和实际输入，不以全局依赖猜测。'
+                           'content为累计正文；全部outcome结论须末帧支持，final_requirement_ids可追加展示义务但不能豁免outcome；process仍须真实取证。有生产指定目标时原样继承不改写'
+                           ' business_role默认outcome；原目标明确要求的搜索/输入/提交/打开过程可用process，'
+                           '仅input/result允许，并用acceptance.source_quote引用具体过程与对象原文；过程仍须真实操作证明。比较、最终结果与结论不能降为process。'}
 
 BRANCH_RULES = {'step_fields': FIRST_RULES['step_fields'], 'requirements': FIRST_RULES['requirements'],
                 'controls': FIRST_RULES['controls'], 'projection': FIRST_RULES['projection'],
                 'decision_fields': 'decision、reason必填；revise附remaining_plan（仅未执行尾部，目标同样优先用当前controls编号，rationale同样只能引用当前帧可见文字）；'
                                    '检查点先看confirmed_progress与missing_requirements：已看到且能支持目标的结果或正文当场提交增量answers登记，candidate_results已有对应候选时优先提交而不是重新取证；'
                                    '全部事项已核验后不再continue执行剩余尾部，直接complete（结束画面缺失时revise一次定位）；'
-                                   '所有决策均可附增量answers，complete可无新增（工程合并仍有效的confirmed_progress；逐项requirement_id、observed_result、evidence：input用{observation,control}，无需region或八字符quote；input_conversion结果用{observation,control}引用实际可见输出文本或数值；其它result/content用{observation,region或quote}，observation可取请求携带的历史关键帧编号，但动作目标仍须来自当前帧）；'
+                                   '所有决策均可附增量answers，complete可无新增（工程合并仍有效的confirmed_progress；每项只需requirement_id与evidence：input用{observation,control}，无需region或八字符quote；input_conversion结果用{observation,control}引用实际可见输出文本或数值；其它result/content用{observation,region或quote}，observation可取请求携带的历史关键帧编号，但动作目标仍须来自当前帧；规范observed_result由宿主从原始捕获生成，模型不誊写正文）；'
                                    'inspect附image_ref和crop原图坐标矩形，只请求观察补图，不计业务动作；new_basis可解释真实变化，能否重提由工程因果事实决定',
-                'answer_text': '除calculations推导结论外，observed_result必须是所引观察可见文本的逐字连续片段；quote命中只证明引用位置真实，不能代替observed_result的逐字要求，归纳或改写会被判为缺证',
-                'calculations': '同一事项增量提交calculations时提供该事项完整数组（工程按事项替换）。普通答案observed_result必须逐字来源。核对/推导事项另用content答案的calculations数组：每项expression仅数字、括号及四则运算；source_requirement_ids引用已核验input；公式/换算来源优先用本答案evidence.quote逐字引用真实页面，也可引用已有content事项，无需提前冻结核对方法；result_requirement_id引用独立已核验result，不得作运算输入；不提交预算数值，工程计算computed_value并按页面精度核对；unit为目标结果逐字数值后紧邻的单位。每个数字须来自引用来源，除数须出现在明确运算/换算说明中，不能用输入恰好同值替代依据；尺寸行/结果卡不算公式。全部输入须参与计算；数组可核对多个结果，最终必须覆盖所有result事项；推导答案的observed_result写核对结论而非冒充逐字页面文字。公式和单位转换必须先真实观察，不预填常识。',
+                'answer_text': '普通答案不写observed_result，宿主按引用从原始捕获生成规范文本；quote仅在没有唯一region/control引用时作受限定位；仅calculations推导结论写observed_result（核对结论，不冒充逐字页面文字）',
+                'calculations': '同一事项增量提交calculations时提供该事项完整数组（工程按事项替换）。普通答案observed_result必须逐字来源。核对/推导事项另用content答案的calculations数组：每项expression仅数字、括号及四则运算；source_requirement_ids引用已核验input；公式/换算来源优先用本答案evidence.quote逐字引用真实页面，也可引用已有content事项，无需提前冻结核对方法；result_requirement_id引用独立已核验result，不得作运算输入；不提交预算数值，工程计算computed_value并按页面精度核对；unit为目标结果逐字数值后紧邻的单位。每个数字须来自引用来源，除数须出现在明确运算/换算说明中，不能用输入恰好同值替代依据；尺寸行/结果卡不算公式。核验本事项明确依赖的输入和结果，不强制覆盖其它独立事项；推导答案的observed_result写核对结论而非冒充逐字页面文字。公式和单位转换必须先真实观察，不预填常识。',
                 'latest_attempt': 'latest_attempt是最近一次尝试（可能失败/无效果/未派发），last_effective_action是最后建立效果的动作；两者不得互相冒充'}
 
 FIRST_RULES['route'] = ('首次提交完整必要路线：必要聚焦/选择/清空/输入、业务触发、全部目标阅读及结束展示；'
     '至少五个自然必要业务动作，不足则unsuitable。当前control附真实label/text或href辅助，未来段只用语义target；跳页后禁止沿用旧编号。rationale写可核实前提，不预猜内容。'
-    'observation_steps只表示动作后取证，不要求逐点模型调用。详情阅读不是独立GUI动作；必要才滚动或返回。'
+    '不提交预测末步或观察步号，结束时核验真实末帧；不要求预测未来控件编号。详情阅读不是独立GUI动作；必要才滚动或返回。'
     '自主目标避开仅图像取数和同一控件互斥最终值，固定目标遇能力限制如实报告。'
     'type只向已聚焦输入插入；替换非空值先可靠全选再覆盖，number可先删除确认空；已满足的焦点/值不重复操作。'
-    'requirements拆分全部必需字段，final_presentation_step安排真实结果展示；不将路径点击变成额外知识义务。')
-FIRST_RULES['evidence_route'] = ('每项evidence_route.source_type为input_state/page_result/page_content/derived_check，'
-    'observation_steps为首轮1起的动作后取证步号；已有依据用existing_evidence引用实际提供的observation及control或region/quote。'
-    'input另给target与expected_value/expected_checked。页面输出确认用result；纯阅读用page_content，不因数字或“核对”自动附加算术。'
-    '仅冻结目标明确要求独立验算/换算推导时用derived_check并列depends_on输入/结果事项，未知公式不预填。')
+    'requirements拆分全部必需字段；不将路径点击变成额外知识义务。')
+FIRST_RULES['evidence_route'] = ('不提交source_type/result_kind/observation_steps/final_presentation_step。depends_on只列真实业务依赖，不要求全局输入依赖。'
+    '每项acceptance必填mode、subject、source_quote（原目标原文）；presence证明指定事实存在，specified另列items，complete另列scope原始完整范围。'
+    '不得把全文缩成片段。普通事实可用历史证据；只有原目标明确要求结束保持才声明evidence_scope=current。')
+
+
+
 BRANCH_RULES['decision_fields'] = ('decision、reason必填。continue沿用pending_steps，complete请求核验，二者都不提交remaining_plan。'
     '只有revise携带非空remaining_plan：一次补齐可预见的全部必要定位、展开、阅读、返回/关闭、剩余原目标及结束展示，'
     '不逐步追加，不改已执行事实或冻结目标，修订尾部可少于五步。'
     '先核对confirmed_progress与missing_requirements，当前已能核验的证据随本次决定批量提交增量answers；'
-    '已核验项不重写，complete可无新增answers。每项requirement_id、observed_result、evidence：'
-    'input用observation/control，result/content用observation及region或quote。'
+    '已核验项不重写，complete可无新增answers。每项只需requirement_id与evidence：'
+    'input用observation/control，result/content用observation及region或quote；规范observed_result由宿主从原始捕获生成。'
     '全部事项已核验则直接complete；只缺末帧时一次安排必要结束段。inspect仅在choices提供时可用，'
     'image_ref取实际提供图，crop用source_rect原图坐标；give_up说明真实缺项。')
 
@@ -183,43 +201,42 @@ def evidence_route_schema():
     anchor = _obj({'observation': _text(200), 'control': _text(100),
                    'region': _text(40), 'quote': _text(400)}, ['observation'])
     anchor['anyOf'] = [{'required': [key]} for key in ('control', 'region', 'quote')]
-    route = _obj({'source_type': {'enum': ['input_state', 'page_result', 'page_content', 'derived_check']},
-        'observation_steps': {'type': 'array', 'minItems': 1, 'uniqueItems': True,
-                              'items': {'type': 'integer', 'minimum': 1}},
-        'existing_evidence': {'type': 'array', 'minItems': 1, 'items': anchor},
-        'depends_on': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': _text(24)}}, ['source_type'])
-    route['anyOf'] = [{'required': ['observation_steps']}, {'required': ['existing_evidence']}]
-    return route
+    # Only explicit business dependencies and existing source references are wire fields.
+    return _obj({        'existing_evidence': {'type': 'array', 'minItems': 1, 'items': anchor},
+        'depends_on': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': _text(24)}}, [])
 
 
 def requirement_schema():
     schema = _obj({'id': _text(24), 'description': _text(240),
         'kind': {'enum': ['input', 'result', 'content']},
-        'evidence_scope': {'enum': ['current', 'historical'], 'description': '首轮冻结：current须保持当前状态；historical为真实动作后的已完成阶段，仍须原捕获及阶段因果。'},
-        'result_kind': {'enum': ['calculation', 'navigation', 'input_conversion'], 'description': 'result专用；navigation须本次真实搜索提交或链接导航；input_conversion须同业务范围真实输入或提交导致另一输出字段变化且depends_on绑定阶段输入；默认calculation须本次输入与结果因果，自动更新或按钮提交由实际观察绑定。'},
+        'business_role': {'enum': ['process', 'outcome'], 'description': '默认outcome。process只描述原目标明确要求的真实过程，仍须操作证明，不承担最终结论展示。'},
+        'evidence_scope': {'enum': ['current', 'historical'], 'description': '仅原目标明确结束保持才用current；普通已发生事实可historical，省略不制造末态义务。'},
+        'acceptance': _obj({'mode': {'enum': ['presence', 'specified', 'complete']},
+            'subject': _text(240), 'source_quote': _text(400),
+            'items': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': _text(240)},
+            'scope': _text(400)}, ['mode', 'subject', 'source_quote']),
         'target': deepcopy(TARGET_SCHEMA),
         'expected_value': {'type': 'string', 'maxLength': 500}, 'expected_checked': {'type': 'boolean'},
         'evidence_route': evidence_route_schema()},
-        ['id', 'description', 'kind', 'evidence_route'])
+        ['id', 'description', 'kind', 'acceptance'])
     schema['allOf'] = [{'if': {'properties': {'kind': {'const': 'input'}}, 'required': ['kind']},
         'then': {'required': ['target'], 'oneOf': [
             {'required': ['expected_value'], 'not': {'required': ['expected_checked']}},
             {'required': ['expected_checked'], 'not': {'required': ['expected_value']}}]},
         'else': {'not': {'anyOf': [{'required': ['expected_value']}, {'required': ['expected_checked']}]}}}]
-    schema['allOf'].append({'if': {'properties': {'result_kind': {'const': 'input_conversion'}}, 'required': ['result_kind']},
-        'then': {'properties': {'kind': {'const': 'result'}}, 'required': ['target']}})
-    schema['allOf'].append({'if': {'properties': {'kind': {'const': 'result'}}, 'required': ['kind']},
-        'else': {'properties': {'result_kind': False}}})
+    schema['properties']['acceptance']['allOf'] = [
+        {'if': {'properties': {'mode': {'const': 'specified'}}}, 'then': {'required': ['items']}},
+        {'if': {'properties': {'mode': {'const': 'complete'}}}, 'then': {'required': ['scope']}}]
     schema['allOf'].append({'if': {'not': {'anyOf': [
         {'properties': {'kind': {'const': 'input'}}, 'required': ['kind']},
-        {'properties': {'result_kind': {'const': 'input_conversion'}}, 'required': ['result_kind']}] }},
+        {'properties': {'kind': {'const': 'result'}}, 'required': ['kind']}] }},
         'then': {'properties': {'target': False}}})
     return schema
 
 
 def submit_plan_schema(allowed_actions, fixed_goal=None):
     """submit_plan parameters: business plan or an explicit unsuitable report."""
-    plan_fields = {'goal': _text(400), 'final_presentation_step': {'type': 'integer', 'minimum': 1},
+    plan_fields = {'goal': _text(400),
                    'requirements': {'type': 'array', 'minItems': 1,
                                     'items': requirement_schema()},
                    'final_requirement_ids': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': _text(24),
@@ -231,7 +248,7 @@ def submit_plan_schema(allowed_actions, fixed_goal=None):
         plan_fields.pop('goal')
     else:
         plan_fields['goal']['description'] = '未指定目标时由你依据页面自主选择具体可验证、自然需要至少五个必要业务动作的目标；接受后冻结。'
-    required = [key for key in plan_fields if key != 'final_requirement_ids']
+    required = [key for key in plan_fields if key not in ('final_requirement_ids', 'final_presentation_step')]
     return {'type': 'object', 'additionalProperties': False,
             'properties': {**plan_fields, 'unsuitable': _obj({'reason': _text(300)})},
             'allOf': [{'if': {'required': ['unsuitable'], 'properties': {'unsuitable': {}}},
@@ -269,12 +286,14 @@ def decision_schema(choices, allowed_actions=None, provided_observations=None):
                               'quote': _text(400), 'control': _text(100)}, ['observation'])
         evidence_item['anyOf'] = [{'required': ['region']}, {'required': ['quote']}, {'required': ['control']}]
         properties['answers'] = {'type': 'array', 'minItems': 0, 'items': _obj({
-            'requirement_id': _text(24), 'observed_result': {'type': 'string', 'maxLength': 400},
+            'requirement_id': _text(24),
+            'observed_result': {'type': 'string', 'maxLength': 400,
+                'description': '普通答案省略：宿主按evidence引用从原始捕获生成规范observed_result；仅calculations推导结论填写。'},
             'evidence': {'type': 'array', 'minItems': 1, 'items': evidence_item},
             'calculations': {'type': 'array', 'minItems': 1, 'items': _obj({'expression': _text(200),
                 'source_requirement_ids': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': _text(24)},
                 'result_requirement_id': _text(24), 'unit': _text(40)})}},
-            ['requirement_id', 'observed_result', 'evidence'])}
+            ['requirement_id', 'evidence'])}
     if 'inspect' in choices:
         properties['image_ref'] = _text(200)
         properties['crop'] = {'type': 'array', 'items': {'type': 'integer', 'minimum': 0},
@@ -301,6 +320,19 @@ def decision_tools(choices, allowed_actions=None, provided_observations=None):
     return [{'type': 'function', 'function': {
         'name': 'plan_decision', 'description': '业务检查点决策：继续/修订剩余计划/申请完成/放弃。',
         'parameters': decision_schema(choices, allowed_actions, provided_observations)}}]
+
+
+def register_evidence_schema(provided_observations=None):
+    """Local registration has no authority to revise or terminate the task."""
+    answers = decision_schema(['continue'], provided_observations=provided_observations)['properties']['answers']
+    return _obj({'status': {'enum': ['registered', 'insufficient', 'not_relevant']},
+                 'reason': _text(300), 'answers': answers}, ['status', 'reason', 'answers'])
+
+
+def register_evidence_tools(provided_observations=None):
+    return [{'type': 'function', 'function': {'name': 'register_evidence',
+        'description': '仅登记所提供观察的证据引用；不足或不相关返回局部状态，不能结束任务。',
+        'parameters': register_evidence_schema(provided_observations)}}]
 
 
 _ALLOWED_CACHE = {}
@@ -341,6 +373,7 @@ def normalize_submit_plan(arguments, allowed_actions=None):
             _note(record, key, 'legacy_field_removed', value=json.dumps(plan[key], ensure_ascii=False)[:200])
             plan.pop(key)
     plan.pop('checks', None)
+    plan.pop('final_presentation_step', None)
     for index, requirement in enumerate(plan.get('requirements') or []):
         if not isinstance(requirement, dict):
             continue
@@ -357,14 +390,12 @@ def normalize_submit_plan(arguments, allowed_actions=None):
                     _note(record, f'requirements[{index}].target.{field}',
                           'input_expectation_moved_to_requirement')
         route = requirement.get('evidence_route')
-        # source_type只有evidence_route内一个合法位置；同值重复或明确错位可无损归位。
-        if isinstance(route, dict) and 'source_type' in requirement:
-            if 'source_type' not in route:
-                route['source_type'] = requirement.pop('source_type')
-                _note(record, f'requirements[{index}].source_type', 'route_field_moved_into_evidence_route')
-            elif route['source_type'] == requirement['source_type']:
-                requirement.pop('source_type')
-                _note(record, f'requirements[{index}].source_type', 'duplicate_route_field_removed')
+        # Execution predictions are host-owned; discard duplicate wire guesses.
+        requirement.pop('source_type', None)
+        requirement.pop('result_kind', None)
+        if isinstance(route, dict):
+            route.pop('source_type', None)
+            route.pop('observation_steps', None)
         if isinstance(requirement.get('target'), dict) and '_source' in requirement['target']:
             requirement['target'].pop('_source')
             _note(record, f'requirements[{index}].target._source', 'host_binding_field_removed')
@@ -440,209 +471,8 @@ def normalize_submit_plan(arguments, allowed_actions=None):
     return plan, {'transforms': record, 'missing': missing}
 
 
-def business_actions(steps):
-    return [step for step in (steps or []) if isinstance(step, dict)
-            and step.get('action') not in NON_BUSINESS_ACTIONS]
-
-
-def evidence_route_gaps(plan, session=None):
-    """Validate an intended route, never grant completion for future steps."""
-    requirements, steps = plan.get('requirements', []), plan.get('steps', [])
-    ids = {r['id'] for r in requirements}
-    gaps = []
-    if len(ids) != len(requirements):
-        gaps.append('重复事项编号')
-    if plan.get('final_requirement_ids') is not None:
-        final_ids = plan['final_requirement_ids']
-        if (not final_ids or len(final_ids) != len(set(final_ids)) or not set(final_ids) <= ids):
-            gaps.append('final_requirement_ids须非空、唯一且引用冻结事项')
-        meaningful = {r['id'] for r in requirements if r['kind'] in ('result', 'content')}
-        if meaningful and not meaningful.intersection(final_ids):
-            gaps.append('final_requirement_ids不能只展示输入而逃开结果或正文结论')
-    if plan.get('final_presentation_step', 0) not in range(1, len(steps) + 1):
-        gaps.append('final_presentation_step超出首轮步骤')
-    dependencies = set()
-    for requirement in requirements:
-        route = requirement.get('evidence_route') or {}
-        if requirement.get('evidence_scope', 'current') not in ('current', 'historical'):
-            gaps.append(requirement['id'] + ':未知证据时态')
-        if requirement.get('result_kind', 'calculation') not in ('calculation', 'navigation', 'input_conversion'):
-            gaps.append(requirement['id'] + ':未知结果类型')
-        if requirement.get('result_kind') == 'input_conversion':
-            inputs = {r['id'] for r in requirements if r['kind'] == 'input'}
-            if not route.get('depends_on') or not set(route['depends_on']) <= inputs:
-                gaps.append(requirement['id'] + ':转换结果须依赖冻结的阶段输入事项')
-        kind = route.get('source_type')
-        allowed = {'input': ('input_state',), 'result': ('page_result',), 'content': ('page_content', 'derived_check')}
-        if kind not in allowed[requirement['kind']]:
-            gaps.append(requirement['id'] + ':来源类型与事项不符')
-        if any(index not in range(1, len(steps) + 1) for index in route.get('observation_steps', [])):
-            gaps.append(requirement['id'] + ':观察步号超出首轮步骤')
-        depends = set(route.get('depends_on', []))
-        if not depends <= ids or requirement['id'] in depends:
-            gaps.append(requirement['id'] + ':依赖未知事项或自身')
-        if kind == 'derived_check':
-            dependencies.update(depends)
-            if not depends:
-                gaps.append(requirement['id'] + ':推导核对缺少依赖事项')
-        if session is not None:
-            for anchor in route.get('existing_evidence', []):
-                oid = anchor['observation']
-                observation = session.observation_records.get(oid)
-                if not observation or oid not in session.provided_observations or not observation.get('capture_verified'):
-                    gaps.append(requirement['id'] + ':已有依据不是实际提供的可信观察')
-                    continue
-                state = _state_for_observation(session, oid)
-                region = next((r for r in session.region_registries.get(oid, []) if r['region_id'] == anchor.get('region')), None)
-                if (anchor.get('control') not in observation.get('provided_control_ids', [])
-                    and region is None and not (anchor.get('quote') and _flat(anchor['quote']) in _flat(state.get('visible_text', '')))):
-                    gaps.append(requirement['id'] + ':已有依据锚点无效')
-    if any(r.get('evidence_route', {}).get('source_type') == 'derived_check' for r in requirements):
-        needed = {r['id'] for r in requirements if r['kind'] in ('input', 'result')}
-        if not needed <= dependencies:
-            gaps.append('推导依赖未覆盖原输入与独立结果事项')
-    return gaps
-
-
-def _explicit_result_terms(goal):
-    """Return explicit output lists, including an unambiguous two-output ``A与B``."""
-    # A reading list names questions/sections, not calculator outputs. Requiring
-    # `result` here would then demand input/submission for a read-only article.
-    if (re.search(r'阅读|閱讀|文章|条目|條目|正文', str(goal or ''))
-            and not re.search(r'输入|輸入|填写|填寫|设置|設置|修改|提交|计算器|計算器|转换器|求解器', str(goal or ''))):
-        return []
-    for clause in re.split(r'[。；;]', str(goal or '')):
-        # Literal field-name admission is sound only for an explicit output
-        # list ending in 结果/输出. Shared nouns (年度与月度账单) and comparative
-        # prose do not define literal labels that descriptions must reproduce.
-        if not re.search(r'(?:结果|输出)[。！？!?.]*$', clause.strip()):
-            continue
-        if re.search(r'对比|比较|比較|哪个|哪個|哪种|哪種', clause):
-            continue
-        enumerated = '、' in clause
-        if not re.search(r'结果|输出|查看|读取', clause):
-            continue
-        if not enumerated and len(re.findall('与', clause)) != 1:
-            continue
-        head = clause.split('结果', 1)[0]
-        if '输出' in head:
-            tail = head.rsplit('输出', 1)[1]
-        elif re.search(r'查看|读取', head):
-            tail = re.split(r'查看|读取', head)[-1]
-        else:
-            continue
-        tail = re.sub(r'^(?:的|页面|计算)+', '', tail)
-        # “收入与支出比”是一个指标名，不是两个独立输出；显式顿号列表除外。
-        if not enumerated and re.search(r'(?:比|比例|比率|比值)$', tail):
-            continue
-        parts = re.split(r'、|以及|与|和|及', tail)
-        terms = [part.strip(' \t\r\n，,：:「」“”') for part in parts]
-        if len(terms) >= 2 and all(2 <= len(term) <= 30 for term in terms):
-            return list(dict.fromkeys(terms))
-    return []
-
-
-def result_requirements_feedback(requirements, goal):
-    result_terms = _explicit_result_terms(goal)
-    if result_terms:
-        result_rows = [row for row in requirements if row.get('kind') == 'result']
-        coverage = {term: [row['id'] for row in result_rows
-                           if term in str(row.get('description') or '')] for term in result_terms}
-        compound = sorted({rid for rows in coverage.values() for rid in rows
-                           if sum(rid in matches for matches in coverage.values()) > 1})
-        missing = [term for term, rows in coverage.items() if not rows]
-        if compound or missing:
-            return {'kind': 'RESULT_REQUIREMENT_ATOMICITY',
-                           'field_paths': ['requirements'], 'requirement_ids': compound,
-                           'missing_result_terms': missing,
-                           'message': '原目标明确列举的每个输出字段必须各用一个result事项，description保留原字段名；不得合并或漏列',
-                           'dispatched': False}
-    return None
-
-
-def requirement_scope_feedback(requirements, goal):
-    """Reject determinable extra obligations and mutually exclusive final inputs."""
-    states = {}
-    for row in requirements:
-        if row.get('kind') != 'input' or row.get('evidence_scope') == 'historical':
-            continue
-        target = row.get('target') or {}
-        identity = target.get('control') or target.get('node') or tuple(
-            (key, target[key]) for key in ('text', 'role', 'href') if target.get(key))
-        if not identity:
-            continue
-        expected = ('value', row['expected_value']) if 'expected_value' in row else ('checked', row.get('expected_checked'))
-        if identity in states and states[identity][1] != expected:
-            return {'kind': 'INCOMPATIBLE_FINAL_INPUTS', 'field_paths': ['requirements'],
-                'requirement_ids': [states[identity][0], row['id']], 'dispatched': False,
-                'message': '同一控件不能同时保留两个互斥最终值；互斥阶段须在首轮明确historical并保留真实阶段动作及捕获，不得把两个互斥值都声明为current'}
-        states[identity] = (row['id'], expected)
-    definition = r'定义|定義|含义|含義|概念|何谓|何謂|是什么|是什麼'
-    if not re.search(definition, str(goal or '')):
-        extra = [row['id'] for row in requirements if row.get('kind') == 'content'
-                 and re.search(r'(?:词条|詞條|条目|條目)?.{0,20}(?:定义|定義)', str(row.get('description') or ''))]
-        if extra:
-            return {'kind': 'UNREQUESTED_READING_OBLIGATION', 'field_paths': ['requirements'],
-                'requirement_ids': extra, 'dispatched': False,
-                'message': '条目访问是原目标的路径，不能额外冻结原目标未要求的定义事项；只保留原问题必需的原子事实'}
-    return None
-
-
-def first_plan_admission(plan, *, minimum=BUSINESS_MINIMUM, goal=''):
-    """首轮资格：必要业务动作数与原目标义务（wait 不计）。"""
-    from jsonschema import Draft202012Validator
-    errors = list(Draft202012Validator(submit_plan_schema(_allowed_all())).iter_errors(plan))
-    if errors:
-        error = errors[0]
-        return False, {'kind': 'PLAN_FIELDS_INVALID', 'field_paths': ['.'.join(map(str, error.absolute_path))],
-                       'message': error.message, 'dispatched': False}
-    original_goal = str(goal or plan.get('goal') or '')
-    if not DERIVATION_OBLIGATION.search(original_goal):
-        extra = [row['id'] for row in plan.get('requirements') or []
-                 if row.get('kind') == 'content' and (
-                     row.get('evidence_route', {}).get('source_type') == 'derived_check'
-                     or DERIVATION_OBLIGATION.search(str(row.get('description') or '')))]
-        if extra:
-            return False, {'kind': 'UNREQUESTED_DERIVATION_CHECK',
-                           'field_paths': ['requirements'],
-                           'requirement_ids': extra,
-                           'message': '原目标没有独立验算、复算、换算推导或交叉验证义务；删除自增的推导核对事项，保留页面结果确认',
-                           'dispatched': False}
-    steps = plan.get('steps') or []
-    waiting = [step for step in steps if step.get('action') in NON_BUSINESS_ACTIONS]
-    business = business_actions(steps)
-    if plan.get('unsuitable'):
-        return True, {'kind': 'unsuitable', 'message': '模型报告本页自然路径不适合普通长流程',
-                      'unsuitable': plan['unsuitable'], 'dispatched': False}
-    atomicity = result_requirements_feedback(plan.get('requirements') or [], original_goal)
-    if atomicity:
-        return False, atomicity
-    scope_gap = requirement_scope_feedback(plan.get('requirements') or [], original_goal)
-    if scope_gap:
-        return False, scope_gap
-    route_gaps = evidence_route_gaps(plan)
-    if route_gaps:
-        return False, {'kind': 'EVIDENCE_ROUTE_INVALID', 'message': '；'.join(route_gaps), 'dispatched': False}
-    if len(business) >= minimum:
-        histogram = {}
-        for step in business:
-            histogram[step['action']] = histogram.get(step['action'], 0) + 1
-        return True, {'kind': 'accepted', 'business_steps': len(business), 'wait_steps': len(waiting),
-                      'total_steps': len(steps), 'action_kinds': len(histogram),
-                      'action_histogram': dict(sorted(histogram.items()))}
-    return False, {'kind': 'business_minimum', 'message': (
-                      f'首轮计划{len(steps)}项中{len(waiting)}项为wait（不计业务动作），业务动作仅{len(business)}个，'
-                      f'少于必要业务动作下限{minimum}；请提交自然完整路径，不补无用动作；自然不足即报告unsuitable'),
-                   'business_steps': len(business), 'wait_steps': len(waiting),
-                   'total_steps': len(steps), 'field_paths': ['steps'], 'dispatched': False}
-
-
 QUOTED_UI_TEXT = re.compile('「([^」]+)」')
 ELIDED_QUOTE = re.compile(r'…|\.{3,}|⋯')
-
-
-def _flat(text):
-    return re.sub(r'\s+', '', str(text or ''))
 
 
 def _quote_fragments(text):
@@ -792,13 +622,6 @@ def _execution_result_requirement(session, requirement):
         r'本次.*(?:输入|輸入|提交)|输入.*(?:结果|結果|答案)|輸入.*(?:结果|結果|答案)|提交.*(?:结果|結果|答案)|计算|計算|换算|換算|求解|转换|轉換', context))
 
 
-def _state_for_observation(session, oid):
-    observation = session.observation_records.get(oid)
-    if not observation or observation.get('capture_verified') is not True:
-        return None
-    return load_json(observation['evidence']['state']['path'])
-
-
 def _input_requirement_matches(session, observation, target):
     """Frozen selectors stay document-local; explicit semantics may bind on the same site.
 
@@ -928,7 +751,7 @@ def _verify_input(session, answer, requirement, *, trusted_capture=False):
                     stale = True
             elif after:
                 stale = True
-        historical = requirement.get('evidence_scope') == 'historical'
+        historical = requirement.get('evidence_scope') == 'historical' or requirement.get('business_role') == 'process'
         phase_action = _historical_input_action(session, oid, cid, fact, field, expected) if historical else None
         if (stale and not historical) or (historical and not phase_action):
             continue
@@ -959,16 +782,27 @@ def _verify_input_conversion(session, answer, requirement, *, trusted_capture=Fa
             continue
         state = _state_for_observation(session, oid)
         node = next((e for e in state.get('elements', []) if e['element_id'] == cid), None)
-        if not node or str(answer.get('observed_result')) not in visible_result_texts(state, node):
+        if not node:
             continue
+        candidates = [text for text in visible_result_texts(state, node)
+                      if substantive_answer_text(text, field=requirement['description'])]
+        declared = str(answer.get('observed_result') or '').strip()
+        if declared:
+            if declared not in visible_result_texts(state, node):
+                continue
+            actual = declared
+        else:
+            # The host derives the canonical output value from the captured node.
+            if not candidates:
+                continue
+            actual = candidates[0]
         binding = result_execution_binding(session, oid, state, node)
         if not binding:
             continue
         dependencies = [r for r in session.requirements if r['id'] in requirement.get('evidence_route', {}).get('depends_on', []) and r['kind'] == 'input']
-        if not dependencies or not result_dependencies_match(session, requirement, binding):
+        if not requirement.get('evidence_route', {}).get('depends_on') or not result_dependencies_match(session, requirement, binding):
             continue
         fact = input_facts(state).get(cid, {})
-        actual = str(answer['observed_result'])
         proof = {'observation_id': oid, 'node': cid, 'input_field': 'value', 'actual': actual,
             'quote': actual, 'source': fact.get('identity'), 'url': state.get('url'),
             'image': observation['evidence']['image'], 'result_execution_binding': binding,
@@ -976,31 +810,74 @@ def _verify_input_conversion(session, answer, requirement, *, trusted_capture=Fa
         if requirement.get('evidence_scope') != 'historical' and _result_superseded(session, _rows(session), oid, state, node, proof):
             continue
         return {'field': requirement['description'], 'status': 'VERIFIED', 'evidence': [proof],
-            'observed_visible_text': actual, 'requirement_id': requirement['id'], 'completion_mapping': 'bound_input_conversion'}, None
+            'observed_visible_text': actual, 'observed_result_source': 'host_capture' if not declared else 'model_declared',
+            'requirement_id': requirement['id'], 'completion_mapping': 'bound_input_conversion'}, None
     return None, {'kind': 'CONVERSION_OUTPUT_NOT_VERIFIED', 'requirement_id': requirement['id'],
         'message': '转换结果须引用可见输出字段逐字值，并由冻结阶段输入及同范围真实编辑或提交导致不同输出变化；输入回显、隐藏值和过期结果不通过。'}
 
 
-def result_dependencies_match(session, requirement, binding):
-    """Frozen stage inputs must hold at the actual producing operation."""
+def result_dependencies_match(session, requirement, binding, _seen=None):
+    """Each dependency is proved at its own producing operation, transitively."""
+    seen = set(_seen or ())
+    if requirement['id'] in seen:
+        return False
+    seen.add(requirement['id'])
     ids = requirement.get('evidence_route', {}).get('depends_on', [])
-    dependencies = [r for r in session.requirements if r['id'] in ids and r['kind'] == 'input']
-    if not dependencies:
-        return True
+    dependencies = [r for r in session.requirements if r['id'] in ids]
+    if len(dependencies) != len(ids):
+        return False
     from .screenshot_effect import input_facts
     trigger = binding.get('submission') or binding
-    oid = (trigger['after_observation_id'] if binding.get('mechanism') == 'edit' else
+    oid = (trigger.get('after_observation_id') if binding.get('mechanism') == 'edit' else
            trigger.get('before_observation_id', trigger.get('submit_before_observation_id')))
-    observation = session.observation_records[oid]
+    observation = session.observation_records.get(oid)
+    if observation is None:
+        return not dependencies
     facts = input_facts(_state_for_observation(session, oid))
-    refs = {r['node'] for r in trigger['input_refs']}
-    for requirement in dependencies:
-        matches = _input_requirement_matches(session, observation, requirement['target'])
-        if len(matches) != 1 or matches[0] not in refs:
+    refs = {r['node'] for r in trigger.get('input_refs', [])}
+    order = list(session.observation_records)
+    # Actual producing input references select business inputs, never every input
+    # in the plan. Matching their frozen values is mandatory even without depends_on.
+    for candidate in ([] if binding.get('trigger') == 'link' else session.requirements):
+        if candidate.get('kind') != 'input' or candidate in dependencies:
+            continue
+        matched = _input_requirement_matches(session, observation, candidate['target'])
+        if len(matched) == 1:
+            from .screenshot_effect import business_scope
+            producing_state = _state_for_observation(session, oid)
+            node = trigger.get('node') or trigger.get('submit_node')
+            producing = next((r for r in session.trajectory if r.get('operation_id') ==
+                             (trigger.get('operation_id') or trigger.get('submit_operation_id'))), {})
+            node = node or (producing.get('target') or {}).get('control_id')
+            scope = business_scope(producing_state, node) if node else None
+            if matched[0] in refs or (scope and business_scope(producing_state, matched[0]) == scope):
+                dependencies.append(candidate)
+    for dependency in dependencies:
+        if dependency['kind'] == 'input':
+            matches = _input_requirement_matches(session, observation, dependency['target'])
+            if len(matches) != 1 or matches[0] not in refs:
+                return False
+            fact = facts.get(matches[0], {})
+            field = 'checked' if 'expected_checked' in dependency else 'value'
+            if fact.get(field) != dependency.get('expected_' + field):
+                return False
+            continue
+        check = (getattr(session, '_verification_checks', {}).get(dependency['id']) or
+                 getattr(session, 'verified_checks', {}).get(dependency['id']))
+        if not check:
             return False
-        fact = facts.get(matches[0], {})
-        field = 'checked' if 'expected_checked' in requirement else 'value'
-        if fact.get(field) != requirement.get('expected_' + field):
+        valid = False
+        for proof in check.get('evidence', []):
+            poid = proof.get('observation_id')
+            producing = (proof.get('navigation_execution_binding') or proof.get('result_execution_binding') or
+                         proof.get('post_submit_causality'))
+            if poid not in order or order.index(poid) > order.index(oid):
+                continue
+            if producing and result_dependencies_match(session, dependency, producing, seen):
+                valid = True
+            elif dependency['kind'] == 'content' and not dependency.get('evidence_route', {}).get('depends_on'):
+                valid = True
+        if not valid:
             return False
     return True
 
@@ -1027,7 +904,7 @@ def result_candidate_rows(session, oid):
     submits = [r for r in rows if (before := _state_for_observation(session, r.get('before_observation_id'))) is not None and submission_row(r, before)]
     nodes = _evidence_nodes(state)
     facts = []
-    calculation_results = any(r.get('kind') == 'result' and r.get('result_kind', 'calculation') == 'calculation'
+    calculation_results = any(r.get('kind') == 'result' and r.get('result_kind') in ('calculation', None)
                               for r in session.requirements)
     for node in nodes if calculation_results else []:
         texts = _visible_node_texts(state, node)
@@ -1045,7 +922,7 @@ def result_candidate_rows(session, oid):
         historical = requirement.get('evidence_scope') == 'historical'
         if not historical and state.get('document_identity') != session.current.get('document_identity'):
             continue
-        kind = requirement.get('result_kind', 'calculation')
+        kind = requirement.get('result_kind')
         if kind == 'navigation':
             if _navigation_result_binding(session, rows, oid, state, requirement):
                 output.extend({'control': n['element_id'], 'text': t, 'requirement_id': requirement['id']}
@@ -1070,59 +947,6 @@ def result_candidate_rows(session, oid):
     return output
 
 
-def _evidence_nodes(state):
-    """Visible blocks are capture-owned DOM sources, even without a tree row."""
-    nodes = {row['element_id']: row for row in state.get('elements', [])}
-    for block in state.get('text_blocks', []):
-        eid, box = block.get('element_id'), block.get('bbox')
-        text = str(block.get('visible_text') or '')
-        if (not eid or not box or len(box) != 4 or not text
-                or _flat(text) not in _flat(state.get('visible_text'))):
-            continue
-        original = nodes.get(eid, {})
-        if original and original.get('visible') is not True:
-            continue
-        nodes[eid] = {**original, 'element_id': eid, 'visible': True,
-                      'bbox': box, 'text': text, 'native_role': block.get('tag', original.get('native_role'))}
-    return list(nodes.values())
-
-
-def _region_has_node(region, node):
-    return (node.get('element_id') in {region.get('element_id'), *region.get('member_ids', [])}
-            or bool(node.get('bbox') and _bbox_inside(node['bbox'], region['bbox'])))
-
-
-def _visible_node_texts(state, node):
-    from .result_execution import visible_result_texts
-    return visible_result_texts(state, node)
-
-
-def _visible_control_values(state, node):
-    from .result_execution import visible_control_texts
-    return visible_control_texts(state, node)
-
-
-def _result_tokens_visible(state, node, text, *, causal_result=False):
-    """Allow labels interleaved between values in one visible verified result.
-
-    A result container often concatenates sibling values while the page's full
-    visible text also contains their labels. Every result token must still be
-    present in order; non-result nodes and offscreen nodes keep exact matching.
-    """
-    binding = next((row for row in state.get('capture_controls', [])
-                    if row.get('element_id') == node.get('element_id')), {})
-    if not binding.get('result_region_selector') and not causal_result:
-        return False
-    visible = _flat(state.get('visible_text'))
-    position = 0
-    for token in str(text or '').split():
-        position = visible.find(_flat(token), position)
-        if position < 0:
-            return False
-        position += len(_flat(token))
-    return bool(str(text or '').split())
-
-
 def verify_final_presentation(session, checks, requirements):
     """Describe only final visible facts; cumulative proofs stay independent."""
     from .numeric_result_evidence import match_result
@@ -1138,7 +962,9 @@ def verify_final_presentation(session, checks, requirements):
     by_id = {row['requirement_id']: row for row in checks if row.get('status') == 'VERIFIED'}
     output, gaps = [], []
     final_ids = getattr(session, 'final_requirement_ids', None)
-    presentation = [row for row in requirements if final_ids is None or row['id'] in final_ids]
+    presentation = [row for row in requirements
+                    if (row.get('business_role', 'outcome') == 'outcome' and row['kind'] in ('result', 'content'))
+                    or (final_ids is not None and row['id'] in final_ids)]
     results = [row for row in presentation if row['kind'] == 'result']
     for requirement in presentation:
         rid, kind = requirement['id'], requirement['kind']
@@ -1146,7 +972,7 @@ def verify_final_presentation(session, checks, requirements):
         if not check:
             continue
         for proof in check.get('evidence', []):
-            if kind == 'input' or requirement.get('result_kind') == 'input_conversion':
+            if kind == 'input' or requirement.get('result_kind') == 'input_conversion' or proof.get('conversion_execution_binding'):
                 node = next((n for n in visible if n['element_id'] == proof.get('node')), None)
                 fact = facts.get(proof.get('node'), {})
                 if not node or fact.get('identity') != proof.get('source'):
@@ -1192,11 +1018,11 @@ def verify_final_presentation(session, checks, requirements):
                     break
             if node is None:
                 continue
-            if kind == 'result' and requirement.get('result_kind') == 'navigation':
+            if kind == 'result' and (requirement.get('result_kind') == 'navigation' or proof.get('navigation_execution_binding')):
                 original = _state_for_observation(session, proof.get('observation_id'))
                 if not original or original.get('document_identity') != state.get('document_identity'):
                     continue
-            if kind == 'result' and requirement.get('result_kind', 'calculation') == 'calculation':
+            if kind == 'result' and (requirement.get('result_kind') == 'calculation' or proof.get('result_execution_binding') or proof.get('post_submit_causality')):
                 binding = result_execution_binding(session, oid, state, node)
                 if binding is None:
                     # Recompute the same delayed-result causality accepted by
@@ -1216,7 +1042,7 @@ def verify_final_presentation(session, checks, requirements):
         if kind == 'result' and not any(row['requirement_id'] == rid for row in output):
             gaps.append({'kind': 'FINAL_RESULT_NOT_VISIBLE', 'requirement_id': rid,
                          'message': '累计结果证据已保留；结束前将该已核验结果呈现在当前清晰视口，无需重取历史输入或依据'})
-    if not results:
+    if True:
         shown = {row['requirement_id'] for row in output if row['kind'] == 'content'}
         for requirement in presentation:
             if requirement['kind'] == 'content' and requirement['id'] in by_id and requirement['id'] not in shown:
@@ -1228,14 +1054,6 @@ def verify_final_presentation(session, checks, requirements):
                 gaps.append({'kind': 'FINAL_CONCLUSION_NOT_VISIBLE', 'requirement_id': requirement['id'],
                     'message': '首轮冻结的末帧事项尚未在当前视口核验；累计证据保留，请定位真实指定展示。'})
     return output, gaps
-
-
-# Only an explicit independent-derivation obligation demands arithmetic.
-# Confirming the page's own output (“核对结果”/“核对”) is a page_result duty:
-# 计算/核对 words alone must not turn page confirmation into manual arithmetic.
-DERIVATION_OBLIGATION = re.compile(
-    r'验算|复算|重算|推导|手动换算|手算|独立(?:计算|验算|核对|推导)|自行(?:计算|验算)|'
-    r'交叉验证|计算过程|recomput|cross.?check|re-?derive|deriv', re.I)
 
 
 def _requires_arithmetic(requirement, requirements, goal=''):
@@ -1262,9 +1080,12 @@ def verify_completion(session, application, requirements, *, require_calculation
         calculation_ids = {answer.get('requirement_id') for answer in calculations}
         ordinary_requirements = [row for row in requirements if row['id'] not in calculation_ids]
         checks, gaps = verify_completion(session, {'answers': ordinary}, ordinary_requirements)
+        # 引用制普通答案没有模型誊写文本时，被核对结果的算术原文回退到宿主
+        # 生成的规范可见文本（同一捕获来源，离线重放一致）。
         known = {row['requirement_id']: {**row, 'arithmetic_source_text': next(
-            (str(answer.get('observed_result') or '') for answer in ordinary
-             if answer.get('requirement_id') == row['requirement_id']), '')} for row in checks}
+            (str(answer.get('observed_result') or '') or str(row.get('observed_visible_text') or '')
+             for answer in ordinary if answer.get('requirement_id') == row['requirement_id']),
+            str(row.get('observed_visible_text') or ''))} for row in checks}
         by_id = {row['id']: row for row in requirements}
         for answer in calculations:
             formula_proofs = []
@@ -1274,7 +1095,7 @@ def verify_completion(session, application, requirements, *, require_calculation
                     continue
                 formula_checks, formula_gaps = verify_completion(session, {'answers': [{
                     'requirement_id': answer['requirement_id'], 'observed_result': quote, 'evidence': [evidence]}]},
-                    [{'id': answer['requirement_id'], 'kind': 'content', 'description': '实际可见的公式与来源文字'}])
+                    [{'id': answer['requirement_id'], 'kind': 'content', 'description': '实际可见的公式与来源文字', 'acceptance': {'mode': 'presence', 'subject': '公式来源'}}])
                 if not formula_gaps:
                     formula_proofs.extend({**proof, 'calculation_source_quote': quote}
                                           for check in formula_checks for proof in check['evidence'])
@@ -1296,10 +1117,12 @@ def verify_completion(session, application, requirements, *, require_calculation
             gaps.append({'kind': 'ANSWER_COVERAGE', 'message': '核对答案仍须覆盖全部原事项且不得重复或新增事项'})
         if require_calculation_coverage:
             covered = {calc['result_requirement_id'] for check in checks for calc in check.get('calculations', [])}
-            missing = [row['id'] for row in requirements if row['kind'] == 'result' and row['id'] not in covered]
+            needed = {dep for row in requirements if row.get('evidence_route', {}).get('source_type') == 'derived_check'
+                      for dep in row.get('evidence_route', {}).get('depends_on', [])}
+            missing = [row['id'] for row in requirements if row['kind'] == 'result' and row['id'] in needed and row['id'] not in covered]
             if missing:
                 gaps.append({'kind': 'RESULT_CHECK_COVERAGE', 'missing_result_requirement_ids': missing,
-                             'message': '原目标全部结果都须有独立有效计算核对，不得仅核对其中一项'})
+                             'message': '明确依赖的结果须有独立有效计算核对'})
         return checks, gaps
     requirement_ids = [row['id'] for row in requirements]
     answered = [answer.get('requirement_id') for answer in answers]
@@ -1332,7 +1155,15 @@ def verify_completion(session, application, requirements, *, require_calculation
     provided = getattr(session, 'provided_observations', set())
     registries = getattr(session, 'region_registries', None) or {}
     checks = []
-    for requirement in requirements:
+    session._verification_checks = {}
+    pending, ordered = list(requirements), []
+    while pending:
+        ready = [r for r in pending if not (set(r.get('evidence_route', {}).get('depends_on', [])) & {p['id'] for p in pending})]
+        if not ready:
+            ready = pending[:1]  # malformed cycles remain rejected by contract admission
+        ordered.extend(ready)
+        pending = [r for r in pending if r not in ready]
+    for requirement in ordered:
         answer = next((a for a in answers if a.get('requirement_id') == requirement['id']), None)
         if answer is None:
             continue
@@ -1342,14 +1173,33 @@ def verify_completion(session, application, requirements, *, require_calculation
             gaps.append({'kind': 'CALCULATION_REQUIRED', 'requirement_id': requirement['id'],
                          'message': '核对事项须提供calculations推导及独立结果对照，单纯看到引用片段不证明核对结论'})
             continue
+        inferred_conversion = None
+        if requirement['kind'] == 'result' and requirement.get('result_kind') is None:
+            for ref in answer.get('evidence', []):
+                observation = session.observation_records.get(ref.get('observation')) or {}
+                cid = observation.get('provided_control_numbers', {}).get(str(ref.get('control')), ref.get('control'))
+                if cid:
+                    candidate = {**requirement, 'target': requirement.get('target') or {'control': cid}}
+                    inferred_conversion, _ = _verify_input_conversion(session, answer, candidate)
+                    if inferred_conversion:
+                        inferred_conversion['result_kind_derivation'] = 'host_observed_input_conversion'
+                        break
+        if inferred_conversion:
+            checks.append(inferred_conversion)
+            session._verification_checks[requirement['id']] = inferred_conversion
+            continue
         if requirement.get('result_kind') == 'input_conversion':
             check, gap = _verify_input_conversion(session, answer, requirement)
-            if check: checks.append(check)
+            if check:
+                checks.append(check)
+                session._verification_checks[requirement['id']] = check
             else: gaps.append(gap)
             continue
         if requirement['kind'] == 'input':
             check, gap = _verify_input(session, answer, requirement)
-            if check: checks.append(check)
+            if check:
+                checks.append(check)
+                session._verification_checks[requirement['id']] = check
             else: gaps.append(gap)
             continue
         observed = str(answer.get('observed_result') or '').strip()
@@ -1360,15 +1210,18 @@ def verify_completion(session, application, requirements, *, require_calculation
         process_required = process_field(process_context)
         anchored_short = (requirement['kind'] == 'content' and 1 < len(observed) < 8
                           and any(e.get('region') for e in answer.get('evidence', [])))
-        if not anchored_short and not substantive_answer_text(observed, field=description, excluded_text=excluded):
-            gaps.append({'kind': 'OBSERVED_RESULT_NOT_SUBSTANTIVE', 'requirement_id': requirement['id'],
-                         'message': 'observed_result须为实际可见的正文或结果，不能是标签、输入回显或空泛描述'})
-            continue
-        if process_required and not process_result_text(observed, process_context):
-            gaps.append({'kind': 'PROCESS_STEPS_NOT_SUBSTANTIVE', 'requirement_id': requirement['id'],
-                         'message': '逐步求解事项必须引用实际可见的多个运算步骤，最终解不能代替过程'})
-            continue
-        navigation_result = requirement['kind'] == 'result' and requirement.get('result_kind') == 'navigation'
+        # 普通答案只要求引用：宿主从原始捕获生成规范observed_result；模型
+        # 誊写的文本仍按逐字与实质口径核对。
+        if observed:
+            if not anchored_short and not substantive_answer_text(observed, field=description, excluded_text=excluded):
+                gaps.append({'kind': 'OBSERVED_RESULT_NOT_SUBSTANTIVE', 'requirement_id': requirement['id'],
+                             'message': 'observed_result须为实际可见的正文或结果，不能是标签、输入回显或空泛描述'})
+                continue
+            if process_required and not process_result_text(observed, process_context):
+                gaps.append({'kind': 'PROCESS_STEPS_NOT_SUBSTANTIVE', 'requirement_id': requirement['id'],
+                             'message': '逐步求解事项必须引用实际可见的多个运算步骤，最终解不能代替过程'})
+                continue
+        navigation_result = requirement['kind'] == 'result' and (requirement.get('result_kind') == 'navigation' or (requirement.get('result_kind') is None and any(_navigation_result_binding(session, rows, ref.get('observation'), _state_for_observation(session, ref.get('observation')) or {}, requirement) for ref in answer.get('evidence', []) if ref.get('observation') in session.observation_records)))
         execution_result = requirement['kind'] == 'result' and not navigation_result
         from .result_execution import frozen_input_refs
         from .screenshot_effect import business_scope
@@ -1405,7 +1258,7 @@ def verify_completion(session, application, requirements, *, require_calculation
             region = regions.get(region_id) if region_id else None
             control = observation.get('provided_control_numbers', {}).get(str(evidence.get('control')), evidence.get('control'))
             control_node = next((n for n in _evidence_nodes(state) if n['element_id'] == control), None)
-            value_anchor = bool(control_node and observed in _visible_control_values(state, control_node))
+            value_anchor = bool(observed and control_node and observed in _visible_control_values(state, control_node))
             if not region_id and not quote_anchor and not value_anchor:
                 gaps.append({'kind': 'MISSING_EVIDENCE_ANCHOR', 'requirement_id': requirement['id'],
                              'observation': oid,
@@ -1442,29 +1295,37 @@ def verify_completion(session, application, requirements, *, require_calculation
                 if quote_anchor and not any(quote_anchor in text for text in candidates):
                     continue
                 # A quote hit only proves the cited position is real; it must not
-                # relax the observed_result/requirement match itself.
-                node_text = next((text for text in candidates if observed in text
-                                  or (execution_result and match_result(observed, text, field=description, result_bound=True))), None)
+                # relax the observed_result/requirement match itself. Without a
+                # model-declared observed_result the host derives the canonical
+                # node text itself.
+                if observed:
+                    node_text = next((text for text in candidates if observed in text
+                                      or (execution_result and match_result(observed, text, field=description, result_bound=True))), None)
+                else:
+                    node_text = next((text for text in candidates
+                                      if substantive_answer_text(text, field=description, excluded_text=excluded)), None) \
+                        or (candidates[0] if candidates else None)
                 if node_text is None:
                     if quote_anchor and verbatim_miss is None:
                         verbatim_miss = candidates[0]
                     continue
                 short_bound = (anchored_short and region is not None and _flat(observed) == _flat(node_text)
                                and _flat(region.get('quote')) == _flat(node_text))
-                if not short_bound and not substantive_answer_text(node_text, field=description, excluded_text=excluded):
+                from .collection_evidence import complete_scope_fragment
+                scope_fragment = complete_scope_fragment(requirement, state, node)
+                # An actual navigation receipt may prove a short destination
+                # heading; a form label/input is still never its result.
+                navigation_heading = (navigation_result and region is not None
+                    and node.get('native_role') in ('h1', 'h2', 'h3', 'heading')
+                    and not node.get('inputable') and not node.get('clickable')
+                    and _navigation_result_binding(session, rows, oid, state, requirement) is not None)
+                if not (short_bound or scope_fragment or navigation_heading) and not substantive_answer_text(node_text, field=description, excluded_text=excluded):
                     gaps.append({'kind': 'INPUT_OR_LABEL_NOT_RESULT', 'requirement_id': requirement['id'],
                                  'quote': node_text[:120], 'message': '输入值或控件标签不能充当结果证据'})
                     continue
                 if process_required and not process_result_text(node_text, process_context):
                     gaps.append({'kind': 'PROCESS_STEPS_NOT_SUBSTANTIVE', 'requirement_id': requirement['id'],
                                  'quote': node_text[:120], 'message': '引用的可见内容不含逐步求解过程'})
-                    continue
-                if (requirement['kind'] == 'content'
-                        and re.search(r'完整|全部|清单|清單|列表|比较|比較|对比|起讫|起訖|使用者', description)
-                        and _flat(observed) != _flat(node_text)):
-                    gaps.append({'kind': 'CONTENT_SCOPE_INCOMPLETE', 'requirement_id': requirement['id'],
-                        'observation': oid, 'available_quote': node_text[:400],
-                        'message': '此事项要求完整清单、字段或比较依据，短片段命中不等于覆盖；引用完整可见句/行，或按原目标分别提交完整的原子事项'})
                     continue
                 binding = result_execution_binding(session, oid, state, node) if execution_result else None
                 if binding is not None and not result_dependencies_match(session, requirement, binding):
@@ -1476,7 +1337,11 @@ def verify_completion(session, application, requirements, *, require_calculation
                          'image': observation['evidence']['image'],
                          'anchor': 'region' if region is not None and not quote_anchor else 'quote',
                          'region': region_id if region is not None else None,
+                         **({'region_quote': region.get('quote')} if region is not None else {}),
                          'result_execution_binding': binding}
+                from .collection_evidence import content_boundary_proof
+                proof['parent_requirement_id'] = requirement['id']
+                proof['content_boundary'] = content_boundary_proof(state, node)
                 block = next((b for b in state.get('text_blocks', [])
                               if b.get('element_id') == node['element_id']), None)
                 if block:
@@ -1509,14 +1374,36 @@ def verify_completion(session, application, requirements, *, require_calculation
                         'message': '引用结果之后同一表单又发生输入或提交，请引用最新结果'})
                     continue
                 proofs.append(proof)
-                break
-            if proofs:
+                # Reading/content evidence accumulates across every cited frame
+                # and region member; result proofs keep the first bound carrier.
+                if requirement['kind'] != 'content':
+                    break
+            if proofs and requirement['kind'] != 'content':
                 break
         if proofs:
+            # 有界正文/清单/表格/比较的覆盖谓词：完整性分母来自合同（区域
+            # 整体或事项列举项），单节点全文命中不再是完整性的替代证明。
+            if requirement['kind'] == 'content':
+                units = getattr(session, '_coverage_units', set())
+                units.update(object_sha256({'requirement': requirement['id'], 'quote': p['quote'],
+                    'url': p.get('url'), 'boundary': {k: (p.get('content_boundary') or {}).get(k) for k in ('selector', 'text')},
+                    'range': ((p.get('content_boundary') or {}).get('node_ranges') or {}).get(p.get('node'))}) for p in proofs)
+                session._coverage_units = units
+            coverage = coverage_gaps(requirement, proofs)
+            if coverage:
+                partial = getattr(session, '_partial_answers', {})
+                partial[requirement['id']] = {'requirement_id': requirement['id'], 'evidence': [
+                    {'observation': p['observation_id'], **({'region': p['region']} if p.get('region') else {'quote': p['quote']})}
+                    for p in proofs]}
+                session._partial_answers = partial
+                gaps.extend(coverage)
+                continue
             checks.append({'field': description, 'status': 'VERIFIED',
-                           'evidence': proofs, 'observed_visible_text': proofs[0]['quote'],
+                           'evidence': proofs, 'observed_visible_text': '\n'.join(p['quote'] for p in proofs),
+                           'observed_result_source': 'host_capture' if not observed else 'model_declared',
                            'requirement_id': requirement['id'],
                            'completion_mapping': 'agent_requirement_to_visible_evidence'})
+            session._verification_checks[requirement['id']] = checks[-1]
         elif verbatim_miss is not None:
             gaps.append({'kind': 'OBSERVED_RESULT_NOT_VERBATIM', 'requirement_id': requirement['id'],
                          'quote': verbatim_miss[:120],
@@ -1526,29 +1413,22 @@ def verify_completion(session, application, requirements, *, require_calculation
                          'message': '实际提供的截图中未找到与observed_result匹配且位于引用region内的可见证据；'
                                     '先使用已捕获的完整文本块及必要历史图修正引用，不为同一缺项导航重取；'
                                     '仅图内文字且没有可核验文本来源时如实报告能力不足，不原样重复complete'})
-    signatures = {}
-    for check in checks:
-        requirement = next(r for r in requirements if r['id'] == check['requirement_id'])
-        if requirement['kind'] != 'result':
-            continue
-        answer = next(a for a in answers if a['requirement_id'] == requirement['id'])
-        proof = check['evidence'][0]
-        signature = (proof.get('observation_id'), proof.get('node'),
-                     str(answer.get('observed_result') or '').strip())
-        signatures.setdefault(signature, []).append(requirement['id'])
-    duplicates = {rid for ids in signatures.values() if len(ids) > 1 for rid in ids}
-    if duplicates:
+    distinct = distinct_result_gaps(checks, requirements, claimed={
+        answer.get('requirement_id'): str(answer.get('observed_result') or '').strip()
+        for answer in answers if answer.get('requirement_id')})
+    if distinct:
+        gap, duplicates = distinct
         checks = [c for c in checks if c['requirement_id'] not in duplicates]
-        gaps.append({'kind': 'DISTINCT_RESULT_EVIDENCE_REQUIRED',
-            'requirement_ids': sorted(duplicates),
-            'message': '不同输出事项不能复制同一位置的同一个答案；分别引用各字段真实标签和值。数值相同时仍须区分对应字段位置或完整标签原文'})
+        gaps.append(gap)
     if require_calculation_coverage:
         context = ' '.join([_goal_description(session), *[row['description'] for row in requirements]])
         if DERIVATION_OBLIGATION.search(context):
-            missing = [row['id'] for row in requirements if row['kind'] == 'result']
+            needed = {dep for row in requirements if row.get('evidence_route', {}).get('source_type') == 'derived_check'
+                      for dep in row.get('evidence_route', {}).get('depends_on', [])}
+            missing = [row['id'] for row in requirements if row['kind'] == 'result' and row['id'] in needed]
             if missing:
                 gaps.append({'kind': 'RESULT_CHECK_COVERAGE', 'missing_result_requirement_ids': missing,
-                             'message': '固定原目标要求独立推导核对，逐字结果或说明不能替代全部结果的独立计算核对'})
+                             'message': '明确依赖结果需要独立推导核对，逐字结果不能替代计算'})
     return checks, gaps
 
 
@@ -1672,52 +1552,17 @@ def _navigation_result_binding(session, rows, oid, state, requirement):
             continue
         # The accepted trajectory already established navigation/popup provenance;
         # sealed effective_trajectory independently revalidates its raw witness.
-        return {'operation_id': row['operation_id'], 'before_observation_id': row['before_observation_id'],
+        from .screenshot_effect import input_facts, business_scope
+        form = business_scope(before, cid) if submit else None
+        binding = {'operation_id': row['operation_id'], 'before_observation_id': row['before_observation_id'],
                 'after_observation_id': after_id, 'result_observation_id': oid,
+                'input_refs': [{'node': node} for node in input_facts(before)
+                               if form and business_scope(before, node) == form],
                 'trigger': 'submission' if submit else 'link'}
+        if not result_dependencies_match(session, requirement, binding):
+            continue
+        return binding
     return None
-
-
-def _result_superseded(session, rows, oid, state, node, proof):
-    """Historical reading stays valid; a calculation must match current inputs."""
-    from .result_execution import _binding, submission_row
-    from .screenshot_effect import business_scope
-    order = {key: index for index, key in enumerate(session.observation_records)}
-    document = state.get('document_identity')
-    if document != session.current.get('document_identity'):
-        return True
-    form = business_scope(state, node['element_id'])
-    if not form:
-        causal = proof.get('post_submit_causality') or {}
-        submit_before = _state_for_observation(session, causal.get('submit_before_observation_id'))
-        submit = next((row for row in rows
-                       if row.get('operation_id') == causal.get('submit_operation_id')), None)
-        if submit_before is not None and submit is not None:
-            form = business_scope(submit_before, (submit.get('target') or {}).get('control_id'))
-    if not form:
-        binding = proof.get('result_execution_binding') or {}
-        submission = binding.get('submission') or {}
-        before = _state_for_observation(session, submission.get('before_observation_id'))
-        if before is not None:
-            form = business_scope(before, submission.get('node'))
-    for row in rows:
-        if row.get('definite_zero_effect') or order.get(row.get('after_observation_id'), -1) <= order.get(oid, -1):
-            continue
-        before = _state_for_observation(session, row.get('before_observation_id'))
-        if before is None or before.get('document_identity') != document:
-            continue
-        from .screenshot_effect import input_edit_row
-        if not input_edit_row(session, row) and not submission_row(row, before):
-            continue
-        changed_form = business_scope(before, (row.get('target') or {}).get('control_id'))
-        if form and changed_form == form:
-            return True
-    return False
-
-
-def _bbox_inside(inner, outer):
-    return (inner[0] >= outer[0] - 1 and inner[1] >= outer[1] - 1
-            and inner[2] <= outer[2] + 1 and inner[3] <= outer[3] + 1)
 
 
 def _post_submit_causality(session, submit_rows, input_rows, result_oid, result_state, result_node):
@@ -1784,7 +1629,7 @@ def _post_submit_causality(session, submit_rows, input_rows, result_oid, result_
         pre_existed = False
         for prior_oid in list(session.observation_records)[:order[after_id]]:
             prior_state = _state_for_observation(session, prior_oid)
-            if prior_state and any(quote in (element.get('text') or '')
+            if prior_state and any(quote in (element.get('visible_text', element.get('text')) or '')
                                    for element in prior_state.get('elements', [])
                                    if element.get('visible') is True):
                 pre_existed = True
@@ -2074,6 +1919,9 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
 
     gateway = None
     protocol = task['fragment']['decision_protocol']
+    from .session_core import validate_effort_profile
+    configured = ledger.config['model'].get('reasoning_effort') or REASONING_EFFORT
+    effective_profile = validate_effort_profile(task['fragment']['reasoning_effort_profile']) if task['fragment'].get('reasoning_effort_profile') else {'first_plan': configured, 'branch': configured}
 
     async def choose(prompt):
         nonlocal gateway
@@ -2081,7 +1929,8 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
         # marker; the gateway purpose label below carries the same stable name.
         payload = {'protocol': STRATEGY_SCREENSHOT_PLAN, 'attempt_id': attempt_id, 'task_id': task['task_id'],
                    'site_uri': task['site_uri'], 'prompt_sha256': object_sha256(
-                       {key: value for key, value in prompt.items() if key not in ('system', 'tools', '_images', '_history')}),
+                       {key: value for key, value in prompt.items()
+                        if key not in ('system', 'tools', '_images', '_history', '_dispatch_deadline')}),
                    'decision': prompt.get('progress', {}).get('decisions_used', 0)}
         if parent_job is not None:
             payload['parent_job_id'] = parent_job['id']
@@ -2106,7 +1955,8 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
                 from .model_gateway import ModelGateway
                 gateway = ModelGateway(ledger, runlog=runlog)
             text = json.dumps({key: value for key, value in prompt.items()
-                               if key not in ('system', 'tools', '_images')}, ensure_ascii=False, sort_keys=True)
+                               if key not in ('system', 'tools', '_images', '_dispatch_deadline')},
+                              ensure_ascii=False, sort_keys=True)
             # The equivalence normalizer covers both strategy-2 wires: submit_plan
             # (first round) and plan_decision (branch checkpoints). Decision calls
             # pass their choices/allowed_actions from the prompt payload.
@@ -2130,7 +1980,8 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
             response = await asyncio.to_thread(gateway.call_tool, job, STRATEGY_SCREENSHOT_PLAN, text, prompt['tools'],
                 system=prompt['system'], images=images,
                 attempts=2, output_limit=ledger.config['model']['max_completion_tokens'],
-                attempt_id=attempt_id, reasoning_effort=REASONING_EFFORT,
+                attempt_id=attempt_id, reasoning_effort=effective_profile['first_plan' if prompt.get('phase') == 'first' else 'branch'],
+                dispatch_deadline=prompt.get('_dispatch_deadline'),
                 **normalizer_kwargs)
             ledger.finish(job, result=response)
             return response
@@ -2150,9 +2001,10 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
     # The base session reads these chooser attributes directly (no getattr
     # fallback on request_limit); the strategy-2 protocol sets no session cap.
     choose.request_limit = None
-    choose.first_plan_reasoning_effort = REASONING_EFFORT
+    choose.first_plan_reasoning_effort = effective_profile['first_plan']
     choose.first_plan_timeout_seconds = 600 if ledger.real_glm else None
-    choose.branch_reasoning_effort = REASONING_EFFORT
+    choose.branch_reasoning_effort = effective_profile['branch']
+    choose.effective_reasoning_effort_profile = deepcopy(effective_profile)
     return choose
 
 
@@ -2161,3 +2013,4 @@ def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None
 def enabled(task):
     from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, strategy_id
     return strategy_id(task) == STRATEGY_SCREENSHOT_PLAN
+

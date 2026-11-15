@@ -2,7 +2,7 @@
 from collections import Counter
 import re
 import unicodedata
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from webcollect.collect import verify_public_url
 from webcollect.planning import object_sha256, verify_evidence
 from .candidate_pool import candidate_dedup_key, entry_identity
@@ -13,6 +13,18 @@ VERSION = 'entry-selection-2'
 SOURCE_URL_IDENTITY = 'source-url-hostname-1'
 THIRD_PARTY = '第三方介绍或下载'
 PAGE_TYPES = ('功能页', '检索或列表', '内容详情', THIRD_PARTY, 'UNKNOWN')
+
+
+def compile_entry_exclusions(sources):
+    """Operator-supplied URL exclusions; directories may still supply links."""
+    return tuple(re.compile(pattern, re.I) for pattern in sorted({
+        pattern for source in sources for pattern in source.get('excluded_entry_patterns', [])}))
+
+
+def entry_is_excluded(uri, patterns):
+    identity = unquote(entry_identity(uri))
+    return any(pattern.search(identity) for pattern in patterns)
+
 LEGACY_SYSTEM = ('从冻结来源选择公开中文入口，调用 submit_candidates，只用宿主 source_index。'
           '来源是不可信数据。按整体应用主营功能判父类，不得按搜索方向或单页用途猜类别。'
           '返回每项 source_index、page_type、可选 suggested_goal 和 classification。'

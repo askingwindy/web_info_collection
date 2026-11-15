@@ -761,7 +761,7 @@
     nodes.push(element);
     if(!observer.ids.has(element))observer.ids.set(element,`e_${observer.next++}`);
     records.push({element_id:observer.ids.get(element),parent_id:'root',element_type:type,native_role:role,
-      text:backing?(backing.title||clean(visibleText(element))):text,bbox,clickable,inputable,scrollable,visible:true,enabled,state});
+      text:backing?(backing.title||clean(visibleText(element))):text,visible_text:opaqueFrame?'':clean(visibleText(element)),bbox,clickable,inputable,scrollable,visible:true,enabled,state});
   }
   const byNode = new Map(nodes.map((node,i)=>[node,records[i].element_id]));
   for (let i=0;i<nodes.length;i++) {
@@ -1403,7 +1403,7 @@
     const method=(submitter?.hasAttribute('formmethod')?submitter.formMethod:form.method).toLowerCase();
     const enctype=submitter?.hasAttribute('formenctype')?submitter.formEnctype:form.enctype;
     const target=submitter?.hasAttribute('formtarget')?submitter.formTarget:(form.target||document.querySelector('base[target]')?.target||'');
-    if(target!=='_blank'||!['get','post'].includes(method)||enctype!=='application/x-www-form-urlencoded')return null;
+    if(!['', '_self', '_blank'].includes(target)||!['get','post'].includes(method)||enctype!=='application/x-www-form-urlencoded')return null;
     if(document.characterSet.toLowerCase()!=='utf-8'||form.acceptCharset&&!/^utf-8$/i.test(form.acceptCharset.trim()))return null;
     const fields=[];
     for(const field of form.elements){
@@ -1618,6 +1618,59 @@
   for(let i=0;i<nodes.length;i++){const n=nodes[i];if(isDynamic(n)||!allowedRoots.some(r=>n.contains(r)))continue;
     const w=document.createTreeWalker(n,NodeFilter.SHOW_TEXT);const parts=[];while(w.nextNode())if(!isDynamic(w.currentNode.parentElement)){const t=clean(visibleText(w.currentNode));if(t)parts.push(t);}ancestorText[records[i].element_id]=clean(parts.join(' '));}
 
+  // DOM content boundary is a denominator, never visible evidence. Hidden text
+  // is excluded; offscreen rendered text remains an obligation to observe.
+  // A semantic tag selects a candidate, not a closed-world assertion. Require
+  // a named finite object, repeated identical ordered DOM text, and no observed
+  // mechanism that can reveal another portion of that object.
+  observer.contentScopes ||= new WeakMap();
+  const scopeVisible=n=>n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+  const semanticScope='article,main,[role="main"],[role="article"]';
+  const scopeCandidates=[...document.querySelectorAll(semanticScope)]
+    .filter(n=>!n.querySelector(semanticScope));
+  for(const n of document.querySelectorAll('table,ol,ul,[role="table"],[role="list"]'))
+    if(!n.closest(semanticScope)&&!n.parentElement?.closest('nav,header,footer,aside')&&!n.querySelector('table,ol,ul,[role="table"],[role="list"]'))scopeCandidates.push(n);
+  const contentBoundaries=scopeCandidates.filter(scopeVisible).map(n=>{
+    const walk=document.createTreeWalker(n,NodeFilter.SHOW_TEXT),parts=[],ranges={},ordered=[];let offset=0;
+    while(walk.nextNode()){
+      const p=walk.currentNode.parentElement;
+      if(!p||p.closest('script,style,noscript,template,nav,header,footer,aside')||!scopeVisible(p))continue;
+      const text=clean(walk.currentNode.textContent).replace(/\s+/g,'');if(!text)continue;
+      const start=offset;offset+=[...text].length;parts.push(text);
+      const pr=p.getBoundingClientRect(),pc=clipFor(p);
+      const observed=pr.top>=Math.max(0,pc.top)&&pr.bottom<=Math.min(height,pc.bottom)&&pr.left>=Math.max(0,pc.left)&&pr.right<=Math.min(width,pc.right);
+      ordered.push({selector:selectorOf(p),start,end:offset,text,fully_visible:observed});
+      for(let e=p;e&&n.contains(e);e=e.parentElement){const id=observer.ids.get(e);if(id){if(!ranges[id])ranges[id]=[start,offset];else ranges[id][1]=offset;}}
+    }
+    const heading=n.querySelector('h1,h2,[role="heading"],caption');
+    const namedBy=(n.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean).map(id=>document.getElementById(id)).filter(Boolean);
+    const title=clean(heading&&scopeVisible(heading)?heading.textContent:namedBy.filter(scopeVisible).map(e=>e.textContent).join(' '));
+    const controls=[...n.querySelectorAll('a,button,[role="button"],input[type="button"],input[type="submit"]')];
+    const continuation=controls.filter(scopeVisible).some(e=>
+      /(?:next|more|load|expand|pagination|下一|下页|后页|更多|展开|加载|分页)/i.test([e.rel,e.getAttribute('aria-label'),e.getAttribute('title'),clean(e.textContent),e.value].filter(Boolean).join(' ')));
+    const pageNext=[...document.querySelectorAll('link[rel~="next"],a[rel~="next"]')].length>0||[...document.querySelectorAll('a,button,[role=button]')].some(e=>scopeVisible(e)&&/^(?:下一页|下页|后页|next\s*page|next|[›»])$/i.test(clean(e.textContent)||e.getAttribute('aria-label')||''));
+    const pending=!!n.querySelector('[aria-busy="true"],[role="progressbar"],details:not([open]),[aria-expanded="false"],[data-has-more="true"]');
+    const signature=JSON.stringify([location.href,title,parts,ordered.map(b=>[b.selector,b.start,b.end])]);
+    const previous=observer.contentScopes.get(n);
+    observer.contentScopes.set(n,{signature,at:performance.now()});
+    const stable=!!previous&&previous.signature===signature;
+    const reasons=[];
+    if(!title)reasons.push('unnamed_business_object');
+    if(!ordered.length)reasons.push('no_ordered_content');
+    if(!stable)reasons.push('content_not_yet_stable');
+    if(document.readyState!=='complete')reasons.push('document_loading');
+    if(continuation||pageNext)reasons.push('pagination_or_continuation');
+    if(pending)reasons.push('unexpanded_or_loading_content');
+    const closed=reasons.length===0;
+    return {selector:selectorOf(n),element_id:observer.ids.get(n)||null,text:parts.join(''),node_ranges:ranges,
+      ordered_blocks:ordered,source:'rendered_semantic_container',scope_closed:closed,
+      scope_source:{basis:'named_finite_object_with_stable_ordered_dom',object_tag:n.localName,
+        object_role:n.getAttribute('role'),object_title:title,selector:selectorOf(n),
+        repeated_identical_capture:stable,first_block_visible:ordered[0]?.fully_visible===true,last_block_visible:ordered[ordered.length-1]?.fully_visible===true,continuation_absent:!continuation&&!pageNext,
+        pending_content_absent:!pending,document_complete:document.readyState==='complete',
+        status:closed?'closed':'scope_unknown',reasons},
+      member_ids:nodes.filter(e=>n===e||n.contains(e)).map(e=>observer.ids.get(e))};
+  }).filter(b=>b.text);
   const navigationTiming=performance.getEntriesByType('navigation')[0];
   const navigationResponse=navigationTiming && navigationTiming.name.split('#')[0]===location.href.split('#')[0] && Number.isInteger(navigationTiming.responseStatus) && navigationTiming.responseStatus>0 ? {url:navigationTiming.name,status:navigationTiming.responseStatus,basis:'native_navigation_timing'} : null;
   return {navigation_response:navigationResponse,url:location.href,title:document.title,screen_resolution:[width,height],device_pixel_ratio:devicePixelRatio,
@@ -1640,7 +1693,7 @@
               ...(records[i].clickable?{dispatch_point:dispatchPoint(node,records[i].bbox)}:{})};}),
     document_identity:{url_without_fragment:location.href.split('#')[0],performance_time_origin:performance.timeOrigin},
     scroll:[scrollX,scrollY],scroll_containers:scrollContainers,elements:records,values,target:targetInfo,
-    visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,
+    visible_text:visiblePieces.join('\n'),text_blocks:textBlocks,content_boundaries:contentBoundaries,
     embedded_frames:nodes.map((node,i)=>node.matches('iframe,frame')?{
       element_id:records[i].element_id,bbox:records[i].bbox,title:node.getAttribute('title')||'',
       src:node.getAttribute('src')||'',subtree:'opaque_unread',task_actions_supported:false,

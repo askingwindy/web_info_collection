@@ -415,7 +415,7 @@ def native_form_intent(operation, state):
     cid = evidence.get('anchor_element_id') or evidence.get('focused_element_id')
     binding = next((b for b in state.get('capture_controls', []) if b['element_id'] == cid), {})
     form = binding.get('form_submission')
-    if not form or form.get('target') != '_blank':return None
+    if not form or form.get('target') not in ('', '_self', '_blank'):return None
     if action == 'click':
         if binding.get('tag') not in ('button', 'input') or binding.get('input_type') != 'submit':return None
         if binding.get('selector') != form.get('submitter_selector'):return None
@@ -453,17 +453,34 @@ async def arm_native_form(origin, operation, state):
             request_log.append({'url':request.url,'method':request.method,'post_data':request.post_data,
                 'content_type':request.headers.get('content-type',''),'redirected':request.redirected_from is not None})
     origin.context.on('request', requested)
-    return {'intent':intent,'requests':requests,'listener':requested,'context':origin.context,'request_log':request_log}
+    return {'intent':intent,'requests':requests,'listener':requested,'context':origin.context,'request_log':request_log,'listener_active':True}
+
+
+def close_native_form(watcher):
+    """Release this action's request listener once across nested cleanup paths."""
+    if watcher and watcher.get('listener_active', True):
+        watcher['context'].remove_listener('request', watcher['listener'])
+        watcher['listener_active'] = False
 
 
 async def finish_native_form(origin, watcher):
     if not watcher:return None
-    watcher['events'] = await origin.evaluate("""()=>{
-      const key=Symbol.for('webcollect.native-form-submit'),entry=globalThis[key];
-      if(!entry)return [];entry.form.removeEventListener('submit',entry.listener,true);
-      delete globalThis[key];return entry.events.map(entry.serialize);
-    }""")
-    return {'intent':watcher['intent'],'events':watcher['events']}
+    try:
+        watcher['events'] = await origin.evaluate("""()=>{
+          const key=Symbol.for('webcollect.native-form-submit'),entry=globalThis[key];
+          if(!entry)return [];entry.form.removeEventListener('submit',entry.listener,true);
+          delete globalThis[key];return entry.events.map(entry.serialize);
+        }""")
+    except Exception:
+        # A normal same-window submit destroys the old execution context.
+        # Its real document request remains available; never repeat submission.
+        if not watcher['request_log']:
+            raise
+        watcher['events'] = []
+    finally:
+        close_native_form(watcher)
+    return {'intent':watcher['intent'],'events':watcher['events'],
+            'document_requests':deepcopy(watcher['request_log'])}
 
 
 def validate_native_form_popup(proof, operation, state, landed_url):
@@ -472,7 +489,6 @@ def validate_native_form_popup(proof, operation, state, landed_url):
     Called online and from sealed postprocessing; flags alone grant no source.
     Redirects and script interception remain unsupported.
     """
-    from urllib.parse import urlencode, urlunsplit
     from .collect import verify_public_url
     intent = native_form_intent(operation, state)
     if not intent or proof.get('form_intent') != intent:raise ValueError('POPUP_FORM_BINDING_UNPROVEN')
@@ -491,25 +507,32 @@ def validate_native_form_popup(proof, operation, state, landed_url):
     fields=intent.get('fields')
     if not isinstance(fields,list) or any(not isinstance(p,list) or len(p)!=2 or any(not isinstance(v,str) for v in p) for p in fields):
         raise ValueError('POPUP_FORM_ENCODING_UNSUPPORTED')
-    normalize=lambda v:re.sub(r'\r\n|\r|\n', '\r\n', v)
-    encoded=urlencode([(normalize(k),normalize(v)) for k,v in fields], safe='*').replace('~','%7E')
-    action=urlsplit(intent['action']);verify_public_url(intent['action']);verify_public_url(landed_url)
-    expected_url=urlunsplit((action.scheme,action.netloc,action.path,encoded if intent['method']=='get' else action.query,''))
+    from .navigation import native_form_encoding
+    expected_url,encoded=native_form_encoding(intent,state['url'])
+    verify_public_url(expected_url);verify_public_url(landed_url)
     request=proof.get('initial_request') or {}
     if (request.get('method') != intent['method'].upper() or request.get('url') != expected_url
             or request.get('redirected') is not False or proof.get('initial_request_count') != 1
             or (intent['method']=='post' and (request.get('post_data') != encoded
                 or request.get('content_type','').split(';')[0].strip() != intent['enctype']))
             or (intent['method']=='get' and request.get('post_data') not in (None,''))
-            or urldefrag(landed_url)[0] != expected_url or proof.get('landed_url') != landed_url):
+            or proof.get('landed_url') != landed_url):
         raise ValueError('POPUP_FORM_REQUEST_UNPROVEN')
+    if urldefrag(landed_url)[0] != expected_url:
+        from .navigation import validate_http_chain
+        chain=proof.get('http_navigation')
+        validate_http_chain(chain,expected_url,landed_url,source_url=state['url'],
+            operation_id=operation.get('operation_id'))
+        first=chain['requests'][0]
+        if any(first.get(key)!=request.get(key) for key in ('url','method','post_data','content_type')):
+            raise ValueError('POPUP_FORM_REDIRECT_SOURCE_UNPROVEN')
     if (proof.get('source_url') != state['url'] or proof.get('source_document') != state.get('document_identity')
             or proof.get('source_node') != (operation.get('evidence',{}).get('anchor_element_id') or operation.get('evidence',{}).get('focused_element_id'))):
         raise ValueError('POPUP_SOURCE_UNPROVEN')
     return True
 
 
-async def verify_popup(origin,opened,operation,state,form_watcher=None):
+async def verify_popup(origin,opened,operation,state,form_watcher=None,http_watcher=None):
     """Earned links or witnessed native form submits; uncertainty stays blocked."""
     if await opened.opener()!=origin:raise ValueError('POPUP_SOURCE_UNPROVEN')
     cid=operation.get('evidence',{}).get('anchor_element_id') or operation.get('evidence',{}).get('focused_element_id')
@@ -517,16 +540,22 @@ async def verify_popup(origin,opened,operation,state,form_watcher=None):
     carrier = navigation_carrier(state, cid)
     href = carrier['href'] if carrier else None
     await opened.wait_for_load_state('domcontentloaded',timeout=30000)
-    if operation['action_type']=='click' and href and urlsplit(href).scheme in ('http','https') and same_url(href,opened.url):
-        return {'source_url':state['url'],'source_document':state.get('document_identity'),
+    if operation['action_type']=='click' and href and urlsplit(href).scheme in ('http','https'):
+        proof = {'source_url':state['url'],'source_document':state.get('document_identity'),
             'source_node':cid,'clicked_href':href,'opener_verified':True,'landed_url':opened.url,
             'link_carrier':carrier,
             'atomic_actions':1,'new_page_first_frame':'following synchronized observation'}
+        if not same_url(href,opened.url):
+            if not http_watcher:raise ValueError('POPUP_LANDING_UNPROVEN')
+            from .navigation import finish_http_navigation
+            proof['http_navigation']=await finish_http_navigation(http_watcher,opened,href,
+                source_url=state['url'],operation_id=operation['operation_id'])
+        return proof
     if not form_watcher:raise ValueError('POPUP_LANDING_UNPROVEN')
     requests=[]
     for request in form_watcher['requests']:
         try:
-            if request.frame==opened.main_frame:requests.append(request)
+            if request.frame==opened.main_frame and request.redirected_from is None:requests.append(request)
         except Exception:continue  # An unbound service-worker request proves nothing.
     request=requests[0] if requests else None
     opener_document=await asyncio.wait_for(origin.evaluate('()=>({url_without_fragment:location.href.split("#")[0],performance_time_origin:performance.timeOrigin})'),timeout=2)
@@ -537,6 +566,11 @@ async def verify_popup(origin,opened,operation,state,form_watcher=None):
             'redirected':request.redirected_from is not None} if request else None),
         'opener':{'url':origin.url,'document_identity':opener_document},'landed_url':opened.url,
         'atomic_actions':1,'new_page_first_frame':'following synchronized observation'}
+    if request and not same_url(request.url,opened.url):
+        if not http_watcher:raise ValueError('POPUP_LANDING_UNPROVEN')
+        from .navigation import finish_http_navigation
+        proof['http_navigation']=await finish_http_navigation(http_watcher,opened,request.url,
+            source_url=state['url'],operation_id=operation['operation_id'])
     form_watcher['popup_proof'] = deepcopy(proof)
     validate_native_form_popup(proof,operation,state,opened.url)
     return proof

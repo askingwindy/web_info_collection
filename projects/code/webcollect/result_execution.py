@@ -24,7 +24,7 @@ def page_feedback(state, *, scope=None):
             if business_scope(state, cid) != scope:
                 continue
         b=bindings.get(cid,{})
-        role=e.get('native_role');text=e.get('text') or ''
+        role=e.get('native_role');text=e.get('visible_text', e.get('text')) or ''
         if b.get('validation_message') or b.get('aria_invalid')=='true':
             invalid.append({'node':cid,'message':b.get('validation_message') or text,'aria_invalid':b.get('aria_invalid')})
         elif b.get('aria_role')=='alert' and re.search(r'无效|無效|错误|錯誤|请输入|請輸入|必须|必須|invalid|required|error',text,re.I):
@@ -138,7 +138,7 @@ def visible_result_texts(state, node):
     binding = _binding(state, cid)
     if node.get('inputable') or node.get('native_role') in ('input', 'textarea', 'select') or binding.get('tag') in ('input', 'textarea', 'select'):
         return visible_control_texts(state, node)
-    texts = [str(node.get('text') or '').strip()]
+    texts = [str(node.get('visible_text') if 'visible_text' in node else node.get('text') or '').strip()]
     flat = lambda value: re.sub(r'\s+', '', str(value or ''))
     for block in state.get('text_blocks', []):
         if block.get('element_id') != cid:
@@ -262,14 +262,14 @@ def result_execution_binding(s, oid, state, node):
             after_bindings={b['element_id']:b for b in after.get('capture_controls',[])}
             after_results=[e for e in after.get('elements',[]) if e.get('visible') is True
                 and after_bindings.get(e['element_id'],{}).get('result_region_selector')==result_selector
-                and (e.get('text') or '')==(node.get('text') or '')]
+                and (e.get('visible_text', e.get('text')) or '')==(node.get('visible_text', node.get('text')) or '')]
             if not after_results:continue
             selector=binding.get('selector','')
             if re.search(r'(?:^| > )table:',selector):
                 before_bindings={b['element_id']:b for b in before.get('capture_controls',[])}
-                old=[e.get('text') for e in before.get('elements',[])
+                old=[e.get('visible_text', e.get('text')) for e in before.get('elements',[])
                     if before_bindings.get(e['element_id'],{}).get('result_region_selector')==result_selector]
-                if (node.get('text') or '') in old:continue
+                if (node.get('visible_text', node.get('text')) or '') in old:continue
             result_form=business_scope(state, node['element_id']) if screenshot else binding.get('form_selector')
             if result_form and form!=result_form:continue
             submit={'operation_id':row['operation_id'],'before_observation_id':row['before_observation_id'],

@@ -92,9 +92,36 @@ class VisualPage:
 
 class Strategy2VisualCore(unittest.TestCase):
     def test_plan_target_provenance_rebind_and_wrong_object_refusal(self):
+        from types import SimpleNamespace
+        from webcollect.screenshot_plan import screenshot_chooser
+        profile_ledger = SimpleNamespace(real_glm=False, config={'model': {'max_images': 2, 'reasoning_effort': 'low'}})
+        profile_task = {'fragment': {'decision_protocol': 'conditional-plan',
+            'reasoning_effort_profile': {'first_plan': 'high', 'branch': 'max'}}}
+        chooser = screenshot_chooser(profile_ledger, profile_task, 'profile-offline')
+        self.assertEqual((chooser.first_plan_reasoning_effort, chooser.branch_reasoning_effort), ('high', 'max'))
         # A native form popup is earned by its frozen form, trusted default
         # submit event, exact opener and actual first navigation request.
         from webcollect.plan_evidence import validate_native_form_popup
+        from webcollect.plan_evidence import finish_native_form, close_native_form
+        from unittest.mock import AsyncMock
+        # A submit's inner evidence finalizer and outer action cleanup own the
+        # same listener. Real Playwright rejects a second handler removal.
+        other_listener = lambda request: None
+        class ListenerContext:
+            def __init__(self, listener):self.listeners = {listener, other_listener}
+            def remove_listener(self, event, listener):
+                self.assert_event = event
+                self.listeners.remove(listener)
+        listener = lambda request: None
+        context = ListenerContext(listener)
+        watcher = {'context':context,'listener':listener,'listener_active':True,
+                   'intent':{'method':'post'},'request_log':[{'method':'POST'}]}
+        origin_form = SimpleNamespace(evaluate=AsyncMock(return_value=[]))
+        submit = asyncio.run(finish_native_form(origin_form, watcher))
+        close_native_form(watcher)
+        self.assertEqual(submit['document_requests'], [{'method':'POST'}])
+        self.assertEqual(context.listeners, {other_listener})
+        self.assertEqual(context.assert_event, 'request')
         form = {'form_selector':'form','submitter_selector':'input[type=submit]',
                 'action':'https://example.org/search','method':'get',
                 'target':'_blank','enctype':'application/x-www-form-urlencoded','fields':[['q','正文']]}
@@ -146,18 +173,61 @@ class Strategy2VisualCore(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'POPUP_LANDING_UNPROVEN'):
             asyncio.run(verify_popup(origin,wrong_opened,click,linked))
         from webcollect.screenshot_plan import first_plan_admission, normalize_submit_plan
+        admit = first_plan_admission
+        def first_plan_admission(plan):
+            fixture = deepcopy(plan)
+            fixture.pop('final_presentation_step', None)
+            for row in fixture.get('requirements', []):
+                if 'acceptance' in row:
+                    row['acceptance']['source_quote'] = fixture['goal']
+            return admit(fixture)
+        from webcollect.screenshot_plan import register_evidence_schema
+        from jsonschema import Draft202012Validator
+        local = Draft202012Validator(register_evidence_schema({'frame'}))
+        self.assertTrue(local.is_valid({'status': 'insufficient', 'reason': '对象不符', 'answers': []}))
+        for forbidden in ('decision', 'remaining_plan', 'complete', 'give_up'):
+            self.assertFalse(local.is_valid({'status': 'registered', 'reason': '引用登记', 'answers': [], forbidden: True}))
         route_plan = {'goal': '读取结果并根据页面依据核对',
             'requirements': [
-                {'id': 'result', 'kind': 'result', 'description': '读取业务结果',
-                 'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
-                {'id': 'check', 'kind': 'content', 'description': '核对结果',
-                 'evidence_route': {'source_type': 'derived_check', 'observation_steps': [4], 'depends_on': ['result']}}],
+                {'id': 'result', 'kind': 'result', 'description': '读取业务结果', 'evidence_scope': 'current',
+                 'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '读取业务结果', 'source_quote': '读取业务结果'}},
+                {'id': 'check', 'kind': 'content', 'description': '核对结果', 'evidence_scope': 'current',
+                 'evidence_route': {'source_type': 'derived_check', 'observation_steps': [4], 'depends_on': ['result']}, 'acceptance': {'mode': 'presence', 'subject': '核对结果', 'source_quote': '核对结果'}}],
             'final_presentation_step': 5,
             'steps': [{'action': 'scroll', 'direction': 'down', 'purpose': '读取必要依据',
                        'rationale': '计划前提：需要读取目标依据', 'expected_result': '必要依据进入视口'} for _ in range(5)]}
         normalized, _ = normalize_submit_plan(route_plan)
-        self.assertEqual(normalized, route_plan)
-        self.assertEqual(first_plan_admission(normalized)[1]['kind'], 'UNREQUESTED_DERIVATION_CHECK')
+        self.assertNotIn('source_type', normalized['requirements'][0]['evidence_route'])
+        from webcollect.collection_contract import compile_contract
+        unsuitable, _ = compile_contract({'unsuitable': {'reason': '自然业务路径不足五步'}})
+        self.assertEqual(first_plan_admission(unsuitable)[1]['kind'], 'unsuitable')
+        compiled, _ = compile_contract(normalized)
+        self.assertEqual(compiled['requirements'][1]['evidence_route']['source_type'], 'page_content')
+        self.assertTrue(first_plan_admission(compiled)[0])
+        for goal, source, allowed in [('阅读全文并查看作者', '阅读', False),
+                                      ('使用全文检索查陈树人', '全文检索', True),
+                                      ('取得全部指定的标题和日期', '标题和日期', True)]:
+            case = deepcopy(compiled)
+            case['goal'] = goal
+            case['requirements'] = [{'id': 'scope', 'kind': 'content', 'description': source,
+                'acceptance': {'mode': 'presence', 'subject': source, 'source_quote': source},
+                'evidence_route': {'source_type': 'page_content'}}]
+            self.assertEqual(first_plan_admission(case)[0], allowed)
+        process_plan = deepcopy(compiled)
+        process_plan['goal'] = '通过搜索陈树人阅读文章'
+        process_plan['requirements'][0].update(business_role='process', description='搜索陈树人结果',
+            acceptance={'mode': 'presence', 'subject': '陈树人', 'source_quote': '搜索陈树人'})
+        process_plan['requirements'][1]['acceptance']['source_quote'] = '阅读文章'
+        self.assertTrue(admit(process_plan)[0])
+        process_plan['requirements'][0]['description'] = '比较陈树人与其他人物结果'
+        self.assertEqual(admit(process_plan)[1]['kind'], 'BUSINESS_ROLE_CONFLICT')
+        process_plan['requirements'][0]['description'] = '搜索另一人物结果'
+        process_plan['requirements'][0]['acceptance']['subject'] = '另一人物'
+        self.assertEqual(admit(process_plan)[1]['kind'], 'BUSINESS_ROLE_CONFLICT')
+        process_plan['requirements'] = [process_plan['requirements'][0]]
+        process_plan['requirements'][0]['description'] = '搜索陈树人结果'
+        process_plan['requirements'][0]['acceptance']['subject'] = '陈树人'
+        self.assertEqual(admit(process_plan)[1]['kind'], 'OUTCOME_REQUIREMENT_MISSING')
         explicit_derivation = deepcopy(route_plan)
         explicit_derivation['goal'] = '读取结果并根据页面依据独立验算'
         self.assertTrue(first_plan_admission(explicit_derivation)[0])
@@ -167,24 +237,24 @@ class Strategy2VisualCore(unittest.TestCase):
         reading = deepcopy(route_plan)
         reading['goal'] = '阅读煎蛋卷条目，查看第1条引用来源及后续章节内容'
         reading['requirements'] = [{'id': 'reading', 'kind': 'content',
-            'description': '阅读引用来源及后续章节',
-            'evidence_route': {'source_type': 'page_content', 'observation_steps': [3]}}]
+            'description': '阅读引用来源及后续章节', 'evidence_scope': 'current',
+            'evidence_route': {'source_type': 'page_content', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '阅读引用来源及后续章节', 'source_quote': '阅读引用来源及后续章节'}}]
         self.assertTrue(first_plan_admission(reading)[0])
         compound = deepcopy(route_plan)
         compound['goal'] = '随后查看页面计算输出的月供、总利息与总成本结果'
         compound['requirements'] = [
-            {'id': 'r1', 'kind': 'result', 'description': '页面输出的月供结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
-            {'id': 'r2', 'kind': 'result', 'description': '页面输出的总利息与总成本结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}}]
+            {'id': 'r1', 'kind': 'result', 'description': '页面输出的月供结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '页面输出的月供结果', 'source_quote': '页面输出的月供结果'}},
+            {'id': 'r2', 'kind': 'result', 'description': '页面输出的总利息与总成本结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '页面输出的总利息与总成本结果', 'source_quote': '页面输出的总利息与总成本结果'}}]
         rejected = first_plan_admission(compound)[1]
         self.assertEqual(rejected['kind'], 'RESULT_REQUIREMENT_ATOMICITY')
         self.assertEqual(rejected['requirement_ids'], ['r2'])
         compound['requirements'][1:] = [
-            {'id': 'r2', 'kind': 'result', 'description': '页面输出的总利息结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
-            {'id': 'r3', 'kind': 'result', 'description': '页面输出的总成本结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}}]
+            {'id': 'r2', 'kind': 'result', 'description': '页面输出的总利息结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '页面输出的总利息结果', 'source_quote': '页面输出的总利息结果'}},
+            {'id': 'r3', 'kind': 'result', 'description': '页面输出的总成本结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '页面输出的总成本结果', 'source_quote': '页面输出的总成本结果'}}]
         self.assertTrue(first_plan_admission(compound)[0])
         missing = deepcopy(compound)
         missing['requirements'].pop()
@@ -199,19 +269,19 @@ class Strategy2VisualCore(unittest.TestCase):
         dual['requirements'][0]['description'] = '页面输出的单利利息与到期总额结果'
         self.assertEqual(first_plan_admission(dual)[1]['kind'], 'RESULT_REQUIREMENT_ATOMICITY')
         dual['requirements'] = [
-            {'id': 'r1', 'kind': 'result', 'description': '页面输出的单利利息结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}},
-            {'id': 'r2', 'kind': 'result', 'description': '页面输出的到期总额结果',
-             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}}]
+            {'id': 'r1', 'kind': 'result', 'description': '页面输出的单利利息结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '页面输出的单利利息结果', 'source_quote': '页面输出的单利利息结果'}},
+            {'id': 'r2', 'kind': 'result', 'description': '页面输出的到期总额结果', 'evidence_scope': 'current',
+             'evidence_route': {'source_type': 'page_result', 'observation_steps': [3]}, 'acceptance': {'mode': 'presence', 'subject': '页面输出的到期总额结果', 'source_quote': '页面输出的到期总额结果'}}]
         self.assertTrue(first_plan_admission(dual)[0])
         misplaced = deepcopy(dual)
         for requirement in misplaced['requirements']:
             requirement['source_type'] = requirement['evidence_route'].pop('source_type')
         normalized, transforms = normalize_submit_plan(misplaced)
         self.assertTrue(all('source_type' not in row for row in normalized['requirements']))
-        self.assertEqual([row['evidence_route']['source_type'] for row in normalized['requirements']],
+        compiled, _ = compile_contract(normalized)
+        self.assertEqual([row['evidence_route']['source_type'] for row in compiled['requirements']],
                          ['page_result', 'page_result'])
-        self.assertEqual(len(transforms['transforms']), 2)
         misplaced_input = {'requirements': [{'kind': 'input', 'target': {
             'control': 'input1', 'expected_value': '42'}, 'expected_value': '42'}]}
         normalized_input, _ = normalize_submit_plan(misplaced_input)
@@ -221,12 +291,14 @@ class Strategy2VisualCore(unittest.TestCase):
         self.assertEqual(conflicting['requirements'][0]['target']['expected_value'], '43')
         invalid_route = deepcopy(explicit_derivation)
         invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [6]
-        self.assertEqual(first_plan_admission(invalid_route)[1]['kind'], 'EVIDENCE_ROUTE_INVALID')
+        self.assertTrue(first_plan_admission(invalid_route)[0])  # Future observation indexes no longer freeze business.
         invalid_route['requirements'][1]['evidence_route']['observation_steps'] = [4]
         invalid_route['requirements'][1]['evidence_route']['depends_on'] = ['unknown']
         self.assertFalse(first_plan_admission(invalid_route)[0])
         invalid_route = deepcopy(route_plan)
-        invalid_route['requirements'][0].pop('evidence_route')
+        # evidence_route已可整体省略（宿主编译生成）；必填字段evidence_scope
+        # 缺失仍是wire schema错误。
+        invalid_route['requirements'][0].pop('acceptance')
         self.assertEqual(first_plan_admission(invalid_route)[1]['kind'], 'PLAN_FIELDS_INVALID')
         original = observation()
         original['provided_control_ids'] = ['input1']

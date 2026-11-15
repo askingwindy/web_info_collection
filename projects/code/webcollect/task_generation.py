@@ -409,7 +409,7 @@ def read_history(registry, *, include_scopes=False):
     if is_current_registry(path):
         rows = registry_snapshot(scope_for_registry(path), path)['rows']
         return [(row['scope_id'], row['task']) for row in rows] if include_scopes else [row['task'] for row in rows]
-    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True, timeout=90)) as con:
         exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_tasks'").fetchone()
         if not exists:
             return []
@@ -584,46 +584,52 @@ def check_live_m4_history(plan, registry, output):
     from .current_chain import SCOPE_SCHEMA, assert_registry_scope, registry_snapshot
     history_scope = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope')
     if isinstance(history_scope, dict) and history_scope.get('schema_version') == SCOPE_SCHEMA:
-        assert_registry_scope(history_scope, registry)
-        registry_snapshot(history_scope, registry)
+        live_snapshot = registry_snapshot(history_scope, registry)
+    else:
+        live_snapshot = None
     own_tasks = set()
     from .task_replanning import validated_replans
     repairs, _ = validated_replans(registry, plan.get('generation', {}).get('replan_closures'))
-    with closing(sqlite3.connect(registry.as_uri()+'?mode=ro', uri=True)) as con:
+    bootstrap_path = capture / 'bootstrap.json'
+    with closing(sqlite3.connect(registry.as_uri()+'?mode=ro', uri=True, timeout=90)) as con:
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if 'm4_tasks' not in tables:
             return {'m4_tasks_checked': 0, 'own_resume_tasks': 0}
-        columns = {row[1] for row in con.execute('PRAGMA table_info(m4_tasks)')}
-        rows = list(con.execute('SELECT '+('scope_id' if 'scope_id' in columns else 'NULL')+',task_json FROM m4_tasks'))
-        bootstrap_path = capture / 'bootstrap.json'
-        if bootstrap_path.is_file() and 'm4_plans' in tables:
-            bootstrap = load_json(bootstrap_path)
-            bound = list(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=?', (own_scope,)))
-            original_plan = {k:v for k,v in plan.items() if k!='media_preflight'}
-            bootstrap_plan = bootstrap.get('plan', {})
-            if (bootstrap.get('schema_version') not in ('runtime-bootstrap', 'webcollect-bootstrap-m4-1')
-                    or bootstrap.get('output_path') != str(capture)
-                    or bootstrap.get('registry_path') != str(registry)
-                    or bootstrap.get('manifest', {}).get('runtime_scope_id') != own_scope
-                    or {k:v for k,v in bootstrap_plan.items() if k!='media_preflight'} != original_plan
-                    or len(bound)!=1 or json.loads(bound[0][0]) != bootstrap_plan):
-                raise ValueError('M4 resume is not bound to this exact output/scope/plan')
-            own_tasks = {object_sha256(t) for t in bootstrap_plan['tasks']}
-        for task in plan['tasks']:
-            signature, semantic = task_signature(task), semantic_signature(task)
-            for scope_id, value in rows:
-                old = json.loads(value)
-                if object_sha256(old) in repairs.get(scope_id, set()):
-                    continue
-                if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
-                    continue
-                from .fragment_workflow import is_fragment
-                from .session_core import is_react_task
-                same_structure = (task_signature(old) == signature and (is_fragment(task) or is_react_task(task) or
-                                  not _different_verified_business(task, old) and not _different_supported_path(task, old)))
-                if same_structure or (semantic and semantic_signature(old) == semantic
-                                      and proposal_signature(old) == proposal_signature(task)):
-                    raise ValueError('Current M4 history contains the same business/structure outside this exact bound resume; no dispatch')
+        raw_rows = []
+        if live_snapshot is None:
+            columns = {row[1] for row in con.execute('PRAGMA table_info(m4_tasks)')}
+            raw_rows = list(con.execute('SELECT '+('scope_id' if 'scope_id' in columns else 'NULL')+',task_json FROM m4_tasks'))
+        bound = (list(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=?', (own_scope,)))
+                 if bootstrap_path.is_file() and 'm4_plans' in tables else [])
+    rows = ([(row['scope_id'], row['task']) for row in live_snapshot['rows']] if live_snapshot is not None
+            else [(scope_id, json.loads(raw)) for scope_id, raw in raw_rows])
+    if bootstrap_path.is_file():
+        bootstrap = load_json(bootstrap_path)
+        original_plan = {k:v for k,v in plan.items() if k!='media_preflight'}
+        bootstrap_plan = bootstrap.get('plan', {})
+        if (bootstrap.get('schema_version') not in ('runtime-bootstrap', 'webcollect-bootstrap-m4-1')
+                or bootstrap.get('output_path') != str(capture)
+                or bootstrap.get('registry_path') != str(registry)
+                or bootstrap.get('manifest', {}).get('runtime_scope_id') != own_scope
+                or {k:v for k,v in bootstrap_plan.items() if k!='media_preflight'} != original_plan
+                or len(bound)!=1 or json.loads(bound[0][0]) != bootstrap_plan):
+            raise ValueError('M4 resume is not bound to this exact output/scope/plan')
+        own_tasks = {object_sha256(t) for t in bootstrap_plan['tasks']}
+    for task in plan['tasks']:
+        signature, semantic = task_signature(task), semantic_signature(task)
+        for scope_id, value in rows:
+            old = value
+            if object_sha256(old) in repairs.get(scope_id, set()):
+                continue
+            if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
+                continue
+            from .fragment_workflow import is_fragment
+            from .session_core import is_react_task
+            same_structure = (task_signature(old) == signature and (is_fragment(task) or is_react_task(task) or
+                              not _different_verified_business(task, old) and not _different_supported_path(task, old)))
+            if same_structure or (semantic and semantic_signature(old) == semantic
+                                  and proposal_signature(old) == proposal_signature(task)):
+                raise ValueError('Current M4 history contains the same business/structure outside this exact bound resume; no dispatch')
     return {'m4_tasks_checked': len(rows), 'own_resume_tasks': len(own_tasks)}
 
 
@@ -874,7 +880,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
                                  else {'ending_policy': CLOSE_POLICY} if react_candidate is not None else {}),
                               app_name=app_name, registration=react_task_version,
                               skip_wechat_articles=(react_candidate or {}).get('skip_wechat_articles',False),
-                              effort_profile=(react_candidate or {}).get('effort_profile') if banded_candidate else None,
+                              effort_profile=(react_candidate or {}).get('effort_profile'),
                               pilot_identity=identities['pages'].get(url))
         if supplied is not None:
             task['capability_id'] = supplied['capability_id']
@@ -899,6 +905,13 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             'application_registry': bound_claim.get('application_registry'),
             **({'site_id_version':'table1-rowid-site-id-1','site_id':bound_claim['site_id']}
                if bound_claim.get('site_id') else {})}
+        if supplied is not None and supplied.get('candidate_observation'):
+            from .candidate_contract import validate_observation
+            observation_binding=validate_observation(supplied)
+            if any(observation_binding.get(key)!=value for key,value in task['candidate_binding'].items()):
+                raise ValueError('Entry observation differs from the frozen task candidate')
+            if observation_binding.get('entry_http'):
+                task['candidate_binding']['entry_http']=deepcopy(observation_binding['entry_http'])
         if react_candidate.get('session_objective'):
             from .session_objective import apply
             apply(task,react_candidate['session_objective'])
@@ -1462,7 +1475,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     _, repair_campaigns = validated_replans(registry, plan['generation'].get('replan_closures'))
     if repair_campaigns and repair_campaigns != {supplied_policy.get('campaign_id')}:
         raise ValueError('Repair must use the original campaign and cumulative budget')
-    with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
+    with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True, timeout=90) as con:
         campaign=con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',
                              (supplied_policy.get('campaign_id'),)).fetchone()
         if not campaign:raise ValueError('Use an existing authorized production campaign; this wrapper never creates one')

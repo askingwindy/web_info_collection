@@ -37,8 +37,10 @@ DEFAULT_POLICY = {'campaign_id': 'm4-1000', 'max_workers': 1, 'max_domain_worker
                   'max_worker_seconds': None, 'resource_root': None}
 ACTIVE = ('reserved', 'running')
 RETRYABLE = ('network', 'resource')
+# 'transient' is a bounded registry-wait conflict: settle the attempt, never
+# stop the batch, auto-retry the task, or blame the site.
 FAILURES = RETRYABLE + ('interrupted', 'semantic', 'unsupported', 'privacy', 'duplicate', 'program', 'other',
-             'collector', 'model', 'configuration', 'interface')
+             'collector', 'model', 'configuration', 'interface', 'transient')
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS m4_campaigns (
@@ -199,9 +201,8 @@ class RuntimeStore:
         # mode=rw/ro never silently creates a replacement for a missing ledger.
         # A busy ledger is not a lost attempt. Wait inside the existing lease;
         # _owned still rejects stale worker/token/expiry after lock acquisition.
-        con = sqlite3.connect(self.registry.as_uri() + ('?mode=ro' if readonly else '?mode=rw'), uri=True, timeout=90)
-        con.row_factory = sqlite3.Row
-        con.execute('PRAGMA busy_timeout=90000')
+        from .registry_db import connect
+        con = connect(self.registry, readonly=readonly)
         return con
 
     @contextmanager
@@ -381,15 +382,21 @@ class RuntimeStore:
             if project and policy['campaign_id'] != project['chain_id']:
                 raise ValueError('Runtime campaign belongs to another candidate project')
             # Schema additions leave all legacy rows and counters intact.
-            ensure_registry_schema(con)
-            con.executescript(SCHEMA)
+            import re
+            expected = set(re.findall(r'CREATE (?:TABLE|INDEX) IF NOT EXISTS (\w+)', SCHEMA))
+            expected.update(('sites', 'batches', 'allocations'))
+            existing = {row[0] for row in con.execute("SELECT name FROM sqlite_master")}
+            if not expected.issubset(existing):
+                ensure_registry_schema(con)
+                con.executescript(SCHEMA)
         finally:
             con.close()
         with self._transaction() as con:
             campaign = con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?', (policy['campaign_id'],)).fetchone()
             if campaign and json.loads(campaign[0]) != policy:
                 raise ValueError('已有campaign预算不同；须带原因显式update_policy，不能换scope重置')
-            con.execute('INSERT OR IGNORE INTO m4_campaigns VALUES(?,?,?)', (policy['campaign_id'], canonical(policy), current))
+            if not campaign:
+                con.execute('INSERT INTO m4_campaigns VALUES(?,?,?)', (policy['campaign_id'], canonical(policy), current))
             existing = con.execute('SELECT campaign_id FROM m4_scopes WHERE scope_id=?', (self.scope_id,)).fetchone()
             if existing and existing[0] != policy['campaign_id']:
                 raise ValueError('已有scope不能更换campaign')
@@ -496,8 +503,8 @@ class RuntimeStore:
         self.sync_site_pool()
         self._sync_site_failures()
         history_proof = self._customer_history_proof()
-        current = timestamp(now)
         with self._transaction() as con:
+            current = timestamp(now)
             policy = self._policy(con)
             old = con.execute('SELECT attempt_id,worker_id,plan_sha256 FROM m4_attempts WHERE scope_id=? AND request_id=?', (self.scope_id, request_id)).fetchone()
             if old:
@@ -945,7 +952,6 @@ class RuntimeStore:
                 or str(primary['error']) not in chain_trace
                 or 'postprocess.py' not in chain_trace or 'in process' not in chain_trace):
             raise ValueError('Crashed close-out must be corroborated by its preserved exception chain')
-        current = timestamp(now)
         con = self._connect(readonly=True)
         try:
             row = self._attempt(con, attempt_id)
@@ -955,7 +961,7 @@ class RuntimeStore:
             con.close()
         execution_task = {**json.loads(row['task_json']), '_plan_schema_version': plan['schema_version'],
                           'require_public_origin': True}
-        if (row['status'] != 'running' or row['started_at'] is None or row['lease_expires_at'] > current
+        if (row['status'] != 'running' or row['started_at'] is None or row['lease_expires_at'] > timestamp(now)
                 or record['boundary']['attempt_id'] != attempt_id
                 or record['task'] != execution_task
                 or record['terminal'].get('stop_reason') != 'ready'
@@ -1002,6 +1008,7 @@ class RuntimeStore:
             'settled_requests': [{'id': r['id'], 'state': r['state']} for r in requests],
             'sample_saved': False})
         with self._transaction() as con:
+            current = timestamp(now)
             row = self._attempt(con, attempt_id)
             if (row['status'] != 'running' or row['lease_expires_at'] > timestamp(now)):
                 raise ValueError('Attempt changed during settlement')
@@ -1111,9 +1118,9 @@ class RuntimeStore:
             requests = list(con.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (attempt_id,)))
         if not requests or any(r['state'] != 'succeeded' for r in requests):
             raise ValueError('Original model requests are unresolved; no rejection reconciliation')
-        current = timestamp(now)
         refs = [raw_receipt, failure, process_exit] + ([cancellation_audit] if cancellation_audit else []) + ([rejected_focus_audit] if rejected_focus_audit else [])
         with self._transaction() as con:
+            current = timestamp(now)
             row = self._attempt(con, attempt_id)
             already_closed=bool(rejected_focus_audit and row['status']=='rejected'
                 and row['failure_class']==primary['failure_class'] and row['root_cause']==primary['error'])
@@ -1156,9 +1163,9 @@ class RuntimeStore:
 
     def recover_expired(self, *, now=None, reason='lease expired; prior process must not resume its trajectory',
                         campaign_wide=False):
-        current = timestamp(now)
         recovered = []
         with self._transaction() as con:
+            current = timestamp(now)
             policy = self._policy(con)
             if campaign_wide:
                 # Dead-scope attempts of this campaign only: an expired lease
@@ -1453,8 +1460,8 @@ class RuntimeStore:
         """
         if not isinstance(worker_id, str) or not worker_id.strip():
             raise ValueError('Worker session needs a stable identity')
-        current = timestamp(now)
         with self._transaction() as con:
+            current = timestamp(now)
             scope = self._scope(con)
             if scope['state'] == 'closed_replanned':
                 raise ValueError('scope已永久closed_replanned，禁止启动worker')
@@ -1483,9 +1490,9 @@ class RuntimeStore:
     def resource_checkpoint(self, output, *, now=None):
         """Fail closed before claiming another ID; preserve all evidence on stop."""
         import shutil
-        current = timestamp(now)
         output = Path(output).resolve()
         with self._transaction() as con:
+            current = timestamp(now)
             scope = self._scope(con)
             if scope['state'] == 'closed_replanned':
                 raise ValueError('scope已永久closed_replanned，禁止资源检查改变其状态')

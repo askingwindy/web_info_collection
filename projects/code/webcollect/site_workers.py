@@ -12,6 +12,7 @@ import uuid
 
 from site_planner.application_discovery import Discovery, classify_homepage, site_context
 from site_planner.candidate_pool import CandidatePool
+from site_planner.entry_selection import compile_entry_exclusions, entry_is_excluded
 from webcollect.batch_core import BatchLedger, file_sha
 from webcollect.current_chain import current_evidence_roots, read_chain_scope
 from webcollect.planning import object_sha256, verify_evidence
@@ -141,16 +142,30 @@ def producer_plan(scope_path, selectors, *, pages_per_site, workers,
     pool = CandidatePool(scope['pool'], readonly=True)
     selected = resolve_sites(pool, selectors)
     seeds_by_host = load_seed_files(seed_files)
+    site_sources = {site['id']: producer_sources(pool, site) for site in selected}
     sites = []
     for site in selected:
         stats = site_statistics(pool, site)
-        stats['remaining'] = max(0, pages_per_site - stats['cumulative_new'])
+        source, hosts = site_sources[site['id']]
+        seeds = [seed for host in hosts for seed in seeds_by_host.get(host, [])] or [source]
+        patterns = compile_entry_exclusions(seeds)
+        excluded = 0
+        if patterns:
+            with pool.pool.connect() as con:
+                rows = con.execute(
+                    "SELECT DISTINCT c.candidate_id,json_extract(c.body,'$.entry_url') "
+                    "FROM data_candidates c JOIN candidate_batch_rows b USING(candidate_id) "
+                    "WHERE c.application_id=? AND b.result='NEW'", (site['id'],)).fetchall()
+            excluded = sum(entry_is_excluded(row[1], patterns) for row in rows)
+        stats['excluded_existing'] = excluded
+        stats['eligible_cumulative_new'] = stats['cumulative_new'] - excluded
+        stats['remaining'] = max(0, pages_per_site - stats['eligible_cumulative_new'])
+        stats['application_new_target'] = pages_per_site + excluded
         sites.append(stats)
     plan = new_plan('producer', scope_path, scope, sites)
     active = [(site, stats) for site, stats in zip(selected, sites) if stats['remaining']]
     if not active:
         return plan
-    site_sources = {site['id']: producer_sources(pool, site) for site in selected}
     selected_hosts = {host for _, hosts in site_sources.values() for host in hosts}
     unmatched = sorted(set(seeds_by_host) - selected_hosts)
     if unmatched:
@@ -159,6 +174,8 @@ def producer_plan(scope_path, selectors, *, pages_per_site, workers,
     for (site, stats), worker_quota in zip(active, worker_quotas):
         source, hosts = site_sources[site['id']]
         site_seeds = [seed for host in hosts for seed in seeds_by_host.get(host, [])]
+        exclusions = sorted({pattern for seed in site_seeds
+                             for pattern in seed.get('excluded_entry_patterns', [])})
         for worker_index, target in enumerate(split_even(stats['remaining'], worker_quota)):
             if not target:
                 continue
@@ -166,6 +183,8 @@ def producer_plan(scope_path, selectors, *, pages_per_site, workers,
             worker_id = f'producer-{number:03d}'
             batch_key = f'{plan["plan_id"]}-p{number:03d}'
             seeds = [site_seeds[worker_index % len(site_seeds)]] if site_seeds else [source]
+            if exclusions:
+                seeds = [{**seed, 'excluded_entry_patterns': exclusions} for seed in seeds]
             command = [sys.executable, '-B', '-u', '-m',
                        'site_planner.candidate_discovery', 'produce-entries',
                        '--config', scope['producer_config'], '--ledger', scope['producer_db'],
@@ -173,8 +192,8 @@ def producer_plan(scope_path, selectors, *, pages_per_site, workers,
                        '--discovery-mode', 'expand', '--site-expansion',
                        '--search-engine', 'public', '--category', site['category'],
                        '--sources', json.dumps(seeds, ensure_ascii=False, separators=(',', ':')),
-                       '--target', str(target), '--application-new-target', str(pages_per_site),
-                       '--application-pending-cap', str(pages_per_site),
+                       '--target', str(target), '--application-new-target', str(stats['application_new_target']),
+                       '--application-pending-cap', str(stats['application_new_target']),
                        '--batch-key', batch_key]
             for host in hosts:
                 command.extend(['--allowed-host', host])

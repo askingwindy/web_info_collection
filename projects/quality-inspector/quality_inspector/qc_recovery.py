@@ -306,7 +306,7 @@ def _verify_recoverable_identity(ledger, job):
 
 def _claim_review_required(ledger, job_id):
     """Own the retained review_required job once; its attempt count is honest."""
-    ledger.recover()
+    ledger.recover(job_id=job_id)
     with ledger.transaction() as con:
         row = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
         if not row or row['kind'] != 'ai-visual':

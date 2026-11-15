@@ -82,6 +82,7 @@ class CandidateStorageCore(unittest.TestCase):
 
             launch_scope = load_json(scope_path)
             chain = read_chain_scope(launch_scope['history_set'])
+            self._check_registry_concurrency(launch_scope, chain, temporary)
             readonly_pool = CandidatePool(launch_scope['pool'], readonly=True)
             self.assertTrue(check_project_pool(chain, readonly_pool.pool))
             for role in ('producer', 'consumer'):
@@ -138,6 +139,22 @@ class CandidateStorageCore(unittest.TestCase):
                 Path(missing['path']).write_text('{}')
                 context = site_context(registry, 'https://example.org/', candidate_id='new')
                 self.assertEqual(context['executions'][0]['evidence_error']['classification'], 'DIGEST_MISMATCH')
+
+
+    def _check_registry_concurrency(self, launch, chain, temporary):
+        from webcollect.runtime import RuntimeStore
+        from webcollect.current_chain import registry_snapshot
+        from webcollect.task_admission import registry_snapshot as task_snapshot
+        store = RuntimeStore(launch['registry'], 'persistence-check')
+        connect, statements = store._connect, []
+        def traced(*args, **kwargs):
+            con = connect(*args, **kwargs)
+            con.set_trace_callback(statements.append)
+            return con
+        with patch.object(store, '_connect', side_effect=traced):
+            store.initialize(load_json(launch['policy']))
+        self.assertFalse(any(sql.lstrip().upper().startswith('CREATE ') for sql in statements))
+        self.assertEqual(registry_snapshot(chain, launch['registry']), task_snapshot(launch['registry']))
 
 
     def test_disposable_roots_are_rejected_before_scope_or_database_creation(self):

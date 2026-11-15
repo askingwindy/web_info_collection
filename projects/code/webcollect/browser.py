@@ -732,7 +732,7 @@ _PREVERIFY_RETRY_DELAYS=(0.25,0.5)
 
 
 async def verify_execution_state(page, state, selector=None, index=0, assertions=None, protected_selectors=None,
-                                 timeout=15, action_scope=None):
+                                 timeout=15, action_scope=None, retries=None):
     """Reject any changed captured state before dispatch, including non-control actions.
 
     Nothing has been dispatched here, so a transient paint mismatch may be
@@ -751,7 +751,7 @@ async def verify_execution_state(page, state, selector=None, index=0, assertions
         if captured.get('action_scope') != action_scope:
             raise ValueError('Scoped action proof was lost or changed before dispatch')
         rejections=[]
-        delays=iter(_PREVERIFY_RETRY_DELAYS)
+        delays=iter(_PREVERIFY_RETRY_DELAYS if retries is None else _PREVERIFY_RETRY_DELAYS[:max(0, retries)])
         phase_budget_ms=3000
         while True:
             phase_wait=None

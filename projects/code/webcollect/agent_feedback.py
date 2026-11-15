@@ -156,8 +156,18 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
                     refs = json.loads(row['evidence_json'] or '[]')
                     entry = {'attempt_id':row['attempt_id'], 'sample_id':row['sample_id'], 'task_id':task['task_id'],
                         'instruction':task.get('instruction'), 'status':row['status'], 'root_cause':row['root_cause'],
-                        'failure_class':row['failure_class'], 'references':refs, 'feedback_status':'LEGACY_NO_STEP_BINDING'}
-                    strict = (candidate_id is not None and actual_owner_id == candidate_id) or row['status'] in ('reserved','running','interrupted') or row['failure_class'] in ('unknown','interrupted')
+                        'failure_class':row['failure_class'], 'references':refs,
+                        'owner_candidate_id':actual_owner_id, 'feedback_status':'LEGACY_NO_STEP_BINDING'}
+                    owned_by_current = candidate_id is not None and actual_owner_id == candidate_id
+                    owned_by_other = (scoped and candidate_id is not None and actual_owner_id is not None
+                                      and actual_owner_id != candidate_id)
+                    # Ownership is decided before evidence strictness. Another
+                    # candidate's interrupted/unknown history remains visible as
+                    # UNAVAILABLE when its bytes are gone, but cannot block this
+                    # candidate. Unowned shared safety history stays strict.
+                    strict = owned_by_current or (not owned_by_other and (
+                        row['status'] in ('reserved','running','interrupted')
+                        or row['failure_class'] in ('unknown','interrupted')))
                     before = {key: len(result.get(key, [])) for key in ('images', 'avoid', 'frame_relocations')}
                     try:
                         if refs: _verify_feedback_evidence(refs)

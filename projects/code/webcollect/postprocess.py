@@ -506,19 +506,22 @@ def effective_trajectory(record, *, _audit_cancelled=False, _verified=None, _fai
         rows.append(row)
     if rows and record['task']['fragment'].get('navigation_protocol') == NAVIGATION_PROTOCOL:
         from .candidate_navigation import verify_path
-        states,operations = [],[]
+        states,operations,proofs = [],[],[]
         previous_id=None;previous_row=None
         for row in rows:
             before = _observation_state(record,row['before_observation_id'])
             if states:
                 bridge=_delayed_bridge(record,previous_row,previous_id,row['before_observation_id']) if previous_id else None
                 states.append(before);operations.append(bridge)
+                proofs.append(None)
             else:
                 states.append(before)
             states.append(_observation_state(record,row['after_observation_id']))
-            operations.append(load_json(row['raw_step']['path'])['operation'])
+            raw_navigation=load_json(row['raw_step']['path'])
+            operations.append(raw_navigation['operation'])
+            proofs.append(raw_navigation.get('popup_provenance') or raw_navigation.get('http_navigation'))
             previous_id=row['after_observation_id'];previous_row=row
-        verify_path(record['task'],states,operations)
+        verify_path(record['task'],states,operations,proofs=proofs)
     from .closing_policy import enabled as v2, validate_record as validate_closing
     if _audit_cancelled:
         if record['terminal'].get('actual_actions') != len(rows):
@@ -695,7 +698,8 @@ def terminal_judgement(completion_status, final_result):
 def _visible_proof_quote(state, quote, node_id=None, *, causal_result=False):
     # Completion accepts clipped paragraph whitespace and result values with
     # labels interleaved in the viewport. Narration must use that same evidence.
-    from .screenshot_plan import _flat, _visible_node_texts, _result_tokens_visible, _evidence_nodes
+    from .collection_contract import _flat
+    from .collection_evidence import _visible_node_texts, _result_tokens_visible, _evidence_nodes
     if node_id is None and quote in state.get('visible_text', ''):
         return True
     return any(any(_flat(quote) in _flat(text) for text in _visible_node_texts(state, node))
