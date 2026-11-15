@@ -119,14 +119,14 @@ def job_conflicts(ledger, uri, candidate_id, payload, *, running, registry=None,
 
 def visit_uri(con, fact):
     """Only an exact, recorded dispatch can narrow a site fact to an HTTP endpoint."""
-    from .site_failure_stop import execution_id
+    from .site_failure_stop import matches_execution_id
     identity, _, stage, reason, evidence, refs = fact
     refs = json.loads(refs)
     if stage != 'probe' or len(refs) != 1 or not isinstance(refs[0],dict):
         return None
     ledger = refs[0].get('ledger')
     vid = refs[0].get('visit_id')
-    if not ledger or not vid or identity != execution_id('probe', ledger, vid):
+    if not ledger or not vid or not matches_execution_id(identity, 'probe', ledger, vid):
         return None
     visit = con.execute("""SELECT v.id,v.job_id,v.target_uri,v.dispatched_at,v.state,v.error_type,
                 j.kind,j.state AS job_state,j.result

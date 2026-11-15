@@ -39,6 +39,12 @@ def execution_id(stage, source, identity):
     return stage + ':' + object_sha256([str(Path(source).resolve()), identity])
 
 
+def matches_execution_id(recorded, stage, source, identity):
+    """Read a pre-move identity without rewriting its original ledger reference."""
+    original = stage + ':' + object_sha256([str(Path(source).absolute()), identity])
+    return recorded in (original, execution_id(stage, source, identity))
+
+
 def validate_binding(value):
     if (not isinstance(value, dict) or not {'ledger', 'campaign_id', 'formal_since'} <= set(value)
             or set(value) - {'ledger', 'campaign_id', 'formal_since', 'application_registry', 'dispatch_rules'}
@@ -210,7 +216,7 @@ class SiteFailureStore:
         if stage != 'probe' or len(refs) != 1 or not isinstance(refs[0],dict) or refs[0].get('ledger') != database:
             return None
         visit_id = refs[0].get('visit_id')
-        if not visit_id or identity != execution_id('probe', database, visit_id):
+        if not visit_id or not matches_execution_id(identity, 'probe', database, visit_id):
             return None
         row = ledger.execute(
             "SELECT v.*,j.payload,j.result FROM top_level_visits v JOIN jobs j ON j.id=v.job_id "
@@ -241,7 +247,7 @@ class SiteFailureStore:
         identity, _, stage, _, evidence, usage = fact
         refs = json.loads(usage)
         if (stage != 'probe' or len(refs) != 1 or refs[0].get('ledger') != database
-                or identity != execution_id('probe', database, refs[0].get('visit_id'))):
+                or not matches_execution_id(identity, 'probe', database, refs[0].get('visit_id'))):
             return None
         row = ledger.execute(
             "SELECT v.*,j.kind,j.state AS job_state,j.payload,j.result FROM top_level_visits v "
@@ -288,7 +294,7 @@ class SiteFailureStore:
             ledger = books.get(database)
             if ledger is not None:
                 sealed = (self._closed_producer_get_uri(ledger, database, fact)
-                          or self._closed_producer_document_uri(ledger, database, fact)) if database==producer else None
+                          or self._closed_producer_document_uri(ledger, database, fact)) if Path(database).resolve()==Path(producer).resolve() else None
                 uri = sealed or visit_uri(ledger, fact)
                 if uri:
                     return {'uri':uri, 'closed_entry':bool(sealed)}
@@ -331,15 +337,17 @@ class SiteFailureStore:
                 referenced_books.add(refs[0]['ledger'])
         with ExitStack() as stack:
             books = {}
-            for path in (producer, producer.with_name('consumer-jobs.sqlite3')):
-                if str(path) not in referenced_books:continue
+            allowed_books = {producer.resolve(), producer.with_name('consumer-jobs.sqlite3').resolve()}
+            for database in referenced_books:
+                path = Path(database).resolve()
+                if path not in allowed_books:continue
                 if path.is_file() and not path.is_symlink():
                     ledger = stack.enter_context(closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=30)))
                     ledger.row_factory = sqlite3.Row
                     if ledger.execute("SELECT 1 FROM sqlite_master WHERE name='batch_meta'").fetchone():
                         bound = ledger.execute("SELECT json_extract(config,'$.site_failure_guard') FROM batch_meta WHERE id=1").fetchone()
-                        if bound and json.loads(bound[0] or 'null') == self.binding:
-                            books[str(path)] = ledger
+                        if bound and json.loads(bound[0] or 'null') and validate_binding(json.loads(bound[0])) == self.binding:
+                            books[database] = ledger
             # Count scope and totals from this same immutable fact snapshot.
             # Earlier returns omit these keys so the caller retains whole-site
             # protection when no endpoint scope can be established.

@@ -1,5 +1,7 @@
 # WebCollect
 
+2026-11-15 生产者支持在 `--seeds-file` 的来源对象中显式填写 `excluded_entry_patterns`（匹配 URL 解码后的完整入口身份）。命中的首页、分类或导航页仍可供发现下级链接，但不进入目标观察/业务判定或发布；真实落地 URL 再检查一次。`site_workers producer` 在规划时分列 `cumulative_new`、`excluded_existing`、`eligible_cumulative_new`，只用排除后的累计量计算 `--pages-per-site` 缺额；原发布事务上限补偿已存在的排除行，旧候选不删除、不改账。普通不带排除规则的启动方式保持原口径。后台运行须由独立会话启动外层协调器，重定向 stdin/stdout/stderr 并保存 PID；`--launch` 本身仍在前台等待。运行前核对原 scope、角色账本配置及生产者会话绑定，不能仅凭 dry-run 成功判断可启动。
+
 2026-11-12 已按[Wiki 阅读与调用优化方案](docs/策略2Wiki阅读与证据标注Token优化方案-20261112.md)集中完成工程、prompt、tool、schema及标注接线：首次路线连续执行，真实偏差时一次补齐尾部，重复请求先于发送收口，弹层滚动与完整正文证据贯通。受影响19条核心用例最新均通过，维护总量50；隔离计算7步／2次intent、弹层阅读5步／3次intent均经正常保存、候选回写和导出，32项检查通过。真实模型与采集未运行，历史包114个哈希仍一致；[实施证据与限制](verify_results/strategy2-wiki-plan-implementation-20261112-r01/report.md)区分局部失败复验、字符代理和真实效果。下方旧记录按各自时间理解。
 
 2026-11-12 门禁走读修复与保存链离线收口已完成（[证据与边界](verify_results/strategy2-save-chain-20261112-r01/report.md)）：首帧只判断首步确定输入冗余，不从引用命中推断滚动多余或正文／结果目标完成；结束修复按当前展示控件、同文档锚点及已核验前页导航事实许可，拒绝编辑／重置／焦点按键时返回具体缺项和定位建议。新增隔离计算8步、纯阅读5步，经正常 `_react_collection`、派生、RuntimeStore提交、候选回写及隔离导出，sample ID与哈希一致；加工失败保持 `program/save_failed/eligible`，integration批次导出仍拒绝。汇总44/44、反馈专项及失败分支5/5通过；受影响核心5个不同用例最新均通过，累计6次执行（5通过、1次旧断言失败后局部复验通过）、pytest共1.05秒，维护总量仍50，未全量重跑。仅合成离线夹具（导出使用生产形状测试），真实模型／网页／生产新增均0，QC／人工NOT_RUN、发布false、客户验收UNKNOWN；不启动采集。

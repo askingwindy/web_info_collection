@@ -434,7 +434,7 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
     from .producer_observation import from_pool
     shared_language = from_pool(pool, ledger, candidate['entry_url'])
     if shared_language is not None:
-        if selection.entry_is_excluded(shared_language[0]['landed_uri'], exclusions):
+        if exclusions and selection.entry_is_excluded(shared_language[0]['landed_uri'], exclusions):
             return pool.record_row_conclusion(header, result='REJECTED',
                 reason='operator_landing_exclusion', original_row=row)
         from .page_consumption import blank_frame_exclusion, required_login_exclusion
@@ -506,7 +506,7 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
     if access['result'] != 'PASS':
         return pool.record_row_conclusion(header,result=access['result'],original_row=row,entry_http=ref,
                                           reason=access['reason'] or 'No confirmed entry HTTP response')
-    if selection.entry_is_excluded(access['landed_uri'], exclusions):
+    if exclusions and selection.entry_is_excluded(access['landed_uri'], exclusions):
         return pool.record_row_conclusion(header, result='REJECTED',
             reason='operator_landing_exclusion', original_row=row, entry_http=ref)
     source = {**source, 'entry_http':ref, 'references':[*source['references'],ref]}

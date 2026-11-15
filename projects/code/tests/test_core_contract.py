@@ -317,6 +317,26 @@ class CandidatePoolContract(unittest.TestCase):
         from unittest.mock import patch
         from types import SimpleNamespace
         from webcollect import site_workers
+        from site_planner.entry_selection import compile_entry_exclusions, entry_is_excluded
+        from site_planner.candidate_discovery import _publish_entry
+        from unittest.mock import Mock
+        excluded_source = {'excluded_entry_patterns': [
+            r'^https://zh\.wikipedia\.org/(?:wiki|zh-cn)/(?:Category|Wikipedia):']}
+        patterns = compile_entry_exclusions([excluded_source])
+        self.assertTrue(entry_is_excluded('https://zh.wikipedia.org/wiki/Category%3A物理学', patterns))
+        self.assertFalse(entry_is_excluded('https://zh.wikipedia.org/wiki/物理学', patterns))
+        fake_pool = Mock()
+        fake_pool.batch_row_identity.return_value = None
+        fake_pool.record_row_conclusion.side_effect = lambda *args, **kwargs: kwargs
+        header = {'row_id': 'entry-exclusion'}
+        rejected = _publish_entry(fake_pool, None, 'batch', None, header,
+            {'entry_url': 'https://zh.wikipedia.org/wiki/Category:物理学'}, excluded_source, {})
+        self.assertEqual(rejected['reason'], 'operator_entry_exclusion')
+        with patch('site_planner.producer_observation.from_pool', return_value=(
+                {'landed_uri': 'https://zh.wikipedia.org/wiki/Wikipedia:首页'}, {})):
+            rejected = _publish_entry(fake_pool, None, 'batch', None, header,
+                {'entry_url': 'https://zh.wikipedia.org/wiki/物理学'}, excluded_source, {})
+        self.assertEqual(rejected['reason'], 'operator_landing_exclusion')
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             proof = root / 'seed.txt'
@@ -341,6 +361,20 @@ class CandidatePoolContract(unittest.TestCase):
                 fallback = site_workers.producer_plan(root/'scope', ['site'], pages_per_site=1, workers=1)
                 self.assertEqual(fallback['workers'][0]['seeds'], [seeds[0]['uri']])
                 self.assertTrue(site_workers.prepare_sites(root/'scope', ['site'])['ready'])
+                seed_file.write_text(json.dumps([{**seed, **excluded_source} for seed in seeds]))
+                site_workers.site_statistics.return_value = {
+                    'cumulative_new': 2, 'application_id': 'site', 'classification_state': 'confirmed'}
+                with patch.object(site_workers, 'entry_is_excluded', side_effect=[True, False]):
+                    site_workers.CandidatePool.return_value.pool.connect.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
+                        ('nav', 'navigation'), ('article', 'content')]
+                    filtered = site_workers.producer_plan(root/'scope', ['site'], pages_per_site=3,
+                        workers=1, seed_files=[seed_file])
+                self.assertEqual(filtered['sites'][0]['excluded_existing'], 1)
+                self.assertEqual(filtered['workers'][0]['command'][
+                    filtered['workers'][0]['command'].index('--application-new-target') + 1], '4')
+                self.assertEqual(json.loads(filtered['workers'][0]['command'][
+                    filtered['workers'][0]['command'].index('--sources') + 1])[0]['excluded_entry_patterns'],
+                    excluded_source['excluded_entry_patterns'])
             plan['log_root'] = str(root/'launch')
             with patch.object(site_workers.subprocess, 'Popen',
                               return_value=SimpleNamespace(pid=1, wait=lambda: 0)):
@@ -353,6 +387,17 @@ class CandidatePoolContract(unittest.TestCase):
             proof.write_text('changed')
             with self.assertRaisesRegex(ValueError, 'evidence missing or changed'):
                 site_workers.load_seed_files([seed_file])
+            from webcollect.site_failure_stop import execution_id, matches_execution_id
+            original_root = root.resolve() / 'original-book'
+            original_root.mkdir()
+            original_book = original_root / 'producer-jobs.sqlite3'
+            original_book.touch()
+            original_identity = execution_id('probe', original_book, 'visit-one')
+            moved_root = root.resolve() / 'moved-book'
+            original_root.rename(moved_root)
+            original_root.symlink_to(moved_root, target_is_directory=True)
+            self.assertTrue(matches_execution_id(original_identity, 'probe', original_book, 'visit-one'))
+            self.assertFalse(matches_execution_id(original_identity, 'probe', original_book, 'visit-two'))
 
 
 class CliEntriesSmoke(unittest.TestCase):

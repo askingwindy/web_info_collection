@@ -593,19 +593,23 @@ class GatewayRunlogTests(unittest.TestCase):
         # A bounded patch covers every independent missing leaf, not only the first.
         from webcollect.screenshot_plan import submit_plan_schema, decision_schema
         from webcollect.model_gateway import schema_errors_feedback
-        multi = {'goal': '读取两项正文', 'final_presentation_step': 1,
-            'requirements': [{'id': f'r{index}', 'kind': 'content', 'description': f'正文{index}'}
+        multi = {'goal': '读取两项正文',
+            'requirements': [{'id': f'r{index}', 'kind': 'content',
+                              'acceptance': {'mode': 'presence', 'subject': f'正文{index}',
+                                             'source_quote': '读取两项正文'}}
                              for index in range(2)],
             'steps': [{'action': 'click', 'target': {'text': '正文'}, 'purpose': f'打开正文{index}',
                        'rationale': '正文入口可见', 'expected_result': '正文进入视口'} for index in range(5)]}
         multi_schema = submit_plan_schema(['click'])
         multi_errors = list(Draft202012Validator(multi_schema).iter_errors(multi))
+        self.assertEqual([list(error.absolute_path) for error in multi_errors],
+                         [['requirements', 0], ['requirements', 1]])
         multi_repair = field_repair_plan(multi_errors[0], multi, multi_schema, 'submit_plan',
                                          validation_errors=multi_errors)
         self.assertEqual(multi_repair['paths'], [
-            ['requirements', 0, 'evidence_scope'],
-            ['requirements', 1, 'evidence_scope']])
-        merged = merge_field_repair(multi_repair, {'field_0': 'current', 'field_1': 'current'})
+            ['requirements', 0, 'description'],
+            ['requirements', 1, 'description']])
+        merged = merge_field_repair(multi_repair, {'field_0': '读取第一项正文', 'field_1': '读取第二项正文'})
         Draft202012Validator(multi_schema).validate(merged)
         # continue携带替换计划是独立语义错误；反馈必须同时指出它和具体缺失target，
         # 不能先做一个注定仍失败的局部补丁，也不能只回传整段False schema。
@@ -834,10 +838,10 @@ class ChooserRunlogTests(SessionHarness):
                 'requirements': [
                     {'id': f'i{i}', 'kind': 'input', 'description': f'{label}设为{value}',
                      'target': {'text': label}, 'expected_value': value, 'evidence_scope': 'current',
-                     'acceptance': {'mode': 'presence', 'subject': label, 'source_quote': f'{label}为{value}'}}
+                     'acceptance': {'mode': 'presence', 'subject': label, 'source_quote': f'为{value}'}}
                     for i, label, value, pos in [(0, '数量', '20', 3), (1, '成本', '60', 6)]]
                 + [{'id': 'r0', 'kind': 'result', 'description': '核对修改后的两个输入值',
-                    'acceptance': {'mode': 'presence', 'subject': '输入值', 'source_quote': '核对输入值'}}],
+                    'acceptance': {'mode': 'presence', 'subject': '输入值', 'source_quote': '输入值'}}],
                 'steps': []}
         for label, value in [('数量', '20'), ('成本', '60')]:
             for action, extra, purpose in [
@@ -972,21 +976,17 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         ]
 
     def _plan(self):
-        # Steps 8–9 form the tail after the declared evidence step: the route
-        # checkpoint after step 8 must fire before step 9 can be dispatched.
-        steps = self._steps() + [
-            {'action': 'scroll', 'direction': 'down', 'purpose': '滚动核对结果下方说明',
-             'rationale': '提交后核对结果区域周边说明', 'expected_result': '结果下方说明进入视口'},
-            {'action': 'click', 'target': {'text': '数量'}, 'purpose': '再次聚焦数量框',
-             'rationale': '核对结果后回到输入区', 'expected_result': '数量输入框获得焦点'},
-        ]
+        # The declared evidence step is gone with predicted future steps; the
+        # result must be caused by this trajectory's own inputs and submission
+        # (the tail 计算 click), and completion is judged at the real checkpoint
+        # after the last executed step.
         return {'goal': '修改数量为20并查看本次利润率结果',
                 'requirements': [
                     {'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果',
                      'evidence_scope': 'current',
                      'acceptance': {'mode': 'presence', 'subject': '利润率结果', 'source_quote': '查看本次利润率结果'},
-                     'evidence_route': {'source_type': 'page_result', 'observation_steps': [8]}}],
-                'final_presentation_step': 8, 'steps': steps}
+                     'evidence_route': {'source_type': 'page_result', 'observation_steps': [7]}}],
+                'final_presentation_step': 7, 'steps': self._steps()}
 
     def _session(self, name, choose, runlog=None):
         evidence = self.root / name / 'evidence' / 'S000001_sample_000201'
@@ -1022,6 +1022,8 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                             claim_id='claim-1', attempt_id=self.attempt_id)
 
+        completion_prompts = []
+
         async def choose(prompt):
             prompts.append(deepcopy(prompt))
             if prompt.get('phase') == 'first':
@@ -1030,34 +1032,49 @@ class ScreenshotSessionRunlogTests(SessionHarness):
                         'request_id': 'mock'}
             if prompt.get('reason') in ('submission_checkpoint', 'action_not_established'):
                 # The model defers registration past the submit checkpoint; the
-                # scroll still has to produce a route checkpoint before the
-                # next planned action (SSD 5.1).
+                # next checkpoint after the last step still has to cite real
+                # evidence before completion can be judged.
                 return {'name': 'plan_decision', 'arguments': {
-                    'decision': 'continue', 'reason': '先滚动核对结果下方说明'},
+                    'decision': 'continue', 'reason': '先核对提交后的结果区'},
                     'tool_call_id': 'continue', 'request_id': 'mock'}
-            evidence_observation = prompt['current_observation']
-            regions = prompt.get('regions') or []
-            region = next((r for r in regions if '利润率' in r.get('quote', '')), None)
-            if region is None:
-                # After scrolling, cite the same region in the historical frame
-                # that was just reattached; do not demand a fresh page result.
-                historical = next((row for row in prompt.get('historical_evidence') or []
-                                   if any('利润率' in r.get('quote', '') for r in row.get('regions') or [])), None)
-                if historical is not None:
-                    evidence_observation = historical['observation']
-                    region = next(r for r in historical['regions'] if '利润率' in r.get('quote', ''))
-            if region is None:
+            # The model view cites citable text through the unified fact
+            # directory (observation + region id), not a flat regions list.
+            fact = next((row for row in prompt.get('fact_directory') or []
+                         if '利润率' in row.get('quote', '')), None)
+            if fact is None:
                 return {'name': 'plan_decision', 'arguments': {
                     'decision': 'continue', 'reason': '继续查看结果'},
                     'tool_call_id': 'continue', 'request_id': 'mock'}
+            completion_prompts.append(deepcopy(prompt))
             return {'name': 'plan_decision', 'arguments': {
                 'decision': 'complete', 'reason': '本次提交的利润率结果已经可见',
                 'answers': [{'requirement_id': 'r1', 'observed_result': '利润率：40%',
-                             'evidence': [{'observation': evidence_observation,
-                                           'region': region['region_id']}]}]},
+                             'evidence': [{'observation': fact['observation'],
+                                           'region': fact['region_id']}]}]},
                 'tool_call_id': 'complete', 'request_id': 'mock'}
 
         session, _ = self._session('logged', choose, runlog=runlog)
+        # The result must be caused by this trajectory's submission: it does not
+        # exist until the real 计算 click, so the completed answer's causality
+        # and freshness are genuine rather than pre-existing page text.
+        result_element = next(row for row in self.surface.state['elements']
+                              if row['element_id'] == 'visible-result')
+        result_binding = next(row for row in self.surface.state['capture_controls']
+                              if row['element_id'] == 'visible-result')
+        self.surface.state['elements'].remove(result_element)
+        self.surface.state['capture_controls'].remove(result_binding)
+        original_execute = self.surface.execute_action
+
+        def execute_with_submit(action_type, arguments):
+            original_execute(action_type, arguments)
+            if action_type == 'click':
+                submit = next(row for row in self.surface.state['elements']
+                              if row['element_id'] == 'submit-result')
+                x, y = arguments['x'], arguments['y']
+                if submit['bbox'][0] <= x < submit['bbox'][2] and submit['bbox'][1] <= y < submit['bbox'][3]:
+                    self.surface.state['elements'].append(result_element)
+                    self.surface.state['capture_controls'].append(result_binding)
+        self.surface.execute_action = execute_with_submit
         summary = await session.run()
         rows = _rows(self.root / 'logs' / 'w1' / 'runtime.jsonl')
         events = [row['event'] for row in rows]
@@ -1071,27 +1088,26 @@ class ScreenshotSessionRunlogTests(SessionHarness):
         self.assertEqual(summary['collection_ending']['goal_completion'], 'VERIFIED')
         self.assertTrue(summary['effective_steps'] >= 5)
         accepted = next(row for row in rows if row['event'] == 'plan_accepted')
-        self.assertEqual(accepted['actionHistogram'], {'click': 4, 'hotkey': 2, 'scroll': 1, 'type': 2})
-        self.assertEqual(accepted['actionKinds'], 4)
-        # The declared observation step (the scroll, plan step 8 of 9) produced a
-        # consolidated evidence boundary before the remaining tail action could be dispatched;
-        # once the goal verified there, the useless tail step never ran.
+        self.assertEqual(accepted['actionHistogram'], {'click': 3, 'hotkey': 2, 'type': 2})
+        self.assertEqual(accepted['actionKinds'], 3)
+        # Completion is judged at the real checkpoint after the last executed
+        # step; predicted future evidence steps no longer anchor any route
+        # checkpoint, and no phantom route observation may fire.
         checkpoints = [row for row in rows if row['event'] == 'checkpoint']
-        route = next(row for row in checkpoints if row['reason'] == 'planned_evidence_complete')
-        self.assertEqual(route['position'], 8)
-        self.assertEqual(route['effectiveSteps'], 7)
+        self.assertFalse(any(row['reason'] in ('planned_evidence_complete', 'route_observation')
+                             for row in checkpoints))
         self.assertEqual(summary['effective_steps'], 7)
-        route_prompt = next(p for p in prompts if p.get('phase') == 'branch'
-                            and p.get('reason') == 'planned_evidence_complete')
-        self.assertEqual(len(route_prompt['pending_steps']), 1)
-        self.assertEqual(route_prompt['missing_requirements'], ['r1'])
-        self.assertNotIn('remaining_plan', route_prompt)
-        self.assertFalse(any(row['reason'] == 'route_observation' for row in checkpoints))
+        completion_prompt = completion_prompts[0]
+        self.assertEqual(completion_prompt['missing_requirements'], ['r1'])
+        self.assertNotIn('remaining_plan', completion_prompt)
         # Captured-but-unregistered result rows are shown as candidates; having
         # captured them is not the same as a verified answer.
-        self.assertTrue(route_prompt['candidate_results'])
-        self.assertTrue(any('利润率' in row['text'] for row in route_prompt['candidate_results']))
-        self.assertEqual([row['requirement_id'] for row in route_prompt['confirmed_progress']], [])
+        self.assertTrue(completion_prompt['candidate_results'])
+        self.assertTrue(all(not row.get('verified_answer')
+                            for row in completion_prompt['candidate_results']))
+        self.assertTrue(any('利润率' in row.get('quote', '')
+                            for row in completion_prompt['fact_directory']))
+        self.assertEqual([row['requirement_id'] for row in completion_prompt['confirmed_progress']], [])
         first = next(prompt for prompt in prompts if prompt.get('phase') == 'first')
         affordances = first['interaction_affordances']
         self.assertEqual(affordances['projected_controls'], len(first['controls']))
