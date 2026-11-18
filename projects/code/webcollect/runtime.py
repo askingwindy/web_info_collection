@@ -4,11 +4,13 @@ Scopes bind an output batch. Campaigns share attempt, resource and outcome accou
 across output directories. This module never opens a
 browser, modifies evidence, or declares a customer/QC acceptance decision.
 """
+from webcollect.sqlite_connection import begin_immediate
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing, contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import ipaddress
-import json
+from webcollect import workspace_json as json
 import math
 import os
 from pathlib import Path
@@ -206,10 +208,10 @@ class RuntimeStore:
         return con
 
     @contextmanager
-    def _transaction(self):
+    def _transaction(self, *, timeout=90):
         con = self._connect()
         try:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con, timeout=timeout)
             yield con
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_site_pool'").fetchone():
                 con.execute('UPDATE m4_site_pool SET pending=1 WHERE scope_id=?', (self.scope_id,))
@@ -619,7 +621,10 @@ class RuntimeStore:
             return self._view(self._attempt(con, attempt_id))
 
     def heartbeat(self, attempt_id, worker_id, lease_token, *, now=None):
-        with self._transaction() as con:
+        with closing(self._connect(readonly=True)) as read:
+            prior=self._attempt(read,attempt_id)
+            remaining=max(0,prior['lease_expires_at']-timestamp(now))
+        with self._transaction(timeout=min(90,remaining)) as con:
             current = timestamp(now)
             self._owned(con, attempt_id, worker_id, lease_token, current)
             from .admission_cohort import guard_scope
@@ -700,7 +705,7 @@ class RuntimeStore:
             latest = db.execute('SELECT claim_id FROM candidate_claims WHERE candidate_id=? ORDER BY created DESC LIMIT 1', (claim['candidate_id'],)).fetchone()
         if not latest or latest[0] != claim['claim_id']:
             raise ValueError('A newer claim prevents historical derivation recovery')
-        with sqlite3.connect(Path(recovery['model_ledger']).resolve().as_uri()+'?mode=ro', uri=True) as db:
+        with workspace_connect(Path(recovery['model_ledger']).resolve().as_uri()+'?mode=ro', uri=True) as db:
             requests = db.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (row['attempt_id'],)).fetchall()
         if not requests or any(state not in ('succeeded', 'invalid_response') for _, state in requests):
             raise ValueError('Unsettled original model request prevents derivation recovery')
@@ -778,7 +783,7 @@ class RuntimeStore:
         # Model requests stay exactly as ledgered: UNKNOWN reservations are
         # neither settled nor cleared by this derivation, and their isolation
         # persists after the interval sample is registered.
-        with sqlite3.connect(Path(recovery['model_ledger']).resolve().as_uri()+'?mode=ro', uri=True) as db:
+        with workspace_connect(Path(recovery['model_ledger']).resolve().as_uri()+'?mode=ro', uri=True) as db:
             requests = db.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (row['attempt_id'],)).fetchall()
         receipts = [r for r in evidence if Path(r['path']).name == 'saved_sample.json']
         if len(receipts) != 1: raise ValueError('One saved derivation receipt required')
@@ -1491,27 +1496,32 @@ class RuntimeStore:
         """Fail closed before claiming another ID; preserve all evidence on stop."""
         import shutil
         output = Path(output).resolve()
+        with closing(self._connect(readonly=True)) as con:
+            policy = self._policy(con)
+        root = Path(policy.get('resource_root') or output).resolve()
+        if not output.is_relative_to(root):
+            raise ValueError('本输出不属于冻结resource_root')
+        disk_path = root
+        while not disk_path.exists():
+            disk_path = disk_path.parent
+        free = shutil.disk_usage(disk_path).free
+        files = list(root.rglob('*')) if root.exists() else []
+        if any(path.is_symlink() for path in files):
+            raise ValueError('resource_root含符号链接，无法完整核算存储')
+        stored = sum(path.stat().st_size for path in files if path.is_file())
         with self._transaction() as con:
             current = timestamp(now)
             scope = self._scope(con)
             if scope['state'] == 'closed_replanned':
                 raise ValueError('scope已永久closed_replanned，禁止资源检查改变其状态')
-            policy = self._policy(con)
-            root = Path(policy.get('resource_root') or output).resolve()
-            if not output.is_relative_to(root):
-                raise ValueError('本输出不属于冻结resource_root')
-            disk_path = root
-            while not disk_path.exists():
-                disk_path = disk_path.parent
-            free = shutil.disk_usage(disk_path).free
-            files = list(root.rglob('*')) if root.exists() else []
-            if any(path.is_symlink() for path in files):
-                raise ValueError('resource_root含符号链接，无法完整核算存储')
-            stored = sum(path.stat().st_size for path in files if path.is_file())
+            if self._policy(con) != policy:
+                raise ValueError('Resource policy changed during measurement')
             usage = self.campaign_worker_time(con, scope['campaign_id'], current)
             reasons = []
             if free == 0:
                 reasons.append('disk_full')
+            elif policy.get('min_free_disk_bytes') is not None and free < policy['min_free_disk_bytes']:
+                reasons.append('disk_low')
             value = {'status': 'STOP' if reasons else 'PASS', 'reasons': reasons,
                 'resource_root': str(root), 'free_disk_bytes': free, 'stored_bytes': stored,
                 **usage,

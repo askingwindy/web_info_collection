@@ -6,7 +6,7 @@ atomic dispatcher; host decisions are never provider function-call messages.
 from copy import deepcopy
 import asyncio
 import time
-import json
+from webcollect import workspace_json as json
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence
 from .goal_evidence import contract_for

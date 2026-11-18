@@ -6,7 +6,7 @@ It never changes collection manifests or declares formal delivery ready.
 import argparse
 from datetime import datetime
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sys
 from .validate import read_json

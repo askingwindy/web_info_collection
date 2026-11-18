@@ -5,7 +5,7 @@ the resulting trace still requires independent admission and formal collection.
 """
 import argparse
 import asyncio
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import re

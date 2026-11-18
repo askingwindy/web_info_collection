@@ -8,7 +8,7 @@ dispatch, no redundant recapture after a supplemental observation, an in-prompt
 current-trajectory memory, and stage-classified decision request failures.
 """
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .planning import object_sha256, verify_evidence
 from .batch_core import file_sha, load_json, OutcomeUnknown
@@ -58,6 +58,8 @@ def is_controlled(task):
 
 def exclusive(path, value):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    from .workspace_paths import bind
+    bind(path)
     with path.open('x', encoding='utf-8') as stream:
         json.dump(value, stream, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
         stream.write('\n'); stream.flush()

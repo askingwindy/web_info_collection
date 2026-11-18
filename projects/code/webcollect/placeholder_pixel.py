@@ -2,7 +2,7 @@
 import base64
 from hashlib import sha256
 from io import BytesIO
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import subprocess

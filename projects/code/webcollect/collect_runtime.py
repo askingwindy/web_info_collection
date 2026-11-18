@@ -8,7 +8,7 @@ import time
 import threading
 from contextlib import asynccontextmanager
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import shutil
 import sqlite3
@@ -29,11 +29,19 @@ class CollectionFailure(ValueError):
 
 
 def runtime_scope(output):
-    return 'output-' + hashlib.sha256(str(Path(output).resolve()).encode()).hexdigest()
+    from .workspace_paths import logical
+    manifest=Path(output)/'manifest.json'
+    if manifest.is_file():
+        existing=read_json(manifest).get('runtime_scope_id')
+        if existing:return existing
+    return 'output-' + hashlib.sha256(logical(output).encode()).hexdigest()
 
 
 def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
+    from .candidate_navigation import NavigationRejected
+    if isinstance(error, NavigationRejected):
+        return 'collector'
     if isinstance(error, CollectionFailure):
         return error.failure_class
     from .collection_strategy import Strategy1Forbidden
@@ -576,10 +584,12 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             strategy_eligibility = ('unresolved' if not screenshot_strategy(task) or summary.get('unknown')
                                     else 'ineligible')
         failure = evidence / 'failure.json'
+        from .failure_policy import disposition
+        handling = summary.get('failure_disposition') or disposition(failure_class=failure_class, reason=root_cause)
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': now(),
                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
-                'failure_class': failure_class, 'raw_saved': True,
+                'failure_class': failure_class, 'raw_saved': True, 'failure_disposition': handling,
                 'stop_reason': summary['stop_reason'], **stop_data})
         # The feedback receipt globs/copies step files; keep it off the event
         # loop so the two heartbeat layers keep renewing during close-out.
@@ -598,7 +608,9 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             # is rejected when its transaction did not succeed.
             settlement_error = {'error_type': type(error).__name__, 'error': str(error)}
             write_json(evidence / 'settlement-failed.json', settlement_error)
-        if failure_class == 'program' and not closing_enabled(task):
+        from .failure_policy import disposition
+        handling = summary.get('failure_disposition') or disposition(failure_class=failure_class, reason=root_cause)
+        if handling['disposition'] == 'global':
             store.set_scope_paused(True,
                 'React derivation program failure; raw execution preserved and dispatch stopped')
         final_result = None
@@ -621,6 +633,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                 unknown=bool(summary.get('unknown')),
                 effectiveSteps=summary.get('effective_steps'))
         return {'status': 'settlement_failed' if settlement_error else 'rejected', 'failure_class': failure_class,
+                'failure_disposition': handling,
                 **({'settlement_error': settlement_error} if settlement_error else {}),
                 'stop_reason': summary['stop_reason'], 'raw_receipt': raw_receipt,
                 **({'strategy_result': final_result} if final_result else {}),
@@ -728,6 +741,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     except Exception as error:
         if not screenshot_strategy(task):
             raise
+        from .failure_policy import disposition
+        summary['failure_disposition']=disposition(error,failure_class='program')
         return await finish_failure('program', 'derivation_failed:' + str(error)[:300],
             strategy_save_status='save_failed', strategy_eligibility='unresolved')
     react_close_event(store, attempt, 'react_raw_saved', _event_now(),
@@ -748,6 +763,7 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                                   _evidence(evidence / 'producer_dedup.json') + [derived['record_ref']],
                                   strategy_eligibility='ineligible')
         if derived['status'] in ('processing_failed', 'delivery_rejected'):
+            summary['failure_disposition']=derived.get('failure_disposition')
             # A program failure of the derivation/save action is an actual
             # save failure; an explicit delivery rejection is not saved and
             # ineligible.
@@ -814,6 +830,8 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
                         'raw_receipt': raw_receipt, 'requires_reconciliation': True}
             raise
         if runtime_row['status'] != 'collected_pending_review':
+            from .failure_policy import disposition
+            summary['failure_disposition']=disposition(error,failure_class='program')
             return await finish_failure('program', 'runtime_commit_failed:' + str(error)[:300],
                 strategy_save_status='save_failed', strategy_eligibility='eligible')
         write_json(evidence / 'secondary-index-failed.json', {'error': str(error),
@@ -1243,7 +1261,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                  'cleanup_error_type': type(cleanup_error).__name__,
                                  'cleanup_error': str(cleanup_error), 'ledger_settled': True,
                                  'not_business_success_evidence': True})
-                        if classify_failure(error) == 'program' and not continuous:
+                        from .failure_policy import disposition
+                        if disposition(error, failure_class=classify_failure(error))['disposition'] == 'global':
                             store.set_scope_paused(True, 'Program validation failure; preserve rejected attempt and stop before another allocation')
                 try:
                     with phase(phase_ledger, 'attempt_runner', scope=meter_identity):

@@ -4,11 +4,12 @@ Visual, nearest-task difference and document jobs have separate cache identities
 Synthetic responses use an incompatible export schema and cannot be imported as
 AI or human approval by the existing independent inspector.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from collections import Counter
 from copy import deepcopy
 from contextlib import closing
 from difflib import SequenceMatcher
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -285,7 +286,7 @@ def research_review_context(reference, dataset, sample_ids):
         raise ValueError('Research handoff current-chain scope changed')
     assert_registry_scope(scope,handoff['history_scope']['registry'])
     attempts=_attempts(scope,dataset,sample_ids);result={}
-    with closing(sqlite3.connect(Path(scope['registry']).as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(Path(scope['registry']).as_uri()+'?mode=ro',uri=True)) as con:
         for attempt in attempts:
             original=next((a for a in handoff['attempts'] if a['attempt_id']==attempt['attempt_id']),None)
             if not original or original['saved_sample']!=attempt['saved_sample']:

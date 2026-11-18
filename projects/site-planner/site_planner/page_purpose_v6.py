@@ -1,5 +1,5 @@
 """V7 purpose decisions: shared observation, compact quotes and typed structure IDs."""
-import json
+from webcollect import workspace_json as json
 import re
 from pathlib import Path
 from jsonschema import Draft202012Validator

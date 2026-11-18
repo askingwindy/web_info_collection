@@ -5,7 +5,7 @@ Original annotations, images and trees are copied byte-for-byte after checking
 their bindings and field allowlists. Reports and documentary history stay out.
 """
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import shutil
 from jsonschema.exceptions import ValidationError

@@ -6,13 +6,14 @@
 - ``task_template_name(task)`` 读取任务 fragment 上的冻结标记；
 - ``freeze_template(task, name)`` 在生成期与策略冻结一起盖章；
 - ``select_template(...)`` 由消费者在首帧之后、任何模型调用之前做确定性
-  选择（目标方向 + 页面结构信号 + 已确认站点模板），不调用模型。
+  选择（显式站点规则 + 目标方向 + 页面结构信号 + 已确认站点模板），不调用模型。
 
 本模块不得在模块级 import 模板包或 session_core，避免环引用；也不承载
 任何提示词、schema 或决策循环代码。历史封存记录（无模板标记）解析到
 webcollect.screenshot_plan 单体实现，保证离线重放按原样只读。
 """
 import re
+from urllib.parse import urlsplit
 
 TEMPLATE_NAMES = ('operation', 'long_reading', 'generic')
 SPECIALIZED_TEMPLATE_NAMES = ('operation', 'long_reading')
@@ -133,6 +134,11 @@ def _page_signals(state):
         role = element.get('native_role')
         if role in ('input', 'select', 'textarea') or element.get('inputable'):
             binding = bindings.get(element.get('element_id'), {})
+            if (element.get('disabled') or binding.get('disabled')
+                    or binding.get('input_type') in ('hidden', 'button', 'submit', 'reset', 'image')
+                    or element.get('native_role') in ('menuitem', 'navigation')
+                    or binding.get('role') in ('menuitem', 'navigation')):
+                continue
             haystack = ' '.join(str(part or '') for part in (
                 binding.get('selector'), binding.get('input_type'),
                 element.get('text'), element.get('placeholder')))
@@ -155,7 +161,7 @@ def _page_signals(state):
 
 
 def _structural_choice(direction, signals):
-    business_inputs = signals['inputs'] >= 1 or signals['buttons'] >= 3
+    business_inputs = signals['inputs'] >= 1
     prose = (signals['prose_blocks'] >= 3 or signals['visible_text_len'] >= 800
              or signals['headings'] >= 3)
     search_entry = (signals['search_inputs'] >= 1 and signals['inputs'] == 0
@@ -174,6 +180,18 @@ def _structural_choice(direction, signals):
     return 'generic', '目标与页面结构无专用模板信号，回退generic'
 
 
+def _explicit_site_rule(state):
+    """Explicit owner-directed site rules, evaluated before structural guessing."""
+    url = str((state or {}).get('url') or '') if isinstance(state, dict) else ''
+    try:
+        host = (urlsplit(url).hostname or '').lower().rstrip('.')
+    except ValueError:
+        return None
+    if host in ('muxtly.com', 'www.muxtly.com'):
+        return 'operation', 'Muxtly全站页面按站点规则固定使用operation模板'
+    return None
+
+
 def select_template(*, pool=None, application_id=None, goal=None, state=None):
     """Deterministic template choice before any model call; returns (name, info)."""
     goal_text = _goal_text(goal)
@@ -181,6 +199,11 @@ def select_template(*, pool=None, application_id=None, goal=None, state=None):
     direction = _goal_direction(goal_text)
     signals['goal_direction'] = direction
     confirmed = confirmed_templates(pool, application_id)
+    site_rule = _explicit_site_rule(state)
+    if site_rule:
+        structural, reason = site_rule
+        return structural, {'source': 'site_rule', 'reason': reason,
+                            'signals': signals, 'confirmed': confirmed}
     structural, reason = _structural_choice(direction, signals)
     confirmed_specialized = [name for name in confirmed
                              if name in SPECIALIZED_TEMPLATE_NAMES]

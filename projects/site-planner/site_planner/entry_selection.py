@@ -342,3 +342,20 @@ def distribution(pool):
     return {'unit':'distinct_application','total':total,'counts':dict(counts),
             'shares':{k:v/total for k,v in counts.items()} if total else {},
             'effective_sample_distribution':'NOT_EVALUATED: requires explicit QC effective set'}
+
+
+def simplified_chinese_evidence(document):
+    """Conservative script gate on the original page text; never rewrite it."""
+    from webcollect.narration_normalization import simplify
+    text = document.get('content', '') or ''
+    # Menu language names are not the page's business language.
+    content = re.sub(r'繁體中文|繁体中文|简体中文|簡體中文|中文[（(](?:繁體|繁体|简体|簡體)[）)]', '', text)
+    han = len(re.findall(r'[\u3400-\u4dbf\u4e00-\u9fff]', content))
+    converted = simplify(content)
+    has_traditional = converted != content
+    eligible = han >= 40 and not has_traditional
+    return {'required_language': 'zh-Hans', 'eligible': eligible,
+            'reason': 'simplified_text_evidenced' if eligible else
+                      'traditional_text_present' if has_traditional else 'insufficient_chinese_text',
+            'han_characters': han, 'traditional_conversion_would_change_text': has_traditional,
+            'source_text_modified': False}

@@ -1,5 +1,6 @@
 """Producer safeguards. Independent QC must still inspect final candidates."""
-import hashlib,json
+import hashlib
+from webcollect import workspace_json as json
 from pathlib import Path
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()

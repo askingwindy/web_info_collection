@@ -1,7 +1,7 @@
 """Independent, bounded, read-only QR decoder for original saved PNG evidence."""
 from hashlib import sha256
 from io import BytesIO
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import subprocess
 import tempfile

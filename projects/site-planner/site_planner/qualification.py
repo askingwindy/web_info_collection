@@ -1,7 +1,8 @@
 """Evidence-bound site qualification, separate from task capacity and sample QC."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -178,7 +179,7 @@ def validate_qualification(record):
         ledger = Path(q['ledger']).resolve()
         if not ledger.is_file():
             raise ValueError('Original model ledger required')
-        con = sqlite3.connect(ledger.as_uri() + '?mode=ro', uri=True)
+        con = workspace_connect(ledger.as_uri() + '?mode=ro', uri=True)
         con.row_factory = sqlite3.Row
         try:
             config = json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])

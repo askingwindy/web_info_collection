@@ -1,6 +1,7 @@
 """Resolve the owner of an unsettled request from the original project books."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -27,7 +28,7 @@ def attempt_owner(guard, registry, attempt_id, *, job_ledger=None, research_requ
     path = Path(registry)
     if not path.is_absolute() or path.is_symlink() or not path.is_file():
         return None
-    with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(path.resolve().as_uri()+'?mode=ro', uri=True)) as con:
         scope = registry_project(con)
         if not scope or Path(scope['registry']).resolve() != path.resolve():
             return None
@@ -54,7 +55,7 @@ def accounted_rejected_focus(registry, attempt_id):
     from .batch_core import load_json
     from .planning import verify_evidence
     from .postprocess import rejected_focus_dispatch_audit
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
         con.row_factory=sqlite3.Row
         row=con.execute('SELECT status,failure_class,root_cause,evidence_json FROM m4_attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
         if not row or row['status']!='rejected' or row['failure_class']!='interrupted':return False
@@ -77,7 +78,7 @@ def accounted_rejected_focus(registry, attempt_id):
         frozen=load_json(binding['claim_reference']['path']);claim=CandidatePool(frozen['pool'], readonly=True).get_claim(binding['claim_id'])
         owner=claim.get('binding') or {}
         if owner.get('attempt_id')!=attempt_id or Path(owner.get('registry','')).resolve()!=Path(registry).resolve():continue
-        with closing(sqlite3.connect(Path(owner['ledger']).as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(Path(owner['ledger']).as_uri()+'?mode=ro',uri=True)) as con:
             requests=list(con.execute("SELECT id,state FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?",(attempt_id,)))
         if requests and {r[0] for r in requests}==set(event['settled_request_ids']) and all(r[1]=='succeeded' for r in requests):return True
     return False
@@ -210,7 +211,7 @@ def _closed_execution(registry, attempt_id, authorization, *, definite=False, tr
         raise ValueError('Original run intent and scope must bind this candidate, output and ledger')
     if owner.get('attempt_id') != attempt_id or Path(owner.get('registry', '')).resolve() != Path(registry).resolve():
         raise ValueError('Original claim and runtime registry differ')
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
         row = con.execute('SELECT a.status,a.failure_class,a.root_cause,t.task_json,a.sample_id FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.attempt_id=?', (attempt_id,)).fetchone()
     if not row or row[:3] != ('rejected', primary.get('failure_class'), primary.get('error')):
         raise ValueError('Original rejected attempt and failure must remain unchanged')
@@ -222,7 +223,7 @@ def _closed_execution(registry, attempt_id, authorization, *, definite=False, tr
             raise ValueError('Original runner flags differ from frozen plan')
     if original_task != executed_task or row[4] != raw.parent.name:
         raise ValueError('Original registered task/sample differs from sealed execution')
-    with closing(sqlite3.connect(Path(owner['ledger']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(owner['ledger']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         requests = list(con.execute("SELECT id,state,error,response,request_json,usage,cost,purpose FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?", (attempt_id,)))
     unknown = [row for row in requests if row['state'] not in ('succeeded', 'invalid_response')]
@@ -309,7 +310,7 @@ def authorized_http400_retry(registry, attempt_id):
     """An appended explicit permit closes execution only, never model accounting."""
     from .batch_core import load_json
     from .planning import verify_evidence
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
         events = list(con.execute("SELECT payload_json FROM m4_events WHERE event_type IN ('http400_new_attempt_authorized','closed_execution_new_attempt_authorized') AND attempt_id=?", (attempt_id,)))
     for raw in events:
         event = json.loads(raw[0]); ref = event['authorization']
@@ -336,14 +337,14 @@ def authorized_transport_research(registry, attempt_id, *, request_id=None):
         return False
     from .batch_core import load_json
     from .planning import verify_evidence
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True)) as con:
         events = con.execute("SELECT payload_json FROM m4_events WHERE event_type='planning_timeout_research_authorized' AND attempt_id=?",(attempt_id,)).fetchall()
     for (raw,) in events:
         event=json.loads(raw); reference=event['authorization'];verify_evidence([reference])
         facts=transport_closed_execution(registry,attempt_id,load_json(reference['path']))
         if facts != event['closed_execution']:continue
         if request_id != facts['next_request_id']:continue
-        with closing(sqlite3.connect(Path(facts['pool']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(Path(facts['pool']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
             row=con.execute('SELECT state,binding,candidate_id,expires,version FROM candidate_claims WHERE request_id=?',(request_id,)).fetchone()
             original=con.execute('SELECT candidate_id,version FROM candidate_claims WHERE claim_id=?',(facts['claim_id'],)).fetchone()
         if row is None:
@@ -386,7 +387,7 @@ def _verify_execution_entry(registry, attempt_id, authorization, report, started
     if transport:
         # Only the already appended original permit has reviewed old static
         # entry evidence. New executions must record their actual command.
-        with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
             events=con.execute("SELECT payload_json FROM m4_events WHERE event_type='planning_timeout_research_authorized' AND attempt_id=?",(attempt_id,)).fetchall()
         for (raw,) in events:
             reference=json.loads(raw)['authorization'];verify_evidence([reference])

@@ -5,6 +5,7 @@ The existing model-to-text/number compiler remains an explicit option.
 Unsupported or naturally short workflows remain rejected candidates, never
 padded or allocated an ID. Parameter/route changes are not new business tasks.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -12,7 +13,7 @@ import re
 from contextlib import closing
 import unicodedata
 from decimal import Decimal, InvalidOperation
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -409,7 +410,7 @@ def read_history(registry, *, include_scopes=False):
     if is_current_registry(path):
         rows = registry_snapshot(scope_for_registry(path), path)['rows']
         return [(row['scope_id'], row['task']) for row in rows] if include_scopes else [row['task'] for row in rows]
-    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True, timeout=90)) as con:
+    with closing(workspace_connect(path.as_uri()+'?mode=ro',uri=True, timeout=90)) as con:
         exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_tasks'").fetchone()
         if not exists:
             return []
@@ -591,7 +592,7 @@ def check_live_m4_history(plan, registry, output):
     from .task_replanning import validated_replans
     repairs, _ = validated_replans(registry, plan.get('generation', {}).get('replan_closures'))
     bootstrap_path = capture / 'bootstrap.json'
-    with closing(sqlite3.connect(registry.as_uri()+'?mode=ro', uri=True, timeout=90)) as con:
+    with closing(workspace_connect(registry.as_uri()+'?mode=ro', uri=True, timeout=90)) as con:
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if 'm4_tasks' not in tables:
             return {'m4_tasks_checked': 0, 'own_resume_tasks': 0}
@@ -1477,7 +1478,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     _, repair_campaigns = validated_replans(registry, plan['generation'].get('replan_closures'))
     if repair_campaigns and repair_campaigns != {supplied_policy.get('campaign_id')}:
         raise ValueError('Repair must use the original campaign and cumulative budget')
-    with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True, timeout=90) as con:
+    with workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True, timeout=90) as con:
         campaign=con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',
                              (supplied_policy.get('campaign_id'),)).fetchone()
         if not campaign:raise ValueError('Use an existing authorized production campaign; this wrapper never creates one')

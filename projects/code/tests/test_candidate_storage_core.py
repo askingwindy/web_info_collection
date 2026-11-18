@@ -137,6 +137,12 @@ class CandidateStorageCore(unittest.TestCase):
                 {'sample_id': 'sample-1', 'template_name': 'long_reading'})
             self.assertEqual((re_registered['pages'], re_registered['registered']), (3, True))
             self.assertEqual(template_sites.confirmed_templates(pool, application_id), ['long_reading'])
+            from webcollect.workspace_paths import bind
+            from webcollect import workspace_json
+            bind(scope_path)
+            portable=__import__('json').loads(workspace_json.dumps({'path':str(source),'input_text':str(source),1:{'path':str(source)}}))
+            self.assertTrue(portable['path'].startswith('workspace:/'))
+            self.assertEqual(portable['input_text'],str(source))
             original_source = source.read_bytes()
             (output / 'temporary-run-log.txt').write_text('Disposable collection output')
             shutil.rmtree(output)
@@ -145,6 +151,7 @@ class CandidateStorageCore(unittest.TestCase):
             chain = read_chain_scope(launch_scope['history_set'])
             self._check_registry_concurrency(launch_scope, chain, temporary)
             self._check_producer_capacity_preserves_unsettled_jobs(temporary)
+            self._check_pool_readers_do_not_take_writer_slots(temporary)
             readonly_pool = CandidatePool(launch_scope['pool'], readonly=True)
             self.assertTrue(check_project_pool(chain, readonly_pool.pool))
             for role in ('producer', 'consumer'):
@@ -161,7 +168,8 @@ class CandidateStorageCore(unittest.TestCase):
                 provenance = connection.execute('SELECT source FROM candidate_sources WHERE candidate_id=?',
                                                 (candidate_id,)).fetchone()
             self.assertEqual(json.loads(saved[0]), candidate)
-            references = json.loads(provenance[0])['references']
+            from webcollect import workspace_json
+            references = workspace_json.loads(provenance[0])['references']
             verify_evidence(references)
             self.assertEqual(references, [source_ref])
             self.assertEqual(current_evidence_roots(chain)[0], root)
@@ -202,6 +210,39 @@ class CandidateStorageCore(unittest.TestCase):
                 context = site_context(registry, 'https://example.org/', candidate_id='new')
                 self.assertEqual(context['executions'][0]['evidence_error']['classification'], 'DIGEST_MISMATCH')
 
+
+    def _check_pool_readers_do_not_take_writer_slots(self, temporary):
+        import sqlite3
+        from contextlib import closing
+        from site_planner.site_pool import SitePool
+        pool = SitePool(temporary / 'concurrent-pool.sqlite3', initialize=True)
+        self.assertEqual(pool.enable_wal(), {'previous': 'wal', 'current': 'wal'})
+        value = {'original': 'immutable'}
+        pool.checkpoint('run', 'old', value)
+        payload = {'uri': 'https://example.org/page'}
+        request, _ = pool.reserve_tool('run', 'browser', 'settled', payload)
+        pool.settle_tool(request, 'succeeded', value)
+        held, _ = pool.reserve_tool('run', 'browser', 'unsettled', payload)
+        connect = pool.connect
+        with closing(sqlite3.connect(pool.path)) as writer, \
+                patch.object(pool, 'connect', side_effect=lambda **kw: connect(**{**kw, 'timeout': 0.05})):
+            writer.execute('BEGIN IMMEDIATE')
+            before = writer.execute('SELECT * FROM tool_requests WHERE id=?', (held,)).fetchone()
+            self.assertEqual(pool.checkpoint('run', 'old', value), value)
+            self.assertEqual(pool.reserve_tool('run', 'browser', 'settled', payload), (request, value))
+            with self.assertRaisesRegex(ValueError, 'UNKNOWN/failed'):
+                pool.reserve_tool('run', 'browser', 'unsettled', payload)
+            with self.assertRaisesRegex(ValueError, 'Checkpoint conflict'):
+                pool.checkpoint('run', 'old', {'changed': True})
+            self.assertEqual(writer.execute('SELECT * FROM tool_requests WHERE id=?', (held,)).fetchone(), before)
+            writer.rollback()
+        with closing(sqlite3.connect(pool.path)) as reader:
+            reader.execute('BEGIN')
+            self.assertEqual(reader.execute('SELECT count(*) FROM checkpoints').fetchone()[0], 1)
+            pool.checkpoint('run', 'new', {'new': True})
+            self.assertEqual(reader.execute('SELECT count(*) FROM checkpoints').fetchone()[0], 1)
+            reader.rollback()
+            self.assertEqual(reader.execute('SELECT count(*) FROM checkpoints').fetchone()[0], 2)
 
     def _check_producer_capacity_preserves_unsettled_jobs(self, temporary):
         import os

@@ -1,6 +1,6 @@
 """Optional, hash-bound capture sidecar. Never changes customer file identities."""
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 

@@ -8,7 +8,7 @@ import argparse
 from collections import Counter, defaultdict
 import csv
 import hashlib
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import sqlite3

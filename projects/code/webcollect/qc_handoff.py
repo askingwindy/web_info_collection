@@ -4,9 +4,10 @@ Only indexed results from the explicit current chain enter the comparison set.
 It neither promotes observation traces nor writes the production registry;
 identical frozen requests can be reused after deterministic integrity checks.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import closing
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -93,7 +94,7 @@ def _attempts(scope, dataset, sample_ids):
     from quality_inspector.profiles import package_files
     from .collect_runtime import verify_committed_samples
     rows = []
-    with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True)) as con:
         for sample_id in sample_ids:
             found = con.execute('SELECT a.attempt_id,a.task_key,a.sample_id,a.status,t.task_id,t.task_version,a.evidence_json '
                                 'FROM m4_attempts a LEFT JOIN m4_tasks t ON t.task_key=a.task_key WHERE a.sample_id=?',

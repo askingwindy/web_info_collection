@@ -3,8 +3,9 @@
 Consumes a saved multi-sample candidate package. Never collects, calls a model,
 changes production strategy, runs a worker or grants a review/release.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .batch_core import load_json, save_json, file_sha
 from .current_chain import read_chain_history
@@ -33,8 +34,8 @@ def prepare(dataset, history_set, output, *, max_batch_size, ai_percent, human_p
         import sqlite3
         from contextlib import closing
         application_registry=output/'application-registry.sqlite3'
-        with closing(sqlite3.connect(Path(scope['candidate_project']['pool']).as_uri()+'?mode=ro',uri=True)) as source, \
-             closing(sqlite3.connect(application_registry)) as destination:
+        with closing(workspace_connect(Path(scope['candidate_project']['pool']).as_uri()+'?mode=ro',uri=True)) as source, \
+             closing(workspace_connect(application_registry)) as destination:
             source.backup(destination)
     manifest=build_set_manifest(sorted(roots),application_registry=application_registry)
     from .telemetry import phase

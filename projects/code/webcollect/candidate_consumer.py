@@ -3,10 +3,11 @@
 Only --run performs IO; claim/list/reconcile never launch discovery, models or a
 browser. Reconciliation reads original ledgers and receipts, never re-executes.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 import asyncio
 from contextlib import closing, asynccontextmanager, AsyncExitStack
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -79,7 +80,7 @@ def guard_candidate_dispatch(ledger, uri, *, candidate_id, research_request_id=N
     registry=ledger.path.with_name('production-registry.sqlite3')
     if (guard or {}).get('dispatch_rules') == PROJECT_RULES and registry.is_file():
         from .application_identity import canonical_key
-        with closing(sqlite3.connect(registry.as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(registry.as_uri()+'?mode=ro',uri=True)) as con:
             scope=registry_project(con)
             check_project_guard(scope,guard,ledger.path,role='consumer')
             attempts=con.execute("""SELECT a.attempt_id,t.task_json FROM m4_attempts a
@@ -100,7 +101,7 @@ def _original_attempts(claim):
     binding=claim.get('binding') or {}
     registry=binding.get('registry')
     if not registry or not Path(registry).is_file(): return []
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
         con.row_factory=sqlite3.Row
         if not con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_attempts'").fetchone(): return []
         rows=[]
@@ -136,7 +137,7 @@ def known_unstarted_historical_claim(claim, successor_binding):
     if not b.get('ledger') or not b.get('registry') or any(b.get(k)!=successor_binding.get(k) for k in ('ledger','registry')):
         return None
     if not Path(b['registry']).is_file() or _original_attempts(claim):return None
-    with closing(sqlite3.connect(Path(b['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(Path(b['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
         con.row_factory=sqlite3.Row
         jobs=[dict(r) for r in con.execute('SELECT id,kind,state,payload FROM jobs')]
         ids={r['id'] for r in jobs if json.loads(r['payload']).get('claim_id')==claim['claim_id'] or r['id']==b.get('queue_job_id')}
@@ -360,7 +361,7 @@ def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=No
     if qc_policy is not None:
         from .task_generation import _qc_policy
         _qc_policy(qc_policy)
-    with closing(sqlite3.connect(Path(paths['registry']).as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(Path(paths['registry']).as_uri()+'?mode=ro',uri=True)) as con:
         row = con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?', (supplied['campaign_id'],)).fetchone()
         if not row or json.loads(row[0]) != supplied:
             raise ValueError('Consumer must use the exact original authorized campaign policy')
@@ -385,7 +386,7 @@ def preflight_cohort_sources(pool, rows, registry):
     from .current_chain import CurrentChainError
     from .planning import object_sha256
     # 与生产者共用同一池库：只读连接同样带锁等待，避免短写者瞬时BUSY。
-    with closing(sqlite3.connect(pool.path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
+    with closing(workspace_connect(pool.path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         for row in rows:
             sources = [json.loads(source[0]) for source in con.execute(
                 'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created,source_key',
@@ -411,7 +412,35 @@ def preflight_cohort_sources(pool, rows, registry):
 
 
 @asynccontextmanager
-async def entry_session(ledger, pool, claim, root, *, session_soft_seconds=None, session_hard_seconds=None):
+async def entry_session(ledger, pool, claim, root, *, runlog=None, **kwargs):
+    started = time.monotonic()
+    from .sqlite_connection import operation_deadline
+    limits=ledger.config.get('session_limits') or {}
+    hard=kwargs.get('session_hard_seconds') or (limits.get('soft_seconds',1800)+limits.get('closeout_grace_seconds',120))
+    budget_token=operation_deadline.set(started+hard)
+    if runlog is not None:
+        runlog.info('session_started', claimId=claim['claim_id'], startedMonotonic=started)
+    outcome = 'failed'
+    try:
+        async with _entry_session(ledger, pool, claim, root, runlog=runlog, **kwargs) as session:
+            yield session
+            outcome = 'finished'
+    except asyncio.CancelledError:
+        outcome = 'cancelled'
+        raise
+    except BaseException as error:
+        if runlog is not None:
+            runlog.warn('session_close_error',errorType=type(error).__name__,reason=str(error))
+        raise
+    finally:
+        operation_deadline.reset(budget_token)
+        if runlog is not None:
+            runlog.info('session_finished', claimId=claim['claim_id'], outcome=outcome,
+                        elapsedSeconds=time.monotonic()-started)
+
+
+@asynccontextmanager
+async def _entry_session(ledger, pool, claim, root, *, session_soft_seconds=None, session_hard_seconds=None, runlog=None):
     """One owned page from the first accounted visit through formal close-out."""
     import time as _time
     limits = ledger.config.get('session_limits') or {}
@@ -494,6 +523,8 @@ async def entry_session(ledger, pool, claim, root, *, session_soft_seconds=None,
                 visits = [v['id'] for v in ledger.visits() if v['job_id']==jid]
                 ledger.finish(job, result=anchor)
                 observed = True
+                if runlog is not None:
+                    runlog.info('first_frame_completed', claimId=claim['claim_id'], anchor=anchor, jobId=jid)
                 def bind_attempt(attempt):
                     pool.stage(claim, 'execution', {'attempt_id':attempt['attempt_id'], 'entry_job_id':jid, 'entry_visit_ids':visits})
                     with ledger.transaction() as con:
@@ -522,7 +553,7 @@ async def entry_session(ledger, pool, claim, root, *, session_soft_seconds=None,
                 SiteFailureStore(guard).record({'site_uri':uri}, execution_id('candidate-observation',ledger.path,jid),
                     stage='observation', state='failed', real_execution=True, reason=str(access_rejection), evidence=[failure],
                     usage_refs=[{'ledger':str(ledger.path),'job_id':jid,'visit_id':visits[-1]['id']}])
-            ledger.finish(job, 'review_required', error=type(error).__name__)
+            ledger.finish(job, 'review_required', result={'failure':failure,'first_frame_completed':False}, error=type(error).__name__)
         raise
 
 
@@ -578,7 +609,7 @@ def tasked_entry_index(registry_path):
     observation; the 2026-11-06 effort experiment lost 28% of its pages to
     exactly this."""
     import sqlite3
-    con = sqlite3.connect(f"file:{Path(registry_path).resolve()}?mode=ro", uri=True, timeout=90)
+    con = workspace_connect(f"file:{Path(registry_path).resolve()}?mode=ro", uri=True, timeout=90)
     try:
         pairs = set()
         for (task_json,) in con.execute('SELECT task_json FROM m4_tasks'):
@@ -662,19 +693,13 @@ async def consume(pool, claim, ledger, **kwargs):
                 if current['state'] != 'consuming':
                     return
                 pool.heartbeat(claim)
-            except sqlite3.OperationalError as error:
-                # A busy short writer does not prove a lost lease. Retry only
-                # within the last confirmed lease; heartbeat still fences it.
-                if (getattr(error, 'sqlite_errorcode', 0) & 255) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
-                    if current and current.get('expires', 0) > time.time():
-                        continue
-                loop.call_soon_threadsafe(cancel_for_lease, error)
-                return
             except Exception as error:
                 loop.call_soon_threadsafe(cancel_for_lease, error)
                 return
 
     async def claim_work():
+        from .failure_policy import current_claim
+        claim_context=current_claim.set(claim['claim_id'])
         try:
             thread.start()
             return await _consume(pool, claim, ledger, **kwargs)
@@ -682,6 +707,7 @@ async def consume(pool, claim, ledger, **kwargs):
             # Invalidate callbacks before the child wakes its caller. A daemon
             # observes stop after its short transaction; no blocking join.
             stop.set()
+            current_claim.reset(claim_context)
             receipt('claim_task_finished', reason='lease_monitor_stopped')
 
     thread = threading.Thread(target=renew_claim, daemon=True)
@@ -802,7 +828,7 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         for source in claim.get('sources',[]):
             verify_evidence(source['references'])
         from .task_generation import generate, execute
-        session = await stack.enter_async_context(entry_session(ledger, pool, claim, root,
+        session = await stack.enter_async_context(entry_session(ledger, pool, claim, root, runlog=runlog,
             session_soft_seconds=session_soft_seconds, session_hard_seconds=session_hard_seconds))
         from .candidate_batch import first_frame_disposition, VERSION as ROUTING_VERSION
         entry_state = load_json(session['anchor']['state']['path'])
@@ -831,7 +857,7 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         if runlog is not None:
             runlog.info('processing', stage='planning')
         # 策略2模板选择：登录/首帧处置之后、任何模型调用之前，确定性决定
-        # 本次采集使用的模板包（无模型调用、无域名规则）。
+        # 本次采集使用的模板包（无模型调用；显式站点规则先于页面结构匹配）。
         from .screenshot_planners import select_template
         with pool.pool.connect() as con:
             template_row = con.execute(
@@ -872,16 +898,25 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
         pool.stage(claim,stage,{'plan':str(plan),'queue_job_id':generated.get('queue_job_id')})
         execution=await execute(ledger,plan,catalog,root/'execution',registry,policy,qc_policy=qc_policy,site_pool=pool.path,
             entry_session=session, runlog=runlog)
-        pool.stage(claim,'save_reconciliation',{'execution_result':execution})
+        # Runtime may already have committed this claim through the normal save callback.
+        # Preserve that terminal transition; do not fence it as still consuming.
+        current=pool.get_claim(claim['claim_id'])
+        if current['state']=='consuming':
+            pool.stage(claim,'save_reconciliation',{'execution_result':execution})
         result=finish_or_reconcile(pool,claim)
         if not result.get('saved'):
             stop = execution.get('collection', {}).get('resource_stop')
             if stop and ledger.config.get('site_failure_guard',{}).get('dispatch_rules'):
-                pool.finish(claim,state='reconcile',stage='execution',reason=canonical(stop))
-                return {'state':'reconcile','execution':execution,'resource_stop':stop}
+                if pool.get_claim(claim['claim_id'])['state']=='consuming':
+                    pool.finish(claim,state='reconcile',stage='execution',reason=canonical(stop))
+                return {'state':'reconcile','execution':execution,'resource_stop':stop,
+                        'failure_disposition':{'disposition':'global','failure_class':'resource','reason':str(stop),'error_feature':'runtime.resource_checkpoint'}}
             uncertain=any(r['status'] in ('reserved','running','interrupted') or r.get('failure_class') in ('unknown','interrupted') for r,t in _original_attempts(pool.get_claim(claim['claim_id'])))
-            pool.finish(claim,state='reconcile' if uncertain else 'failed',stage='execution',reason=canonical(execution))
-            result={'state':'reconcile' if uncertain else 'failed','execution':execution}
+            current=pool.get_claim(claim['claim_id'])
+            if current['state']=='consuming':
+                pool.finish(claim,state='reconcile' if uncertain else 'failed',stage='execution',reason=canonical(execution))
+                current=pool.get_claim(claim['claim_id'])
+            result={'state':current['state'],'execution':execution,'unresolved':uncertain}
         else:
             # 正式保存后的站点模板登记与进度日志：任何失败只记录展示日志，
             # 绝不改变已提交的保存结果或候选状态。
@@ -923,7 +958,13 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
             reconciled=finish_or_reconcile(pool,claim)
             if reconciled.get('saved'):
                 if isinstance(error, asyncio.CancelledError): raise
-                return reconciled
+                from .failure_policy import disposition
+                diagnostic={'error_type':type(error).__name__,'reason':str(error),
+                            'failure_disposition':disposition(error)}
+                exclusive(root/'post-save-closeout-error.json',diagnostic)
+                if runlog is not None:
+                    runlog.warn('post_save_closeout_error',**diagnostic)
+                return {**reconciled,**diagnostic}
             from .navigation import NavigationTimeoutError
             entry_timeout = stage=='observation' and isinstance(error, NavigationTimeoutError)
             no_dispatch = None
@@ -996,6 +1037,10 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
         raise ValueError('Processing limit must be a positive integer')
     if poll_seconds is not None and (type(poll_seconds) is not int or poll_seconds < 1):
         raise ValueError('Polling interval must be a positive number of seconds')
+    import os
+    from .failure_policy import RoundFailures, disposition
+    round_failures = RoundFailures(os.environ.get('WEBCOLLECT_ROUND_EVENTS') or
+                                  str(Path(kwargs['output']) / (worker_id + '-failures.jsonl')))
     results=[]
     if target is not None and (type(target) is not int or target < 1 or not producer_batch):
         raise ValueError('Result target requires a positive integer and explicit producer batch')
@@ -1074,7 +1119,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 'results': [], 'skipped': [], 'unexamined': len(rows) if rows is not None else None,
                 'stop_reason': stop_reason, 'stop_details': stop_details, 'events': str(events)})
     from .key_health import probe_accounts, pool_available
-    if not campaign and not await asyncio.to_thread(pool_available, ledger):
+    if not campaign and not os.environ.get('WEBCOLLECT_CENTRAL_KEY_HEALTH') and not await asyncio.to_thread(pool_available, ledger):
         probes = await asyncio.to_thread(probe_accounts, ledger, 'candidate-run:' + request_prefix)
         record('key_health_startup', probes=probes)
     if not await asyncio.to_thread(pool_available, ledger):
@@ -1085,6 +1130,10 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     # 站点停止判定必须用当前候选自己的application_id：非cohort保持原值。
     site_app = application_id
     while limit is None or processed < limit:
+        if round_failures.stopped() or any(os.environ.get(k) and Path(os.environ[k]).exists()
+                for k in ('WEBCOLLECT_STOP_FILE', 'WEBCOLLECT_PRODUCER_STOP_FILE')):
+            stop_reason = 'round_stopped'
+            break
         if campaign:
             from .consumer_campaign import stopped
             if stopped(campaign, site_app):
@@ -1173,7 +1222,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 # settle this claim and keep consuming instead of stopping the batch.
                 from .registry_db import is_locked
                 engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError)) and not is_locked(error)
-                if engineering:
+                handling = round_failures.record(claim['claim_id'], disposition(error, phase='candidate_execution'))
+                if handling['stop_dispatch']:
                     stop_dispatch(error, phase='candidate_execution', claim=claim, diagnostic=diagnostic)
                 runlog.info('failed', claimId=claim['claim_id'],
                     errorType=type(error).__name__, reason=str(error)[:200])
@@ -1183,7 +1233,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                         pool.finish(claim,state='reconcile',stage=current['stage'],reason=type(error).__name__+': '+str(error))
                         current=pool.get_claim(claim['claim_id'])
                     result={'state':current['state'],'stage':current['stage'],
-                            'reason':current.get('reason') or str(error), 'error_diagnostic':diagnostic}
+                            'reason':current.get('reason') or str(error), 'error_diagnostic':diagnostic, 'failure_disposition':handling}
                     if engineering:
                         result.update(failure_class='program', engineering_failure=True,
                                       no_dispatch_proof=getattr(error, 'no_dispatch_proof', None))
@@ -1200,13 +1250,37 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             if campaign:
                 from .consumer_campaign import deliver
                 result['campaign_delivery']=deliver(campaign,pool,claim)
+            if result.get('failure_disposition'):
+                handling=round_failures.record(claim['claim_id'],result['failure_disposition'])
+                result['failure_disposition']=handling
+                if handling['stop_dispatch']:
+                    stop_dispatch(RuntimeError(handling['reason']),phase='candidate_result',claim=claim)
+            if not result.get('failure_disposition'):
+                # Read authoritative attempt outcomes, preserving original failure_class.
+                for original, task in _original_attempts(pool.get_claim(claim['claim_id'])):
+                    if original.get('failure_class'):
+                        refs=json.loads(original.get('evidence_json') or '[]')
+                        detail=None
+                        for ref in refs:
+                            if Path(ref.get('path','')).name=='failure.json':
+                                verify_evidence([ref])
+                                detail=load_json(ref['path']).get('failure_disposition')
+                        detail=detail or disposition(failure_class=original['failure_class'], reason=original.get('root_cause'))
+                        if not detail.get('error_feature') and detail['disposition']=='page_program':
+                            # Missing original throw-site cannot be grouped by variable error text.
+                            detail['error_feature']='unlocated:' + original['attempt_id']
+                        handling=round_failures.record(claim['claim_id'],detail)
+                        result['failure_disposition']=handling
+                        if handling['stop_dispatch']:
+                            stop_dispatch(RuntimeError(handling['reason']),phase='attempt_finished',claim=claim)
             if producer_batch or campaign:
                 record_outcome(pool,claim,result)
             result={**result,'claim_id':claim['claim_id'],'candidate_id':claim['candidate_id']}
             processed += 1
             record('candidate_finished',result=result)
             runlog.info('candidate_finished', state=result.get('state'),
-                saved=bool(result.get('saved')), stage=result.get('stage'))
+                saved=bool(result.get('saved')), stage=result.get('stage'),
+                failureClass=result.get('failure_class'), failureDisposition=result.get('failure_disposition'), reason=result.get('reason'))
             if bounded:results.append(result)
             if stop_reason == 'engineering_failure':
                 break
@@ -1215,7 +1289,8 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                    error_type=type(error).__name__,reason=str(error))
             from .registry_db import is_locked
             engineering = isinstance(error, (CurrentChainError, sqlite3.Error, KeyError, NameError, AttributeError, TypeError)) and not is_locked(error)
-            if engineering:
+            handling=round_failures.record(claim.get('claim_id') if claim else 'before_claim', disposition(error, phase='consumer_loop' if claim else 'before_claim_preflight'))
+            if handling['stop_dispatch']:
                 stop_dispatch(error, phase='consumer_loop', claim=claim)
             # Original claims/requests remain fenced. A known shared engineering
             # fault must not consume the next candidate under the same inputs.
@@ -1256,7 +1331,7 @@ def guard_original_dispatch(original, *, research_request_id=None):
             if not accounted_closed_execution(binding['registry'],row['attempt_id']):
                 raise ValueError('Original runtime attempt unresolved; no retry')
     if binding.get('ledger'):
-        with closing(sqlite3.connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(Path(binding['ledger']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
             config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
             jobs=con.execute("""SELECT j.state,j.payload,json_extract(p.payload,'$.registry') FROM jobs j
                 LEFT JOIN jobs p ON p.id=json_extract(j.payload,'$.parent_job_id')
@@ -1297,7 +1372,7 @@ def retry(pool, candidate_id, *, reason, recovery=None, authorization=None, clos
     if authorization:
         from .runtime import RuntimeStore
         # This is an explicit appended permit, never a rewrite of the old claim.
-        with closing(sqlite3.connect(Path(binding['registry']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(Path(binding['registry']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
             row = con.execute('SELECT scope_id FROM m4_attempts WHERE attempt_id=?', (binding['attempt_id'],)).fetchone()
         RuntimeStore(binding['registry'], row[0]).authorize_http400_new_attempt(
             binding['attempt_id'], authorization={'path': str(Path(authorization).resolve()), 'sha256': file_sha(authorization)}, definite=definite)
@@ -1350,7 +1425,7 @@ def statistics(pool):
         binding=claim.get('binding') or {}
         if binding.get('registry') and binding.get('policy'):
             policy=load_json(binding['policy'])
-            with closing(sqlite3.connect(Path(binding['registry']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
+            with closing(workspace_connect(Path(binding['registry']).resolve().as_uri()+'?mode=ro',uri=True)) as con:
                 active=con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',(policy['campaign_id'],)).fetchone()
                 if active: targets[policy['campaign_id']]=json.loads(active[0])['target_total']
     counts.update(formal_attempts=len(attempts),collected=len(saved),qualified_targets=targets,
@@ -1408,6 +1483,13 @@ def main(argv=None):
         session_objective = {'path': str(objective_path), 'sha256': file_sha(objective_path)}
         load_json(objective_path)
         verify_evidence([session_objective])
+    if a.command=='run':
+        from .collection_startup import check
+        scope_path=Path(a.registry).resolve().parent/'scope.json'
+        checked=check(scope_path)
+        if checked['status']!='PASS':
+            print(json.dumps(checked,ensure_ascii=False))
+            return 2
     pool=CandidatePool(a.pool)
     if a.command=='list':
         records=pool.rows()
@@ -1435,7 +1517,7 @@ def main(argv=None):
             scope = read_chain_scope(Path(a.history_set).absolute())
             check_project_pool(scope, pool.pool)
             check_project_guard(scope, guard, a.ledger, role='consumer')
-        ledger=BatchLedger(a.ledger,config,initialize=new_project)
+        ledger=BatchLedger(a.ledger,config)
         if a.campaign:
             import signal
             signal.signal(signal.SIGINT, signal.default_int_handler)

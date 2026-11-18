@@ -1,6 +1,6 @@
 """Program 2's read-only shared-pool interface; contains no collection dispatch."""
 import argparse
-import json
+from webcollect import workspace_json as json
 
 
 def read_site_pool(path, *, purpose='candidates', categories=None, include_unavailable=False, fragment_planning=False):

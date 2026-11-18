@@ -1,5 +1,6 @@
 """Read original attempt/QC evidence into site context, never issue reviews."""
-import json
+from webcollect.sqlite_connection import raw_connect as workspace_connect
+from webcollect import workspace_json as json
 from functools import lru_cache
 from pathlib import Path
 import sqlite3
@@ -140,7 +141,7 @@ def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=
     result = {'schema_version': VERSION, 'generation': list(generation), 'executions': [],
               'quality': [], 'images': [], 'avoid': [], 'unresolved': []}
     if registry is not None and Path(registry).exists():
-        with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
+        with workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
             con.row_factory = sqlite3.Row
             if scoped:
                 check_project_guard(registry_project(con), guard, model_ledger.path, role='consumer')
@@ -351,7 +352,7 @@ def known_start_conflicts(registry, capability, spec):
     verify_evidence([image])
     if not Path(registry).exists():
         return []
-    with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
+    with workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
         con.row_factory = sqlite3.Row
         if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_exact_images'").fetchone():
             return []

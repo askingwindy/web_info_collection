@@ -3,6 +3,14 @@ from urllib.parse import urlsplit
 from .plan_protocol import (DELAYED_NAVIGATION_PROTOCOL as DELAYED_PROTOCOL,
                             NAVIGATION_PROTOCOL, REACT_PROTOCOL)
 
+class NavigationRejected(ValueError):
+    """Typed page refusal; never grants permission to a new destination."""
+    def __init__(self, message, *, source=None, destination=None, phase=None):
+        super().__init__(message)
+        self.code = message.split(':', 1)[0]
+        self.source, self.destination, self.phase = source, destination, phase
+
+
 LEGACY_PAGE_LIMIT=64
 NAV_ACTIONS={'click','double_click','hotkey','type','select','open_url','back'}
 # Sealed historical records keep their originally frozen names; new fragments
@@ -134,7 +142,7 @@ def check_url(task, url, allowed_hosts=None, page_urls=None):
         from .candidate_contract import guard_claim
         guard_claim(task)
     if not destination_allowed(task,url,page_urls):
-        raise ValueError('NAVIGATION_SOURCE_UNPROVEN: destination outside frozen or earned exact pages')
+        raise NavigationRejected('NAVIGATION_SOURCE_UNPROVEN: destination outside frozen or earned exact pages', destination=url, phase='check_url')
 
 
 def admit_landing(task, page_urls, url, operation=None, *, source=None, proof=None):
@@ -148,8 +156,8 @@ def admit_landing(task, page_urls, url, operation=None, *, source=None, proof=No
 def extend(task, urls, state, previous=None, *, source=None, proof=None):
     """Register actual landings only; observing links never expands ownership."""
     outcome=admit_landing(task,urls,state['url'],previous,source=source,proof=proof)
-    if outcome=='out_of_scope':raise ValueError('NAVIGATION_SOURCE_UNPROVEN: destination has no exact permission')
-    if outcome=='capacity':raise ValueError('Candidate page scope limit reached')
+    if outcome=='out_of_scope':raise NavigationRejected('NAVIGATION_SOURCE_UNPROVEN: destination has no exact permission', destination=state['url'], phase='landing')
+    if outcome=='capacity':raise NavigationRejected('NAVIGATION_CAPACITY: Candidate page scope limit reached', destination=state['url'], phase='landing')
     return urls
 
 

@@ -2,6 +2,7 @@
 
 No scan, model call, review, registry write, or inferred effective population.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from pathlib import Path
 import sqlite3
 from .batch_core import load_json, file_sha
@@ -29,7 +30,7 @@ def from_registry(registry, report_ref=None):
             pool = scope.get('candidate_project', {}).get('pool')
             if not pool:
                 return unknown('当前工程没有可选的有效集合报告来源')
-            with sqlite3.connect(Path(pool).resolve().as_uri()+'?mode=ro', uri=True) as con:
+            with workspace_connect(Path(pool).resolve().as_uri()+'?mode=ro', uri=True) as con:
                 if not con.execute("SELECT 1 FROM sqlite_master WHERE name='application_delivery_projection'").fetchone():
                     return unknown('当前工程尚未绑定有效集合报告')
                 refs = [row[0] for row in con.execute('SELECT DISTINCT reference FROM application_delivery_projection')]
@@ -68,7 +69,7 @@ def from_registry(registry, report_ref=None):
                 or any(p.get('format_status') != 'PASS' for p in report['packages'])):
             raise ValueError('报告成员格式检查未完成或未通过')
         short = 0
-        with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
+        with workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro', uri=True) as con:
             for member in members:
                 sample = Path(member['sample_path']).resolve()
                 annotation = assert_current_result_path(scope, sample/'annotation.json')

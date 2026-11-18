@@ -1,6 +1,6 @@
 """Installed, content-bound customer authority; no repository lookup at runtime."""
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 

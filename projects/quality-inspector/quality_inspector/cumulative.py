@@ -1,7 +1,7 @@
 """Frozen cumulative input sets; mechanical checks never grant release readiness."""
 import csv
 import hashlib
-import json
+from webcollect import workspace_json as json
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit

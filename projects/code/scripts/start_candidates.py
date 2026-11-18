@@ -18,7 +18,9 @@ def main():
     parser.add_argument('role', choices=('producer', 'consumer', 'monitor'))
     args, extra = parser.parse_known_args()
     try:
-        scope = json.loads(args.scope.read_text(encoding='utf-8'))
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+        from webcollect.batch_core import load_json
+        scope = load_json(args.scope)
         if args.role == 'monitor':
             entry = ['webcollect.candidate_monitor']
             bound = {'--scope': str(args.scope.absolute())}
@@ -28,7 +30,7 @@ def main():
             if not (separator and run_id and batch_key):
                 raise ValueError('batch 应为 <生产者 run_id>/entry-batch/<batch-key>')
             if not args.dry_run:
-                config = json.loads(Path(scope['producer_config']).read_text(encoding='utf-8'))
+                config = load_json(scope['producer_config'])
                 if config['run_id'] != run_id:
                     raise ValueError('scope.batch 与生产者配置的 run_id 不一致')
             bound = {'--config': scope['producer_config'], '--ledger': scope['producer_db'],

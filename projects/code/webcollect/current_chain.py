@@ -3,9 +3,10 @@
 The manifest is immutable. Its dedicated M4 registry owns incremental result
 membership. This module does not grant admission, QC approval, or production IDs.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -79,7 +80,7 @@ def _manifest(path):
 def _meta(registry):
     registry = _path(registry)
     _require(registry.is_file(), 'dedicated current-chain registry missing')
-    with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
+    with closing(workspace_connect(registry.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         _require('current_chain_meta' in tables and 'current_chain_results' in tables,
                  'unmarked/legacy registry cannot enter the current chain')
@@ -145,7 +146,11 @@ def initialize_chain(manifest_path, registry, *, chain_id, current_result_roots,
     registry.parent.mkdir(parents=True, exist_ok=True)
     from .runtime import SCHEMA
     from .storage import ensure_registry_schema
-    with closing(sqlite3.connect(registry, timeout=90)) as con:
+    from .sqlite_connection import connect, prepare_wal
+    new = not registry.exists()
+    with closing(connect(registry, create=True)) as con:
+        if new:
+            prepare_wal(con)
         ensure_registry_schema(con)
         con.executescript(SCHEMA)
         con.execute('CREATE TABLE current_chain_meta (id INTEGER PRIMARY KEY CHECK(id=1), binding_json TEXT NOT NULL)')
@@ -168,7 +173,7 @@ def read_chain_scope(manifest_path):
 
 def read_chain_history(manifest_path):
     scope = read_chain_scope(manifest_path)
-    with closing(sqlite3.connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
+    with closing(workspace_connect(Path(scope['registry']).as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         # Pin membership and task/attempt identity to one SQLite read snapshot;
         # peer consumers may append while original files are being checked.
         con.execute('BEGIN')
@@ -224,7 +229,7 @@ def is_current_registry(registry):
     path = Path(registry).resolve()
     if not path.is_file():
         return False
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
+    with closing(workspace_connect(path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='current_chain_meta'").fetchone() is not None
 
 
@@ -519,7 +524,8 @@ def append_current_result(manifest_path, annotation_path, *, site_uri, task_key)
     annotation = load_json(path); sample_id = annotation.get('sample_id')
     _require(isinstance(sample_id, str) and path.name == 'annotation.json' and path.parent.name == sample_id,
              'actual current annotation/sample identity required')
-    with closing(sqlite3.connect(scope['registry'], timeout=90)) as con:
+    from .sqlite_connection import connect
+    with closing(connect(scope['registry'])) as con:
         _require(con.execute('SELECT 1 FROM m4_attempts WHERE sample_id=? AND task_key=?',
                              (sample_id, task_key)).fetchone() is not None,
                  'result has no original current-chain attempt')

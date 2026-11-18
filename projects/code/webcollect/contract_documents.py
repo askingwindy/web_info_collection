@@ -1,5 +1,5 @@
 """Render the requested customer documents from explicit production facts."""
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 

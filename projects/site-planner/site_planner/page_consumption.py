@@ -1,6 +1,6 @@
 """Producer-owned first-frame image exclusion; original evidence and QC stay separate."""
 import asyncio
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import time
 from PIL import Image

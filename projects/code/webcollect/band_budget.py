@@ -4,7 +4,8 @@ Derived SQLite indexes are disposable. Original runtime/QC evidence owns status.
 All filesystem/QC binding work happens outside the reservation write transaction.
 Only new/changed runtime evidence is projected; repeated reservations are O(1).
 """
-import json
+from webcollect.sqlite_connection import raw_connect as workspace_connect
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -55,7 +56,7 @@ def _actual_accepted(registry,reference):
     from .current_chain import _meta,read_chain_scope,assert_current_result_path
     scope=read_chain_scope(_meta(registry)['manifest']['path'])
     rows=[];seen=set();sources={};stage_counts={'reviewed_pass':0,'batch_accepted':0,'published':0}
-    with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
+    with workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
         con.row_factory=sqlite3.Row
         tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for member in members:
@@ -108,7 +109,7 @@ def _accepted(registry,reference):
 
 def bind_accepted_set(registry,reference):
     facts=_accepted(registry,reference);project=_project(registry)
-    with sqlite3.connect(Path(registry)) as con:
+    with workspace_connect(Path(registry)) as con:
         con.execute('INSERT INTO m4_events(scope_id,campaign_id,event_type,task_key,attempt_id,at,payload_json) VALUES(?,?,?,?,?,?,?)',
                     ('band-budget','band-budget',ACCEPTED,None,None,time.time(),json.dumps({'project':project,'reference':reference},ensure_ascii=False)))
     return facts
@@ -116,7 +117,7 @@ def bind_accepted_set(registry,reference):
 
 def _refresh(registry,key,project):
     """Read changed evidence outside writer lock, apply only if cursor unchanged."""
-    with sqlite3.connect(Path(registry)) as con:
+    with workspace_connect(Path(registry)) as con:
         con.row_factory=sqlite3.Row;_schema(con)
         state=con.execute('SELECT * FROM m4_band_state WHERE project_key=?',(key,)).fetchone()
         cursor=state['cursor'] if state else 0
@@ -156,7 +157,7 @@ def _refresh(registry,key,project):
         try:metrics['accepted']=_accepted(registry,accepted_ref)
         except (OSError,ValueError,KeyError,TypeError) as error:
             metrics['accepted']={'status':'UNKNOWN','denominator':None,'reason':str(error),'source':accepted_ref}
-    with sqlite3.connect(Path(registry)) as con:
+    with workspace_connect(Path(registry)) as con:
         con.row_factory=sqlite3.Row;con.execute('BEGIN IMMEDIATE')
         current=con.execute('SELECT cursor FROM m4_band_state WHERE project_key=?',(key,)).fetchone()
         if current and current['cursor']!=cursor:return False
@@ -181,12 +182,12 @@ def reserve(registry,task,attempt):
         return {'protocol':'continuous-consumer-1','assigned_band':None,'project':None,
                 'assignment_basis':'natural goal; no band quotas'}
     project=_project(registry);key=object_sha256(project)
-    with sqlite3.connect(Path(registry)) as con:
+    with workspace_connect(Path(registry)) as con:
         _schema(con)
         prior=con.execute('SELECT budget_json FROM m4_band_reservations WHERE project_key=? AND task_id=?',(key,task['task_id'])).fetchone()
         if prior:return json.loads(prior[0])
     _refresh(registry,key,project)  # A newer competing snapshot already covers our cursor; reuse it under the short reservation transaction.
-    with sqlite3.connect(Path(registry)) as con:
+    with workspace_connect(Path(registry)) as con:
         con.row_factory=sqlite3.Row;con.execute('BEGIN IMMEDIATE')
         prior=con.execute('SELECT budget_json FROM m4_band_reservations WHERE project_key=? AND task_id=?',(key,task['task_id'])).fetchone()
         if prior:return json.loads(prior[0])
@@ -226,7 +227,7 @@ def freeze(registry,task,attempt_id,band,reason):
     """Lock the grounded band before first business dispatch, preserving proposal."""
     if band not in ('five','long','short') or not reason:raise ValueError('Grounded band and reason required')
     project=_project(registry);key=object_sha256(project)
-    with sqlite3.connect(Path(registry)) as con:
+    with workspace_connect(Path(registry)) as con:
         con.execute('BEGIN IMMEDIATE')
         row=con.execute('SELECT attempt_id,band,locked_band FROM m4_band_reservations WHERE project_key=? AND task_id=?',(key,task['task_id'])).fetchone()
         if not row or row[0]!=attempt_id:raise ValueError('Original band reservation/attempt mismatch')

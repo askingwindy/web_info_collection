@@ -4,12 +4,13 @@ This sidecar owns targets, task-position assignments and immutable QC references
 It never allocates production IDs, changes a capture outcome, signs a review or
 adds campaign budget. SQLite remains authoritative for every task and attempt.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
-import json
+from webcollect import workspace_json as json
 import os
 from pathlib import Path
 import sqlite3
@@ -102,7 +103,7 @@ class SiteProgress:
 
     @contextmanager
     def _connect(self):
-        con = sqlite3.connect(self.registry.as_uri() + '?mode=ro', uri=True, timeout=30)
+        con = workspace_connect(self.registry.as_uri() + '?mode=ro', uri=True, timeout=90)
         con.row_factory = sqlite3.Row
         try:
             yield con

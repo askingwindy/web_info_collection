@@ -3,7 +3,7 @@
 The consumer never imports this module. Old sources, claims and Table2 bodies
 are immutable; decisions and progress are append-only receipts.
 """
-import json
+from webcollect import workspace_json as json
 import re
 import time
 from html.parser import HTMLParser

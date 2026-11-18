@@ -1,6 +1,6 @@
 """Reuse one evidence-bound anonymous GET for screening, purpose and publication."""
 import asyncio
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from . import page_consumption as images
 from .candidate_pool import entry_identity

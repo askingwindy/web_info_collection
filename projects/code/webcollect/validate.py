@@ -1,5 +1,5 @@
 """确定性结构检查；图文语义和真实采集证据始终单独待审。"""
-import json
+from webcollect import workspace_json as json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +18,8 @@ PENDING = ['截图真实性、视口范围及截图与界面树同步证据', '�
            '账号来源与业务操作合规', '四路及跨批去重', '人工看图核对']
 
 def read_json(path):
+    from .workspace_paths import bind
+    bind(path)
     return json.loads(path.read_text(encoding='utf-8'), parse_constant=lambda value: (_ for _ in ()).throw(ValueError('非标准 JSON 常量 '+value)))
 
 def validate_sample(directory, mode='delivery', manifest=None):

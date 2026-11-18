@@ -1,5 +1,5 @@
 """Read-only per-request stage report; missing metering is never zero billing."""
-import json
+from webcollect import workspace_json as json
 from collections import Counter
 
 STAGES=('search_planning','search_api','result_selection','page_opportunity','source_qualification',

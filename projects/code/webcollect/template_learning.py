@@ -3,9 +3,10 @@
 No model emulation. The original four host tools, dispatch/UNKNOWN guards,
 raw journal, effective-action checks and formal save remain authoritative.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import contextmanager
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -227,7 +228,7 @@ def qc_binding(report_path, review_path, queue_path, ledger):
     """Read existing independent jobs; never dispatch, reset or infer package PASS."""
     from quality_inspector.profiles import package_files
     report,review,queue=map(load_json,(report_path,review_path,queue_path))
-    with sqlite3.connect(Path(ledger.path).resolve().as_uri()+'?mode=ro',uri=True) as con:
+    with workspace_connect(Path(ledger.path).resolve().as_uri()+'?mode=ro',uri=True) as con:
         config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
     if config.get('mode')!='real':raise ValueError('Only original real independent QC can promote a template')
     if package_files(Path(queue['dataset']))!=queue['candidate_package_sha256']:raise ValueError('QC package bytes changed')
@@ -245,7 +246,7 @@ def qc_binding(report_path, review_path, queue_path, ledger):
             payload=job.get('payload') or {}
             if isinstance(payload,str):payload=json.loads(payload)
             if payload.get('mode')=='synthetic' or payload.get('synthetic') is True:raise ValueError('Synthetic QC cannot promote a template')
-            with sqlite3.connect(Path(ledger.path).resolve().as_uri()+'?mode=ro',uri=True) as con:
+            with workspace_connect(Path(ledger.path).resolve().as_uri()+'?mode=ro',uri=True) as con:
                 requests=con.execute('SELECT usage,response,request_json,state FROM model_requests WHERE job_id=?',(j[kind],)).fetchall()
             actual=False
             for usage,response,request,state in requests:
@@ -280,7 +281,7 @@ class TemplateLibrary:
 
     def connect(self):
         from .batch_core import ClosingConnection
-        return sqlite3.connect(self.path,timeout=30,factory=ClosingConnection)
+        return workspace_connect(self.path,timeout=90,factory=ClosingConnection)
 
     def snapshot(self):
         with self.connect() as c:
@@ -363,7 +364,7 @@ class TemplateLibrary:
         class OriginalJobs:
             path=Path(qc['ledger'])
             def get(self,jid):
-                with sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True) as con:
+                with workspace_connect(self.path.as_uri()+'?mode=ro',uri=True) as con:
                     row=con.execute('SELECT state,payload FROM jobs WHERE id=?',(jid,)).fetchone()
                 return {'state':row[0],'payload':json.loads(row[1])} if row else {}
         verified=qc_binding(qc['report']['path'],qc['review']['path'],qc['queue']['path'],OriginalJobs())[qc['sample_id']]
@@ -400,7 +401,7 @@ class LearningSession(TemplateSession):
             from .candidate_contract import validate_task_binding
             binding=validate_task_binding(self.task)
             import sqlite3
-            con=sqlite3.connect(Path(self.library['pool']).as_uri()+'?mode=ro',uri=True)
+            con=workspace_connect(Path(self.library['pool']).as_uri()+'?mode=ro',uri=True)
             try:
                 row=con.execute('SELECT application_id FROM data_candidates WHERE candidate_id=?',(binding['candidate_id'],)).fetchone()
                 aid=row[0] if row else None

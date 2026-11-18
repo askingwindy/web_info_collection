@@ -4,10 +4,11 @@ No dispatcher, network, model or production run is started here. A shard must
 have one owner: copying the same shard to two live workers is not failover.
 Task site_uri must equal the explicit canonical root; pages use initial_url.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from collections import defaultdict
 from contextlib import closing
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -276,7 +277,7 @@ def seed_registry(manifest, registry, shard_id):
     marker = {'manifest': manifest, 'shard_id': shard_id}
     expected = {int(row['site_id'][1:]): (row['site_uri'], row['site_category'], 'real') for row in manifest['sites']}
     if registry.exists():
-        with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
             tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {'sites', 'allocations', 'batches'} <= tables:
                 raise ValueError('Existing registry is not an explicit compatible production registry')
@@ -296,7 +297,7 @@ def seed_registry(manifest, registry, shard_id):
                 if expected.get(number) != (uri, category, kind):
                     raise ValueError('Existing global site mapping is incompatible; registry remains unchanged')
     registry.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(registry)) as con:
+    with closing(workspace_connect(registry)) as con:
         ensure_registry_schema(con); con.execute('BEGIN IMMEDIATE')
         con.execute('CREATE TABLE IF NOT EXISTS batch_shard_meta(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL)')
         for number, (uri, category, kind) in expected.items():
@@ -321,7 +322,7 @@ def verify_plan_shard(plan, registry):
     path = Path(registry).resolve(); binding = plan.get('batch_shard')
     marker = None
     if path.is_file():
-        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(path.as_uri() + '?mode=ro', uri=True)) as con:
             marker = _marker(con)
     if marker is None:
         if binding is not None or any('batch_identity' in task for task in plan['tasks']):
@@ -342,7 +343,7 @@ def verify_shard_policy(registry, policy):
     path = Path(registry).resolve()
     if not path.is_file():
         return
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(path.as_uri() + '?mode=ro', uri=True)) as con:
         marker = _marker(con)
     if marker is None:
         return
@@ -377,7 +378,7 @@ def freeze_result(registry, qc_report, dataset):
             or report.get('release_ready') is not True):
         raise ValueError('Only final, exactly bound, release-ready QC PASS may enter a shard result')
     report_hash = file_sha(qc_report); samples = []
-    with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
         marker = _marker(con)
         if marker is None:
             raise ValueError('Qualified result must originate in a seeded shard registry')

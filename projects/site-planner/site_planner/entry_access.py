@@ -1,6 +1,6 @@
 """One accounted, read-only GET before publishing a new candidate."""
 import time
-import json
+from webcollect import workspace_json as json
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError

@@ -1,7 +1,8 @@
 """Consumer-only, source-bound transient observation protocol; never grants ready."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .batch_core import load_json
 from .planning import object_sha256, verify_evidence, validate_capability
@@ -93,7 +94,7 @@ def validate_research_v2(descriptor, pool, original, registry=None):
             raise ValueError('Unstarted research lacks its frozen claim event')
         import sqlite3
         from contextlib import closing
-        with closing(sqlite3.connect(Path(old['ledger']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(Path(old['ledger']).resolve().as_uri()+'?mode=ro', uri=True)) as con:
             if any(original['claim_id'] in payload for (payload,) in con.execute('SELECT payload FROM jobs')):
                 raise ValueError('Unstarted research already has observation/planning jobs')
     if (Path(authorization['pool']).resolve() != pool.path.resolve()

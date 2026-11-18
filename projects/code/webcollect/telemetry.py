@@ -6,7 +6,7 @@ omit URL paths, queries, headers, cookies, request/response bodies and credentia
 from collections import Counter
 from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime, timezone
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import os

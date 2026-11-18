@@ -9,7 +9,7 @@ necessary evidence batches or completion, and a verified `complete`.
 """
 import asyncio
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 import re
 import time
 from datetime import datetime, timezone

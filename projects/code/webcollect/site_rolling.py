@@ -1,6 +1,6 @@
 """Bounded per-site planning rounds in the original job ledger. Never collects."""
 import argparse
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .batch_core import load_json, save_json, file_sha, BatchLedger
 from .planning import object_sha256, verify_evidence

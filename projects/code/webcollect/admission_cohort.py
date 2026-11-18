@@ -4,9 +4,10 @@ Reservations are engineering duplicate guards, not AI peer review or QC. They
 allocate no production identifiers and are never silently released on failure.
 Only exact prebound peer rows may differ from the independently reviewed base.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -258,7 +259,7 @@ def assert_history_context(plan, registry, capture_output, expected_context, liv
         _require(expected_context == actual, 'workflow original registry/customer history drift; unbound change is not a peer')
     if connection is not None:
         return check(connection)
-    with closing(sqlite3.connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
         return check(con)
 
 
@@ -349,7 +350,7 @@ def reserve_schedule(frozen, schedule_path):
                'members': sorted(members, key=lambda member: member['scope_id'])}
     cohort_id = object_sha256(binding)
     history_proof = validate_customer_history(plans[0])
-    con = sqlite3.connect(Path(config['registry']).as_uri() + '?mode=rw', uri=True, timeout=30)
+    con = workspace_connect(Path(config['registry']).as_uri() + '?mode=rw', uri=True, timeout=90)
     try:
         con.execute('BEGIN IMMEDIATE')
         ensure_schema(con)

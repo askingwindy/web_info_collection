@@ -1,6 +1,6 @@
 """Record operator-approved uncapped discovery and named source quarantines on the original project ledger."""
 import argparse
-import json
+from webcollect import workspace_json as json
 import os
 import re
 import time

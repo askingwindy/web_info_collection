@@ -1,5 +1,5 @@
 """Append-only authorization recovery; never clears or reissues unknown requests."""
-import json
+from webcollect import workspace_json as json
 from .planning import object_sha256, verify_evidence
 
 KIND='model-authorization-probe'

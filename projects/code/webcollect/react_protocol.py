@@ -5,7 +5,7 @@ their request identities remain readable by the legacy adapter.
 """
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 from .plan_protocol import (REACT_PROTOCOL, REFERENCE_PROTOCOL, EFFECTIVE_ACTION_RULE,

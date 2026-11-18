@@ -7,8 +7,8 @@ BUSY_SECONDS = 90
 
 def connect(registry, *, readonly=True):
     path = Path(registry).resolve()
-    con = sqlite3.connect(path.as_uri() + ('?mode=ro' if readonly else '?mode=rw'),
-                          uri=True, timeout=BUSY_SECONDS)
+    from .sqlite_connection import connect as connection
+    con = connection(path, readonly=readonly)
     con.row_factory = sqlite3.Row
     return con
 

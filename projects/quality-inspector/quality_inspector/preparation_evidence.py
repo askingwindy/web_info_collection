@@ -1,6 +1,6 @@
 """Independent preparation evidence checks; no producer imports or visual claims."""
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .format_checks import delivered_call_matches_capture
 

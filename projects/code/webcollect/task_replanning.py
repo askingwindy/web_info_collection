@@ -1,5 +1,6 @@
 """Explicit failed-scope receipts permit repair, never erase production history."""
-import json
+from webcollect.sqlite_connection import raw_connect as workspace_connect
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 
@@ -13,7 +14,7 @@ def validated_replans(registry, references):
         return {}, set()
     verify_evidence(references)
     allowed, campaigns = {}, set()
-    with sqlite3.connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True) as con:
+    with workspace_connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True) as con:
         for ref in references:
             receipt = load_json(ref['path'])
             scope = receipt.get('scope_id')

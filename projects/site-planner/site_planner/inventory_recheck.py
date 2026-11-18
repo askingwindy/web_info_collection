@@ -12,9 +12,10 @@ entry 403) is culled; forensics/geometry failures, single timeouts and host
 quirks stay strikes or observation-only notes and never become a permanent
 dead page on their own.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 import asyncio
-import json
+from webcollect import workspace_json as json
 import random
 import sqlite3
 import time
@@ -45,7 +46,7 @@ AUDIT_KEYWORDS = {
 
 
 def _connect(pool_path):
-    return sqlite3.connect(pool_path, timeout=30)
+    return workspace_connect(pool_path, timeout=90)
 
 
 def _ensure_recheck_table(con):

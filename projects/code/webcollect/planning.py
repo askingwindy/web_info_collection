@@ -2,7 +2,7 @@
 from copy import deepcopy
 from datetime import datetime
 import hashlib
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import time

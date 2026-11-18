@@ -4,11 +4,13 @@ One frozen configuration per run/database; reservations survive crashes. Unknown
 provider outcomes keep their full reservation and cannot be automatically resent.
 Amounts are integer millionths of the configured currency, never floats.
 """
+from webcollect.sqlite_connection import begin_immediate
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import contextmanager
 from collections import Counter, defaultdict
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import sqlite3
@@ -24,6 +26,11 @@ CONSUMER_KINDS = frozenset(('candidate-observation', 'collection', 'react-native
 
 class BudgetStop(ValueError):
     pass
+
+
+class UserStopped(BudgetStop):
+    code = 'user_stop_before_dispatch'
+    failure_class = 'interrupted'
 
 
 class SessionGLMCallLimit(BudgetStop):
@@ -53,6 +60,8 @@ class VisitRateWait(ValueError):
 
 
 def load_json(path):
+    from .workspace_paths import bind
+    bind(path)
     return json.loads(Path(path).read_text(encoding='utf-8'),
                       parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Nonfinite JSON')))
 
@@ -64,6 +73,8 @@ def file_sha(path):
 def save_json(path, value):
     """Atomic, recoverable output. Existing different bytes are never replaced."""
     path = Path(path)
+    from .workspace_paths import bind
+    bind(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
     if path.exists():
@@ -277,6 +288,8 @@ class BatchLedger:
                 CREATE TABLE IF NOT EXISTS domain_dispatch (domain TEXT PRIMARY KEY, dispatched REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS batch_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, event TEXT NOT NULL, detail TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS generated_task_index (signature TEXT PRIMARY KEY, job_id TEXT NOT NULL, task_json TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS job_parents(job_id TEXT PRIMARY KEY REFERENCES jobs(id), parent_id TEXT NOT NULL REFERENCES jobs(id), parent_owner TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS model_sessions(session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL);
                 ''')
                 inserted = con.execute('INSERT OR IGNORE INTO batch_meta VALUES(1,?,?)', (canonical(self.config), time.time())).rowcount
                 self._ensure_visit_schema(con, complete=bool(inserted))
@@ -339,7 +352,7 @@ class BatchLedger:
         if guard:
             from .current_chain import registry_project, check_project_guard
             registry = self.path.with_name('production-registry.sqlite3')
-            with sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True,
+            with workspace_connect(registry.as_uri() + '?mode=ro', uri=True,
                                  factory=ClosingConnection) as current:
                 check_project_guard(registry_project(current), guard, self.path, role='consumer')
 
@@ -349,17 +362,20 @@ class BatchLedger:
             return decision['max_concurrent_jobs']
         return (self.producer_concurrency or {}).get('max_concurrent_jobs', self.config['budget']['max_concurrent_jobs'])
 
-    def connect(self, create=False, *, timeout=30):
-        con = sqlite3.connect(str(self.path) if create else self.path.as_uri() + '?mode=rw',
-                              uri=not create, timeout=timeout, factory=ClosingConnection)
+    def connect(self, create=False, *, timeout=90):
+        from .sqlite_connection import connect, prepare_wal
+        new = create and not self.path.exists()
+        con = connect(self.path, create=create, timeout=timeout, factory=ClosingConnection)
+        if new:
+            prepare_wal(con)
         con.row_factory = sqlite3.Row
         return con
 
     @contextmanager
-    def transaction(self, *, timeout=30):
+    def transaction(self, *, timeout=90):
         con = self.connect(timeout=timeout)
         try:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con, timeout=timeout)
             yield con
             con.commit()
         except BaseException:
@@ -480,9 +496,8 @@ class BatchLedger:
                             ('max_job_attempts reached; original attempts retained', time.time(), row['id']))
                 self.event(con, 'job_attempt_limit', {'job_id': row['id'], 'attempts': row['attempts'], 'limit': attempt_cap})
                 return None
-            con.execute('CREATE TABLE IF NOT EXISTS job_parents ('
-                        'job_id TEXT PRIMARY KEY REFERENCES jobs(id), parent_id TEXT NOT NULL REFERENCES jobs(id), '
-                        'parent_owner TEXT NOT NULL)')
+            if not con.execute("SELECT 1 FROM sqlite_master WHERE name='job_parents'").fetchone():
+                con.execute('CREATE TABLE job_parents(job_id TEXT PRIMARY KEY REFERENCES jobs(id), parent_id TEXT NOT NULL REFERENCES jobs(id), parent_owner TEXT NOT NULL)')
             prior_parent = con.execute('SELECT parent_id,parent_owner FROM job_parents WHERE job_id=?', (row['id'],)).fetchone()
             if prior_parent is not None and (parent_job is None or tuple(prior_parent) != (parent_job['id'], parent_job['owner'])):
                 raise ValueError('Retained decision parent binding cannot be replaced')
@@ -524,7 +539,10 @@ class BatchLedger:
         return row
 
     def heartbeat(self, job, *, request_timeout=None):
-        with self.transaction() as con:
+        with self.connect() as read:
+            prior = self._owned(read,job)
+            remaining=max(0,prior['lease']-time.time())
+        with self.transaction(timeout=min(90,remaining)) as con:
             row = self._owned(con, job)
             lease_seconds = self.config['budget']['lease_seconds']
             if request_timeout is not None:
@@ -576,6 +594,9 @@ class BatchLedger:
 
     @staticmethod
     def _ensure_visit_schema(con, *, complete=False):
+        tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE name IN ('top_level_visits','visit_accounting_meta')")}
+        if len(tables)==2 and con.execute('SELECT 1 FROM visit_accounting_meta WHERE id=1').fetchone():
+            return
         con.execute('''CREATE TABLE IF NOT EXISTS top_level_visits (
             id TEXT PRIMARY KEY, job_id TEXT NOT NULL, purpose TEXT NOT NULL,
             attempt_index INTEGER NOT NULL, target_uri TEXT NOT NULL, domain TEXT NOT NULL,
@@ -840,7 +861,8 @@ class BatchLedger:
         """Select/recover once under the existing short SQLite write lock."""
         from .model_credentials import credential, account_id
         with self.transaction() as con:
-            con.execute('CREATE TABLE IF NOT EXISTS model_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL)')
+            if not con.execute("SELECT 1 FROM sqlite_master WHERE name='model_sessions'").fetchone():
+                con.execute('CREATE TABLE model_sessions(session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL)')
             old = con.execute('SELECT account_id FROM model_sessions WHERE session_id=?', (session_id,)).fetchone()
             if old is None:
                 accounts = {row[0] for row in con.execute("SELECT DISTINCT json_extract(request_json,'$.account_id') FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=? OR job_id=?", (session_id,session_id)) if row[0]}
@@ -949,17 +971,16 @@ class BatchLedger:
             return {'id': rid, 'state': 'new'}
 
     def settle_request(self, request_id, *, state, usage=None, response=None, error=None):
-        # Replay only this complete local settlement, after rollback/close.
-        # A received provider answer must never trigger another HTTP request.
-        for attempt in range(2):
-            try:
-                return self._settle_request_once(request_id, state=state, usage=usage,
-                    response=response, error=error, timeout=30 if attempt == 0 else 1)
-            except sqlite3.Error as failure:
-                code = getattr(failure, 'sqlite_errorcode', None)
-                if attempt or code is None or code & 0xff not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
-                    raise
-                time.sleep(.2)
+        # BEGIN owns the only local retry budget. Never replay a provider call or
+        # a possibly committed settlement; retain uncertainty if read-back cannot prove it.
+        try:
+            return self._settle_request_once(request_id,state=state,usage=usage,response=response,error=error,timeout=90)
+        except sqlite3.Error:
+            with self.connect() as con:
+                row=con.execute('SELECT state,usage,response,error FROM model_requests WHERE id=?',(request_id,)).fetchone()
+            expected=(state,canonical(usage) if usage else None,canonical(response) if response is not None else None,error)
+            if row is not None and tuple(row)==expected:return
+            raise
 
     def _settle_request_once(self, request_id, *, state, usage, response, error, timeout):
         cost = None

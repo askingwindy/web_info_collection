@@ -1,6 +1,7 @@
 """One versioned source review covers screen and formal qualification checks."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from webcollect.batch_core import load_json,save_json,file_sha
 from webcollect.planning import object_sha256,verify_evidence
@@ -99,7 +100,7 @@ def validate(record):
     receipt=original['screening']['unified_review']
     # Read saved configuration without changing it or constructing a new ledger.
     import sqlite3
-    with sqlite3.connect(Path(receipt['ledger']).as_uri()+'?mode=ro',uri=True) as con:
+    with workspace_connect(Path(receipt['ledger']).as_uri()+'?mode=ro',uri=True) as con:
         config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
     ledger=BatchLedger(receipt['ledger'],config)
     decision=verify(original,ledger)

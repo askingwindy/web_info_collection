@@ -1,6 +1,6 @@
 import argparse
 import asyncio
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 

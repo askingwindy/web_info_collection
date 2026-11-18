@@ -4,7 +4,7 @@ import csv
 from collections import Counter
 from datetime import datetime, timezone
 import hashlib
-import json
+from webcollect import workspace_json as json
 import re
 import shutil
 import tempfile

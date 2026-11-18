@@ -7,7 +7,7 @@ lookup and dispatch so concurrent aliases cannot both spend a request.
 from contextlib import contextmanager
 from copy import deepcopy
 import fcntl
-import json
+from webcollect import workspace_json as json
 from webcollect.batch_core import BudgetStop
 
 from .semantic import digest, sample_identity

@@ -1,5 +1,7 @@
 """编号注册表：同一生产线须始终使用同一个 SQLite 文件。"""
-import json
+from webcollect.sqlite_connection import begin_immediate
+from webcollect.sqlite_connection import raw_connect as workspace_connect
+from webcollect import workspace_json as json
 import re
 import sqlite3
 from datetime import datetime
@@ -9,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 def write_json(path, data):
     path = Path(path)
+    from .workspace_paths import bind
+    bind(path)
     with path.open('x', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
         f.write('\n')
@@ -92,10 +96,14 @@ def allocate(registry, uri, category, sample_kind='integration', day=None, batch
     """事务分配站点、批次与一个样本；失败保留空号，不回收已分配编号。"""
     registry = Path(registry)
     registry.parent.mkdir(parents=True, exist_ok=True)
-    con=sqlite3.connect(registry,timeout=30)
+    from .sqlite_connection import connect, prepare_wal
+    new = not Path(registry).exists()
+    con=connect(registry, create=True)
+    if new:
+        prepare_wal(con)
     try:
         ensure_registry_schema(con)
-        con.execute('BEGIN IMMEDIATE')
+        begin_immediate(con)
         result=allocate_in_transaction(con,uri,category,sample_kind,day,batch_id)
         con.commit()
         return result
@@ -114,7 +122,7 @@ def verify_existing_registry(registry, output_parent):
     if not registry.is_file():raise ValueError('数据目录已有采集批次但编号账本缺失；请恢复原账本，不允许重新分配编号')
     try:
         from contextlib import closing
-        with closing(sqlite3.connect(registry.as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(registry.as_uri()+'?mode=ro',uri=True)) as con:
             for batch in batches:
                 manifest_path=batch/'manifest.json'
                 if not manifest_path.exists():continue  # Incomplete attempts still retain their reservations in this ledger.

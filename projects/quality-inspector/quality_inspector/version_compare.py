@@ -1,6 +1,6 @@
 """Content-addressed sample versions; explicit supersession, never mtime selection."""
 import csv
-import json
+from webcollect import workspace_json as json
 from collections import defaultdict
 from pathlib import Path
 

@@ -3,12 +3,13 @@
 Uses the original project, claims, runtime store and model ledgers. Never recovers
 foreign leases, replaces a candidate or resends an attempted QC job.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 import asyncio
 from collections import Counter
 from datetime import datetime, timezone
 import fcntl
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -23,7 +24,7 @@ def write_new(path, value):
 
 
 def db(path):
-    c=sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True);c.row_factory=sqlite3.Row;return c
+    c=workspace_connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True);c.row_factory=sqlite3.Row;return c
 
 
 def request_costs(ledger_path, *, job_ids=None, attempt_id=None):

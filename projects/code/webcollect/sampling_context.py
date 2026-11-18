@@ -1,6 +1,7 @@
 """Read-only production ordinals for sampled QC; no caller-supplied progress."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing
-import json
+from webcollect import workspace_json as json
 import sqlite3
 from pathlib import Path
 from .fragment_workflow import is_fragment
@@ -58,7 +59,7 @@ def group_key(task):
 
 def production_context(scope, sample_ids):
     registry = str(Path(scope['registry']).resolve())
-    with closing(sqlite3.connect(Path(registry).as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(registry).as_uri()+'?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         candidates = con.execute('SELECT a.sample_id,a.campaign_id FROM m4_attempts a WHERE a.sample_id IN ('+
             ','.join('?' for _ in sample_ids)+')', list(sample_ids)).fetchall()
@@ -102,7 +103,7 @@ def history_state(context):
     verify_context(context)
     state = {g: {'pending': [], 'full': False, 'sources': []} for g in set(context['groups'].values())}
     path = Path(context['source']['registry'])
-    with closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(path.as_uri()+'?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_quality_admissions'").fetchone()
         rows = []

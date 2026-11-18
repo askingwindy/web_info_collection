@@ -1,5 +1,5 @@
 """Batch result accounting and evidence-bound recovery; no external transport."""
-import json
+from webcollect import workspace_json as json
 import re
 from pathlib import Path
 

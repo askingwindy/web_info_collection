@@ -6,7 +6,7 @@ business completion. Callers choose fields and samples before delivery export.
 from collections import Counter
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import shutil

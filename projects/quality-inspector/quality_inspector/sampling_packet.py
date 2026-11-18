@@ -1,6 +1,6 @@
 """Export selected all-frame evidence for session review, without model dispatch."""
 import argparse
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 

@@ -1,6 +1,6 @@
 """Bounded read-only page-visit facts for the query planner, never a blacklist."""
 from collections import Counter
-import json
+from webcollect import workspace_json as json
 import re
 from pathlib import Path
 from urllib.parse import urlsplit

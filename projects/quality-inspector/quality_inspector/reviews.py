@@ -4,7 +4,7 @@ Legacy decisions are immutable. A separately authored migration assessment may
 reference an unchanged legacy record; this module never manufactures assessment.
 """
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 SEMANTIC = ['visual_alignment', 'terminal_semantics', 'language', 'privacy', 'substantive_difference']

@@ -1,5 +1,5 @@
 """Category-only query planning on the producer's existing jobs/checkpoints."""
-import json
+from webcollect import workspace_json as json
 import re
 from webcollect.model_gateway import ModelGateway
 from webcollect.batch_core import OutcomeUnknown, save_json, load_json

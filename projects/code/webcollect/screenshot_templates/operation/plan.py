@@ -18,7 +18,7 @@ import asyncio
 import ast
 import math
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 import re
 from pathlib import Path
 
@@ -75,7 +75,7 @@ SYSTEM_PROMPT = (
 FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途）、rationale（依据当前界面事实说明为何该动作在此可行，独立于purpose，不复述用途）、'
                               'expected_result（执行前对执行后可见变化的明确预期，不预猜数值答案，不退化为动作名或控件名）；'
                               'target优先用{"control":"当前controls清单中的编号"}精确引用当前帧控件，语义text/node/region/role/href可作辅助；'
-                              'type/select另需value（实际插入文字或选项值）及expected_value（最终值，空字符串也是值）；hotkey另需keys（全选用["ctrl","a"]；全选/删除编辑快捷键必须target绑定输入control且实际已聚焦）；scroll另需direction；wait另需duration_ms；drag另需end_target；'
+                              'type/select另需value（实际插入文字或选项值）及expected_value（最终值，空字符串也是值）；type不会自动聚焦：当前目标输入未聚焦时，必须先安排指向同一控件的独立click，再安排type；hotkey另需keys（全选用["ctrl","a"]；全选/删除编辑快捷键必须target绑定输入control且实际已聚焦）；scroll另需direction；wait另需duration_ms；drag另需end_target；'
                               'click/double_click/right_click只需target；open_url另需page_id（只取本会话已观察页面）；back无参数且须本会话已有导航；complete不是步动作，由分支的complete决策承担',
                'controls': 'controls清单列出当前帧可绑定控件：control编号、labels、role、当前值、焦点与已证明动作(proven_actions)；select的options为真实观察到的选项；只引用清单中的编号。'
                            '截图上黄色角标数字等于同一行的number，与control一一对应，两者都可填进target.control；'
@@ -97,8 +97,10 @@ FIRST_RULES = {'step_fields': '每步：action、target、purpose（本步用途
                            '例：搜索→搜索结果→文章详情，搜索输入与navigation结果属于已完成阶段，应标historical；详情结论按原目标登记。'
                            '不提交result_kind；因果来自真实产生操作和实际输入，不以全局依赖猜测。'
                            'content为累计正文；全部outcome结论须末帧支持，final_requirement_ids可追加展示义务但不能豁免outcome；process仍须真实取证。有生产指定目标时原样继承不改写'
-                           ' business_role默认outcome；原目标明确要求的搜索/输入/提交/打开过程可用process，'
-                           '仅input/result允许，并用acceptance.source_quote引用具体过程与对象原文；过程仍须真实操作证明。比较、最终结果与结论不能降为process。'}
+                           ' business_role默认outcome；operation的input事项默认省略business_role，只有原目标明确要求输入过程本身时才声明process；'
+                           '原目标明确要求的搜索/输入/提交/打开过程可用process，'
+                           '仅input/result允许，并用acceptance.source_quote引用具体过程与对象原文；过程仍须真实操作证明。比较、最终结果与结论不能降为process。'
+                           '所有acceptance.source_quote只能是本轮提交goal的逐字连续原文，不能引用页面标题、介绍或说明文字。'}
 
 BRANCH_RULES = {'step_fields': FIRST_RULES['step_fields'], 'requirements': FIRST_RULES['requirements'],
                 'controls': FIRST_RULES['controls'], 'projection': FIRST_RULES['projection'],
@@ -171,10 +173,11 @@ def step_variants(allowed_actions):
     actions = supported_actions(allowed_actions)
     extras = {
         'click': ['target'], 'double_click': ['target'], 'right_click': ['target'],
-        'type': ['target', 'value', 'expected_value'], 'select': ['target', 'value', 'expected_value'],
+        'type': ['target', 'value'], 'select': ['target', 'value'],
         'hotkey': ['keys'], 'scroll': ['direction'], 'open_url': ['page_id'],
         'back': [], 'drag': ['target', 'end_target'], 'wait': ['duration_ms']}
-    optional = {'hotkey': ['target'], 'scroll': ['target']}
+    optional = {'hotkey': ['target'], 'scroll': ['target'],
+                'type': ['expected_value'], 'select': ['expected_value']}
     fields = {'target': deepcopy(TARGET_SCHEMA), 'end_target': deepcopy(TARGET_SCHEMA),
               'value': {'type': 'string', 'maxLength': 500},
               'expected_value': {'type': 'string', 'maxLength': 500},
@@ -201,9 +204,9 @@ def evidence_route_schema():
     anchor = _obj({'observation': _text(200), 'control': _text(100),
                    'region': _text(40), 'quote': _text(400)}, ['observation'])
     anchor['anyOf'] = [{'required': [key]} for key in ('control', 'region', 'quote')]
-    # Only explicit business dependencies and existing source references are wire fields.
-    return _obj({        'existing_evidence': {'type': 'array', 'minItems': 1, 'items': anchor},
-        'depends_on': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': _text(24)}}, [])
+    # Empty depends_on is an omit-equivalent form accepted for the normalizer.
+    return _obj({'existing_evidence': {'type': 'array', 'minItems': 1, 'items': anchor},
+        'depends_on': {'type': 'array', 'minItems': 0, 'uniqueItems': True, 'items': _text(24)}}, [])
 
 
 def requirement_schema():
@@ -218,7 +221,7 @@ def requirement_schema():
         'target': deepcopy(TARGET_SCHEMA),
         'expected_value': {'type': 'string', 'maxLength': 500}, 'expected_checked': {'type': 'boolean'},
         'evidence_route': evidence_route_schema()},
-        ['id', 'description', 'kind', 'acceptance'])
+        ['id', 'kind', 'acceptance'])
     schema['allOf'] = [{'if': {'properties': {'kind': {'const': 'input'}}, 'required': ['kind']},
         'then': {'required': ['target'], 'oneOf': [
             {'required': ['expected_value'], 'not': {'required': ['expected_checked']}},
@@ -227,10 +230,8 @@ def requirement_schema():
     schema['properties']['acceptance']['allOf'] = [
         {'if': {'properties': {'mode': {'const': 'specified'}}}, 'then': {'required': ['items']}},
         {'if': {'properties': {'mode': {'const': 'complete'}}}, 'then': {'required': ['scope']}}]
-    schema['allOf'].append({'if': {'not': {'anyOf': [
-        {'properties': {'kind': {'const': 'input'}}, 'required': ['kind']},
-        {'properties': {'kind': {'const': 'result'}}, 'required': ['kind']}] }},
-        'then': {'properties': {'target': False}}})
+    # content.target is a redundant model annotation removed by the normalizer;
+    # input/result targets retain their business meaning.
     return schema
 
 
@@ -393,9 +394,23 @@ def normalize_submit_plan(arguments, allowed_actions=None):
         if isinstance(route, dict):
             route.pop('source_type', None)
             route.pop('observation_steps', None)
+            if route.get('depends_on') == []:
+                route.pop('depends_on')
+                _note(record, f'requirements[{index}].evidence_route.depends_on',
+                      'empty_dependency_list_removed')
+            if not route:
+                requirement.pop('evidence_route', None)
+                _note(record, f'requirements[{index}].evidence_route', 'empty_route_removed')
         if isinstance(requirement.get('target'), dict) and '_source' in requirement['target']:
             requirement['target'].pop('_source')
             _note(record, f'requirements[{index}].target._source', 'host_binding_field_removed')
+        if requirement.get('kind') == 'content' and 'target' in requirement:
+            requirement.pop('target')
+            _note(record, f'requirements[{index}].target', 'redundant_content_target_removed')
+        subject = (requirement.get('acceptance') or {}).get('subject')
+        if 'description' not in requirement and isinstance(subject, str) and subject.strip():
+            requirement['description'] = subject
+            _note(record, f'requirements[{index}].description', 'description_derived_from_acceptance_subject')
         # Empty accidental duplicate metadata carries no business meaning.
         # Nonempty id2 remains subject to strict schema rejection.
         if isinstance(requirement, dict) and requirement.get('id2') == '':
@@ -430,6 +445,10 @@ def normalize_submit_plan(arguments, allowed_actions=None):
                 _note(record, f'{prefix}.expected', 'legacy_predicate_moved_to_context',
                       kind=expected.get('kind'), text=str(expected['text'])[:120])
             step.pop('expected')
+        if (action in ('type', 'select') and 'expected_value' not in step
+                and isinstance(step.get('value'), str)):
+            step['expected_value'] = step['value']
+            _note(record, f'{prefix}.expected_value', 'expected_value_copied_from_declared_value')
         for key in list(step):
             if key == 'visible_label' and isinstance(step.get('target'), dict):
                 continue
@@ -1778,10 +1797,16 @@ def verify_first_evidence_routes(record, session):
     admission = result_requirements_feedback(normalized.get('requirements') or [], first_plan.get('goal', ''))
     if admission:
         raise ValueError('Sealed first plan fails current qualification: ' + admission['message'])
+    # The sealed plan has already passed through the host compiler. Re-run that
+    # same deterministic step before checking route semantics: normalization
+    # intentionally removes host-owned source_type and omit-equivalent routes.
+    # Validate only the model-owned wire fields here; an omitted route is an
+    # empty object, while an explicit null remains invalid.
+    compiled, _ = compile_contract(normalized, first_plan.get('goal', ''))
     from jsonschema import Draft202012Validator
     route_errors = [error.message for row in normalized['requirements']
-        for error in Draft202012Validator(evidence_route_schema()).iter_errors(row.get('evidence_route'))]
-    route_errors.extend(evidence_route_gaps(normalized, session))
+        for error in Draft202012Validator(evidence_route_schema()).iter_errors(row.get('evidence_route', {}))]
+    route_errors.extend(evidence_route_gaps(compiled, session))
     if route_errors:
         raise ValueError('Sealed first-plan evidence route is invalid: ' + str(route_errors))
 

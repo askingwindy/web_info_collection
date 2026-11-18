@@ -1,7 +1,7 @@
 """Read-only media triage. Routes schedule work; none certifies quality."""
 import asyncio
 import hashlib
-import json
+from webcollect import workspace_json as json
 from importlib.resources import files
 import math
 from urllib.parse import urldefrag

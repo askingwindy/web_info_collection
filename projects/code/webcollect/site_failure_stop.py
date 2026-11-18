@@ -3,9 +3,11 @@
 Original collection/model ledgers are read-only sources. This module neither
 dispatches work nor retries requests. Unknown outcomes remain explicit holds.
 """
+from webcollect.sqlite_connection import begin_immediate
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import ExitStack, closing
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -36,7 +38,8 @@ def application_key(value, registry=None):
 
 
 def execution_id(stage, source, identity):
-    return stage + ':' + object_sha256([str(Path(source).resolve()), identity])
+    from .workspace_paths import logical
+    return stage + ':' + object_sha256([logical(source), identity])
 
 
 def matches_execution_id(recorded, stage, source, identity):
@@ -121,7 +124,8 @@ class SiteFailureStore:
                     raise ValueError('Original whole-site seed is incomplete; dispatch remains blocked')
 
     def connect(self, writable=False):
-        return closing(sqlite3.connect(self.path.as_uri() + ('?mode=rw' if writable else '?mode=ro'), uri=True, timeout=30))
+        from .sqlite_connection import connect
+        return closing(connect(self.path, readonly=not writable, durable=False))
 
     @classmethod
     def initialize(cls, binding, *, seed_policy=None, source_root=None):
@@ -140,7 +144,9 @@ class SiteFailureStore:
                     raise ValueError('Seed count/stop must equal its original execution identities')
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('xb'): pass  # Never replace/reset an existing stop ledger.
-        with closing(sqlite3.connect(path)) as con:
+        from .sqlite_connection import connect, prepare_wal
+        with closing(connect(path, durable=False)) as con:
+            prepare_wal(con)
             con.executescript('CREATE TABLE stop_meta(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);'
                 'CREATE TABLE site_executions(execution_id TEXT PRIMARY KEY,application_key TEXT NOT NULL,'
                 'stage TEXT NOT NULL,state TEXT NOT NULL,reason TEXT NOT NULL,evidence_json TEXT NOT NULL,'
@@ -167,7 +173,7 @@ class SiteFailureStore:
             raise ValueError('Only evidenced real execution failures/unknown outcomes may enter the site ledger')
         body = (identity, application_key(application, self.binding.get('application_registry')), stage, state, reason, canonical(evidence), canonical(usage_refs))
         with self.connect(True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             old = con.execute('SELECT execution_id,application_key,stage,state,reason,evidence_json,usage_refs_json '
                               'FROM site_executions WHERE execution_id=?', (identity,)).fetchone()
             if old and tuple(old) != body:
@@ -198,7 +204,7 @@ class SiteFailureStore:
         record = {'producer_ledger':str(Path(producer_ledger).resolve()), 'manifest':chain['manifest'],
                   'reason':reason, 'policy':'closed-read-only-entry-get-uri-1'}
         with self.connect(True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             con.execute('CREATE TABLE IF NOT EXISTS entry_get_uri_policy(id INTEGER PRIMARY KEY CHECK(id=1), decision TEXT NOT NULL, created REAL NOT NULL)')
             con.execute('INSERT OR IGNORE INTO entry_get_uri_policy VALUES(1,?,?)',(canonical(record),time.time()))
             original = json.loads(con.execute('SELECT decision FROM entry_get_uri_policy WHERE id=1').fetchone()[0])
@@ -342,7 +348,7 @@ class SiteFailureStore:
                 path = Path(database).resolve()
                 if path not in allowed_books:continue
                 if path.is_file() and not path.is_symlink():
-                    ledger = stack.enter_context(closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=30)))
+                    ledger = stack.enter_context(closing(workspace_connect(path.as_uri()+'?mode=ro', uri=True, timeout=90)))
                     ledger.row_factory = sqlite3.Row
                     if ledger.execute("SELECT 1 FROM sqlite_master WHERE name='batch_meta'").fetchone():
                         bound = ledger.execute("SELECT json_extract(config,'$.site_failure_guard') FROM batch_meta WHERE id=1").fetchone()
@@ -386,7 +392,7 @@ class SiteFailureStore:
         if not evidence:raise ValueError('Reassessment evidence required')
         verify_evidence(evidence)
         with self.connect(True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             row=con.execute('SELECT * FROM site_executions WHERE execution_id=?',(identity,)).fetchone()
             if not row:raise ValueError('Original execution not found')
             original=self._execution_fact(row)
@@ -410,7 +416,7 @@ class SiteFailureStore:
             raise ValueError('Explicit original-campaign reassessment authorization required')
         reviews=[]
         with self.connect(True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             for identity in decision['execution_ids']:
                 original=con.execute('SELECT * FROM site_executions WHERE execution_id=? AND application_key=?',(identity,key)).fetchone()
                 if not original:raise ValueError('Original execution required')
@@ -481,7 +487,7 @@ class SiteFailureStore:
         if not ((terminal.get('kind') == 'terminal' and zero_dispatch) or sealed_react):
             raise ValueError('Terminal evidence does not prove zero dispatched actions')
         engineering = ('program', 'configuration', 'model', 'interface', 'collector')
-        with closing(sqlite3.connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
             con.row_factory = sqlite3.Row
             row = con.execute('SELECT status,failure_class FROM m4_attempts WHERE attempt_id=?', (attempt,)).fetchone()
             if not row or row['status'] != 'rejected' or row['failure_class'] not in engineering:
@@ -506,7 +512,7 @@ class SiteFailureStore:
         verify_evidence([proof['diagnostic']])
         diagnostic=load_json(proof['diagnostic']['path'])
         ledger=Path(proof['ledger']).resolve()
-        with closing(sqlite3.connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
             con.row_factory=sqlite3.Row
             row=con.execute('SELECT * FROM top_level_visits WHERE id=?',(proof['visit_id'],)).fetchone()
             if not row:raise ValueError('Original visit missing')
@@ -624,7 +630,7 @@ class SiteFailureStore:
                 incoming[fact['fact_id']] = (success, fact)
         added = 0
         with self.connect(True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             self._success_schema(con)
             existing = {row[0]: self._execution_fact(row) for row in con.execute(
                 'SELECT execution_id,application_key,stage,state,reason,evidence_json,usage_refs_json,recorded_at FROM site_executions')}
@@ -661,7 +667,7 @@ class SiteFailureStore:
         from .runtime import _bound_quality_report
         from .collect_runtime import verify_committed_samples, sample_hashes
         registry = Path(registry).resolve()
-        with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
             rows = con.execute('SELECT a.attempt_id,a.sample_id,a.status,a.evidence_json,t.task_json,'
                 'r.evidence_json,r.at FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key '
                 'JOIN m4_reviews r ON r.sample_id=a.sample_id '
@@ -694,7 +700,7 @@ class SiteFailureStore:
                     'verification': 'source-bound-independent-qc-pass', 'recorded_at': at}
             self._validate_fact(fact, True)
             with self.connect(True) as con:
-                con.execute('BEGIN IMMEDIATE'); self._success_schema(con)
+                begin_immediate(con); self._success_schema(con)
                 old = con.execute('SELECT fact_json FROM site_successes WHERE fact_id=?', (identity,)).fetchone()
                 if old and json.loads(old[0]) != fact:
                     raise ValueError('Original QC success fact cannot be changed')
@@ -779,7 +785,7 @@ class SiteFailureStore:
     def sync_formal(self, registry, campaign_id):
         """Merge only committed new failures, including other pages/scopes."""
         registry = Path(registry).resolve()
-        with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
             rows = con.execute('SELECT a.attempt_id,a.status,a.failure_class,a.root_cause,a.evidence_json,t.task_json '
                 'FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key '
                 'WHERE a.campaign_id=? AND a.started_at>=? AND a.finished_at IS NOT NULL '

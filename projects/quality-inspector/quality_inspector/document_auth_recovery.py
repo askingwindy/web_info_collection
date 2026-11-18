@@ -4,11 +4,12 @@ The frozen document lane, its failed request, fee reservation and source-bound
 receipt are unchanged. Preparation cannot dispatch: a compatible lane receipt
 is issued only after a later successful, persisted authentication diagnostic.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import contextmanager, closing
 from copy import deepcopy
 import fcntl
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -46,7 +47,7 @@ def _implementation():
 def _rows(path, sql, parameters=()):
     path = Path(path)
     if path.is_symlink() or not path.is_file(): raise ValueError('Original existing SQLite ledger required')
-    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row; con.execute('PRAGMA query_only=ON')
         return [dict(row) for row in con.execute(sql, parameters)]
 

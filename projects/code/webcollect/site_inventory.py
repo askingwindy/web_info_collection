@@ -1,6 +1,6 @@
 """Read-only Table1/Table2 inventory for site-scoped worker planning."""
 import argparse
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 from site_planner.candidate_pool import CandidatePool
@@ -11,7 +11,8 @@ STATES = ('pending', 'consuming', 'succeeded', 'failed', 'reconcile')
 
 def load_scope(path):
     scope_path = Path(path).absolute()
-    scope = json.loads(scope_path.read_text(encoding='utf-8'))
+    from .batch_core import load_json
+    scope = load_json(scope_path)
     if not scope.get('pool'):
         raise ValueError('Scope does not bind a candidate pool')
     return scope_path, scope

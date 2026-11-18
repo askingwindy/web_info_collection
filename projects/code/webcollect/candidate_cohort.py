@@ -3,10 +3,11 @@
 This entry never claims, recovers, visits, or calls a provider. Output is a new
 directory; a fixed list is never topped up when one of its members is rejected.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from collections import Counter
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 
@@ -22,8 +23,8 @@ class ReadOnlyLedger(BatchLedger):
     def connect(self, create=False):
         if create:
             raise ValueError('Selection cannot create a ledger')
-        con = sqlite3.connect(self.path.as_uri()+'?mode=ro', uri=True,
-                              timeout=30, factory=ClosingConnection)
+        con = workspace_connect(self.path.as_uri()+'?mode=ro', uri=True,
+                              timeout=90, factory=ClosingConnection)
         con.row_factory = sqlite3.Row
         return con
 
@@ -125,6 +126,7 @@ def inspect_rows(scope_path, *, candidate_ids=None):
             isolated = guard_candidate_dispatch(ledger, body['entry_url'], candidate_id=cid)
             counts['dispatch_guard_pass'] += 1
             result.update(eligible=True, version=row['version'], application_id=row['application_id'],
+                requested_goal_source='producer_table2' if body['requested_goal'] is not None else 'entry_unspecified',sources=srcs,
                 body_sha256=hashlib.sha256(row['body'].encode()).hexdigest(), body=body,
                 entry_url=body['entry_url'], requested_goal=body['requested_goal'],
                 producer_batch=pub['run_id'], producer_row_id=pub['row_id'],
@@ -172,6 +174,8 @@ def freeze(scope_path, output, *, count=50, seed='round2', candidate_ids=None, d
                  eligible_count=sum(r['eligible'] for r in rows), selected_count=len(selected),
                  selection_complete=len(selected)==expected, dry_run=dry_run)
     output.mkdir(parents=True, exist_ok=False)
+    from .workspace_paths import prepare_output
+    prepare_output(output,scope_path)
     save_json(output/'audit.json',audit); save_json(output/'rows.json',rows)
     if not dry_run and audit['selection_complete']:
         cohort = {'schema_version':'consumer-multibatch-cohort',
@@ -198,3 +202,47 @@ def main(argv=None):
 
 
 if __name__ == '__main__': main()
+
+
+def freeze_round(scope_path, producer_plan, output):
+    """Earliest 50 usable NEW pages/site from this round's native producer batches."""
+    from site_planner.candidate_pool import CandidatePool
+    scope=load_json(scope_path);plan=load_json(producer_plan)
+    if plan.get('role')!='producer' or len(plan.get('sites',[]))!=2:
+        raise ValueError('A two-site producer round plan is required')
+    exit_receipt=load_json(Path(plan['log_root'])/'summary.json')
+    if exit_receipt.get('plan_id')!=plan['plan_id'] or exit_receipt.get('succeeded') is not True or any(w.get('returncode')!=0 for w in exit_receipt.get('workers',[])):
+        raise ValueError('Producer round has not drained successfully')
+    production=load_json(Path(plan['log_root'])/'producer-summary.json')
+    if production.get('plan_id')!=plan['plan_id'] or production.get('natural_busy_locked_events')!=0 or any(s.get('shortfall')!=0 for s in production['sites']):
+        raise ValueError('Producer net-new target incomplete; cannot freeze baseline')
+    config=load_json(scope['producer_config'])
+    batches={config['run_id']+'/entry-batch/'+w['batch_key'] for w in plan['workers']}
+    pool=CandidatePool(scope['pool'],readonly=True)
+    with pool.pool.connect() as con:
+        published=[dict(r) for r in con.execute("SELECT b.*,c.application_id FROM candidate_batch_rows b JOIN data_candidates c USING(candidate_id) WHERE b.result='NEW' ORDER BY b.created,c.candidate_id") if r['run_id'] in batches]
+    by_id={}
+    for row in published:by_id.setdefault(row['candidate_id'],row)
+    _,audited,audit=inspect_rows(scope_path,candidate_ids=list(by_id))
+    eligible={r['candidate_id']:r for r in audited if r['eligible']}
+    selected=[];counts=Counter()
+    for cid,pub in by_id.items():
+        if cid in eligible and counts[pub['application_id']]<50:
+            row=eligible[cid]
+            if row['producer_batch'] not in batches:raise ValueError('NEW provenance belongs to another producer round')
+            selected.append(row);counts[pub['application_id']]+=1
+    output=Path(output).resolve();output.mkdir(parents=True,exist_ok=False)
+    from .workspace_paths import prepare_output
+    prepare_output(output,scope_path)
+    complete=len(counts)==2 and set(counts.values())=={50}
+    save_json(output/'audit.json',{**audit,'producer_plan':reference(producer_plan),'round_batches':sorted(batches),
+                                  'counts':dict(counts),'selection_complete':complete,'requested_denominator':100})
+    save_json(output/'rows.json',audited)
+    if not complete:return {'ready':False,'counts':dict(counts),'cohort':None}
+    cohort={'schema_version':'consumer-multibatch-cohort','selection_protocol':VERSION,
+            'selection_order':'published_at,candidate_id','scope':reference(scope_path),'manifest':reference(scope['history_set']),
+            'pool':scope['pool'],'registry':scope['registry'],'consumer_ledger':scope['consumer_db'],
+            'denominator':100,'selected':[{**r,'order':n} for n,r in enumerate(selected,1)],
+            'audit':reference(output/'audit.json'),'replacement_allowed':False}
+    save_json(output/'cohort.json',cohort)
+    return {'ready':True,'counts':dict(counts),'cohort':str(output/'cohort.json')}

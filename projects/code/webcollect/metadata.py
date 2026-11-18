@@ -1,6 +1,6 @@
 """按需求列序生成 metadata.csv；不将结构通过宣称为合格交付。"""
 import csv
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .validate import read_json, validate_sample, StrictValidator, SCHEMAS
 

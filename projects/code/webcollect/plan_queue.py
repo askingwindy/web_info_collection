@@ -5,7 +5,7 @@ ledger reconciliation; generation never runs this consumer implicitly.
 """
 import argparse
 import asyncio
-import json
+from webcollect import workspace_json as json
 from .batch_core import BatchLedger, file_sha, load_json
 
 

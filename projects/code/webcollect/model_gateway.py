@@ -6,7 +6,7 @@ Prices/model names are explicit configuration, never inferred from chat access.
 """
 from copy import deepcopy
 import base64
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import time
@@ -1045,13 +1045,26 @@ class ModelGateway:
                     from urllib.parse import urlsplit
                     endpoint=urlsplit(model['endpoint'])
                     try:
-                        if not socket.getaddrinfo(endpoint.hostname,endpoint.port or 443,type=socket.SOCK_STREAM):
-                            raise OSError('No addresses')
+                        from .failure_policy import safe_retry
+                        dns_deadline = min((native_context or {}).get('dispatch_deadline') or float('inf'), time.monotonic() + 15)
+                        def resolve():
+                            rows = socket.getaddrinfo(endpoint.hostname, endpoint.port or 443, type=socket.SOCK_STREAM)
+                            if not rows:
+                                raise OSError('No addresses')
+                            return rows
+                        import os
+                        safe_retry(resolve, safe=True, deadline=dns_deadline,
+                            stopped=lambda: any(os.environ.get(k) and Path(os.environ[k]).exists() for k in ('WEBCOLLECT_STOP_FILE', 'WEBCOLLECT_PRODUCER_STOP_FILE')),
+                            retryable=lambda e: isinstance(e, OSError))
                     except OSError as error:
                         with self.ledger.transaction() as con:
                             self.ledger.event(con,'model_local_network_preflight_failed',
                                 {'job_id':job['id'],'error_type':type(error).__name__,'errno':error.errno,'http_dispatched':False})
-                        raise ValueError('Local provider DNS preflight failed before reservation/HTTP dispatch') from None
+                        from .failure_policy import PreDispatchDNSFailure
+                        failure=PreDispatchDNSFailure('Local provider DNS preflight exhausted before reservation/HTTP dispatch')
+                        failure.retry_count=getattr(error,'retry_count',0)
+                        if isinstance(error,InterruptedError):raise
+                        raise failure from None
             while True:
                 try:
                     # 会话软时限对消费者决策同样生效：软时限后不再发起新的
@@ -1194,6 +1207,12 @@ class ModelGateway:
                             return None
                     timeout = (native_context or {}).get('timeout_seconds') or model['timeout_seconds']
                     opener = urllib.request.build_opener(NoRedirect)
+                    import os
+                    if any(os.environ.get(key) and Path(os.environ[key]).exists() for key in ('WEBCOLLECT_STOP_FILE','WEBCOLLECT_PRODUCER_STOP_FILE')):
+                        from .batch_core import UserStopped
+                        settling_locally=True
+                        self._settle_failure(job,rid,state='failed',response={'http_dispatched':False,'reason':'user_stop'},error='user_stop_before_http')
+                        raise UserStopped('用户停止：本笔预留已按未发送结算，不派发HTTP')
                     if deadline is not None and time.monotonic() >= deadline:
                         settling_locally = True
                         self._settle_failure(job,rid,state='failed',

@@ -5,7 +5,7 @@ Every control and page comes from synchronized original observation evidence.
 """
 from copy import deepcopy
 import ipaddress
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import time

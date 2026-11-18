@@ -1,5 +1,9 @@
 # WebCollect
 
+2026-11-18 当前稳定性修复状态：**首轮代码修复与独立全代码审核均已结束，整体 REQUIRES_FIXES；6项P1、3项P2必修未关闭，另有1项P3提醒，S1–S6尚未完成验收。** 逐项进度、验证边界及关闭清单见[实施说明](docs/采集链路稳定性修复实施说明-20261117.md)，依据见[独立审核](verify_results/collection-stability-repair-20261117-r01/independent-full-code-review.md)。20本地子进程约183秒零锁错误及核心50项通过仅为隔离证据；真实Muxtly/Wiki各50页与固定100页基线仍NOT_RUN。QC/人审NOT_RUN、发布false、验收UNKNOWN；不据旧运行记录或离线PASS恢复采集。下文较早日期内容保留历史含义。
+
+2026-11-15 候选池并发锁修复：新池默认 WAL；已有本地池在全部使用者退出后备份并调用 `SitePool.enable_wal()`，不要在 worker 中重复切换。已存在的 checkpoint 和成功工具收据只读复用，新增写入仍在短事务内复核，UNKNOWN/reserved 不重发。本轮 Muxtly 已按用户要求结束并保留 903 页；Wiki 独占 20 个后台生产者槽，累计目标 5000 个有效业务页。实际进程与产量读原运行目录的 `latest-active.json` / `status.py`，修复验证见 `verify_results/wiki-lock-repair-20261115-230850/`。
+
 2026-11-15 生产者并发名额只统计租约仍有效的 running 根作业；过期行、UNKNOWN 与 reserved 原账保留，不通过全局恢复释放名额。模型/HTTP 派发前遇到临时满额会等待同一个未派发作业，不能因此退出或另建请求重发。设置 `WEBCOLLECT_PRODUCER_STOP_FILE` 后，创建该文件可在当前模型调用结算后停止后续派发。当前双站 5000 页运行的 20 槽补位协调器与实际状态见 `results/site-workers/20261115-152557-muxtly-wiki-5000-fd804f/latest-active.json`；补位仅选择有证据且不涉及未决请求的独立来源。
 
 2026-11-15 生产者支持在 `--seeds-file` 的来源对象中显式填写 `excluded_entry_patterns`（匹配 URL 解码后的完整入口身份）。命中的首页、分类或导航页仍可供发现下级链接，但不进入目标观察/业务判定或发布；真实落地 URL 再检查一次。`site_workers producer` 在规划时分列 `cumulative_new`、`excluded_existing`、`eligible_cumulative_new`，只用排除后的累计量计算 `--pages-per-site` 缺额；原发布事务上限补偿已存在的排除行，旧候选不删除、不改账。普通不带排除规则的启动方式保持原口径。后台运行须由独立会话启动外层协调器，重定向 stdin/stdout/stderr 并保存 PID；`--launch` 本身仍在前台等待。运行前核对原 scope、角色账本配置及生产者会话绑定，不能仅凭 dry-run 成功判断可启动。

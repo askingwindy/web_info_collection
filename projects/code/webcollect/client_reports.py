@@ -2,7 +2,7 @@
 from collections import Counter
 import csv
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import shutil

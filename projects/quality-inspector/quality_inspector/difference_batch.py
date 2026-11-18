@@ -5,7 +5,7 @@ trajectory is shared across the three complete pair comparisons.
 """
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 from jsonschema import Draft202012Validator

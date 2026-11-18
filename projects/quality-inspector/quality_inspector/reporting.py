@@ -1,5 +1,5 @@
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from .engine import SEMANTIC
 from .layout import discover, sample_root

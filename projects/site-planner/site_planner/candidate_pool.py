@@ -1,8 +1,9 @@
 """Opt-in additive candidate inventory. Production/QC facts stay in RuntimeStore."""
+from webcollect.sqlite_connection import begin_immediate
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 import time
 import unicodedata
 import uuid
@@ -171,7 +172,7 @@ class CandidatePool:
             if readonly:
                 raise ValueError('Cannot install a read-only candidate pool')
             with self.pool.connect(write=True) as con:
-                con.execute('BEGIN IMMEDIATE')
+                begin_immediate(con)
                 try:
                     present = con.execute("SELECT 1 FROM sqlite_master WHERE name='candidate_meta'").fetchone()
                     row = con.execute('SELECT version FROM candidate_meta WHERE id=1').fetchone() if present else None
@@ -215,7 +216,7 @@ class CandidatePool:
         # concurrently running workers never hold the write lock unnecessarily.
         if not readonly and 'template_sites' not in tables:
             with self.pool.connect(write=True) as con:
-                con.execute('BEGIN IMMEDIATE')
+                begin_immediate(con)
                 try:
                     con.execute(TEMPLATE_SITES_DDL)
                     con.commit()
@@ -270,7 +271,7 @@ class CandidatePool:
     @contextmanager
     def transaction(self, *, timeout=90):
         with self.pool.connect(write=True, timeout=timeout) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con, timeout=timeout)
             yield con
             con.commit()
 
@@ -348,6 +349,13 @@ class CandidatePool:
                 'category_hint':source.get('category_hint') or 'UNKNOWN',
                 'candidate_kind':value['candidate_kind'], 'source_refs':source['references']})['application_id']
         key = candidate_dedup_key(value, aid)
+        # Immutable GET bytes and identity provenance are checked before taking the writer.
+        access = None
+        entry_reference = source.get('entry_http')
+        if entry_reference:
+            verify_evidence([entry_reference])
+            access = load_json(entry_reference['path'])
+        prepared_owner = self.pool.application(value['entry_url']) if source.get('table_policy') else None
         with self.transaction() as con:
             if row_header is not None:
                 prior = con.execute('SELECT response_sha256,record FROM candidate_batch_rows WHERE row_id=?',
@@ -363,7 +371,7 @@ class CandidatePool:
                 from .application_discovery import Discovery, POLICY
                 from .entry_selection import confirmed_category
                 site = Discovery(self).get(aid, con)
-                owner=self.pool.application(value['entry_url'])
+                owner=prepared_owner
                 if (source['table_policy'] != POLICY or not site or site['classification_state'] != 'confirmed'
                         or not owner or owner['id']!=aid or source.get('application_classification',{}).get('application')!=aid
                         or site['decision_id'] != source.get('site_decision_id')
@@ -377,7 +385,8 @@ class CandidatePool:
                     from .entry_access import wire_uri
                     receipt=source.get('entry_http')
                     if not receipt: raise ValueError('New Table2 entry requires the final GET receipt')
-                    verify_evidence([receipt]); access=load_json(receipt['path'])
+                    if receipt != entry_reference:
+                        raise ValueError('Entry GET binding changed during publication')
                     if (access.get('result')!='PASS' or access.get('method')!='GET'
                             or type(access.get('http_status')) is not int or not 200<=access['http_status']<300
                             or not isinstance(access.get('entry_uri'),str)
@@ -416,7 +425,8 @@ class CandidatePool:
             cid = old['candidate_id'] if old else 'candidate-' + str(uuid.uuid4())
             landed_key = None
             if source.get('table_policy') and source.get('entry_http'):
-                access = load_json(source['entry_http']['path'])
+                if source['entry_http'] != entry_reference:
+                    raise ValueError('Entry GET binding changed during publication')
                 if access.get('result')=='PASS':
                     if self.consumption(access.get('landed_uri') or access['entry_uri'],con,kind=value['candidate_kind']):
                         raise ValueError('NO_CONSUME: producer image-only landed page exclusion')
@@ -668,6 +678,8 @@ class CandidatePool:
         if not worker_id or not request_id or not 1 <= lease_seconds <= 86400:
             raise ValueError('Worker, unique request and bounded lease required')
         self._require_v2()
+        if frozen_row is not None:
+            verify_evidence([frozen_row['entry_http']])
         with self.transaction() as con:
             if frozen_row is not None:
                 if candidate_id != frozen_row['candidate_id'] or not producer_batch or recovery_version:
@@ -702,9 +714,19 @@ class CandidatePool:
                     raise ValueError('Claim request producer batch conflict')
                 return self._claim(prior)
             sql = "SELECT * FROM data_candidates WHERE state='pending'"
+            parameters = []
+            if candidate_id:
+                sql += ' AND candidate_id=?'
+                parameters.append(candidate_id)
+            if application_id:
+                sql += ' AND application_id=?'
+                parameters.append(application_id)
             if producer_batch:
                 sql += " AND candidate_id IN (SELECT candidate_id FROM candidate_batch_rows WHERE run_id=? AND result='NEW')"
-            for row in con.execute(sql+' ORDER BY created,candidate_id', (producer_batch,) if producer_batch else ()):
+                            # indexed source filter, no Python full-pool scan
+            if producer_batch:
+                parameters.append(producer_batch)
+            for row in con.execute(sql+' ORDER BY created,candidate_id', parameters):
                 if candidate_id and row['candidate_id']!=candidate_id:continue
                 disposition = self.disposition(con, row['candidate_id'])
                 if recovery_version:
@@ -722,7 +744,6 @@ class CandidatePool:
                         'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created,source_key', (row['candidate_id'],))]
                     if object_sha256(ordered_sources) != frozen_row['sources_sha256']:
                         raise ValueError('Frozen candidate sources changed; no replacement claim')
-                    verify_evidence([frozen_row['entry_http']])
                 # The consumer verifies this claimed snapshot before browser IO.
                 # A broken source belongs to one candidate, not the entire queue.
                 cid = row['candidate_id']; claim = str(uuid.uuid4()); token = str(uuid.uuid4())
@@ -765,11 +786,14 @@ class CandidatePool:
             raise ValueError('Claim target changed')
         return row
 
-    def heartbeat(self, claim, seconds=300):
+    def heartbeat(self, claim, seconds=300, *, deadline=None, stopped=None):
         if not 1 <= seconds <= 86400: raise ValueError('Bounded lease required')
-        with self.transaction(timeout=2) as con:
+        current=self.get_claim(claim['claim_id'])
+        limit=min(deadline or float('inf'),time.monotonic()+max(0,current['expires']-time.time()))
+        with self.transaction(timeout=min(90,max(0,limit-time.monotonic()))) as con:
             self._fence(con,claim)
-            con.execute('UPDATE candidate_claims SET expires=?,updated=? WHERE claim_id=?', (time.time()+seconds,time.time(),claim['claim_id']))
+            now=time.time()
+            con.execute('UPDATE candidate_claims SET expires=?,updated=? WHERE claim_id=?', (now+seconds,now,claim['claim_id']))
 
     def stage(self, claim, stage, binding=None, *, expected_stage=None):
         with self.transaction() as con:

@@ -10,7 +10,7 @@ conclusion, and interrupted batches resume from the original response only.
 import argparse
 from collections import Counter
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 import re
 import time
 import unicodedata
@@ -433,6 +433,16 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
     # Reuse the original rendered observation; never issue a replacement GET.
     from .producer_observation import from_pool
     shared_language = from_pool(pool, ledger, candidate['entry_url'])
+    if source.get('simplified_chinese_only'):
+        if shared_language is None:
+            return pool.record_row_conclusion(header, result='HELD',
+                reason='simplified_chinese_observation_missing', original_row=row)
+        script = selection.simplified_chinese_evidence(shared_language[0])
+        if not script['eligible']:
+            return pool.record_row_conclusion(header, result='REJECTED',
+                reason='simplified_chinese_not_evidenced',
+                original_row={**row, 'page_language_evidence': script})
+        source = {**source, 'page_language_evidence': script}
     if shared_language is not None:
         if exclusions and selection.entry_is_excluded(shared_language[0]['landed_uri'], exclusions):
             return pool.record_row_conclusion(header, result='REJECTED',
@@ -542,6 +552,18 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
         raise ValueError('Search probe and dispatch holds require a category-only new-sites batch')
     if not queries and not sources and not directions and not categories and goals_path is None:
         raise ValueError('Explicit queries, directions, goals or evidence-backed sources required')
+    # Read-only launch validation precedes even additive pool/ledger initialization.
+    from webcollect.collection_startup import check
+    scope_path=Path(ledger_path).resolve().parent/'scope.json'
+    checked=check(scope_path)
+    if checked['status']!='PASS':
+        return {'status':'STARTUP_FAILED','startup_check':checked,'disposition':'global','reason_owner':'program','dispatches':0}
+    owner=load_json(scope_path)
+    if (config!=load_json(owner['producer_config']) or Path(pool_path).resolve()!=Path(owner['pool']).resolve()
+            or Path(ledger_path).resolve()!=Path(owner['producer_db']).resolve()
+            or history_set is not None and Path(history_set).resolve()!=Path(owner['history_set']).resolve()):
+        return {'status':'STARTUP_FAILED','code':'PRODUCER_BINDING_MISMATCH','disposition':'global','reason_owner':'program','dispatches':0}
+    history_set=owner['history_set']
     pool = CandidatePool(pool_path)
     pool._require_v2()
     session_id = config['run_id']

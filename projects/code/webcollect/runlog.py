@@ -10,7 +10,7 @@ and never replaces the GLM credential session, claim, attempt, task_key,
 request dedup or UNKNOWN identities.
 """
 from datetime import datetime
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sys
 import threading
@@ -140,6 +140,8 @@ class SessionLog:
     def _append(self, name, record):
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
+            from .workspace_paths import bind
+            bind(self._dir/name)
             with (self._dir / name).open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True,
                                          allow_nan=False, default=str) + '\n')

@@ -299,7 +299,7 @@ class StrategyResultContract(unittest.TestCase):
         historical_s2 = {'fragment': {'collection_strategy': {'id': STRATEGY_SCREENSHOT_PLAN}}}
         self.assertIsNone(task_template_name(historical_s2))
         self.assertIs(template_module(task_template_name(historical_s2)), screenshot_plan_module)
-        # 确定性模板选择：目标方向 + 页面结构；无模型调用、无域名规则。
+        # 确定性模板选择：显式站点规则 + 目标方向 + 页面结构；无模型调用。
         calculator_state = {'elements': [
             {'element_id': 'a', 'native_role': 'input', 'visible': True, 'text': '单价'},
             {'element_id': 'b', 'native_role': 'input', 'visible': True, 'text': '数量'}],
@@ -350,6 +350,25 @@ class StrategyResultContract(unittest.TestCase):
             name, info = select_template(pool=object(), application_id='app-2',
                                          goal='随便看看', state={'elements': []})
             self.assertEqual((name, info['source']), ('generic', 'confirmed_site'))
+        # 显式 Muxtly 全站规则优先于目标、页面结构和已确认模板；中英文、
+        # 分类或阅读状页面都固定 operation，其它站点仍走原有路由。
+        for url in ('https://muxtly.com/zh-CN/calculators/baby-percentile',
+                    'https://www.muxtly.com/en/tools/area-converter',
+                    'https://muxtly.com/zh-CN/category/health'):
+            with self.subTest(url=url):
+                name, info = select_template(goal='搜索后阅读正文', state={**article_state, 'url': url})
+                self.assertEqual((name, info['source']), ('operation', 'site_rule'))
+                self.assertIn('Muxtly全站', info['reason'])
+        name, info = select_template(goal='搜索后阅读正文',
+                                     state={**article_state, 'url': 'https://example.org/article'})
+        self.assertEqual((name, info['source']), ('long_reading', 'page_match'))
+        name, _ = select_template(goal='搜索后阅读正文',
+                                  state={**article_state, 'url': 'https://muxtly.com.evil.example/article'})
+        self.assertEqual(name, 'long_reading')
+        with patch('webcollect.screenshot_planners.confirmed_templates', return_value=['long_reading']):
+            name, info = select_template(pool=object(), application_id='app-mux', goal='阅读正文',
+                                         state={**article_state, 'url': 'https://muxtly.com/zh-CN/article'})
+            self.assertEqual((name, info['source']), ('operation', 'site_rule'))
 
     def test_finalize_replaces_transient_end_with_actual_outcome(self):
         result = {'result_contract': RESULT_CONTRACT,
@@ -521,9 +540,10 @@ class CandidatePoolContract(unittest.TestCase):
                     filtered['workers'][0]['command'].index('--sources') + 1])[0]['excluded_entry_patterns'],
                     excluded_source['excluded_entry_patterns'])
             plan['log_root'] = str(root/'launch')
-            with patch.object(site_workers.subprocess, 'Popen',
-                              return_value=SimpleNamespace(pid=1, wait=lambda: 0)):
+            with patch('webcollect.collection_startup.check', return_value={'status':'PASS'}), patch('webcollect.collection_report.producer_round',return_value={'sites':[]}) as producer_report, patch.object(site_workers.subprocess, 'Popen',
+                              return_value=SimpleNamespace(pid=1, wait=lambda **kw: 0, poll=lambda:0)):
                 self.assertTrue(site_workers.launch(plan)['succeeded'])
+                producer_report.assert_called_once()
             saved = json.loads((root/'launch/plan.json').read_text())
             for i, worker in enumerate(saved['workers']):
                 path = worker['command'][worker['command'].index('--sources') + 1]
@@ -565,7 +585,7 @@ class CliEntriesSmoke(unittest.TestCase):
                     '--registry', str(root / 'registry'), '--policy', str(root / 'policy'),
                     '--history-set', str(root / 'manifest'), '--worker-id', 'fixed',
                     '--request-prefix', 'fixed', '--limit', '1']
-            with patch.object(cli, 'CandidatePool') as pool, patch.object(cli, 'BatchLedger'), \
+            with patch('webcollect.collection_startup.check', return_value={'status':'PASS'}), patch.object(cli, 'CandidatePool') as pool, patch.object(cli, 'BatchLedger'), \
                     patch.object(cli, 'run', new_callable=Mock) as run, patch.object(cli.asyncio, 'run', return_value={}) as execute, \
                     redirect_stdout(StringIO()):
                 # Replace the async entry itself: no coroutine, probe, browser or ledger IO.

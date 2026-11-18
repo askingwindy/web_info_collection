@@ -12,10 +12,11 @@ request attribution, no separate ledgers. Model attribution recomputes from
 the ledger's own job/attempt records: group -> worker -> candidate -> claim ->
 attempt/job -> request.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 import asyncio
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import random
 import subprocess
@@ -264,7 +265,7 @@ def _slot_requests(ledger_path, claim):
     attempt_id = binding.get('attempt_id')
     if not attempt_id:
         return {'requests': [], 'reserved_not_dispatched': []}
-    con = sqlite3.connect(f"file:{Path(ledger_path).resolve()}?mode=ro", uri=True)
+    con = workspace_connect(f"file:{Path(ledger_path).resolve()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
         rows = con.execute(

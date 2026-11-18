@@ -4,8 +4,9 @@ The production registry remains authoritative. Pool updates are idempotent and
 serialized by SQLite; a failed write is retried before the next dispatch, never
 by replaying a browser attempt or a model request.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
@@ -98,7 +99,7 @@ def _projection_candidate(task):
 
 def _snapshot(registry, scope):
     registry = Path(registry).resolve()
-    with closing(sqlite3.connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(registry.as_uri() + '?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         con.execute('BEGIN')
         revision = _revision(con, scope)
@@ -137,7 +138,7 @@ def check_pool_binding(pool, registry):
     path = Path(registry).resolve()
     project = None
     if path.is_file():
-        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(path.as_uri() + '?mode=ro', uri=True)) as con:
             project = registry_project(con)
     return check_project_pool(project, pool)
 
@@ -201,7 +202,7 @@ def page_state(pool, uri, *, candidate=None):
             source = con.execute('SELECT revision FROM collection_sources WHERE registry=? AND scope_id=?',
                                  (task['registry'], task['scope_id'])).fetchone()
             try:
-                with closing(sqlite3.connect(Path(task['registry']).as_uri() + '?mode=ro', uri=True)) as runtime:
+                with closing(workspace_connect(Path(task['registry']).as_uri() + '?mode=ro', uri=True)) as runtime:
                     pending |= _revision(runtime, task['scope_id']) != source[0]
             except (OSError, sqlite3.Error):
                 pending = True
@@ -275,7 +276,7 @@ def apply_qc(report_path, handoff_reference):
     if set(ids) != {r['sample_id'] for r in report['samples']}:
         raise ValueError('QC report sample set differs from the original handoff')
     registry = handoff['history_scope']['registry']
-    with closing(sqlite3.connect(Path(registry).as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(registry).as_uri() + '?mode=ro', uri=True)) as con:
         scopes = {r[0] for sid in ids for r in con.execute('SELECT scope_id FROM m4_attempts WHERE sample_id=?', (sid,))}
     for scope in scopes:
         store = RuntimeStore(registry, scope)

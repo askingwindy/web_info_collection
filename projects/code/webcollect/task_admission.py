@@ -6,12 +6,13 @@ is a named independent judgment supported by original image/tree bindings, not
 a caller-selected business ID. Historical signatures survive review expiry;
 new dispatch always rechecks live source, capability, history and registry.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from copy import deepcopy
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
 import hashlib
 from io import BytesIO
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -281,7 +282,7 @@ def _review_source(packet, review):
         trace = source.get('model_trace', {})
         ledger = Path(trace.get('ledger', '')).resolve()
         _require(ledger.is_file(), 'real model review needs its original request ledger')
-        with closing(sqlite3.connect(ledger.as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(ledger.as_uri() + '?mode=ro', uri=True)) as con:
             con.row_factory = sqlite3.Row
             config = json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
             row = con.execute('SELECT * FROM model_requests WHERE id=?', (trace.get('request_id'),)).fetchone()

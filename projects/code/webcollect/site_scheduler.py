@@ -3,13 +3,14 @@
 This schedules existing, published M4 plans. It does not discover sites, invent
 tasks, increase production budgets, issue model calls or grant QC acceptance.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 import asyncio
 from contextlib import contextmanager
 from copy import deepcopy
 import fcntl
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -88,7 +89,7 @@ def validate_schedule(value):
             raise ValueError('One logical site may use multiple URIs, but must have one conservative traffic domain')
     if maximum != policy['max_workers']:
         raise ValueError('max_parallel_sites must equal shared policy.max_workers while each site has one worker; explicitly update the original campaign policy first')
-    con = sqlite3.connect(Path(config['registry']).as_uri() + '?mode=ro', uri=True)
+    con = workspace_connect(Path(config['registry']).as_uri() + '?mode=ro', uri=True)
     try:
         exists = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_campaigns'").fetchone()
         row = con.execute('SELECT policy_json FROM m4_campaigns WHERE campaign_id=?',

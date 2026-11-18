@@ -3,9 +3,10 @@
 Stage artifacts are immutable. This module never creates a production chain,
 changes its budget, retries UNKNOWN requests, or manufactures review results.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 import asyncio
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -124,7 +125,7 @@ def identity(catalog_path, output, *, registry=None, candidate_observation=False
         import sqlite3
         # A second function page must retain the original whole-application
         # allocation name, rather than renaming the application to its title.
-        with sqlite3.connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
+        with workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True) as con:
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='m4_pilot_applications'").fetchone():
                 existing=con.execute('SELECT canonical_uri,name FROM m4_pilot_applications WHERE application_key=?',
                                      (production_identity.page_url(root_uri),)).fetchone()

@@ -10,7 +10,7 @@ are re-exported here for the existing strategy-1 import sites; 策略 2
 import asyncio
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 import time
 import secrets
 from pathlib import Path

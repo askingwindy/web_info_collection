@@ -4,12 +4,13 @@ The default inspector still requires complete review. This separate, opt-in
 contract freezes sample slots and random selection. Original failures survive
 replacement; unselected samples are admitted by policy, not called AI PASS.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import closing
 from copy import deepcopy
 import csv
 import hashlib
-import json
+from webcollect import workspace_json as json
 import math
 import os
 from pathlib import Path
@@ -389,7 +390,7 @@ def export_failures(plan_path, ledger_path, output):
     for slot in plan['slots']:
         if target.is_relative_to(Path(slot['current']['source_path'])):
             raise ValueError('Failure receipt must be outside frozen sample evidence')
-    with closing(sqlite3.connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
         con.row_factory=sqlite3.Row
         config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
         if config.get('mode')!='real' or not config.get('model') or config['model'].get('provider')=='synthetic':
@@ -419,7 +420,7 @@ def _failures(paths, plan):
         if receipt.get('schema_version')!=VERSION+'-ai-failures' or receipt.get('plan_sha256')!=plan['plan_sha256']:
             raise ValueError('AI failure receipt differs from current frozen sampling plan')
         ledger=Path(receipt['ledger']).resolve()
-        with closing(sqlite3.connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(workspace_connect(ledger.as_uri()+'?mode=ro',uri=True)) as con:
             con.row_factory=sqlite3.Row
             config=json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
             if (config.get('mode')!='real' or not config.get('model') or config['model'].get('provider')=='synthetic'

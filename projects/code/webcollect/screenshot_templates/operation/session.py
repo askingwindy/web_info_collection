@@ -9,7 +9,7 @@ necessary evidence batches or completion, and a verified `complete`.
 """
 import asyncio
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 import re
 import time
 from datetime import datetime, timezone
@@ -146,9 +146,18 @@ class ScreenshotPlanSession(RawSessionCore):
         except BudgetStop as error:
             # 软时限后的网关拒绝（consumer_session_soft_deadline）是预算结束，
             # 不是工程故障；未决请求保留 UNKNOWN。
-            self.stop_reason, self.stop_summary = 'budget', str(error)
+            from webcollect.batch_core import UserStopped
+            stopped=isinstance(error,UserStopped)
+            if stopped:
+                self.strategy_end_reason='user_stopped'
+                self.failure_class='interrupted'
+                from webcollect.failure_policy import disposition
+                self.failure_disposition=disposition(error)
+            self.stop_reason, self.stop_summary = ('blocked' if stopped else 'budget'), str(error)
             self.state = 'closed_by_host'
         except ReactStop as error:
+            from webcollect.failure_policy import disposition
+            self.failure_disposition=disposition(error,failure_class=error.failure_class)
             stop = error
             if self.stop_reason is None:
                 self.stop_reason, self.stop_summary = error.stop_reason, error.reason
@@ -170,9 +179,18 @@ class ScreenshotPlanSession(RawSessionCore):
                 self._close()
                 raise
         except BaseException as error:
-            stop = ReactStop('blocked', type(error).__name__ + ': ' + str(error), 'program')
+            # 已明确的导航范围拒绝是单页业务失败，保留原始轨迹后继续队列；
+            # 其它未知异常仍按工程故障处理，不借此吞掉程序错误。
+            from webcollect.candidate_navigation import NavigationRejected
+            navigation_rejection = isinstance(error, NavigationRejected)
+            failure_class = 'collector' if navigation_rejection else 'program'
+            stop = ReactStop('blocked', type(error).__name__ + ': ' + str(error), failure_class)
             self.stop_reason, self.stop_summary = 'blocked', str(stop)
-            self.failure_class = 'program'
+            self.failure_class = failure_class
+            if navigation_rejection:
+                self.strategy_end_reason = 'navigation_not_permitted'
+            from webcollect.failure_policy import disposition
+            self.failure_disposition = disposition(error, failure_class=failure_class)
             self.state = 'closed_by_host'
         self.host_failure = stop is not None
         receipt = self._close()
@@ -204,6 +222,7 @@ class ScreenshotPlanSession(RawSessionCore):
                                 if (getattr(self, 'goal_evidence', None) or {}).get('business_goal_status') == 'VERIFIED'
                                 else 'unconfirmed'),
                 'failure_class': self.failure_class, 'unknown': self.unknown,
+                'failure_disposition': getattr(self, 'failure_disposition', None),
                 'effective_steps': len(self.trajectory), 'actual_actions': self.actual_dispatches,
                 'short_flow': self.short_flow, 'short_flow_reason': self.short_flow_reason,
                 **({'collection_ending': getattr(self, 'collection_ending', None)}
@@ -254,7 +273,8 @@ class ScreenshotPlanSession(RawSessionCore):
         self._controls()
         limit = int(getattr(self.choose, 'max_images', 2))
         if limit < 1:
-            raise ReactStop('blocked', '模型图片配置至少须允许一张清晰视口图', 'program')
+            from webcollect.failure_policy import GlobalFailure
+            raise GlobalFailure('模型图片配置至少须允许一张清晰视口图')
         visuals = await prepare_visuals(self.current, self.root, self.page,
                                         first=prompt.get('phase') == 'first' and limit >= 2)
         available = list(visuals)
@@ -627,7 +647,7 @@ class ScreenshotPlanSession(RawSessionCore):
                 if getattr(self, 'runlog', None) is not None:
                     self._runlog('plan_rejected', observationId=self.current['observation_id'],
                         reason=feedback.get('kind'), retriable=True)
-                self._runlog_info('first_plan_result',
+                self._runlog_info('first_plan_result', requestId=response.get('request_id'),
                     goalMode='fixed' if fixed_goal else 'autonomous',
                     goal=str(fixed_goal or plan.get('goal') or '')[:80],
                     steps=len(plan.get('steps') or []), accepted=False, retriable=True,
@@ -637,7 +657,7 @@ class ScreenshotPlanSession(RawSessionCore):
             if getattr(self, 'runlog', None) is not None:
                 self._runlog('plan_rejected', observationId=self.current['observation_id'],
                     reason=feedback.get('kind'), retriable=False)
-            self._runlog_info('first_plan_result',
+            self._runlog_info('first_plan_result', requestId=response.get('request_id'),
                 goalMode='fixed' if fixed_goal else 'autonomous',
                 goal=str(fixed_goal or plan.get('goal') or '')[:80],
                 steps=len(plan.get('steps') or []), accepted=False, retriable=False,
@@ -649,7 +669,7 @@ class ScreenshotPlanSession(RawSessionCore):
             if getattr(self, 'runlog', None) is not None:
                 self._runlog('plan_rejected', observationId=self.current['observation_id'],
                     reason='unsuitable', retriable=False)
-            self._runlog_info('first_plan_result',
+            self._runlog_info('first_plan_result', requestId=response.get('request_id'),
                 goalMode='fixed' if fixed_goal else 'autonomous',
                 goal=str(fixed_goal or plan.get('goal') or '')[:80],
                 steps=len(plan.get('steps') or []), accepted=False,
@@ -665,7 +685,7 @@ class ScreenshotPlanSession(RawSessionCore):
             if getattr(self, 'runlog', None) is not None:
                 self._runlog('plan_rejected', observationId=self.current['observation_id'],
                     reason='missing_requirements', retriable=True)
-            self._runlog_info('first_plan_result',
+            self._runlog_info('first_plan_result', requestId=response.get('request_id'),
                 goalMode='fixed' if fixed_goal else 'autonomous',
                 goal=str(fixed_goal or plan.get('goal') or '')[:80],
                 steps=len(plan.get('steps') or []), accepted=False, retriable=True,
@@ -684,7 +704,7 @@ class ScreenshotPlanSession(RawSessionCore):
         self.position = 0
         self._plan_accept_route_state(compiled['steps'], compiled.get('final_presentation_step'))
         self.initial_feedback = None
-        self.plan_event = self.event('screenshot-plan', phase='first',
+        self.plan_event = self.event('screenshot-plan', phase='first', request_id=response.get('request_id'),
             goal=self.frozen_goal, requested_goal=deepcopy(self.requested_goal),
             session_objective=deepcopy((self.task['fragment'].get('session_objective') or {}).get('objective')),
             requirements=deepcopy(self.requirements), steps=deepcopy(self.plan['steps']),
@@ -695,7 +715,7 @@ class ScreenshotPlanSession(RawSessionCore):
             self._runlog('plan_accepted', observationId=self.current['observation_id'],
                 plannedSteps=len(self.plan['steps']), requirements=len(self.requirements),
                 actionKinds=feedback.get('action_kinds'), actionHistogram=feedback.get('action_histogram'))
-        self._runlog_info('first_plan_result',
+        self._runlog_info('first_plan_result', requestId=response.get('request_id'),
             goalMode='fixed' if fixed_goal else 'autonomous',
             goal=str(self.frozen_goal or '')[:80], steps=len(self.plan['steps']),
             accepted=True, reason='accepted')

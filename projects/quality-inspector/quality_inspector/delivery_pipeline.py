@@ -4,13 +4,14 @@ This runner never collects trajectories, authors human decisions, or bypasses
 distribution checks. Every operation uses the immutable outer receipt. Unlike
 the legacy worker sampling_binding, its binding is part of each job identity.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from collections import Counter
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 
@@ -303,7 +304,7 @@ def verify(receipt_path,ledger=None):
 
 def _ledger(receipt):
     path=Path(receipt['ledger']).resolve()
-    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as con:
+    with closing(workspace_connect(path.as_uri()+'?mode=ro',uri=True)) as con:
         row=con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()
     if not row:raise ValueError('Existing model ledger configuration is missing')
     config=json.loads(row[0])

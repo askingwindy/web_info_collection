@@ -14,10 +14,11 @@ UNKNOWN etc.). A late settled answer is reported when the original account
 actually contains one; otherwise UNKNOWN and its fee reservation are retained
 without any dispatch, automatic retry or replacement request.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -584,7 +585,7 @@ def _late_answer(rows, request):
 def reconcile(config_path, ledger_path, job_id, output):
     """Re-read the original account; keep UNKNOWN without any dispatch."""
     ledger_path = Path(ledger_path).resolve()
-    with sqlite3.connect(ledger_path.as_uri() + '?mode=ro', uri=True) as con:
+    with workspace_connect(ledger_path.as_uri() + '?mode=ro', uri=True) as con:
         con.row_factory = sqlite3.Row
         config = json.loads(con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()[0])
         if config != load_json(config_path):

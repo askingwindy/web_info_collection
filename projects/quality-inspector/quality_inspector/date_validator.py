@@ -8,7 +8,7 @@ No registration, review, candidate file, or human decision is changed here.
 import argparse
 from datetime import date
 import hashlib
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import re

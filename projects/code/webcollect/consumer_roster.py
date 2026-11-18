@@ -1,6 +1,6 @@
 """Prepare or launch a chosen number of consumers on the original shared scope."""
 import argparse
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import subprocess

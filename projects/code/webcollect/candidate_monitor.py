@@ -1,8 +1,9 @@
 """Read-only observer for a producer/consumer trial. Workers are started independently."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import closing
 from datetime import datetime, timezone
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import sys
@@ -16,7 +17,7 @@ def rows(database, query, args=()):
     path = Path(database).absolute()
     if not path.is_file():  # A producer can start after the observer.
         return []
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(path.as_uri() + '?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         return [dict(row) for row in con.execute(query, args)]
 

@@ -3,6 +3,7 @@
 Related samples do not imply allocation. Explicit equal-weight allocations form
 a separate estimated view; original shared requests are counted exactly once.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from collections import Counter, defaultdict
 from contextlib import closing
@@ -10,7 +11,7 @@ import csv
 from fractions import Fraction
 import hashlib
 import io
-import json
+from webcollect import workspace_json as json
 import math
 from pathlib import Path
 import re
@@ -106,7 +107,7 @@ def _file(path):
 def read_snapshot(ledger):
     """Hash all columns of the three accounting tables in one RO transaction."""
     ledger = _file(ledger)
-    with closing(sqlite3.connect(ledger.as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(ledger.as_uri() + '?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         con.execute('PRAGMA query_only=ON')
         con.execute('BEGIN')
@@ -732,7 +733,7 @@ def _compact_query(value):
 def token_audit(ledger):
     """Read token usage from original requests, independently of historical rates."""
     from .stage_metering import stage_for
-    with closing(sqlite3.connect(Path(ledger).resolve().as_uri()+'?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(ledger).resolve().as_uri()+'?mode=ro', uri=True)) as con:
         con.row_factory = sqlite3.Row
         requests = list(con.execute('SELECT r.id,r.state,r.usage,r.job_id,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id ORDER BY r.started,r.id'))
     rows=[]

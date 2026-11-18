@@ -2,7 +2,7 @@
 import asyncio
 from datetime import datetime
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import platform
 import shutil
@@ -1452,6 +1452,8 @@ def checkpoint_json(path, value):
     temporary=None
     try:
         path=Path(path)
+        from .workspace_paths import bind
+        bind(path)
         with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,prefix='.'+path.stem+'-',suffix='.tmp',delete=False) as file:
             temporary=Path(file.name)
             json.dump(value,file,ensure_ascii=False,indent=2,allow_nan=False)

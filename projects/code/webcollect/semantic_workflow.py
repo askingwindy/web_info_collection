@@ -3,7 +3,7 @@
 No live I/O or execution-time action insertion. Original frames remain complete.
 """
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from importlib.resources import files
 from .batch_core import load_json
 from .planning import verify_evidence, object_sha256

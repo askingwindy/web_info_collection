@@ -10,7 +10,7 @@ from collections import Counter
 import asyncio
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import time
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit, quote

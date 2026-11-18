@@ -5,10 +5,11 @@ Run after capture: python -m webcollect.production_facts --source BATCH_ROOT
 saved plan's production_facts object or an explicitly supplied declarations file;
 missing facts never become invented compliance assertions.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from collections import Counter
 from datetime import datetime
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 
@@ -130,7 +131,7 @@ def _closed_replan(root, manifest, plan):
     require(registry_path.is_absolute(),'registry path must be absolute')
     registry_path=real_file(registry_path,registry_path.parent).resolve()
     try:
-        con=sqlite3.connect(registry_path.as_uri()+'?mode=ro',uri=True)
+        con=workspace_connect(registry_path.as_uri()+'?mode=ro',uri=True)
         try:
             db_scope=con.execute('SELECT campaign_id,state FROM m4_scopes WHERE scope_id=?',(closure['scope_id'],)).fetchone()
             events=con.execute("SELECT event_id,payload_json FROM m4_events WHERE scope_id=? AND event_type='scope_closed_replanned'",

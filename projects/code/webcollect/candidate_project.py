@@ -1,7 +1,8 @@
 """Initialize a local candidate project. Publish the launch scope after all stores are ready."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import closing
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -17,7 +18,7 @@ def numbering_floors(registries):
     """Carry numeric reservations across a cutover, without carrying page or site decisions."""
     floors = {}
     for registry in registries:
-        with closing(sqlite3.connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
+        with closing(workspace_connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
             values = [('site', con.execute('SELECT COALESCE(MAX(id),0) FROM sites').fetchone()[0])]
             for (bid,) in con.execute('SELECT id FROM batches'):
                 prefix, number = bid.rsplit('_',1)
@@ -79,11 +80,15 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
     # The fixed root may contain unrelated legacy project subdirectories. Only
     # this root's own scope/config/database files exclude a new initialization.
     root.mkdir(parents=True,exist_ok=True)
+    from .workspace_paths import prepare
+    common = Path(__import__('os').path.commonpath((root, results)))
+    prepare(root, common)
+    prepare(results, common)
     # An incomplete initialization keeps its files for diagnosis. The scope is published last.
     results.mkdir(parents=True, exist_ok=True)
     owner = initialize_chain(manifest,registry,chain_id=project_id,current_result_roots=[results],
                              now=since,candidate_project=project)
-    with closing(sqlite3.connect(registry)) as con:
+    with closing(workspace_connect(registry)) as con:
         con.execute('CREATE TABLE allocation_floors(name TEXT PRIMARY KEY,last_number INTEGER NOT NULL)')
         con.executemany('INSERT INTO allocation_floors VALUES(?,?)',floors.items())
         con.commit()
@@ -100,6 +105,12 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
     for role, config in configs.items():
         path = state/(role+'-config.json')
         save_json(path,config)
+        from .batch_core import BatchLedger
+        prepared_ledger=BatchLedger(state/(role+'-jobs.sqlite3'), config, initialize=True)
+        if role=='consumer':
+            from .key_health import ensure_schema
+            with prepared_ledger.transaction() as con:
+                ensure_schema(con)
         scope[role+'_config'] = str(path)
         scope[role+'_db'] = str(state/(role+'-jobs.sqlite3'))
     if qc_policy is not None:
@@ -132,3 +143,34 @@ def main(argv=None):
 
 if __name__=='__main__':
     main()
+
+
+def prepare_existing_wal(scope_path, backup_root, *, drained=False):
+    """Explicit offline preparation only; never called from startup checks/workers."""
+    from .site_inventory import load_scope
+    from .sqlite_connection import backup,connect,prepare_wal
+    if drained is not True:raise ValueError('All users must be drained before preparing existing stores')
+    _,scope=load_scope(scope_path)
+    guard=load_json(scope['consumer_config'])['site_failure_guard']
+    paths=[Path(scope[k]) for k in ('pool','producer_db','consumer_db','registry')]+[Path(guard['ledger'])]
+    backup_root=Path(backup_root).resolve();backup_root.mkdir(parents=True,exist_ok=False)
+    # Existing undecided requests remain original rows, including reserved/UNKNOWN.
+    # Reject active leases; this is not an automatic recovery or lease reset.
+    for role in ('producer_db','consumer_db'):
+        with closing(connect(scope[role],readonly=True)) as con:
+            if con.execute("SELECT 1 FROM jobs WHERE state='running' AND lease>? LIMIT 1",(time.time(),)).fetchone():
+                raise ValueError('Live job lease remains; do not switch shared stores')
+    with closing(connect(scope['pool'],readonly=True)) as con:
+        if con.execute("SELECT 1 FROM candidate_claims WHERE state='consuming' AND expires>? LIMIT 1",(time.time(),)).fetchone():
+            raise ValueError('Live candidate lease remains; do not switch shared stores')
+    with closing(connect(scope['registry'],readonly=True)) as con:
+        if con.execute("SELECT 1 FROM m4_attempts WHERE status IN ('reserved','running') AND lease_expires_at>? LIMIT 1",(time.time(),)).fetchone():
+            raise ValueError('Live attempt lease remains; do not switch shared stores')
+    report=[]
+    for path in paths:
+        target=backup_root/path.name;backup(path,target)
+        with closing(connect(path,durable=path.name not in ('candidate-pool.sqlite3','site-facts.sqlite3'))) as con:
+            previous=con.execute('PRAGMA journal_mode').fetchone()[0];prepare_wal(con)
+        report.append({'path':str(path),'backup':str(target),'previous':previous,'journal_mode':'wal'})
+    save_json(backup_root/'preparation.json',{'drained':True,'stores':report,'cross_database_atomic':False,'original_rows_rewritten':False})
+    return report

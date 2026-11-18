@@ -5,7 +5,7 @@ directly in their owning module; there is no per-rule version registry.
 """
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 
 CHECKS = ('visual_alignment', 'terminal_semantics', 'language', 'privacy',
           'substantive_difference')

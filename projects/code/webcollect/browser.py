@@ -3,7 +3,7 @@ import asyncio
 import base64
 import hashlib
 from importlib.resources import files
-import json
+from webcollect import workspace_json as json
 import math
 import time
 import weakref

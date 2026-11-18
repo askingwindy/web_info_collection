@@ -388,7 +388,7 @@ def _normalize_node_target(target, observation, allowed, normalization):
         candidates = [{'control': key, 'text': controls[key].get('element', {}).get('text'),
                        'labels': [r['text'] for r in controls[key].get('readable_labels', [])]}
                       for key in sorted(allowed) if key in controls]
-        import json
+        from webcollect import workspace_json as json
         raise ValueError('TARGET_NODE_NOT_UNIQUELY_BOUND: node='+repr(node)+
             '; use text for a rendered label or control for its current ID; current candidates='+
             json.dumps(candidates, ensure_ascii=False))

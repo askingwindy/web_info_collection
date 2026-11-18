@@ -7,7 +7,7 @@ PASS is not an alternative to that trace. No model or human service is called.
 """
 from copy import deepcopy
 from pathlib import Path
-import json
+from webcollect import workspace_json as json
 
 from .contract import fingerprint
 from .reporting import review_template as existing_template

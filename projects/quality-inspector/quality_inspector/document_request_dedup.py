@@ -9,10 +9,11 @@ token inside a supporting facts.json is represented by a checked reference to
 an identical, uniquely located document substring. The original request is
 reconstructed byte for byte before any compacted request is returned.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from copy import deepcopy
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import sys
@@ -346,7 +347,7 @@ def build_request(value):
 def compare_ledger_request(ledger, request_id):
     """Read one historical request only; no model dispatch or ledger mutation."""
     path = Path(ledger).resolve(strict=True)
-    with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as con:
+    with workspace_connect(path.as_uri() + '?mode=ro', uri=True) as con:
         con.execute('PRAGMA query_only=ON')
         con.execute('BEGIN')
         row = con.execute('SELECT request_json FROM model_requests WHERE id=?', (request_id,)).fetchone()

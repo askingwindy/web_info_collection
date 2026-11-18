@@ -7,7 +7,7 @@ not sample review or formal delivery requirements. No trajectory is collected.
 import argparse
 from collections import Counter
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 

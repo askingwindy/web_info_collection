@@ -7,7 +7,7 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 import fcntl
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import time
 

@@ -8,7 +8,7 @@ Failed derivations append records and never touch the raw directory.
 from copy import deepcopy
 from datetime import datetime
 import hashlib
-import json
+from webcollect import workspace_json as json
 import re
 from pathlib import Path
 import platform
@@ -892,7 +892,9 @@ def derive(task, record, delivery, ids, manifest, *, resume=False):
     try:
         trajectory = effective_trajectory(record)
     except (ValueError, KeyError, TypeError) as error:
-        return {'status': 'processing_failed', 'error': str(error), 'effective_steps': 0}
+        from .failure_policy import disposition
+        return {'status': 'processing_failed', 'error': str(error), 'effective_steps': None,
+                'failure_disposition':disposition(error,failure_class='program')}
     return _derive_verified(task, record, trajectory, delivery, ids, manifest, resume=resume)
 
 

@@ -1,5 +1,5 @@
 """Public first-party business evidence only; consumer goals belong to consumers."""
-import json
+from webcollect import workspace_json as json
 import re
 import time
 

@@ -3,10 +3,11 @@
 The coordinator or standalone run owner probes. UNKNOWN never authorizes replay or account rotation.
 Secrets exist only in the transport call, never in persisted health or probe rows.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import closing
 import hashlib
 import http.client
-import json
+from webcollect import workspace_json as json
 import time
 import uuid
 import urllib.request
@@ -81,7 +82,7 @@ def pool_available(ledger):
     import sqlite3
     # Availability is a read-only query: do not take a SQLite write lock while
     # other fixed workers are claiming candidates or renewing their leases.
-    with closing(sqlite3.connect(ledger.path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
+    with closing(workspace_connect(ledger.path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         con.row_factory = sqlite3.Row
         con.execute('PRAGMA busy_timeout=90000')
         excluded = unavailable_accounts(ledger, con, historical=ledger._unavailable_model_accounts(con), readonly=True)

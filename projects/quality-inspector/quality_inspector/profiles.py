@@ -1,7 +1,7 @@
 """Explicit delivery and local pilot scopes; no inferred customer acceptance."""
 import csv
 import hashlib
-import json
+from webcollect import workspace_json as json
 from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from .layout import discover

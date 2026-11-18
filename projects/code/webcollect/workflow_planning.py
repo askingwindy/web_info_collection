@@ -1,5 +1,5 @@
 """Source-bound model proposals; compilation/collection remain deterministic."""
-import json
+from webcollect import workspace_json as json
 from .planning import verify_evidence
 from .batch_core import load_json
 

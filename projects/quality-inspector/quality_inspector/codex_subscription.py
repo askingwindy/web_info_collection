@@ -4,11 +4,12 @@ This is not the batch worker or a release command. It has its own persistent
 subscription quota ledger, never substitutes model=null or synthetic API rates,
 and leaves substantive difference pending until independent cumulative review.
 """
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
-import json
+from webcollect import workspace_json as json
 import os
 from pathlib import Path
 import signal
@@ -156,7 +157,7 @@ def amend(ledger, authorization, output):
     validate_amendment(value)
     sha = digest(value)
     # No silent creation of a replacement empty ledger.
-    db = sqlite3.connect('file:'+str(Path(ledger).resolve())+'?mode=rw', uri=True, timeout=10)
+    db = workspace_connect('file:'+str(Path(ledger).resolve())+'?mode=rw', uri=True, timeout=10)
     try:
         amendment_tables(db)
         db.execute('BEGIN IMMEDIATE')
@@ -281,7 +282,7 @@ def validate_slot_revision(db, value):
 def repurpose(ledger, authorization, output):
     value = json.loads(Path(authorization).read_text())
     sha = digest(value)
-    db = sqlite3.connect('file:'+str(Path(ledger).resolve())+'?mode=rw', uri=True, timeout=10)
+    db = workspace_connect('file:'+str(Path(ledger).resolve())+'?mode=rw', uri=True, timeout=10)
     try:
         amendment_tables(db)
         db.execute('BEGIN IMMEDIATE')
@@ -482,7 +483,7 @@ def run(sample, output, ledger, *, run_id, model, purpose='transport_smoke',
         identity['repair_id'] = repair_id
     key = digest(identity)
     ledger.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(ledger, timeout=10)
+    db = workspace_connect(ledger, timeout=10)
     db.execute('CREATE TABLE IF NOT EXISTS run (id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL, started REAL)')
     db.execute('CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, state TEXT NOT NULL, started REAL NOT NULL, directory TEXT NOT NULL, result TEXT, error TEXT)')
     amendment_tables(db)

@@ -1,7 +1,7 @@
 """Category-only GLM discovery; durable stages and evidence, no collection dispatch."""
 from itertools import count
 import asyncio
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import time
 import re

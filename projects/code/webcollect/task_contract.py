@@ -4,7 +4,7 @@ Legacy plans are read unchanged. The versioned entry point deliberately has a
 smaller supported capability set than the customer action space.
 """
 import hashlib
-import json
+from webcollect import workspace_json as json
 import re
 
 from .plan_protocol import FRAGMENT_POLICY

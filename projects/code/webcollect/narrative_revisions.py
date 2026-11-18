@@ -1,7 +1,7 @@
 """Evidence-cited narrative revisions without changing captured evidence or actions."""
 import copy
 import hashlib
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 

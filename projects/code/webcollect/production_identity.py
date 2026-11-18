@@ -5,7 +5,7 @@ identity binds original page evidence; it does not require an earlier execution
 or semantic admission. Collection saves pending evidence for independent QC.
 Legacy tasks and numbering remain unchanged.
 """
-import json
+from webcollect import workspace_json as json
 import re
 import unicodedata
 from pathlib import Path

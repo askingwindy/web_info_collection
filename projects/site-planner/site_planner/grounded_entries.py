@@ -6,7 +6,7 @@ No browser or consumer implementation is imported by this path.
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 import sqlite3
@@ -465,6 +465,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         raise ValueError('application_new_target must be positive')
     allowed_hosts=sorted(set(h.lower() for h in allowed_hosts))
     entry_exclusions = compile_entry_exclusions(sources)
+    simplified_chinese_only = any(source.get('simplified_chinese_only') is True for source in sources)
     def host_allowed(uri):
         if not allowed_hosts or urlsplit(uri).hostname in allowed_hosts:return True
         # Sealed historical batches carry their own frozen model_protocol;
@@ -714,6 +715,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     'ranking_reason':hit.get('ranking_reason'),'references':refs}
                 if entry_exclusions:
                     source['excluded_entry_patterns'] = [pattern.pattern for pattern in entry_exclusions]
+                if simplified_chinese_only:
+                    source['simplified_chinese_only'] = True
                 if True:
                     source['business_diagnostic']={k:hit.get(k) for k in ('business_role_hint','template_identity')}
                     source['business_diagnostic']['acceptance']='UNKNOWN: operation differences require consumer evidence'

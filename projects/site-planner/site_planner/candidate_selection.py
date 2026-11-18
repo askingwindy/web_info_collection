@@ -10,7 +10,7 @@ from copy import deepcopy
 import hashlib
 from html.parser import HTMLParser
 import ipaddress
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit

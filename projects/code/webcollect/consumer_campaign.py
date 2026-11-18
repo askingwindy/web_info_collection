@@ -1,9 +1,10 @@
 """Continuous site consumers with immediate, minute-directory customer exports."""
+from webcollect.sqlite_connection import raw_connect as workspace_connect
 import argparse
 from contextlib import contextmanager, closing
 from datetime import datetime, timezone
 import fcntl
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import signal
 import sqlite3
@@ -219,13 +220,19 @@ def main():
         p.error('duplicate sites are not allowed')
     if a.workers_per_site < 1 or (a.target is not None and a.target < 1):
         p.error('workers and explicit target must be positive')
-    scope = json.loads(a.scope.read_text())
+    from .collection_startup import check
+    checked=check(a.scope)
+    if checked['status']!='PASS':
+        print(json.dumps(checked,ensure_ascii=False))
+        return 2
+    from .batch_core import load_json
+    scope = load_json(a.scope)
     from .consumer_roster import build_roster
     from site_planner.candidate_pool import CandidatePool
     pool = CandidatePool(scope['pool'])
     roster = build_roster(scope, len(a.site) * a.workers_per_site, a.prefix, job_limit=None, campaign_limit=None)
     applications = []
-    with closing(sqlite3.connect(Path(scope['pool']).resolve().as_uri() + '?mode=ro', uri=True)) as con:
+    with closing(workspace_connect(Path(scope['pool']).resolve().as_uri() + '?mode=ro', uri=True)) as con:
         for site in a.site:
             row = con.execute('SELECT id FROM applications WHERE host=?', (site,)).fetchone()
             if not row: raise ValueError('Site absent from original application pool: ' + site)

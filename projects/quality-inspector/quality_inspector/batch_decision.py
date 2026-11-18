@@ -9,7 +9,7 @@ import argparse
 from collections import Counter
 from copy import deepcopy
 import inspect as python_inspect
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 from webcollect.batch_core import file_sha, load_json, save_json

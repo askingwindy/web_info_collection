@@ -6,7 +6,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 import urllib.error
 import urllib.request
-import json
+from webcollect import workspace_json as json
 import re
 
 from webcollect.batch_core import OutcomeUnknown, file_sha, save_json

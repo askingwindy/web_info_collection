@@ -7,7 +7,7 @@ contexts, control roles/labels and target identity topology. Original UI trees
 must corroborate the targets; blank labels additionally bind input position and
 adjacent formula/control context. Unsupported history remains UNKNOWN.
 """
-import json
+from webcollect import workspace_json as json
 import re
 from pathlib import Path
 

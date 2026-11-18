@@ -43,6 +43,67 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValidationError):
             validate(short, submit_plan_schema(['back']))
         validate({'unsuitable': {'reason': '自然不足五步'}}, submit_plan_schema(['back']))
+        # operation 的线协议先接纳四种可确定归一化形式，再由同一正规化器
+        # 补齐/删除并留痕；执行编译器仍要求最终 expected_value。
+        from webcollect.screenshot_templates.operation.plan import (
+            FIRST_RULES, normalize_submit_plan as normalize_operation,
+            submit_plan_schema as operation_schema)
+        common = {'purpose': '必要业务操作', 'rationale': '依据当前控件',
+                  'expected_result': '页面显示相应变化'}
+        operation_raw = {
+            'goal': '计算',
+            'requirements': [{'id': 'r1', 'kind': 'content',
+                'acceptance': {'mode': 'presence', 'subject': '计算结果', 'source_quote': '计算'},
+                'target': {'text': '页面介绍不是目标'}, 'evidence_route': {'depends_on': []}}],
+            'steps': [
+                {**common, 'action': 'type', 'target': {'control': 'c1'}, 'value': '10'},
+                {**common, 'action': 'select', 'target': {'control': 'c2'}, 'value': '千克'},
+                *[{**common, 'action': 'back'} for _ in range(3)]]}
+        operation_before = deepcopy(operation_raw)
+        validate(operation_raw, operation_schema(['type', 'select', 'back']))
+        operation_normalized, operation_record = normalize_operation(
+            operation_raw, ['type', 'select', 'back'])
+        validate(operation_normalized, operation_schema(['type', 'select', 'back']))
+        self.assertEqual(operation_raw, operation_before)
+        requirement = operation_normalized['requirements'][0]
+        self.assertEqual(requirement['description'], '计算结果')
+        self.assertNotIn('target', requirement)
+        self.assertNotIn('evidence_route', requirement)
+        self.assertEqual(operation_normalized['steps'][0]['expected_value'], '10')
+        self.assertEqual(operation_normalized['steps'][1]['expected_value'], '千克')
+        self.assertFalse(operation_record.get('missing'))
+        self.assertIn('type不会自动聚焦', FIRST_RULES['step_fields'])
+        self.assertIn('本轮提交goal的逐字连续原文', FIRST_RULES['requirements'])
+        # 封存校验与在线执行使用同一宿主编译顺序：省略或由宿主字段清空的
+        # evidence_route 不是 None 对象错误；显式 null 仍须拒绝。
+        from webcollect.screenshot_templates.operation.plan import verify_first_evidence_routes
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sealed = deepcopy(operation_normalized)
+            sealed['requirements'][0]['evidence_route'] = {'source_type': 'page_content'}
+            (root / '0001-screenshot-plan.json').write_text(__import__('json').dumps(sealed))
+            (root / 'boundary.json').write_text('{}')
+            record = {'receipt': {'boundary': {'path': str(root / 'boundary.json')},
+                'files_sha256': {'0001-screenshot-plan.json': 'offline-fixture'}}}
+            replay = SimpleNamespace(observation_records={}, provided_observations=[], region_registries={})
+            verify_first_evidence_routes(record, replay)
+            sealed['requirements'][0]['evidence_route'] = None
+            (root / '0001-screenshot-plan.json').write_text(__import__('json').dumps(sealed))
+            with self.assertRaisesRegex(ValueError, "None is not of type 'object'"):
+                verify_first_evidence_routes(record, replay)
+        from webcollect.failure_policy import disposition
+        from webcollect.candidate_navigation import NavigationRejected
+        self.assertEqual(disposition(NavigationRejected('NAVIGATION_SOURCE_UNPROVEN: no exact permission'))['disposition'], 'business')
+        self.assertEqual(disposition(ValueError('NAVIGATION_SOURCE_UNPROVEN'))['disposition'], 'page_program')
+        from site_planner.candidate_pool import CandidatePool
+        heartbeat_pool = object.__new__(CandidatePool)
+        heartbeat_pool.transaction = MagicMock()
+        heartbeat_pool.transaction.return_value.__enter__.return_value = MagicMock()
+        heartbeat_pool._fence = MagicMock()
+        heartbeat_pool.get_claim = MagicMock(return_value={'expires':__import__('time').time()+300})
+        heartbeat_pool.heartbeat({'claim_id': 'offline-claim'})
+        self.assertLessEqual(heartbeat_pool.transaction.call_args.kwargs['timeout'], 90)
+        heartbeat_pool._fence.assert_called_once()
 
     async def test_standalone_checks_scope_then_probes_once_and_stops_unavailable(self):
         from webcollect.current_chain import CurrentChainError

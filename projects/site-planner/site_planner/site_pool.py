@@ -1,6 +1,7 @@
 """Shared, append-only discovery provenance; never grants collection authority."""
+from webcollect.sqlite_connection import begin_immediate
 from contextlib import closing
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
@@ -41,7 +42,9 @@ class SitePool:
             if readonly:
                 raise ValueError('Cannot initialize a read-only pool')
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(sqlite3.connect(self.path)) as con:
+            from webcollect.sqlite_connection import connect
+            with closing(connect(self.path, create=True, durable=False)) as con:
+                con.execute('PRAGMA journal_mode=WAL')
                 con.executescript('''
                 PRAGMA foreign_keys=ON;
                 CREATE TABLE IF NOT EXISTS pool_meta(id INTEGER PRIMARY KEY CHECK(id=1), schema TEXT NOT NULL);
@@ -84,12 +87,21 @@ class SitePool:
             raise ValueError('Read-only site pool')
         # Twenty consumers share this single-writer ledger. Wait only for a
         # transient SQLite lock; owner/token/expiry fencing remains unchanged.
-        con = sqlite3.connect(self.path.as_uri() + ('?mode=rw' if write else '?mode=ro'),
-                              uri=True, timeout=timeout)
+        from webcollect.sqlite_connection import connect
+        con = connect(self.path, readonly=not write, timeout=timeout, durable=False)
         con.row_factory = sqlite3.Row
         con.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
         con.execute('PRAGMA foreign_keys=ON')
         return closing(con)
+
+    def enable_wal(self):
+        """Prepare an existing local pool once, before starting its workers."""
+        with self.connect(write=True) as con:
+            previous = con.execute('PRAGMA journal_mode').fetchone()[0]
+            current = con.execute('PRAGMA journal_mode=WAL').fetchone()[0]
+        if current.lower() != 'wal':
+            raise ValueError('Shared candidate pool requires WAL before concurrent dispatch')
+        return {'previous': previous, 'current': current}
 
     def application(self, uri):
         host = host_identity(uri)
@@ -119,24 +131,28 @@ class SitePool:
 
     def checkpoint(self, run_id, key, value=None):
         """Immutable completed stages, including failures; conflicts never overwrite."""
-        with self.connect(write=value is not None) as con:
-            if value is not None:
-                con.execute('BEGIN IMMEDIATE')
+        encoded = canonical(value) if value is not None else None
+        with self.connect() as con:
             old = con.execute('SELECT value FROM checkpoints WHERE run_id=? AND key=?', (run_id, key)).fetchone()
-            if old:
-                if value is not None and old[0] != canonical(value):
-                    raise ValueError('Checkpoint conflict')
-                return json.loads(old[0])
-            if value is not None:
-                con.execute('INSERT INTO checkpoints VALUES(?,?,?,?)', (run_id, key, canonical(value), time.time()))
+        if old is None and encoded is not None:
+            with self.connect(write=True) as con:
+                begin_immediate(con)
+                # Another producer may have published while this one waited.
+                old = con.execute('SELECT value FROM checkpoints WHERE run_id=? AND key=?', (run_id, key)).fetchone()
+                if old is None:
+                    con.execute('INSERT INTO checkpoints VALUES(?,?,?,?)', (run_id, key, encoded, time.time()))
                 con.commit()
-            return value
+        if old is not None:
+            if encoded is not None and old[0] != encoded:
+                raise ValueError('Checkpoint conflict')
+            return json.loads(old[0])
+        return value
 
     def merge(self, source, target, proof):
         """Explicit evidence-backed merge. Keep source rows and original events."""
         verify_evidence(proof)
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='collection_tasks'").fetchone():
                 if con.execute('SELECT 1 FROM collection_tasks c JOIN pages p ON p.id=c.page_id '
                                'WHERE p.application_id IN (?,?)', (source,target)).fetchone():
@@ -165,7 +181,7 @@ class SitePool:
         uri = page_uri(value['uri']); host = host_identity(uri)
         body = canonical(value); event = object_sha256([value['origin'], value['run_id'], value['event_id']])
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             prior = con.execute('SELECT * FROM discoveries WHERE id=?', (event,)).fetchone()
             if prior:
                 if prior['record'] != body:
@@ -196,7 +212,7 @@ class SitePool:
         verify_evidence(proof)
         host = host_identity(uri)
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             existing = con.execute('SELECT id FROM applications WHERE host=?', (host,)).fetchone()
             if existing and existing['id'] != application_id:
                 raise ValueError('Existing application requires an explicit merge, not alias overwrite')
@@ -217,7 +233,7 @@ class SitePool:
         record = {'decision': decision, 'evidence': evidence, 'execution_verified': 'NOT_RUN'}
         identity = object_sha256([page_id, run_id, record])
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             con.execute('INSERT OR IGNORE INTO assessments VALUES(?,?,?,?,?)',
                         (identity, page_id, run_id, canonical(record), time.time()))
             con.commit()
@@ -227,7 +243,7 @@ class SitePool:
         if inventory:
             self.verify_identity_evidence()
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             old = con.execute('SELECT * FROM runs WHERE id=?', (run_id,)).fetchone()
             if old:
                 if old['config'] != canonical(config):
@@ -245,15 +261,25 @@ class SitePool:
 
     def reserve_tool(self, run_id, kind, key, payload, *, maximum=None, batch_scope=None, probe_of=None):
         identity = object_sha256([run_id, kind, key])
+        encoded = canonical(payload)
+
+        def settled(original):
+            if original['payload'] != encoded:
+                raise ValueError('Tool request payload conflict')
+            if original['state'] != 'succeeded':
+                raise ValueError('Tool outcome UNKNOWN/failed; reconcile original, do not resend')
+            return identity, json.loads(original['result'])
+
+        # Reusing a completed probe does not require the sole writer slot.
+        with self.connect() as con:
+            old = con.execute('SELECT * FROM tool_requests WHERE id=?', (identity,)).fetchone()
+        if old:
+            return settled(old)
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             old = con.execute('SELECT * FROM tool_requests WHERE id=?', (identity,)).fetchone()
             if old:
-                if old['payload'] != canonical(payload):
-                    raise ValueError('Tool request payload conflict')
-                if old['state'] != 'succeeded':
-                    raise ValueError('Tool outcome UNKNOWN/failed; reconcile original, do not resend')
-                return identity, json.loads(old['result'])
+                return settled(old)
             if probe_of:
                 prior = con.execute("SELECT run_id,state,result FROM tool_requests WHERE id=? AND kind='search'",(probe_of,)).fetchone()
                 if (not prior or prior['run_id'] != run_id or prior['state'] != 'unknown'
@@ -280,7 +306,7 @@ class SitePool:
                     con.execute('INSERT INTO checkpoints VALUES(?,?,?,?)',
                                 (batch_scope,'search-dispatch/'+identity,canonical({'request_id':identity}),time.time()))
             con.execute('INSERT INTO tool_requests VALUES(?,?,?,?,?,?,?,?)',
-                        (identity, run_id, kind, canonical(payload), 'reserved', None, time.time(), None))
+                        (identity, run_id, kind, encoded, 'reserved', None, time.time(), None))
             con.commit()
             return identity, None
 
@@ -288,7 +314,7 @@ class SitePool:
         if state not in ('succeeded', 'failed', 'unknown'):
             raise ValueError('Invalid tool outcome')
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             changed = con.execute("UPDATE tool_requests SET state=?,result=?,finished=? WHERE id=? AND state='reserved'",
                                   (state, canonical(result), time.time(), identity)).rowcount
             if changed != 1:
@@ -307,7 +333,7 @@ class SitePool:
             if 'site_qualification' not in r and 'review_provenance' not in r:
                 raise ValueError('A discovery hint cannot grant capability authority')
         with self.connect(write=True) as con:
-            con.execute('BEGIN IMMEDIATE')
+            begin_immediate(con)
             for r in catalog['records']:
                 p = con.execute('SELECT id FROM pages WHERE uri=?', (page_uri(r['site_uri']),)).fetchone()
                 if not p:

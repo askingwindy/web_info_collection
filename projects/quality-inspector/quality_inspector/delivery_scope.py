@@ -1,5 +1,5 @@
 """Read-only delivery membership and cross-package mechanical binding."""
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 
 from .contract import digest

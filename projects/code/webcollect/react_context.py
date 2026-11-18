@@ -1,6 +1,6 @@
 """Bounded wire projection only; archived requests and raw evidence stay intact."""
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 
 LIMITS = {'system': 5000, 'tools': 24000, 'observation': 18000,
           'facts': 22000, 'history': 32000, 'query': 2000, 'requested_goal': 32000}

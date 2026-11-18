@@ -1,7 +1,7 @@
 """Read-only candidate details and role-separated GLM accounting for one local project."""
 import argparse
 from collections import defaultdict
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import time
 

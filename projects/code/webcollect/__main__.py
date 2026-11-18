@@ -1,6 +1,6 @@
 import argparse
 from datetime import datetime
-import json
+from webcollect import workspace_json as json
 from pathlib import Path
 import sys
 import sqlite3

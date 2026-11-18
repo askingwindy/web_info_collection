@@ -360,7 +360,7 @@ async def prepare_visuals(observation, directory, page=None, *, first=False):
             path = root / ('visual-' + oid[:16] + '-overview.png')
             with path.open('xb') as stream:
                 overview.save(stream, format='PNG')
-            import json
+            from webcollect import workspace_json as json
             def exclusive(path, data):
                 with path.open('x', encoding='utf-8') as stream:
                     json.dump(data, stream, ensure_ascii=False, sort_keys=True, indent=2)

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
-import json
+from webcollect import workspace_json as json
 import os
 from pathlib import Path
 import tempfile

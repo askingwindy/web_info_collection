@@ -11,7 +11,7 @@ states and never lets model text act as a tool result.
 """
 import asyncio
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 import time
 from pathlib import Path
 from urllib.parse import urlsplit

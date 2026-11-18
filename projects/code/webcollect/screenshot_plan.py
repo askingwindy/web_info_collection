@@ -18,7 +18,7 @@ import asyncio
 import ast
 import math
 from copy import deepcopy
-import json
+from webcollect import workspace_json as json
 import re
 import time
 from pathlib import Path
