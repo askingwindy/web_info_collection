@@ -101,7 +101,9 @@ def _qc_resolve_child(channel, host, port):
 
 
 def _qc_addresses(host, port, deadline, stopped=lambda: False):
-    context = multiprocessing.get_context('fork' if 'fork' in multiprocessing.get_all_start_methods() else 'spawn')
+    # A fresh interpreter avoids inheriting macOS resolver/CoreFoundation locks
+    # from the browser/heartbeat threads. Forked getaddrinfo crashed in real runs.
+    context = multiprocessing.get_context('spawn')
     receiver, sender = context.Pipe(duplex=False)
     resolver = context.Process(target=_qc_resolve_child,args=(sender,host,port),daemon=True)
     try:
@@ -115,7 +117,15 @@ def _qc_addresses(host, port, deadline, stopped=lambda: False):
                 raise TimeoutError('Wall deadline during DNS')
             if receiver.poll(min(.05, remaining)):
                 break
-        ok, value = receiver.recv()
+        try:
+            ok, value = receiver.recv()
+        except EOFError as cause:
+            from .failure_policy import GlobalFailure
+            resolver.join(.05)
+            error=GlobalFailure('Local DNS resolver exited without a result; exitcode='+str(resolver.exitcode))
+            error.failure_class='program'
+            error.code='DNS_RESOLVER_EXIT'
+            raise error from cause
         if not ok: raise OSError('QC DNS resolution failed: '+value)
         if stopped():raise InterruptedError('Stopped before HTTP dispatch during DNS')
         if time.monotonic() >= deadline:raise TimeoutError('Wall deadline during DNS')

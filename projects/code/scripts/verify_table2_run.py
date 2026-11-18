@@ -14,6 +14,15 @@ from webcollect.navigation import NavigationHTTPError, NavigationTimeoutError
 from webcollect.production_quality import require_public_task_state
 
 
+def delayed_dns_child(channel, host, port):
+    time.sleep(5)
+
+
+def exited_dns_child(channel, host, port):
+    import os
+    os._exit(3)
+
+
 class Table2RunChecks(unittest.TestCase):
     def test_resume_retains_original_cohort_and_worker_ownership(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -74,7 +83,7 @@ class Table2RunChecks(unittest.TestCase):
         import multiprocessing
         before = {p.pid for p in multiprocessing.active_children()}
         started = time.monotonic()
-        with patch('webcollect.model_gateway.socket.getaddrinfo', side_effect=lambda *a, **k: time.sleep(5)):
+        with patch('webcollect.model_gateway._qc_resolve_child', delayed_dns_child):
             with self.assertRaises(TimeoutError):
                 _qc_addresses('unused.invalid', 443, started+.05)
         self.assertLess(time.monotonic()-started, .7)
@@ -83,6 +92,22 @@ class Table2RunChecks(unittest.TestCase):
         self.assertEqual({p.pid for p in multiprocessing.active_children()}, before)
         with self.assertRaises(BudgetStop):
             safe_retry(lambda: time.sleep(.02), safe=True, deadline=time.monotonic()+.005)
+
+    def test_dns_spawn_from_twenty_threads_and_crash_classification(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import multiprocessing
+        from webcollect.failure_policy import GlobalFailure
+        before={p.pid for p in multiprocessing.active_children()}
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            results=list(pool.map(lambda _: _qc_addresses('localhost',443,time.monotonic()+20),range(20)))
+        self.assertTrue(all(results))
+        self.assertEqual({p.pid for p in multiprocessing.active_children()},before)
+        with patch('webcollect.model_gateway._qc_resolve_child', exited_dns_child):
+            with self.assertRaises(GlobalFailure) as caught:
+                _qc_addresses('localhost',443,time.monotonic()+5)
+        detail=disposition(caught.exception,failure_class='model')
+        self.assertEqual(detail['disposition'],'global')
+        self.assertEqual(detail['code'],'DNS_RESOLVER_EXIT')
 
     def test_legacy_serialization_does_not_copy_evidence(self):
         from webcollect.workspace_paths import _root, HistoricalAbsolute, encode
@@ -161,6 +186,27 @@ class Table2RunChecks(unittest.TestCase):
             before=pool.get_claim(old['claim_id'])
             pool.claim_next('new','new-request',candidate_id=ids[1])
             self.assertEqual(pool.get_claim(old['claim_id']),before)
+
+    def test_runtime_recovery_preserves_other_scope(self):
+        import sqlite3
+        from webcollect.runtime import RuntimeStore
+        con=sqlite3.connect(':memory:');con.row_factory=sqlite3.Row
+        self.addCleanup(con.close)
+        con.execute('CREATE TABLE m4_attempts(attempt_id TEXT,scope_id TEXT,status TEXT,lease_expires_at REAL,started_at REAL,finished_at REAL,failure_class TEXT,root_cause TEXT,task_key TEXT,task_json TEXT)')
+        con.execute('CREATE TABLE m4_tasks(task_key TEXT,status TEXT,quota_reserved INTEGER,next_eligible_at REAL)')
+        for scope in ('old','new'):
+            con.execute('INSERT INTO m4_attempts VALUES(?,?,?,0,NULL,NULL,NULL,NULL,?,?)',(scope,scope,'reserved',scope,'{}'))
+            con.execute('INSERT INTO m4_tasks VALUES(?,?,1,0)',(scope,'reserved'))
+        con.commit()
+        before=dict(con.execute("SELECT * FROM m4_attempts WHERE scope_id='old'").fetchone())
+        store=object.__new__(RuntimeStore);store.scope_id='new'
+        store._transaction=lambda:con;store._policy=lambda c:{'campaign_id':'c'}
+        store._attempt=lambda c,i:c.execute('SELECT * FROM m4_attempts WHERE attempt_id=?',(i,)).fetchone()
+        store._domain_finished=lambda *a:None;store._event=lambda *a:None
+        result=store.recover_expired(now=1)
+        self.assertEqual([r['attempt_id'] for r in result],['new'])
+        self.assertEqual(dict(con.execute("SELECT * FROM m4_attempts WHERE scope_id='old'").fetchone()),before)
+        self.assertEqual(con.execute("SELECT status FROM m4_tasks WHERE task_key='old'").fetchone()[0],'reserved')
 
     def test_unknown_with_response_counts_as_http(self):
         result=collection_report.request_summary([{'state':'unknown','request_json':'{}',
