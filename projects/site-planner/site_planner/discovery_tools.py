@@ -283,6 +283,13 @@ class DiscoveryBrowser:
                 self.pool.settle_tool(rid,'failed',result)
                 self.ledger.finish(job,result=result)
                 return result
+            if self.capture_document:
+                if not response or response.request.method!='GET':raise ValueError('No original browser GET response')
+                # Read the original response before readiness waits or screenshots:
+                # a later script navigation can discard Playwright's response body.
+                raw=await asyncio.wait_for(response.body(),timeout=5)
+                if len(raw)>4_000_000:raise ValueError('Original browser response exceeds evidence bound')
+                raw_path=directory/'response-body.bin';raw_path.write_bytes(raw)
             # Same-page bounded observation, no form entry, button dispatch or replay.
             try:
                 await page.locator('body').wait_for(state='visible', timeout=5000)
@@ -328,23 +335,41 @@ class DiscoveryBrowser:
                     observation['read_timing']=timing
             confirmed_dom=None
             if self.frame_policy:
-                from .producer_read_policy import READINESS_SCRIPT
+                from .producer_read_policy import READINESS_SCRIPT,wait_ready
                 save_json(directory/'frame-1-observation.json',observation)
                 first_image=reference(image)
-                before=await page.evaluate(READINESS_SCRIPT)
-                confirmed=await page.evaluate(observation_js)
-                confirmed['image_view']=await page.evaluate(image_script)
-                image=directory/'viewport-confirmed.png'
-                await page.screenshot(path=str(image),timeout=10000)
-                confirmed_dom=await page.content()
-                after=await page.evaluate(READINESS_SCRIPT)
-                confirmed['image_view_after']=await page.evaluate(image_script)
-                confirmed['frame_capture']={'policy':self.frame_policy,'first_image':first_image,
-                    'first_observation':reference(directory/'frame-1-observation.json'),
-                    'main_before':before,'main_after':after,'stable':before['signature']==after['signature'] and before['meaningful']}
-                if not confirmed['frame_capture']['stable']:
-                    save_json(directory/'frame-confirmation-unstable.json',confirmed)
-                    raise ValueError('Main business region changed during confirmed frame capture')
+                unstable_frames=[]
+                for confirmation_attempt in (1,2):
+                    # One local recapture only; never reload or repeat the GET.
+                    recheck_timing=await wait_ready(page) if confirmation_attempt>1 else None
+                    before=await page.evaluate(READINESS_SCRIPT)
+                    confirmed=await page.evaluate(observation_js)
+                    confirmed['image_view']=await page.evaluate(image_script)
+                    suffix='' if confirmation_attempt==1 else '-2'
+                    image=directory/('viewport-confirmed'+suffix+'.png')
+                    await page.screenshot(path=str(image),timeout=10000)
+                    confirmed_dom=await page.content()
+                    after=await page.evaluate(READINESS_SCRIPT)
+                    confirmed['image_view_after']=await page.evaluate(image_script)
+                    meaningful=bool(before['meaningful'] and after['meaningful'])
+                    stable=meaningful and before['signature']==after['signature']
+                    confirmed['frame_capture']={'policy':self.frame_policy,'first_image':first_image,
+                        'first_observation':reference(directory/'frame-1-observation.json'),
+                        'main_before':before,'main_after':after,'stable':stable,
+                        'confirmation_attempt':confirmation_attempt,'prior_unstable_frames':list(unstable_frames)}
+                    if recheck_timing is not None:confirmed['frame_capture']['recheck_timing']=recheck_timing
+                    if stable:break
+                    failure_dom=directory/('rendered-dom-confirmation-'+str(confirmation_attempt)+'.html')
+                    failure_dom.write_text(confirmed_dom,encoding='utf-8')
+                    confirmed['frame_capture'].update(
+                        reason='main_region_changed' if meaningful else 'main_region_empty',
+                        confirmed_image=reference(image),rendered_dom=reference(failure_dom))
+                    failure_path=directory/('frame-confirmation-unstable'+suffix+'.json')
+                    save_json(failure_path,confirmed)
+                    unstable_frames.append(reference(failure_path))
+                else:
+                    raise ValueError('Main business region changed during confirmed frame capture' if meaningful else
+                                     'Main business region has no visible text or controls during confirmed frame capture')
                 if timing is not None:confirmed['read_timing']=timing
                 observation=confirmed
             observation.update({'requested_uri': uri, 'http_status': status if status is not None else 'UNKNOWN',
@@ -353,13 +378,9 @@ class DiscoveryBrowser:
                 'observed_at': time.time(), 'interaction_scope': 'navigation and reading only'})
             document_ref=None
             if self.capture_document:
-                if not response or response.request.method!='GET':raise ValueError('No original browser GET response')
                 from .entry_access import wire_uri
                 if wire_uri(response.url)!=wire_uri(observation['landed_uri']):
                     raise (OutcomeUnknown if self.read_policy else ValueError)('Observed page moved beyond the captured GET response')
-                raw=await asyncio.wait_for(response.body(),timeout=5)
-                if len(raw)>4_000_000:raise ValueError('Original browser response exceeds evidence bound')
-                raw_path=directory/'response-body.bin';raw_path.write_bytes(raw)
                 dom_path=directory/'rendered-dom.html';dom_path.write_text(confirmed_dom if confirmed_dom is not None else await page.content(),encoding='utf-8')
                 if page.url!=observation['landed_uri']:
                     raise (OutcomeUnknown if self.read_policy else ValueError)('Page route changed during shared capture')
