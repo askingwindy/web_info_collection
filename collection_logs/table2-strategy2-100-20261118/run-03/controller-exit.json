@@ -1,0 +1,152 @@
+{
+  "pid": 59421,
+  "finished": 1794963746.8852758,
+  "summary": {
+    "plan_id": "20261118084955-79a8ade5",
+    "interrupted": false,
+    "error": null,
+    "started_at": 1794962996.648761,
+    "finished_at": 1794963631.208991,
+    "elapsed_seconds": 634.6096378340153,
+    "workers": [
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-01",
+        "pid": 59515,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-02",
+        "pid": 59516,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-03",
+        "pid": 59517,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-04",
+        "pid": 59518,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-05",
+        "pid": 59519,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-06",
+        "pid": 59520,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-07",
+        "pid": 59521,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-08",
+        "pid": 59522,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-09",
+        "pid": 59523,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-10",
+        "pid": 59524,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-11",
+        "pid": 59525,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-12",
+        "pid": 59526,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-13",
+        "pid": 59527,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-14",
+        "pid": 59528,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-15",
+        "pid": 59529,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-16",
+        "pid": 59530,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-17",
+        "pid": 59531,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-18",
+        "pid": 59532,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-19",
+        "pid": 59533,
+        "stop_sent": true,
+        "returncode": -2
+      },
+      {
+        "worker_id": "fixed-20261118084955-79a8ade5-20",
+        "pid": 59534,
+        "stop_sent": true,
+        "returncode": -2
+      }
+    ],
+    "unlaunched": 0,
+    "automatic_export": false,
+    "stop_reason": null,
+    "preflight": {
+      "status": "PASS",
+      "errors": [],
+      "effective_limits": {
+        "http_limit": 40,
+        "soft_seconds": 1800,
+        "closeout_grace_seconds": 120
+      },
+      "dispatches": 0,
+      "browser_calls": 0,
+      "account_probes": 0,
+      "ledger_writes": 0
+    },
+    "succeeded": false,
+    "report_integrity": "FAILED"
+  }
+}

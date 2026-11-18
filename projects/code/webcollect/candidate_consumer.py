@@ -695,11 +695,11 @@ async def consume(pool, claim, ledger, **kwargs):
         receipt('lease_cancel_applied', cancelled=lease_cancelled)
 
     def renew_claim():
-        current = claim
         while not stop.wait(2):
             try:
-                current = pool.get_claim(claim['claim_id'])
-                if current['state'] != 'consuming':
+                with pool.pool.connect() as con:
+                    current=con.execute('SELECT state FROM candidate_claims WHERE claim_id=?',(claim['claim_id'],)).fetchone()
+                if not current or current['state'] != 'consuming':
                     return
                 pool.heartbeat(claim)
             except Exception as error:

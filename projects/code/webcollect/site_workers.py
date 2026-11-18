@@ -239,7 +239,7 @@ def consumer_plan(scope_path, selectors, *, workers):
     return plan
 
 
-def fixed_consumer_plan(scope_path, cohort_path, log_root):
+def fixed_consumer_plan(scope_path, cohort_path, log_root, *, resume_from=None):
     """Prepare 20 static worker shards, five pages each, no exports or save target."""
     from .batch_core import load_json, save_json, file_sha
     scope_path, scope=load_scope(scope_path)
@@ -254,6 +254,17 @@ def fixed_consumer_plan(scope_path, cohort_path, log_root):
     plan=new_plan('consumer',scope_path,scope,sites)
     plan.update(log_root=str(root),cohort=str(Path(cohort_path).resolve()), collection_strategy='screenshot_plan',
                 automatic_export=False, stop_after_saves=None, fixed=True)
+    if resume_from:
+        previous=load_json(resume_from)
+        if (Path(previous['scope']).resolve()!=scope_path or Path(previous['cohort']).resolve()!=Path(cohort_path).resolve()
+                or previous.get('collection_strategy')!='screenshot_plan'):
+            raise ValueError('Resume must retain the same scope, cohort and strategy')
+        summary=load_json(Path(previous['log_root'])/'summary.json')
+        if any(w.get('returncode') is None for w in summary['workers']):
+            raise ValueError('Previous workers must exit before resume')
+        plan.update(resume_from=str(Path(resume_from).resolve()),
+            prior_worker_ids=list(dict.fromkeys(previous.get('prior_worker_ids',[])+[w['worker_id'] for w in previous['workers']])),
+            previous_run_roots=list(dict.fromkeys(previous.get('previous_run_roots',[])+[previous['log_root']])))
     for index in range(20):
         shard=[dict(r,order=n+1) for n,r in enumerate(rows[index*5:index*5+5])]
         number=len(plan['workers'])+1;wid=f'fixed-{plan["plan_id"]}-{number:02d}'
@@ -351,6 +362,8 @@ def launch(plan):
                 raise ValueError('No available model account')
         env={**child_environment(),'WEBCOLLECT_STOP_FILE':str(stop),'WEBCOLLECT_PRODUCER_STOP_FILE':str(stop),
              'WEBCOLLECT_ROUND_EVENTS':str(failures.path),'WEBCOLLECT_CENTRAL_KEY_HEALTH':'1'}
+        if plan.get('fixed') and plan.get('role')=='consumer':
+            env['WEBCOLLECT_SERIAL_HISTORY']='1'
         if plan['role']=='producer':
             for index,worker in enumerate(plan['workers'],1):
                 command=worker['command'];at=command.index('--sources')+1
@@ -438,6 +451,7 @@ def main(argv=None):
     fixed.add_argument('--cohort',type=Path,required=True)
     fixed.add_argument('--log-root',type=Path,required=True)
     fixed.add_argument('--launch',action='store_true')
+    fixed.add_argument('--resume-from',type=Path,help='Previous prepared plan; retain all claims and only consume unclaimed rows')
     for role in (producer, consumer):
         role.add_argument('--scope', type=Path, required=True)
         role.add_argument('--site', action='append', required=True,
@@ -468,7 +482,7 @@ def main(argv=None):
             result=freeze_round(args.scope,args.producer_plan,args.output)
             code=0 if result['ready'] else 2
         elif args.role == 'fixed-consumer':
-            plan=fixed_consumer_plan(args.scope,args.cohort,args.log_root)
+            plan=fixed_consumer_plan(args.scope,args.cohort,args.log_root,resume_from=args.resume_from)
             result={'launched':False,**plan}
             code=0
             if args.launch:

@@ -55,6 +55,9 @@ PATH_FIELDS = frozenset(('path','ledger','registry','pool','site_ledger','output
 
 def encode(value, field=None):
     root=_root.get()
+    # Legacy projects have no relative-path binding. JSON already accepts the
+    # string subclasses, so walking/copying their full evidence trees is a no-op.
+    if root is None:return value
     if isinstance(value,HistoricalAbsolute):return str(value)
     is_path = isinstance(value,WorkspacePath) or field in PATH_FIELDS or bool(isinstance(field,str) and (field.endswith('_path') or field.endswith('_root')))
     if isinstance(value,str) and root and is_path and value.startswith(str(root)+os.sep):

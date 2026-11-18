@@ -1,0 +1,26 @@
+{
+  "checked_at": "2026-11-18T02:03:00.820680+00:00",
+  "scope": "Archive fidelity, structured log parsing, result counts and credential/image pattern scan; not a collection acceptance result",
+  "unchanged_log_copies_verified": 270,
+  "projections": 3,
+  "json_files_parsed": 66,
+  "jsonl_files_parsed": 113,
+  "jsonl_records_parsed": 2369,
+  "worker_stdout_logs": 80,
+  "candidate_results": 100,
+  "claim_states": {
+    "reconcile": 57,
+    "failed": 43
+  },
+  "consumer_model_requests": 103,
+  "input_tokens": 2062007,
+  "output_tokens": 76226,
+  "scan": "Pattern checks only; no credential files were read",
+  "errors": [],
+  "pass": true,
+  "git_whitespace_exception": {
+    "path": "run-02/funnel.md",
+    "line": 3,
+    "reason": "Original interrupted-report message ends with a space: preserved byte-for-byte; excluded only this native log from diff whitespace check."
+  }
+}

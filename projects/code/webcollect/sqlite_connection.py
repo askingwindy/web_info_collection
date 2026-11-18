@@ -100,7 +100,10 @@ def begin_immediate(con, *, timeout=90):
         for attempt in range(4):
             remaining=deadline-time.monotonic()
             if remaining<=0:raise TimeoutError('SQLite operation deadline expired')
-            con.execute('PRAGMA busy_timeout='+str(max(1,int(min(1,remaining)*1000))))
+            # Divide the remaining budget among the remaining attempts. A
+            # one-second slice exhausted all four attempts after ~11 seconds,
+            # cancelling healthy leases despite the configured 90-second wait.
+            con.execute('PRAGMA busy_timeout='+str(max(1,int(remaining/(4-attempt)*1000))))
             try:
                 con.execute('BEGIN IMMEDIATE')
                 return

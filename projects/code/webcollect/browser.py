@@ -39,6 +39,7 @@ _SELF_PAINTING_ROLES=('canvas','video','iframe','frame','embed','object')
 class EvidenceStale(ValueError):
     """Synchronized state/pixels changed between evidence and execution."""
     responsibility = 'collector'
+    failure_class = 'collector'
     recoverable_before_dispatch = True
 
 

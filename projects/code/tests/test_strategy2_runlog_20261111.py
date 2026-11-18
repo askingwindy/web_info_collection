@@ -63,7 +63,7 @@ class _GatewayHarness(unittest.TestCase):
         self.root = Path(temp.name)
         self.opener = StubOpener()
         for mock in (patch.dict('os.environ', {'WEBCOLLECT_OFFLINE_TEST_KEY': 'offline-secret-never-export'}),
-                     patch('webcollect.model_gateway.socket.getaddrinfo', return_value=[('CONTROLLED_DNS',)]),
+                     patch('webcollect.model_gateway._qc_addresses', return_value=[('CONTROLLED_DNS',)]),
                      patch('urllib.request.build_opener', return_value=self.opener)):
             mock.start()
             self.addCleanup(mock.stop)
@@ -821,7 +821,7 @@ class ChooserRunlogTests(SessionHarness):
         self.root = Path(temp.name)
         self.opener = StubOpener()
         env = patch.dict('os.environ', {'WEBCOLLECT_OFFLINE_TEST_KEY': 'offline-secret-never-export'})
-        dns = patch('webcollect.model_gateway.socket.getaddrinfo',
+        dns = patch('webcollect.model_gateway._qc_addresses',
                     return_value=[('CONTROLLED_DNS',)])
         http = patch('urllib.request.build_opener', return_value=self.opener)
         for mock in (env, dns, http):

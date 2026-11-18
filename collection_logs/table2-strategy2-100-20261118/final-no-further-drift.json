@@ -1,0 +1,60 @@
+{
+  "at": 1794966597.215571,
+  "history_after_fix": [
+    {
+      "table": "m4_attempts",
+      "rows": 8,
+      "further_differences": []
+    },
+    {
+      "table": "m4_tasks",
+      "rows": 8,
+      "further_differences": []
+    }
+  ],
+  "worker_segments": [
+    {
+      "segment": "run-01",
+      "workers": 0,
+      "exit_codes": {},
+      "still_alive": []
+    },
+    {
+      "segment": "run-02",
+      "workers": 20,
+      "exit_codes": {
+        "-2": 18,
+        "2": 2
+      },
+      "still_alive": []
+    },
+    {
+      "segment": "run-03",
+      "workers": 20,
+      "exit_codes": {
+        "-2": 20
+      },
+      "still_alive": []
+    },
+    {
+      "segment": "run-04",
+      "workers": 20,
+      "exit_codes": {
+        "-2": 17,
+        "-15": 1,
+        "0": 2
+      },
+      "still_alive": []
+    },
+    {
+      "segment": "run-05",
+      "workers": 20,
+      "exit_codes": {
+        "0": 20
+      },
+      "still_alive": []
+    }
+  ],
+  "pass": true,
+  "original_protection_audit": "protected-final.json (FAIL: eight original attempt transitions, preserved)"
+}

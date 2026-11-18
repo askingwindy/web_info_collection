@@ -1,0 +1,103 @@
+{
+  "at": 1794966502.978951,
+  "pass": false,
+  "checks": [
+    {
+      "store": "producer-jobs",
+      "table": "model_requests",
+      "protected": 21,
+      "differences": []
+    },
+    {
+      "store": "consumer-jobs",
+      "table": "model_requests",
+      "protected": 43,
+      "differences": []
+    },
+    {
+      "store": "candidate-pool",
+      "table": "candidate_claims",
+      "protected": 807,
+      "differences": []
+    },
+    {
+      "store": "production-registry",
+      "table": "m4_attempts",
+      "protected": 614,
+      "differences": [
+        {
+          "id": "476271ce-15fe-4746-9488-27102911f38d",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "8da67a19-3d99-423c-b72d-b8e6fc50ead4",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "9347d0b6-28c8-43ee-87fb-7fd574d740f9",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "31affddd-f707-4bbb-abb0-c9f22bc8426f",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "6a080233-fafd-46d2-b8de-e3ff0476dd74",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "6ac0ab62-9550-4429-9ba3-49f75cd7f806",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "1ec53f26-5537-4b8d-b19b-0c014a3693d8",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        },
+        {
+          "id": "42321d40-f99c-4b7d-bb1d-b0c08f36d9ad",
+          "changed_fields": [
+            "status",
+            "finished_at",
+            "failure_class",
+            "root_cause"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+2026-11-18T09:13:33.053+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-09 siteId=null candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=claim claimId=0af91db0-33ad-47ca-9657-c151f947cd58 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915
+2026-11-18T09:13:33.053+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-09 siteId=null candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://www.muxtly.com/zh-TW/federal-income-tax-calculator/
+2026-11-18T09:13:39.525+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T09:13:39.627+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=session_started claimId=0af91db0-33ad-47ca-9657-c151f947cd58 startedMonotonic=561143.055412208
+2026-11-18T09:13:53.017+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=first_frame_completed claimId=0af91db0-33ad-47ca-9657-c151f947cd58 anchor={"image": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-09/0af91db0-33ad-47ca-9657-c151f947cd58/first.png", "sha256": "c133cb1f93e919b041831f002020dd8e175efa9b82214799edc54034d131940a"}, "state": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-09/0af91db0-33ad-47ca-9657-c151f947cd58/first-state.json", "sha256": "a2c7f5a6c9b7eae7386203ecf3cfc4c68cf83ab04cafc9da1aeec09af485956b"}, "capture": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-09/0af91db0-33ad-47ca-9657-c151f947cd58/first-capture.json", "sha256": "aaf764791444032e63d558a937e1e18428065fdc8fb6c44426db85adf845c651"}} jobId=b78a0d044853426da978b543264a03ea10942949ec37d3ad5f232b23d085a34c
+2026-11-18T09:13:54.198+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=processing stage=planning
+2026-11-18T09:13:54.204+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=template_selected template_name=operation source=site_rule reason=Muxtly全站页面按站点规则固定使用operation模板 module=webcollect.screenshot_templates.operation match.inputs=2 match.search_inputs=0 match.buttons=3 match.headings=3 match.links=3 match.prose_blocks=1 match.visible_text_len=138 match.goal_direction=null
+2026-11-18T09:14:26.327+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=null sampleId=null event=processing stage=execution
+2026-11-18T09:21:05.859+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=session_start site=https://www.muxtly.com/zh-TW/federal-income-tax-calculator/
+2026-11-18T09:21:05.861+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=attempt_started attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc
+2026-11-18T09:21:19.292+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=processing stage=observation observationId=edce3e7429a7aeb21da6294872d60f04c2320c526a0732eb8ec98291a68bca22 effectiveSteps=0
+2026-11-18T09:21:22.339+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=cancelled internalDeadline=false effectiveSteps=0 unknown=true
+2026-11-18T09:21:22.347+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=range_close kind=RAW_PENDING reason=会话被取消，保留已执行内容 unknown=true
+2026-11-18T09:21:25.799+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=session_finished claimId=0af91db0-33ad-47ca-9657-c151f947cd58 outcome=cancelled elapsedSeconds=466.1736414170591
+2026-11-18T09:21:30.346+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=claim_task_finished claimId=0af91db0-33ad-47ca-9657-c151f947cd58 taskName=candidate:0af91db0-33ad-47ca-9657-c151f947cd58 reason=lease_monitor_stopped
+2026-11-18T09:21:30.346+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=lease_cancel_requested claimId=0af91db0-33ad-47ca-9657-c151f947cd58 taskName=candidate:0af91db0-33ad-47ca-9657-c151f947cd58 errorType=ValueError reason="Expired or invalid candidate credential; reconcile original"
+2026-11-18T09:21:30.347+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=lease_cancel_ignored claimId=0af91db0-33ad-47ca-9657-c151f947cd58 taskName=candidate:0af91db0-33ad-47ca-9657-c151f947cd58 reason=claim_task_finished
+2026-11-18T09:21:30.347+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=claim_cancelled claimId=0af91db0-33ad-47ca-9657-c151f947cd58 taskName=candidate:0af91db0-33ad-47ca-9657-c151f947cd58 reason=worker_or_external_cancel
+2026-11-18T09:21:30.351+08:00 INFO sessionId=0af91db0-33ad-47ca-9657-c151f947cd58 strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-09 siteId=S000001 candidateId=candidate-65629fca-6ce0-4175-9fe0-098221f52915 claimId=0af91db0-33ad-47ca-9657-c151f947cd58 attemptId=34c095cd-85fe-400c-b9af-d6f5e916d1fc sampleId=S000001_sample_000198 event=cancelled claimId=0af91db0-33ad-47ca-9657-c151f947cd58 reason=worker_cancelled
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1199, in run
+    result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 716, in consume
+    return await owner
+           ^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 705, in claim_work
+    return await _consume(pool, claim, ledger, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 947, in _consume
+    done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1535, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1525, in main
+    result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+        session_objective=session_objective,
+        effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
+        categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 132, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt

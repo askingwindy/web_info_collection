@@ -1,0 +1,106 @@
+2026-11-18T09:13:39.454+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=null candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=claim claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3
+2026-11-18T09:13:39.455+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=null candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://news.sina.com.cn/world/
+2026-11-18T09:13:48.481+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T09:13:48.586+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=session_started claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 startedMonotonic=561152.014792791
+2026-11-18T09:14:22.295+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=session_close_error severity=warn errorType=Error reason="Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at eval (eval at evaluate (:370:30), <anonymous>:1560:134)\n    at Array.map (<anonymous>)\n    at eval (eval at evaluate (:370:30), <anonymous>:1560:106)\n    at UtilityScript.evaluate (<anonymous>:377:18)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+2026-11-18T09:14:22.296+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=session_finished claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 outcome=failed elapsedSeconds=33.71026341698598
+2026-11-18T09:14:25.438+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=claim_task_finished claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 taskName=candidate:e02de86e-c7b2-4b70-afe9-4650445254c6 reason=lease_monitor_stopped
+2026-11-18T09:14:25.445+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=failed claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 errorType=Error reason="Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval "
+2026-11-18T09:14:25.458+08:00 INFO sessionId=e02de86e-c7b2-4b70-afe9-4650445254c6 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000245 candidateId=candidate-0bdd2528-8579-42f5-8ebc-2006e0ba2bc3 claimId=e02de86e-c7b2-4b70-afe9-4650445254c6 attemptId=null sampleId=null event=candidate_finished state=failed saved=false stage=observation failureClass=null failureDisposition={"reason_owner": "site", "retry_count": 0, "disposition": "business", "failure_class": null, "code": "UNSUPPORTED_GEOMETRY", "reason": "Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at eval (eval at evaluate (:370:30), <anonymous>:1560:134)\n    at Array.map (<anonymous>)\n    at eval (eval at evaluate (:370:30), <anonymous>:1560:106)\n    at UtilityScript.evaluate (<anonymous>:377:18)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)", "error_feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636", "transient": false, "shared_dependency_exhausted": false, "claim_id": "e02de86e-c7b2-4b70-afe9-4650445254c6", "at": 1794964465.4449751, "occurrence": null, "stop_dispatch": false} reason="Error: Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at eval (eval at evaluate (:370:30), <anonymous>:1560:134)\n    at Array.map (<anonymous>)\n    at eval (eval at evaluate (:370:30), <anonymous>:1560:106)\n    at UtilityScript.evaluate (<anonymous>:377:18)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+2026-11-18T09:14:26.923+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=null candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=claim claimId=905dfc40-4011-45e5-8e88-b23f4d388735 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050
+2026-11-18T09:14:26.924+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=null candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://news.cctv.com/china/
+2026-11-18T09:14:29.615+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T09:14:29.627+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=session_started claimId=905dfc40-4011-45e5-8e88-b23f4d388735 startedMonotonic=561193.055901333
+2026-11-18T09:14:37.174+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=first_frame_completed claimId=905dfc40-4011-45e5-8e88-b23f4d388735 anchor={"image": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-16/905dfc40-4011-45e5-8e88-b23f4d388735/first.png", "sha256": "3d6f7ae79a592a90e453049f7a41a4f269542aa75c75ddb5a6bd4f210ce3e3e1"}, "state": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-16/905dfc40-4011-45e5-8e88-b23f4d388735/first-state.json", "sha256": "734ef649196a3a7bb9c255743bfad81797681caa8e6a6d9898fbbea3758e15b9"}, "capture": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-16/905dfc40-4011-45e5-8e88-b23f4d388735/first-capture.json", "sha256": "e39b0193a58f66552007522094465145a35af08b93fed1de06f81c9dd436f6e1"}} jobId=7f1fb963bb01cb91de0559e30b8d6118d9ed8f1e4804925eab229f120d876919
+2026-11-18T09:14:38.048+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=processing stage=planning
+2026-11-18T09:14:38.054+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=template_selected template_name=generic source=generic_fallback reason=目标与页面结构无专用模板信号，回退generic module=webcollect.screenshot_templates.generic match.inputs=0 match.search_inputs=0 match.buttons=0 match.headings=1 match.links=56 match.prose_blocks=1 match.visible_text_len=247 match.goal_direction=null
+2026-11-18T09:17:31.146+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=processing stage=execution
+2026-11-18T09:21:31.442+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=session_finished claimId=905dfc40-4011-45e5-8e88-b23f4d388735 outcome=cancelled elapsedSeconds=421.816628917004
+2026-11-18T09:21:35.643+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=claim_task_finished claimId=905dfc40-4011-45e5-8e88-b23f4d388735 taskName=candidate:905dfc40-4011-45e5-8e88-b23f4d388735 reason=lease_monitor_stopped
+2026-11-18T09:21:35.644+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=claim_cancelled claimId=905dfc40-4011-45e5-8e88-b23f4d388735 taskName=candidate:905dfc40-4011-45e5-8e88-b23f4d388735 reason=worker_or_external_cancel
+2026-11-18T09:21:35.652+08:00 INFO sessionId=905dfc40-4011-45e5-8e88-b23f4d388735 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-16 siteId=S000246 candidateId=candidate-d4e895fe-fd3c-4d60-9c1a-7d5add220050 claimId=905dfc40-4011-45e5-8e88-b23f4d388735 attemptId=null sampleId=null event=cancelled claimId=905dfc40-4011-45e5-8e88-b23f4d388735 reason=worker_cancelled
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1199, in run
+    result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 716, in consume
+    return await owner
+           ^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 705, in claim_work
+    return await _consume(pool, claim, ledger, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 951, in _consume
+    return await working
+           ^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 939, in work
+    async with AsyncExitStack() as stack:
+               ~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 768, in __aexit__
+    raise exc
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 751, in __aexit__
+    cb_suppress = await cb(*exc_details)
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 425, in entry_session
+    async with _entry_session(ledger, pool, claim, root, runlog=runlog, **kwargs) as session:
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 540, in _entry_session
+    await context.close()
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/async_api/_generated.py", line 2196, in close
+    await self._impl_obj.close(reason=reason)
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_browser_context.py", line 574, in close
+    await self._channel.send("close", None, {"reason": reason})
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 78, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 634, in wrap_api_call
+    return await cb()
+           ^^^^^^^^^^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 149, in _inner_send
+    done, _ = await asyncio.wait(
+              ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1535, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1525, in main
+    result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+        session_objective=session_objective,
+        effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
+        categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 132, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt

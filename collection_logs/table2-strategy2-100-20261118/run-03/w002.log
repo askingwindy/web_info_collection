@@ -1,0 +1,130 @@
+2026-11-18T08:52:17.666+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=null candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=claim claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270
+2026-11-18T08:52:17.671+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=null candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://jiankang.cctv.com
+2026-11-18T08:52:34.274+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T08:52:34.487+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=session_started claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 startedMonotonic=559878.007966041
+2026-11-18T08:53:31.585+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=session_close_error severity=warn errorType=Error reason="Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at eval (eval at evaluate (:370:30), <anonymous>:1557:30)\n    at UtilityScript.evaluate (<anonymous>:377:18)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+2026-11-18T08:53:31.587+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=session_finished claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 outcome=failed elapsedSeconds=57.101450709044
+2026-11-18T08:54:33.519+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=claim_task_finished claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 taskName=candidate:0d3cce26-7d1e-48fb-a62b-252f203bdde9 reason=lease_monitor_stopped
+2026-11-18T08:54:33.539+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=failed claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 errorType=Error reason="Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval "
+2026-11-18T08:54:33.729+08:00 INFO sessionId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000113 candidateId=candidate-89186119-bece-4542-88c4-a10a412fd270 claimId=0d3cce26-7d1e-48fb-a62b-252f203bdde9 attemptId=null sampleId=null event=candidate_finished state=failed saved=false stage=observation failureClass=null failureDisposition={"reason_owner": "site", "retry_count": 0, "disposition": "business", "failure_class": null, "code": "UNSUPPORTED_GEOMETRY", "reason": "Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at eval (eval at evaluate (:370:30), <anonymous>:1557:30)\n    at UtilityScript.evaluate (<anonymous>:377:18)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)", "error_feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636", "transient": false, "shared_dependency_exhausted": false, "claim_id": "0d3cce26-7d1e-48fb-a62b-252f203bdde9", "at": 1794963273.5388339, "occurrence": null, "stop_dispatch": false} reason="Error: Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at eval (eval at evaluate (:370:30), <anonymous>:1557:30)\n    at UtilityScript.evaluate (<anonymous>:377:18)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+2026-11-18T08:54:56.311+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=null candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=claim claimId=b9ed25c6-b541-4362-9272-6a4603429e9f candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3
+2026-11-18T08:54:56.314+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=null candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://hi8.com/g/banzhuan
+2026-11-18T08:55:27.391+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T08:55:27.513+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=session_started claimId=b9ed25c6-b541-4362-9272-6a4603429e9f startedMonotonic=560051.028869125
+2026-11-18T08:56:30.643+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=session_close_error severity=warn errorType=Error reason="Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:278:16)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)"
+2026-11-18T08:56:30.645+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=session_finished claimId=b9ed25c6-b541-4362-9272-6a4603429e9f outcome=failed elapsedSeconds=63.141595375025645
+2026-11-18T08:57:21.053+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=claim_task_finished claimId=b9ed25c6-b541-4362-9272-6a4603429e9f taskName=candidate:b9ed25c6-b541-4362-9272-6a4603429e9f reason=lease_monitor_stopped
+2026-11-18T08:57:21.081+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=failed claimId=b9ed25c6-b541-4362-9272-6a4603429e9f errorType=Error reason="Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval "
+2026-11-18T08:57:21.268+08:00 INFO sessionId=b9ed25c6-b541-4362-9272-6a4603429e9f strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000067 candidateId=candidate-c8bccab8-e411-4a13-966a-c0003f61f8e3 claimId=b9ed25c6-b541-4362-9272-6a4603429e9f attemptId=null sampleId=null event=candidate_finished state=failed saved=false stage=observation failureClass=null failureDisposition={"reason_owner": "site", "retry_count": 0, "disposition": "business", "failure_class": null, "code": "UNSUPPORTED_GEOMETRY", "reason": "Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:278:16)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)", "error_feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636", "transient": false, "shared_dependency_exhausted": false, "claim_id": "b9ed25c6-b541-4362-9272-6a4603429e9f", "at": 1794963441.0801249, "occurrence": null, "stop_dispatch": false} reason="Error: Page.evaluate: Error: UNSUPPORTED_GEOMETRY: non-axis-aligned rotation/skew/perspective cannot supply target truth\n    at axisScale (eval at evaluate (:370:30), <anonymous>:37:13)\n    at clipFor (eval at evaluate (:370:30), <anonymous>:55:74)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:278:16)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)\n    at visibleText (eval at evaluate (:370:30), <anonymous>:264:39)\n    at Array.map (<anonymous>)"
+2026-11-18T08:57:53.219+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=null candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=claim claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d
+2026-11-18T08:57:53.224+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=null candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl="https://www.168tcw.cn/info/biz_64.html?uid="
+2026-11-18T08:58:14.604+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T08:58:14.649+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=session_started claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea startedMonotonic=560218.175983958
+2026-11-18T08:59:28.968+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=lease_cancel_requested claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea taskName=candidate:1cdf406f-4507-4cfd-a188-74c3cdf27bea errorType=OperationalError reason="database is locked"
+2026-11-18T08:59:28.989+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=lease_cancel_applied claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea taskName=candidate:1cdf406f-4507-4cfd-a188-74c3cdf27bea cancelled=true
+2026-11-18T08:59:37.718+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=session_finished claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea outcome=cancelled elapsedSeconds=83.07121070800349
+2026-11-18T08:59:37.729+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=claim_task_finished claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea taskName=candidate:1cdf406f-4507-4cfd-a188-74c3cdf27bea reason=lease_monitor_stopped
+2026-11-18T08:59:37.731+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=claim_cancelled claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea taskName=candidate:1cdf406f-4507-4cfd-a188-74c3cdf27bea reason=worker_or_external_cancel
+2026-11-18T09:00:04.958+08:00 INFO sessionId=1cdf406f-4507-4cfd-a188-74c3cdf27bea strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-02 siteId=S000081 candidateId=candidate-420eb8bc-5d96-4680-ae3f-7c2873a55b5d claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea attemptId=null sampleId=null event=cancelled claimId=1cdf406f-4507-4cfd-a188-74c3cdf27bea reason=worker_cancelled
+Traceback (most recent call last):
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 947, in _consume
+    done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError: candidate_lease_lost
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1199, in run
+    result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 716, in consume
+    return await owner
+           ^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 705, in claim_work
+    return await _consume(pool, claim, ledger, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 955, in _consume
+    await asyncio.gather(working, return_exceptions=True)
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 941, in work
+    return await work_in(stack)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 831, in work_in
+    session = await stack.enter_async_context(entry_session(ledger, pool, claim, root, runlog=runlog,
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        session_soft_seconds=session_soft_seconds, session_hard_seconds=session_hard_seconds))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 668, in enter_async_context
+    result = await _enter(cm)
+             ^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 425, in entry_session
+    async with _entry_session(ledger, pool, claim, root, runlog=runlog, **kwargs) as session:
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 543, in _entry_session
+    await browser.close()
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/async_api/_generated.py", line 1330, in close
+    await self._impl_obj.close(reason=reason)
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_browser.py", line 244, in close
+    await self._channel.send("close", None, {"reason": reason})
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 78, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 634, in wrap_api_call
+    return await cb()
+           ^^^^^^^^^^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 149, in _inner_send
+    done, _ = await asyncio.wait(
+              ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1535, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1525, in main
+    result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+        session_objective=session_objective,
+        effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
+        categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 132, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt

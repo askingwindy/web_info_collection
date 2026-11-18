@@ -1,0 +1,33 @@
+{
+  "consumer_config": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/consumer-config.json",
+    "sha256": "41e557ac7b231adef04e78c22536dd037f29c144c1a7269f5276a0c94835ef92"
+  },
+  "dispatch_check": "guard_candidate_dispatch(uri, candidate_id=original_candidate_id)",
+  "dispatches": 0,
+  "dry_run": false,
+  "eligible_count": 100,
+  "layers": {
+    "dispatch_guard_pass": 100,
+    "never_claimed": 100,
+    "pending_without_disposition": 100,
+    "published_NEW": 100,
+    "row_sources_GET_verified": 100,
+    "table2": 100
+  },
+  "manifest": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/chain/manifest.json",
+    "sha256": "a71b2de09e20e41d6237ddaee41779cce423d513f2da24e03dc1c23948882b31"
+  },
+  "rejections": {},
+  "requested_count": 100,
+  "schema_version": "candidate-dispatch-selection",
+  "scope": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/scope.json",
+    "sha256": "7931defffc34415aef6861fa3481e5057db1b6c9cc902066e9200c7cf1526cc6"
+  },
+  "selected_count": 100,
+  "selection_complete": true,
+  "selection_seed": "oldest-per-site-20261118",
+  "writes_to_original_stores": false
+}

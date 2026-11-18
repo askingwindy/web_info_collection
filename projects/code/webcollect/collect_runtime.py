@@ -1069,12 +1069,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
             store.enqueue_plan(plan, publication)
     del startup_frames
     with preparation_phase(timing, "runtime_recovery_snapshot"):
-        # Reap this scope's expired leases plus any other dead-scope attempt of
-        # the same campaign: an expired lease can never be resumed by its owner
-        # (lease fencing), and without a campaign-wide reap a crashed close-out in
-        # an abandoned scope would block its whole site as an unresolved attempt
-        # with no remaining reaper (real-run v13/v14 fact).
-        store.recover_expired(campaign_wide=True)
+        # A fresh collection scope never owns recovery of historical attempts.
+        store.recover_expired()
         attempts = store.attempt_ledger()['attempts']
         verify_committed_samples(output, attempts)
         quarantine_interrupted(output, attempts)

@@ -1,8 +1,38 @@
 """Bounded connections and transaction-only registry reads."""
 import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
 
 BUSY_SECONDS = 90
+
+
+@contextmanager
+def history_read_slot(registry):
+    """Bound resident history decoding on this machine; no SQLite lock held.
+
+    Twenty snapshots of the original evidence exceed local RAM. Browser/model
+    sessions stay concurrent; only this CPU/memory-heavy read is serialized.
+    """
+    import fcntl, os, time
+    if os.environ.get('WEBCOLLECT_SERIAL_HISTORY')!='1':
+        yield
+        return
+    from .sqlite_connection import operation_deadline
+    deadline=operation_deadline.get() or time.monotonic()+1800
+    path=Path(registry).resolve()
+    with path.with_name(path.name+'.history.lock').open('a') as stream:
+        while True:
+            if any(os.environ.get(key) and Path(os.environ[key]).exists()
+                   for key in ('WEBCOLLECT_STOP_FILE','WEBCOLLECT_PRODUCER_STOP_FILE')):
+                raise InterruptedError('History snapshot stopped before reading')
+            if time.monotonic()>=deadline:
+                raise TimeoutError('History snapshot deadline expired before reading')
+            try:
+                fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except BlockingIOError:time.sleep(.1)
+        try:yield
+        finally:fcntl.flock(stream,fcntl.LOCK_UN)
 
 
 def connect(registry, *, readonly=True):
