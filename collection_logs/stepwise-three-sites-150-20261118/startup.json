@@ -1,0 +1,148 @@
+{
+  "controller": {
+    "commit": "bc87dba28aa1c1db9b91e5fd4617284186307257",
+    "pid": 90181,
+    "plan_id": "20261118221912-23fe3b7e",
+    "started": "2026-11-18T22:19:12.504335+08:00",
+    "workers": 20
+  },
+  "live_worker_evidence": {
+    "at": "2026-11-18T22:21:24.244561+08:00",
+    "live": 20,
+    "peak": 20,
+    "workers": {
+      "fixed-20261118221912-23fe3b7e-01": 90394,
+      "fixed-20261118221912-23fe3b7e-02": 90395,
+      "fixed-20261118221912-23fe3b7e-03": 90396,
+      "fixed-20261118221912-23fe3b7e-04": 90397,
+      "fixed-20261118221912-23fe3b7e-05": 90398,
+      "fixed-20261118221912-23fe3b7e-06": 90399,
+      "fixed-20261118221912-23fe3b7e-07": 90400,
+      "fixed-20261118221912-23fe3b7e-08": 90401,
+      "fixed-20261118221912-23fe3b7e-09": 90402,
+      "fixed-20261118221912-23fe3b7e-10": 90403,
+      "fixed-20261118221912-23fe3b7e-11": 90404,
+      "fixed-20261118221912-23fe3b7e-12": 90405,
+      "fixed-20261118221912-23fe3b7e-13": 90406,
+      "fixed-20261118221912-23fe3b7e-14": 90407,
+      "fixed-20261118221912-23fe3b7e-15": 90408,
+      "fixed-20261118221912-23fe3b7e-16": 90409,
+      "fixed-20261118221912-23fe3b7e-17": 90410,
+      "fixed-20261118221912-23fe3b7e-18": 90411,
+      "fixed-20261118221912-23fe3b7e-19": 90412,
+      "fixed-20261118221912-23fe3b7e-20": 90413
+    }
+  },
+  "preflight_advanced_to_native_workers": true,
+  "startup_probe_count": 0,
+  "historical_scope_at_start": {
+    "claims": 907,
+    "formal_attempts": 643,
+    "consumer_unsettled": 43,
+    "producer_unsettled": 21
+  },
+  "source_compatibility_link": {
+    "at": 1795011340.5416262,
+    "documented_alias": "producer-muxtly-wiki-200-20261111-r01",
+    "target": "prod",
+    "created": true,
+    "verified_before_link": [
+      {
+        "site": "zh.wikipedia.org",
+        "name": "site-home-4b3df798ab173d5d59e1ea86acf452690249ac8f9facbb8591f8728defbcb189.json",
+        "digest_matches": true
+      },
+      {
+        "site": "zh.wikipedia.org",
+        "name": "site-classification-9a41636d480e0674f30dab1726acda0a8d5b653bed41c941285de899c534098d.json",
+        "digest_matches": true
+      },
+      {
+        "site": "muxtly.com",
+        "name": "muxtly-seed-01.json",
+        "digest_matches": true
+      },
+      {
+        "site": "muxtly.com",
+        "name": "site-classification-f74d07767632e4b92f44b18e54996c2bcf2afbfd152d15aa0762717fd2bf7f86.json",
+        "digest_matches": true
+      }
+    ],
+    "changed_database_rows": 0
+  },
+  "targeted_checks_final": "6 passed in 0.47s",
+  "early_progress": {
+    "at": "2026-11-18T22:23:56+08:00",
+    "segment": "run-01",
+    "plan_id": "20261118221912-23fe3b7e",
+    "strategy": "stepwise",
+    "worker_target": 20,
+    "worker_peak_observed": 20,
+    "state": "RUNNING",
+    "unique_claims": 22,
+    "unclaimed": 128,
+    "formal_attempts": 20,
+    "saved_pending_review": 0,
+    "by_site": {
+      "zh.wikipedia.org": {
+        "selected": 50,
+        "claimed": 7,
+        "claim_states": {
+          "consuming": 5,
+          "failed": 2
+        },
+        "attempt_states": {
+          "running": 5
+        },
+        "saved_pending_review": 0
+      },
+      "muxtly.com": {
+        "selected": 50,
+        "claimed": 8,
+        "claim_states": {
+          "consuming": 8
+        },
+        "attempt_states": {
+          "running": 8
+        },
+        "saved_pending_review": 0
+      },
+      "dpm.org.cn": {
+        "selected": 50,
+        "claimed": 7,
+        "claim_states": {
+          "consuming": 7
+        },
+        "attempt_states": {
+          "running": 7
+        },
+        "saved_pending_review": 0
+      }
+    },
+    "consumer_model": {
+      "requests": 13,
+      "states": {
+        "invalid_response": 1,
+        "reserved": 11,
+        "succeeded": 1
+      },
+      "dispatch": {
+        "dispatched": 2,
+        "unproven": 11
+      },
+      "input_tokens": null,
+      "output_tokens": null,
+      "known_input_tokens": 5416,
+      "known_output_tokens": 302,
+      "unknown_usage_requests": 11,
+      "cost": "UNKNOWN"
+    },
+    "new_consumer_requests_not_yet_attributed": 0,
+    "issues_recorded": 3,
+    "stop_requested": false,
+    "qc": "NOT_RUN",
+    "human_review": "NOT_RUN",
+    "dataset_published": false,
+    "customer_acceptance": "UNKNOWN"
+  }
+}

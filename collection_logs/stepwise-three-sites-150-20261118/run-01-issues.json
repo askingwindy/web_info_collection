@@ -1,0 +1,35 @@
+[
+  {
+    "segment": "run-01",
+    "at": 1795011755.9764931,
+    "site": "zh.wikipedia.org",
+    "claim_id": "45e74da0-57a8-47fc-b056-90d14c77e4a6",
+    "disposition": "business",
+    "owner": "site",
+    "feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636",
+    "reason_code": "ERR_CONNECTION_CLOSED",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795011757.728357,
+    "site": "zh.wikipedia.org",
+    "claim_id": "8561565c-d65a-4623-bdab-84e51ee4d231",
+    "disposition": "business",
+    "owner": "site",
+    "feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636",
+    "reason_code": "ERR_CONNECTION_CLOSED",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795011827.718622,
+    "site": "dpm.org.cn",
+    "claim_id": "dfb48b04-a29e-4f6b-9205-fa7d418907ed",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "see_local_original",
+    "stop_dispatch": false
+  }
+]
