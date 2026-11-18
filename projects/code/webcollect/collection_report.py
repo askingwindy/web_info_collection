@@ -36,8 +36,6 @@ def jsonl(root, name):
     for path in sorted(Path(root).rglob(name)):
         for n,line in enumerate(path.read_text().splitlines(),1):
             if line.strip():
-                from .workspace_paths import bind
-                bind(path)
                 try:result.append({**json.loads(line),'_evidence':{'path':str(path),'line':n}})
                 except ValueError:result.append({'event':'unreadable_event','_evidence':{'path':str(path),'line':n}})
     return result
@@ -396,8 +394,6 @@ def main(argv=None):
     for name in ('scope','cohort','run-root','output'):p.add_argument('--'+name,required=True,type=Path)
     p.add_argument('--running',action='store_true');a=p.parse_args(argv)
     report=build(a.scope,a.cohort,a.run_root,running=a.running);a.output.mkdir(parents=True,exist_ok=True)
-    from .workspace_paths import prepare_output
-    prepare_output(a.output,a.scope)
     save_json(a.output/'funnel.json',report);(a.output/'funnel.md').write_text(markdown(report))
     return 0 if report['integrity']=='PASS' else 2
 

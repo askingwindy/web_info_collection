@@ -1,0 +1,887 @@
+{
+  "fixture_only": true,
+  "external_model_requests": 0,
+  "external_web_requests": 0,
+  "real_local_browser": true,
+  "mocked_boundaries": [
+    "external_model_transport",
+    "network_case_back_navigation_to_local_socket_failure",
+    "execution_source_identity_changed_audit_value",
+    "full_history_snapshot_must_not_run"
+  ],
+  "checks": [
+    {
+      "chain": "operation",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "operation",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "operation",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "operation",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "session_close_error",
+        "session_finished",
+        "post_save_closeout_error",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "operation",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "operation",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "operation",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 6,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "operation",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "operation",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "operation",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 5,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "operation",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "operation",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 8
+    },
+    {
+      "chain": "reading",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "reading",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "reading",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "reading",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "session_close_error",
+        "session_finished",
+        "post_save_closeout_error",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "reading",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "reading",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "reading",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 6,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "reading",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "reading",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "reading",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 5,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "reading",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "reading",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 8
+    },
+    {
+      "chain": "shortflow",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "shortflow",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "shortflow",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "shortflow",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "shortflow",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "failed",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_not_saved",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_claim_failed",
+      "pass": true,
+      "detail": "failed"
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_raw_retained",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_terminal_reason",
+      "pass": true,
+      "detail": "short_flow"
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_class",
+      "pass": true,
+      "detail": "collector"
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_not_unknown",
+      "pass": true,
+      "detail": false
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_effective_below_five",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "shortflow",
+      "name": "failure_skips_finalization",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "shortflow",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "shortflow",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 3
+    },
+    {
+      "chain": "protocol",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "protocol",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "protocol",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "protocol",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "protocol",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "failed",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_not_saved",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_claim_failed",
+      "pass": true,
+      "detail": "failed"
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_raw_retained",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_terminal_reason",
+      "pass": true,
+      "detail": "protocol_error"
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_class",
+      "pass": true,
+      "detail": "model"
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_not_unknown",
+      "pass": true,
+      "detail": false
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_effective_below_five",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "protocol",
+      "name": "failure_skips_finalization",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "protocol",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "protocol",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 2
+    },
+    {
+      "chain": "network",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "network",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "network",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "network",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "network",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "failed",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "network",
+      "name": "failure_not_saved",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "network",
+      "name": "failure_claim_failed",
+      "pass": true,
+      "detail": "failed"
+    },
+    {
+      "chain": "network",
+      "name": "failure_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "network",
+      "name": "failure_raw_retained",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "network",
+      "name": "failure_terminal_reason",
+      "pass": true,
+      "detail": "error"
+    },
+    {
+      "chain": "network",
+      "name": "failure_class",
+      "pass": true,
+      "detail": "network"
+    },
+    {
+      "chain": "network",
+      "name": "failure_not_unknown",
+      "pass": true,
+      "detail": false
+    },
+    {
+      "chain": "network",
+      "name": "failure_effective_below_five",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "network",
+      "name": "failure_skips_finalization",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "network",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "network",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "select",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "select",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "select",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "select",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "failed",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "select",
+      "name": "normal_runtime_saved_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "candidate_writeback_succeeded",
+      "pass": false,
+      "detail": "failed"
+    },
+    {
+      "chain": "select",
+      "name": "chain_no_exception",
+      "pass": false,
+      "detail": "TypeError(\"'NoneType' object is not subscriptable\")"
+    },
+    {
+      "chain": "rotated",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "rotated",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "rotated",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "rotated",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "session_close_error",
+        "session_finished",
+        "post_save_closeout_error",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "rotated",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "rotated",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "rotated",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 6,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "rotated",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "rotated",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "rotated",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 5,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "rotated",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "rotated",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "rotated_subtree_recorded",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 8
+    },
+    {
+      "chain": "rotated",
+      "name": "source_unchanged_during_run",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "driver_unchanged_during_run",
+      "pass": true,
+      "detail": "bf0366a3c8812824bef8618ea61376c74ae5769bab9dfa415613c6f29ba75c3f"
+    }
+  ],
+  "timings": {
+    "operation": {
+      "seconds": 6.576103084022179,
+      "model_requests": 8,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-operation-1794982961191425000/scope.json",
+      "saved": true,
+      "claim_id": "3931a4eb-88fc-40ed-9d70-899bf1a775a3"
+    },
+    "reading": {
+      "seconds": 8.381362749962136,
+      "model_requests": 8,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-reading-1794982967823953000/scope.json",
+      "saved": true,
+      "claim_id": "d420b694-fcdb-4b55-a703-1e5cb3c6e1bb"
+    },
+    "shortflow": {
+      "seconds": 3.26769620901905,
+      "model_requests": 3,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-shortflow-1794982976240855000/scope.json",
+      "saved": false,
+      "claim_id": "5b8d6388-c744-4617-b37a-8d53b4d7ac44"
+    },
+    "protocol": {
+      "seconds": 1.9817089999560267,
+      "model_requests": 2,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-protocol-1794982979541320000/scope.json",
+      "saved": false,
+      "claim_id": "a92380bc-a396-4371-bfd2-7848419e6696"
+    },
+    "network": {
+      "seconds": 2.038157416973263,
+      "model_requests": 1,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-network-1794982981558327000/scope.json",
+      "saved": false,
+      "claim_id": "ac8fda56-d044-460b-b349-77df568e107c"
+    },
+    "rotated": {
+      "seconds": 6.395618041977286,
+      "model_requests": 8,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-rotated-1794982990485132000/scope.json",
+      "saved": true,
+      "claim_id": "c9221399-09d4-4764-84a8-1b8045e1be45"
+    }
+  },
+  "model_transport_calls": 40,
+  "customer_exports_beyond_fixture": 0,
+  "production_samples_added": 0,
+  "passed": false
+}

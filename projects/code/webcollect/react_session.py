@@ -560,7 +560,9 @@ class ReactSession(RawSessionCore):
 
 
     async def run(self):
-        """Entry navigation → first observe → ReAct rounds → raw close."""
+        """Frozen historical strategy; no live entry or model dispatch."""
+        from .collection_strategy import Strategy1Forbidden
+        raise Strategy1Forbidden()
         stop = None
         try:
             if self.native or self.glm_session_id:
@@ -672,7 +674,9 @@ def dedupe_history_images(history, *, extra_images=1, max_images):
 
 
 def react_chooser(ledger, task, attempt_id, *, parent_job=None):
-    """Each decision keeps an original ledger identity; UNKNOWN is never resent."""
+    """Frozen historical chooser; original request identities remain read-only."""
+    from .collection_strategy import Strategy1Forbidden
+    raise Strategy1Forbidden()
     if not isinstance(attempt_id, str) or not attempt_id.strip():
         raise ValueError('Original ReAct attempt identity required')
 

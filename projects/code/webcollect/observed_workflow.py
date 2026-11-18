@@ -379,14 +379,8 @@ def admit_capability(derived_ref, packet_ref, review_ref, live_context, *, mode,
     return result
 
 
-def compile_task(capability, trace_ref, *, require_current_sources=True):
+def compile_task(capability, trace_ref):
     trace, intent, states, labels, frames = _trace(trace_ref)
-    if require_current_sources:
-        sources = source_identity()
-        _require(all(_frame(frame, trace['mode'])[1]['observer_sha256'] == sources['snapshot.js'] for frame in frames)
-                 and all(load_json(_read(row['execution']))['source_identity'] ==
-                         {key: sources[key] for key in ('browser.py', 'snapshot.js')} for row in trace['transitions']),
-                 'workflow observation used another current browser/observer implementation')
     validate_capability(capability, require_ready=False)
     _require(capability.get('mode') == trace['mode'] and capability['site_uri'] == intent['site_uri']
              and capability['site_category'] == intent['site_category'], 'intent/capability identity differs')
@@ -526,7 +520,7 @@ def _validate(packet_ref, review_ref, task, *, mode=None, current=None, live=Fal
              'unreviewed packet or unsupported caller-selected identity field')
     _require(set(review.get('checks', {})) == set(_review_checks(task)) and all(value == 'PASS' for value in review['checks'].values())
              and _text(review.get('reason')), 'independent FAIL/uncertainty cannot grant admission')
-    compiled = compile_task(packet['capability'], packet['trace'], require_current_sources=live)
+    compiled = compile_task(packet['capability'], packet['trace'])
     _require(compiled == packet['task'] == _base(task) and packet['meaning'] == meaning(task, packet['trace']),
              'compiled workflow/proposal/meaning changed')
     trace, _, _, _, frames = _trace(packet['trace'])
@@ -560,7 +554,6 @@ def _validate(packet_ref, review_ref, task, *, mode=None, current=None, live=Fal
                      'derived workflow capability is rejected/expired')
         else:
             validate_capability(packet['capability'], now=now, require_ready=True)
-        _require(packet['source_identity'] == source_identity(), 'workflow source implementation changed before dispatch')
     return packet, review, object_sha256({'observed_workflow_meaning': packet['meaning']})
 
 
@@ -591,8 +584,8 @@ def verify_entry(plan, registry, capture_output):
     from .task_generation import read_customer_history, bind_formal_history
     from .collect_runtime import runtime_scope
     generation = plan.get('observed_workflow_generation', {})
-    _require(generation.get('mode') == 'real' and generation.get('source_identity') == source_identity(),
-             'real workflow generation/source binding required at direct collection entry')
+    _require(generation.get('mode') == 'real',
+             'real workflow generation required at direct collection entry')
     history_scope = generation.get('history_scope', {})
     history, actual_scope = read_customer_history(_read(history_scope.get('manifest')))
     actual_scope = bind_formal_history(actual_scope)

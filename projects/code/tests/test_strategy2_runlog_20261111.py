@@ -1,4 +1,4 @@
-"""Strategy-2 display logging: runlog records, gateway model-calls, session loop.
+"""Shared logging and gateway accounting, with frozen historical fixture helpers.
 
 Isolated temp directories and the synthetic ReactHarness surface only. The
 simulated model transport goes through the real screenshot_chooser /
@@ -22,7 +22,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from webcollect.batch_core import BatchLedger, OutcomeUnknown, load_json, object_sha256
-from webcollect.model_gateway import ModelGateway
+from webcollect.model_gateway import ModelGateway, ProviderRejected, ProviderFinishIncomplete
 from webcollect.runlog import (SessionLog, for_claim, for_direct_run,
                                image_references, sanitize_debug)
 from webcollect.plan_protocol import ENDING_POLICY as COMPLETE_VERSION
@@ -542,6 +542,94 @@ class GatewayRunlogTests(unittest.TestCase):
             retained_request = dict(con.execute('SELECT * FROM model_requests WHERE id=?', (original['id'],)).fetchone())
         self.assertEqual(retained_request, original)
 
+        # The original request timeout is clipped to the remaining hard limit.
+        fresh_ledger, fresh_job, fresh_gateway, _ = self._gateway()
+        seen_timeouts = []
+        def timed_out(request, timeout):
+            seen_timeouts.append(timeout)
+            raise TimeoutError('controlled clipped wait')
+        with patch.object(self.f.opener, 'open', side_effect=timed_out):
+            with self.assertRaises(OutcomeUnknown):
+                self.fixture.call(fresh_gateway, fresh_job, attempt_id='claim-1',
+                    dispatch_deadline=time.monotonic() + 1,
+                    request_deadline=time.monotonic() + 2)
+        self.assertEqual(len(seen_timeouts), 1)
+        self.assertGreater(seen_timeouts[0], 0)
+        self.assertLessEqual(seen_timeouts[0], 2)
+        with fresh_ledger.connect() as con:
+            clipped = dict(con.execute('SELECT * FROM model_requests').fetchone())
+        self.assertEqual(clipped['state'], 'unknown')
+        self.assertEqual(json.loads(clipped['response'])['request_timeout_seconds'], seen_timeouts[0])
+
+    def test_provider_rejections_settle_without_unknown_and_preserve_holds(self):
+        from urllib.error import HTTPError
+        from webcollect.provider_recovery import holds
+        from site_planner.producer_business_content import _purpose_holds
+        from site_planner.discovery_agent import model_decision, model_tool_decision
+        from site_planner.candidate_pool import entry_identity
+        for status in (400, 401, 403, 408, 429, 499, 500, 503):
+            ledger, job, gateway, _ = self._gateway()
+            ledger.finish(job)
+            job = ledger.claim('stepwise-decision', job_id=ledger.enqueue(
+                'stepwise-decision', {'attempt_id': 'claim-1', 'offline': True}))
+            detail = {'code': 'rate_limit_exceeded' if status == 429 else '1301',
+                      'message': 'controlled provider rejection'}
+            self.f.opener.error = HTTPError('https://provider.invalid/chat/completions', status,
+                'controlled', {'Retry-After': '17'}, io.BytesIO(json.dumps({'error': detail}).encode()))
+            before = len(self.f.opener.calls)
+            expected = ProviderRejected if status < 500 else OutcomeUnknown
+            with self.assertRaises(expected):
+                self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2)
+            with ledger.connect() as con:
+                original = dict(con.execute('SELECT * FROM model_requests').fetchone())
+                unresolved = ledger.session_http_usage(con, 'claim-1')['unresolved']
+                auth = holds(con)
+            self.assertEqual(original['state'], 'failed' if status < 500 else 'unknown')
+            self.assertEqual(original['cost'], 0 if status < 500 else None)
+            self.assertIsNone(original['usage'])
+            self.assertEqual(bool(unresolved), status >= 500)
+            self.assertEqual(bool(auth), status in (401, 403))
+            if status == 429:
+                self.assertIn(gateway._account_id(), ledger.unavailable_model_accounts())
+                self.assertEqual(json.loads(original['response'])['provider_error']['retry_after_seconds'], 17)
+                with ledger.connect() as con:
+                    self.assertEqual(con.execute('SELECT status FROM consumer_key_health').fetchone()[0], 'rate_limited')
+            # Same job/purpose cannot turn a settled rejection into a new call.
+            with self.assertRaises(expected):
+                self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2)
+            self.assertEqual(len(self.f.opener.calls) - before, 1)
+            with ledger.connect() as con:
+                self.assertEqual(dict(con.execute('SELECT * FROM model_requests').fetchone()), original)
+
+        # Both producer adapters close their job as failed, retain the reply,
+        # and recognize the same failure on later read-back without dispatch.
+        for native in (False, True):
+            ledger, unused, gateway, _ = self._gateway()
+            ledger.finish(unused)
+            self.f.opener.error = HTTPError('https://provider.invalid/chat/completions', 400,
+                'controlled', {}, io.BytesIO(b'{"error":{"code":"1301"}}'))
+            payload = {'scope': 'offline-purpose', 'source_uris': ['https://example.org/page']}
+            before = len(self.f.opener.calls)
+            def dispatch():
+                if native:
+                    return model_tool_decision(ledger, gateway, 'ai-target-page-purpose-1',
+                        payload, self.f.tools, system='offline policy')
+                return model_decision(ledger, gateway, 'ai-target-page-purpose-1',
+                    payload, _TOOLS_SCHEMA)
+            with patch.object(ledger, 'bind_model_session', return_value='CONTROLLED_UNUSED'):
+                with self.assertRaises(ProviderRejected):
+                    dispatch()
+                with self.assertRaises(ProviderRejected):
+                    dispatch()
+            self.assertEqual(len(self.f.opener.calls) - before, 1)
+            with ledger.connect() as con:
+                original = dict(con.execute('SELECT * FROM model_requests').fetchone())
+            self.assertEqual(original['state'], 'failed')
+            self.assertEqual(ledger.get(original['job_id'])['state'], 'failed')
+            page_holds = _purpose_holds(ledger)
+            self.assertEqual(page_holds[entry_identity(payload['source_uris'][0])][0]['state'], 'failed')
+        self.f.opener.error = None
+
     def test_missing_usage_is_null_and_invalid_response_keeps_actual_usage(self):
         # 同一事实只算一次：失败请求的用量如实记录——缺 usage 记 null（不是
         # 0），invalid_response 保留 provider 实际返回的 usage。
@@ -730,7 +818,7 @@ class GatewayRunlogTests(unittest.TestCase):
         # Already compact input cannot authorize a second paid length request.
         _, compact_job, compact_gateway, _ = self._gateway()
         before = len(self.f.opener.calls)
-        with self.assertRaisesRegex(ValueError, 'no lossless compact'):
+        with self.assertRaisesRegex(ProviderFinishIncomplete, 'output_exhausted'):
             self.f.call(compact_gateway, compact_job, attempts=5, attempt_id='claim-1')
         self.assertEqual(len(self.f.opener.calls) - before, 1)
         # Different failure kinds still share the same two-request decision budget;
@@ -809,503 +897,6 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertNotIn('opaque-offline-protocol-field', blob)
         self.assertNotIn('data:image/png;base64,', blob)
         self.assertTrue(any(entry['path'].endswith('.png') for entry in wire['images']))
-
-
-class ChooserRunlogTests(SessionHarness):
-    """Simulated provider transport through the real screenshot_chooser chain."""
-
-    def setUp(self):
-        super().setUp()
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
-        self.opener = StubOpener()
-        env = patch.dict('os.environ', {'WEBCOLLECT_OFFLINE_TEST_KEY': 'offline-secret-never-export'})
-        dns = patch('webcollect.model_gateway._qc_addresses',
-                    return_value=[('CONTROLLED_DNS',)])
-        http = patch('urllib.request.build_opener', return_value=self.opener)
-        for mock in (env, dns, http):
-            mock.start()
-            self.addCleanup(mock.stop)
-        self.image = self.root / 'first.png'
-        Image.new('RGB', (8, 8), 'white').save(self.image)
-        self.task = build_url_task(url='https://example.org/', task_version='runlog-fixture',
-                                    ending_policy=COMPLETE_VERSION)
-        freeze_strategy(self.task, STRATEGY_SCREENSHOT_PLAN)
-        self.task['task_id'] = 'react-' + object_sha256(
-            {'url': self.task['initial_url'], 'spec': self.task['workflow_proposal']['spec']})[:24]
-        validate_task(self.task)
-
-    async def test_chooser_parses_native_submit_plan_and_logs_model_calls(self):
-        from webcollect.screenshot_plan import screenshot_chooser
-        config = load_json(CONFIG)
-        config['mode'] = 'real'
-        config['budget'].update(currency='OFFLINE_TEST_UNITS', max_model_cost_micros=1_000_000,
-                                min_model_interval_seconds=0)
-        config['model']['rates'].update(input=1, output=1, version='OFFLINE_TEST',
-                                        source='OFFLINE_TEST')
-        config['model'].update(provider='glm', model='glm-5.3-flash',
-                               endpoint='https://provider.invalid/chat/completions',
-                               api_key_env='WEBCOLLECT_OFFLINE_TEST_KEY', reserve_cost_micros=100_000,
-                               supports_vision=True, image_tokens_per_image=1200,
-                               request_overhead_tokens=128,reasoning_effort='low')
-        self.task['fragment']['reasoning_effort_profile']={'first_plan':'high','branch':'max'}
-        self.task['workflow_proposal']['spec']['reasoning_effort_profile']={'first_plan':'high','branch':'max'}
-        self.task['task_id']='react-'+object_sha256({'url':self.task['initial_url'],
-            'spec':self.task['workflow_proposal']['spec']})[:24]
-        ledger = BatchLedger(self.root / 'chooser.sqlite3', config, initialize=True)
-        runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
-                            level='DEBUG', claim_id='claim-1')
-        plan = {'goal': '修改数量为20、成本为60并核对输入值',
-                'final_presentation_step': 6,
-                'requirements': [
-                    {'id': f'i{i}', 'kind': 'input', 'description': f'{label}设为{value}',
-                     'target': {'text': label}, 'expected_value': value, 'evidence_scope': 'current',
-                     'acceptance': {'mode': 'presence', 'subject': label, 'source_quote': f'为{value}'}}
-                    for i, label, value, pos in [(0, '数量', '20', 3), (1, '成本', '60', 6)]]
-                + [{'id': 'r0', 'kind': 'result', 'description': '核对修改后的两个输入值',
-                    'acceptance': {'mode': 'presence', 'subject': '输入值', 'source_quote': '输入值'}}],
-                'steps': []}
-        for label, value in [('数量', '20'), ('成本', '60')]:
-            for action, extra, purpose in [
-                    ('click', {}, '聚焦输入框'),
-                    ('hotkey', {'keys': ['ctrl', 'a']}, '全选原值'),
-                    ('type', {'value': value, 'expected_value': value}, '替换原值')]:
-                plan['steps'].append({'action': action, 'target': {'text': label},
-                    **extra, 'purpose': purpose, 'rationale': f'{label}需要替换为本次值',
-                    'expected_result': f'{label}输入框完成{purpose}'})
-        self.opener.raw['choices'] = [{'finish_reason': 'tool_calls', 'message': {
-            'content': '', 'reasoning_content': 'opaque-offline-protocol-field',
-            'tool_calls': [{'id': 'c1', 'type': 'function', 'function': {
-                'name': 'submit_plan', 'arguments': json.dumps(plan, ensure_ascii=False)}}]}}]
-        # Exercise the actual first request, gateway schema, normalization and
-        # admission, rather than validating only the standalone tool response.
-        root = self.root / 'entry-session'
-        with patch('webcollect.batch_core.BatchLedger.bind_model_session',
-                   return_value='CONTROLLED_UNUSED'):
-            choose = screenshot_chooser(ledger, self.task, 'claim-1', runlog=runlog)
-            session = ScreenshotPlanSession(self.task, root / 'raw', choose, self.page,
-                steps_directory=root, attempt_id='claim-1')
-            await session._open_entry()
-            prompt = session._first_prompt()
-            self.assertEqual(prompt['goal_selection']['mode'], 'autonomous')
-            self.assertIsNone(prompt['goal'])
-            self.assertIn('goal', prompt['tools'][0]['function']['parameters']['allOf'][0]['else']['required'])
-            await session._first_plan_round()
-        self.assertEqual(json.loads(self.opener.calls[0].data)['reasoning_effort'],'high')
-        self.assertIsNone(session.initial_feedback)
-        self.assertEqual(session.frozen_goal, plan['goal'])
-        self.assertEqual(len(session.plan['steps']), 6)
-        self.assertEqual(session._branch_prompt('checkpoint')['goal'], plan['goal'])
-        self.assertNotIn('goal', session._branch_prompt('checkpoint')['tools'][0]['function']['parameters']['properties'])
-        self.assertEqual(session.actual_dispatches, 0)
-        calls = _rows(self.root / 'logs' / 'w1' / 'model-calls.jsonl')
-        started = [row for row in calls if row['event'] == 'request_started']
-        finished = [row for row in calls if row['event'] == 'request_finished']
-        self.assertEqual(len(started), 1)
-        self.assertEqual(finished[0]['state'], 'succeeded')
-        self.assertEqual(finished[0]['sessionId'], 'claim-1')
-        self.assertTrue(finished[0]['stage'].startswith(STRATEGY_SCREENSHOT_PLAN))
-        debug = _rows(self.root / 'logs' / 'w1' / 'model-debug.jsonl')
-        blob = json.dumps(debug)
-        self.assertNotIn('opaque-offline-protocol-field', blob)
-        self.assertNotIn('offline-secret-never-export', blob)
-        self.assertNotIn('data:image/png;base64,', blob)
-
-        fixed_goal = '将数量改为20、成本改为60，并核对这两个输入值'
-        fixed_task = deepcopy(self.task)
-        fixed_task['workflow_proposal']['spec']['goal']['structured'] = {'description': fixed_goal}
-        fixed_task['task_id'] = 'react-' + object_sha256(
-            {'url': fixed_task['initial_url'], 'spec': fixed_task['workflow_proposal']['spec']})[:24]
-        fixed_plan = deepcopy(plan)
-        fixed_plan.pop('goal')
-        self.opener.raw['choices'][0]['message']['tool_calls'][0]['function']['arguments'] = json.dumps(fixed_plan, ensure_ascii=False)
-        root = self.root / 'fixed-session'
-        with patch('webcollect.batch_core.BatchLedger.bind_model_session', return_value='CONTROLLED_UNUSED'):
-            choose = screenshot_chooser(ledger, fixed_task, 'claim-fixed', runlog=runlog)
-            fixed = ScreenshotPlanSession(fixed_task, root / 'raw', choose, self.page,
-                steps_directory=root, attempt_id='claim-fixed')
-            await fixed._open_entry()
-            fixed_prompt = fixed._first_prompt()
-            self.assertEqual(fixed_prompt['goal_selection']['mode'], 'fixed')
-            self.assertEqual(fixed_prompt['goal'], fixed_goal)
-            schema = fixed_prompt['tools'][0]['function']['parameters']
-            self.assertNotIn('goal', schema['properties'])
-            from jsonschema import Draft202012Validator
-            self.assertTrue(list(Draft202012Validator(schema).iter_errors({**fixed_plan, 'goal': '改写目标'})))
-            await fixed._first_plan_round()
-        self.assertIsNone(fixed.initial_feedback)
-        self.assertEqual(fixed.frozen_goal, fixed_goal)
-        self.assertEqual(fixed._branch_prompt('checkpoint')['goal'], fixed_goal)
-        self.assertEqual(fixed.actual_dispatches, 0)
-        self.opener.raw['choices'][0]['message']['tool_calls'][0]['function'].update(
-            name='plan_decision',arguments=json.dumps({'decision':'continue','reason':'继续既定必要步骤'}))
-        await choose(fixed._branch_prompt('checkpoint'))
-        self.assertEqual(json.loads(self.opener.calls[-1].data)['reasoning_effort'],'max')
-
-
-class ScreenshotSessionRunlogTests(SessionHarness):
-    """Session-loop runtime events and unchanged business results."""
-
-    def setUp(self):
-        super().setUp()
-        self.task = build_url_task(url=self.page.url, task_version='s2-runlog',
-                                    ending_policy=COMPLETE_VERSION)
-        freeze_strategy(self.task, STRATEGY_SCREENSHOT_PLAN)
-        self.task['task_id'] = 'react-' + object_sha256(
-            {'url': self.task['initial_url'], 'spec': self.task['workflow_proposal']['spec']})[:24]
-        validate_task(self.task)
-        self.attempt_id = 's2-runlog-attempt'
-        state = self.surface.state
-        state['elements'][0]['text'] = '数量'
-        state['elements'][1]['text'] = '成本'
-        for binding in state['capture_controls']:
-            binding['form_selector'] = '#calculator'
-        state['elements'].append({'element_id': 'submit-result', 'text': '计算',
-            'native_role': 'button', 'element_type': 'button', 'bbox': [10, 200, 210, 240],
-            'visible': True, 'enabled': True, 'clickable': True, 'inputable': False,
-            'parent_id': 'root', 'scrollable': False, 'state': 'default'})
-        state['capture_controls'].append({'element_id': 'submit-result',
-            'selector': '#submit-result', 'tag': 'button', 'input_type': 'submit',
-            'form_selector': '#calculator'})
-        state['elements'].append({'element_id': 'visible-result', 'text': '利润率：40%',
-            'native_role': 'status', 'element_type': 'p', 'bbox': [10, 260, 800, 320],
-            'visible': True, 'enabled': True, 'clickable': False, 'inputable': False,
-            'parent_id': 'root', 'scrollable': False, 'state': 'default'})
-        state['capture_controls'].append({'element_id': 'visible-result',
-            'selector': '#actual-result', 'tag': 'p', 'form_selector': '#calculator',
-            'result_region_selector': '#actual-result'})
-
-    def _steps(self):
-        return [
-            {'action': 'click', 'target': {'text': '数量'}, 'purpose': '聚焦数量输入框',
-             'rationale': '需要先在数量输入框输入新值', 'expected_result': '数量输入框获得焦点'},
-            {'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'text': '数量'},
-             'purpose': '全选原值', 'rationale': '全选后才能替换旧值',
-             'expected_result': '旧值被完整选中'},
-            {'action': 'type', 'target': {'text': '数量'}, 'value': '20',
-             'purpose': '输入数量20', 'rationale': '本次计算使用数量20',
-             'expected_result': '数量显示为20', 'expected_value': '20'},
-            {'action': 'click', 'target': {'text': '成本'}, 'purpose': '聚焦成本输入框',
-             'rationale': '成本同样需要输入本次值', 'expected_result': '成本输入框获得焦点'},
-            {'action': 'hotkey', 'keys': ['ctrl', 'a'], 'target': {'text': '成本'},
-             'purpose': '全选原成本', 'rationale': '替换已有成本', 'expected_result': '成本原值全选'},
-            {'action': 'type', 'target': {'text': '成本'}, 'value': '60',
-             'purpose': '输入成本60', 'rationale': '本次计算使用成本60',
-             'expected_result': '成本显示为60', 'expected_value': '60'},
-            {'action': 'click', 'target': {'text': '计算'}, 'purpose': '提交计算',
-             'rationale': '提交后页面才会计算本次利润率',
-             'expected_result': '结果区显示本次利润率'},
-        ]
-
-    def _plan(self):
-        # The declared evidence step is gone with predicted future steps; the
-        # result must be caused by this trajectory's own inputs and submission
-        # (the tail 计算 click), and completion is judged at the real checkpoint
-        # after the last executed step.
-        return {'goal': '修改数量为20并查看本次利润率结果',
-                'requirements': [
-                    {'id': 'r1', 'kind': 'result', 'description': '查看本次输入对应的利润率计算结果',
-                     'evidence_scope': 'current',
-                     'acceptance': {'mode': 'presence', 'subject': '利润率结果', 'source_quote': '查看本次利润率结果'},
-                     'evidence_route': {'source_type': 'page_result', 'observation_steps': [7]}}],
-                'final_presentation_step': 7, 'steps': self._steps()}
-
-    def _session(self, name, choose, runlog=None):
-        evidence = self.root / name / 'evidence' / 'S000001_sample_000201'
-        kwargs = {'steps_directory': evidence, 'attempt_id': self.attempt_id}
-        if runlog is not None:
-            kwargs['runlog'] = runlog
-        return ScreenshotPlanSession(self.task, evidence / 'raw', choose, self.page,
-                                     **kwargs), evidence
-
-    def _choose(self, prompts):
-        async def choose(prompt):
-            prompts.append(deepcopy(prompt))
-            if prompt.get('phase') == 'first':
-                return {'name': 'submit_plan', 'arguments': self._plan(),
-                        'tool_call_id': 'first', 'assistant_message': {'role': 'assistant'},
-                        'request_id': 'mock'}
-            regions = prompt.get('regions') or []
-            region = next((r for r in regions if '利润率' in r.get('quote', '')), None)
-            if region is None:
-                return {'name': 'plan_decision', 'arguments': {
-                    'decision': 'continue', 'reason': '继续查看结果'},
-                    'tool_call_id': 'continue', 'request_id': 'mock'}
-            return {'name': 'plan_decision', 'arguments': {
-                'decision': 'complete', 'reason': '本次提交的利润率结果已经可见',
-                'answers': [{'requirement_id': 'r1', 'observed_result': '利润率：40%',
-                             'evidence': [{'observation': prompt['current_observation'],
-                                           'region': region['region_id']}]}]},
-                'tool_call_id': 'complete', 'request_id': 'mock'}
-        return choose
-
-    async def test_runtime_log_covers_lifecycle_and_never_emits_success(self):
-        prompts = []
-        runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
-                            claim_id='claim-1', attempt_id=self.attempt_id)
-
-        completion_prompts = []
-
-        async def choose(prompt):
-            prompts.append(deepcopy(prompt))
-            if prompt.get('phase') == 'first':
-                return {'name': 'submit_plan', 'arguments': self._plan(),
-                        'tool_call_id': 'first', 'assistant_message': {'role': 'assistant'},
-                        'request_id': 'mock'}
-            if prompt.get('reason') in ('submission_checkpoint', 'action_not_established'):
-                # The model defers registration past the submit checkpoint; the
-                # next checkpoint after the last step still has to cite real
-                # evidence before completion can be judged.
-                return {'name': 'plan_decision', 'arguments': {
-                    'decision': 'continue', 'reason': '先核对提交后的结果区'},
-                    'tool_call_id': 'continue', 'request_id': 'mock'}
-            # The model view cites citable text through the unified fact
-            # directory (observation + region id), not a flat regions list.
-            fact = next((row for row in prompt.get('fact_directory') or []
-                         if '利润率' in row.get('quote', '')), None)
-            if fact is None:
-                return {'name': 'plan_decision', 'arguments': {
-                    'decision': 'continue', 'reason': '继续查看结果'},
-                    'tool_call_id': 'continue', 'request_id': 'mock'}
-            completion_prompts.append(deepcopy(prompt))
-            return {'name': 'plan_decision', 'arguments': {
-                'decision': 'complete', 'reason': '本次提交的利润率结果已经可见',
-                'answers': [{'requirement_id': 'r1', 'observed_result': '利润率：40%',
-                             'evidence': [{'observation': fact['observation'],
-                                           'region': fact['region_id']}]}]},
-                'tool_call_id': 'complete', 'request_id': 'mock'}
-
-        session, _ = self._session('logged', choose, runlog=runlog)
-        # The result must be caused by this trajectory's submission: it does not
-        # exist until the real 计算 click, so the completed answer's causality
-        # and freshness are genuine rather than pre-existing page text.
-        result_element = next(row for row in self.surface.state['elements']
-                              if row['element_id'] == 'visible-result')
-        result_binding = next(row for row in self.surface.state['capture_controls']
-                              if row['element_id'] == 'visible-result')
-        self.surface.state['elements'].remove(result_element)
-        self.surface.state['capture_controls'].remove(result_binding)
-        original_execute = self.surface.execute_action
-
-        def execute_with_submit(action_type, arguments):
-            original_execute(action_type, arguments)
-            if action_type == 'click':
-                submit = next(row for row in self.surface.state['elements']
-                              if row['element_id'] == 'submit-result')
-                x, y = arguments['x'], arguments['y']
-                if submit['bbox'][0] <= x < submit['bbox'][2] and submit['bbox'][1] <= y < submit['bbox'][3]:
-                    self.surface.state['elements'].append(result_element)
-                    self.surface.state['capture_controls'].append(result_binding)
-        self.surface.execute_action = execute_with_submit
-        summary = await session.run()
-        rows = _rows(self.root / 'logs' / 'w1' / 'runtime.jsonl')
-        events = [row['event'] for row in rows]
-        for expected in ('plan_accepted', 'checkpoint', 'action_started',
-                         'action_finished', 'goal_verified', 'session_end'):
-            self.assertIn(expected, events)
-        self.assertNotIn('success', events)
-        self.assertEqual({row['sessionId'] for row in rows}, {'claim-1'})
-        self.assertEqual(summary['stop_reason'], 'ready')
-        self.assertEqual(summary['strategy_end_reason'], 'goal_completed')
-        self.assertEqual(summary['collection_ending']['goal_completion'], 'VERIFIED')
-        self.assertTrue(summary['effective_steps'] >= 5)
-        accepted = next(row for row in rows if row['event'] == 'plan_accepted')
-        self.assertEqual(accepted['actionHistogram'], {'click': 3, 'hotkey': 2, 'type': 2})
-        self.assertEqual(accepted['actionKinds'], 3)
-        # Completion is judged at the real checkpoint after the last executed
-        # step; predicted future evidence steps no longer anchor any route
-        # checkpoint, and no phantom route observation may fire.
-        checkpoints = [row for row in rows if row['event'] == 'checkpoint']
-        self.assertFalse(any(row['reason'] in ('planned_evidence_complete', 'route_observation')
-                             for row in checkpoints))
-        self.assertEqual(summary['effective_steps'], 7)
-        completion_prompt = completion_prompts[0]
-        self.assertEqual(completion_prompt['missing_requirements'], ['r1'])
-        self.assertNotIn('remaining_plan', completion_prompt)
-        # Captured-but-unregistered result rows are shown as candidates; having
-        # captured them is not the same as a verified answer.
-        self.assertTrue(completion_prompt['candidate_results'])
-        self.assertTrue(all(not row.get('verified_answer')
-                            for row in completion_prompt['candidate_results']))
-        self.assertTrue(any('利润率' in row.get('quote', '')
-                            for row in completion_prompt['fact_directory']))
-        self.assertEqual([row['requirement_id'] for row in completion_prompt['confirmed_progress']], [])
-        first = next(prompt for prompt in prompts if prompt.get('phase') == 'first')
-        affordances = first['interaction_affordances']
-        self.assertEqual(affordances['projected_controls'], len(first['controls']))
-        self.assertIn('input', affordances['kinds'])
-        self.assertTrue(all(row['number'] == index for index, row in enumerate(first['controls'], 1)))
-
-        # A positional selector can move while the same physical control ID
-        # survives. Recover the probe once from the newly captured binding,
-        # without consuming any business action or declaring a null probe seen.
-        probe_session, _ = self._session('binding-probe', self._choose([]))
-        await probe_session._open_entry()
-        cid='control-0';old=probe_session.current['controls'][cid]['binding']['selector']
-        source=next(b for b in self.surface.state['capture_controls'] if b['element_id']==cid)
-        source['selector']=old+'-moved'
-        actions=len(self.surface.executed);observations=len(probe_session.observations)
-        result=await probe_session._observe(cid)
-        self.assertTrue(result['data']['target_probe']['acquired'])
-        self.assertEqual(probe_session.current['controls'][cid]['probe']['element_id'],cid)
-        self.assertEqual(len(probe_session.observations)-observations,2)
-        self.assertEqual(len(self.surface.executed),actions)
-        self.assertEqual(probe_session.actual_dispatches,0)
-        repeated=await probe_session._observe(cid)
-        self.assertEqual(repeated['status'],'rejected')
-        self.assertTrue(repeated['data']['target_probe']['acquired'])
-        self.assertNotIn('inspect',repeated['summary'])
-        unavailable, _ = self._session('unavailable-probe', self._choose([]))
-        await unavailable._open_entry()
-        async def no_target(selector,index):
-            return await self.surface.capture(self.page,selector='#not-present')
-        with patch.object(unavailable,'_capture_observation',side_effect=no_target):
-            missing=await unavailable._observe(cid)
-        self.assertFalse(missing['data']['target_probe']['acquired'])
-        repeated=await unavailable._observe(cid)
-        self.assertEqual(repeated['status'],'rejected')
-        self.assertFalse(repeated['data']['target_probe']['acquired'])
-        self.assertIn('仅已尝试',repeated['summary'])
-        self.assertNotIn('inspect',repeated['summary'])
-
-    async def test_runlog_does_not_change_the_business_result(self):
-        # Both runs must start from the same page surface: the first session's
-        # typing changes input values, so restore the captured initial state.
-        initial_values = deepcopy(self.surface.state['values'])
-        initial_result = self.surface.state['elements'][-1]['text']
-        quiet, _ = self._session('quiet', self._choose([]))
-        without = await quiet.run()
-        self.surface.state['values'] = deepcopy(initial_values)
-        self.surface.state['elements'][-1]['text'] = initial_result
-        loud_log = SessionLog(self.root, 'w2', 'claim-2', STRATEGY_SCREENSHOT_PLAN,
-                              claim_id='claim-2', attempt_id=self.attempt_id)
-        loud, _ = self._session('loud', self._choose([]), runlog=loud_log)
-        with_log = await loud.run()
-        for key in ('stop_reason', 'strategy_end_reason', 'goal_status',
-                    'effective_steps', 'actual_actions', 'host_failure', 'unknown'):
-            self.assertEqual(without[key], with_log[key], key)
-
-        # 模板包会话走同一离线基底：业务结果与单体一致，展示日志新增
-        # first_plan_result / completion_result，且 template_name 身份随行。
-        from webcollect.screenshot_templates import (generic as generic_template,
-                                                      long_reading as long_reading_template,
-                                                      operation as operation_template)
-        self.surface.state['values'] = deepcopy(initial_values)
-        self.surface.state['elements'][-1]['text'] = initial_result
-        template_log = SessionLog(self.root, 'w3', 'claim-tpl', STRATEGY_SCREENSHOT_PLAN,
-                                  claim_id='claim-tpl', attempt_id=self.attempt_id)
-        template_log.attach(template_name='operation')
-        template_evidence = self.root / 'template-op' / 'evidence' / 'S000001_sample_000202'
-        template_session = operation_template.Session(self.task, template_evidence / 'raw',
-            self._choose([]), self.page, steps_directory=template_evidence,
-            attempt_id=self.attempt_id, runlog=template_log)
-        template_summary = await template_session.run()
-        for key in ('stop_reason', 'strategy_end_reason', 'goal_status', 'effective_steps',
-                    'actual_actions', 'host_failure', 'unknown'):
-            self.assertEqual(template_summary[key], with_log[key], key)
-        template_rows = _rows(self.root / 'logs' / 'w3' / 'runtime.jsonl')
-        template_events = {row['event'] for row in template_rows}
-        self.assertIn('first_plan_result', template_events)
-        self.assertIn('completion_result', template_events)
-        self.assertEqual({row['template_name'] for row in template_rows}, {'operation'})
-        first_plan_row = next(row for row in template_rows if row['event'] == 'first_plan_result')
-        self.assertTrue(first_plan_row['accepted'])
-        self.assertEqual(first_plan_row['steps'], 7)
-        completion_row = next(row for row in template_rows if row['event'] == 'completion_result')
-        self.assertEqual(completion_row['endReason'], template_summary['strategy_end_reason'])
-        self.assertEqual(completion_row['effectiveSteps'], template_summary['effective_steps'])
-
-        # 构造级隔离：临时改写一个模板包的规则/提示词，另一个模板包按其自身
-        # plan 派生的请求负载保持不变（同一会话基底，无真实模型）。
-        async def first_prompt_of(module, name):
-            session = module.Session(self.task, self.root / ('iso-' + name) / 'raw',
-                self._choose([]), self.page, steps_directory=self.root / ('iso-' + name),
-                attempt_id=self.attempt_id)
-            await session._open_entry()
-            return session._first_prompt()
-
-        operation_prompt = await first_prompt_of(operation_template, 'op')
-        long_reading_prompt = await first_prompt_of(long_reading_template, 'lr')
-        self.assertEqual(operation_prompt['system'], operation_template.plan.SYSTEM_PROMPT)
-        self.assertEqual(long_reading_prompt['system'], long_reading_template.plan.SYSTEM_PROMPT)
-        self.assertNotEqual(operation_prompt['system'], long_reading_prompt['system'])
-        self.assertNotEqual(operation_template.plan.SYSTEM_PROMPT,
-                            long_reading_template.plan.SYSTEM_PROMPT)
-        self.assertNotEqual(generic_template.plan.SYSTEM_PROMPT,
-                            long_reading_template.plan.SYSTEM_PROMPT)
-        original_route = operation_template.plan.FIRST_RULES['route']
-        try:
-            operation_template.plan.FIRST_RULES['route'] = 'MUTATED-OP-RULE'
-            mutated_operation = await first_prompt_of(operation_template, 'op2')
-            stable_long_reading = await first_prompt_of(long_reading_template, 'lr2')
-            self.assertEqual(mutated_operation['rules']['route'], 'MUTATED-OP-RULE')
-            self.assertEqual(stable_long_reading['rules']['route'],
-                             long_reading_template.plan.FIRST_RULES['route'])
-            self.assertNotIn('MUTATED-OP-RULE', stable_long_reading['rules']['route'])
-        finally:
-            operation_template.plan.FIRST_RULES['route'] = original_route
-        original_lr_route = long_reading_template.plan.FIRST_RULES['route']
-        try:
-            long_reading_template.plan.FIRST_RULES['route'] = 'MUTATED-LR-RULE'
-            mutated_long_reading = await first_prompt_of(long_reading_template, 'lr3')
-            stable_operation = await first_prompt_of(operation_template, 'op3')
-            self.assertEqual(mutated_long_reading['rules']['route'], 'MUTATED-LR-RULE')
-            self.assertNotIn('MUTATED-LR-RULE', stable_operation['rules']['route'])
-        finally:
-            long_reading_template.plan.FIRST_RULES['route'] = original_lr_route
-
-    async def test_cancelled_session_logs_cancellation_and_keeps_raw(self):
-        runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
-                            claim_id='claim-1', attempt_id=self.attempt_id)
-
-        entered = asyncio.Event()
-
-        async def choose(prompt):
-            entered.set()
-            await asyncio.Future()
-            raise AssertionError('unreachable')
-
-        session, evidence = self._session('cancelled', choose, runlog=runlog)
-        task = asyncio.ensure_future(session.run())
-        await asyncio.wait_for(entered.wait(), timeout=5)
-        task.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await task
-        rows = _rows(self.root / 'logs' / 'w1' / 'runtime.jsonl')
-        events = [row['event'] for row in rows]
-        self.assertIn('cancelled', events)
-        self.assertTrue((evidence / 'raw').exists())
-
-    async def test_unknown_decision_is_logged_as_unknown_not_resend(self):
-        from webcollect.batch_core import OutcomeUnknown
-
-        async def choose(prompt):
-            if prompt.get('phase') == 'first':
-                raise OutcomeUnknown('provider outcome/charge UNKNOWN; request retained: r9')
-            raise AssertionError('unreachable')
-
-        runlog = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
-                            claim_id='claim-1', attempt_id=self.attempt_id)
-        session, _ = self._session('unknown', choose, runlog=runlog)
-        summary = await session.run()
-        rows = _rows(self.root / 'logs' / 'w1' / 'runtime.jsonl')
-        self.assertIn('session_end', [row['event'] for row in rows])
-        self.assertTrue(summary['unknown'])
-        self.assertEqual(summary['failure_class'], 'interrupted')
-
-    async def test_concurrent_sessions_do_not_cross_logs(self):
-        runlog_a = SessionLog(self.root, 'wa', 'claim-a', STRATEGY_SCREENSHOT_PLAN,
-                              claim_id='claim-a', attempt_id=self.attempt_id)
-        runlog_b = SessionLog(self.root, 'wb', 'claim-b', STRATEGY_SCREENSHOT_PLAN,
-                              claim_id='claim-b', attempt_id=self.attempt_id)
-        session_a, _ = self._session('parallel-a', self._choose([]), runlog=runlog_a)
-        session_b, _ = self._session('parallel-b', self._choose([]), runlog=runlog_b)
-        await asyncio.gather(session_a.run(), session_b.run())
-        for worker, session_id in (('wa', 'claim-a'), ('wb', 'claim-b')):
-            rows = _rows(self.root / 'logs' / worker / 'runtime.jsonl')
-            self.assertTrue(rows)
-            self.assertEqual({row['sessionId'] for row in rows}, {session_id})
 
 
 if __name__ == '__main__':

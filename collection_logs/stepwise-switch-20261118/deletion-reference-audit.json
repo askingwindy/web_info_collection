@@ -1,0 +1,215 @@
+{
+  "stopwatch_strategy": {
+    "path": "projects/code/webcollect/stopwatch_strategy.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:140:      \"projects/code/webcollect/stopwatch_strategy.py\": \"54c1fec5c209a7ffe02c7dd47d1be024176928a114967141a87560b45e469db9\",",
+      "./docs/版本维护代码索引-20261111.md:573:### [stopwatch_strategy.py](../projects/code/webcollect/stopwatch_strategy.py)"
+    ],
+    "code_references_after": []
+  },
+  "template_learning_experiment": {
+    "path": "projects/code/webcollect/template_learning_experiment.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:149:      \"projects/code/webcollect/template_learning_experiment.py\": \"8823509d4c4720510ca966435958884813246d56a1bbbc17e436621c2459d102\",",
+      "./docs/消费者模板学习Muxtly试验-20261103.md:7:工程入口为 `webcollect.template_learning_experiment`，参数 `capture|independent-qc|audit --cohort <冻结清单> --directory <本轮目录>`；capture 还需 `--worker`。运行使用本轮冻结源码副本，凭据只由原 runtime 读取。普通消费者与 AB8 入口独立可用。",
+      "./docs/消费者模板学习Muxtly试验-20261103.md:19:复用范围是当前 manifest/候选池绑定的可选消费者入口；并非普通消费者默认启用的全站模板。调用 `TemplateLibrary(path, manifest, pool)` 后，可用 `learn(pool, claim_id)` 从正式成功保存提炼草案，`qc_binding(...)` 与 `apply_qc(...)` 异步接入原独立结果；实际有界消费通过 `template_learning_experiment capture`，冻结清单还须绑定当前源码、原 scope、初始库与定向检查，并声明上述 `session_wiring`。本轮原始冻结清单用于原件核对，不作为再次派发授权。",
+      "./docs/工程说明.md:765:`webcollect.template_learning_experiment {capture,independent-qc,audit} --cohort … --directory …` 是有界正式入口。它复用原候选领取、原会话宿主四工具、原账、正式保存和独立 QC；捕获每次检索时的库快照。检索以原 claim 应用/目标和可信首帧为输入，执行器读取库中程序；选择值缺显示证明时先做原定向观察，仍不足就交回当前状态的 ReAct。已提交的计算不再提交；结果阶段不要求滚动离屏的表单仍可见。正式保存后同一提炼入口接收新轨迹，QC 可稍后从独立入口绑定。详见[本轮说明](消费者模板学习Muxtly试验-20261103.md)。",
+      "./docs/版本维护代码索引-20261111.md:618:### [template_learning_experiment.py](../projects/code/webcollect/template_learning_experiment.py)"
+    ],
+    "code_references_after": []
+  },
+  "consumer_template_experiment": {
+    "path": "projects/code/webcollect/consumer_template_experiment.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:74:      \"projects/code/webcollect/consumer_template_experiment.py\": \"86795c11cb8f84f80cfffb52f8d4944e3870af10f5f4191a1e1ea0b1cdf7e9d1\",",
+      "./README.md:496:2026-11-03 独立可选的消费者模板对照入口为 `webcollect.consumer_template_experiment`，两个模板通过原同会话四工具驱动浏览器，普通消费者继续原 ReAct。[实现、目标规则与有界八条试验](docs/消费者模板AB8试验-20261103.md)。仅此固定八条采集及同样本独立 AI QC 获授权，不恢复其他生产或发布。",
+      "./docs/工程说明.md:743:`consumer_templates.py` 提供计算器填值和百科正文定向阅读；`consumer_template_experiment.py` 在自己的进程中临时替换会话类，核对冻结八条、源码与离线报告后复用正式候选领取、原账、同会话四工具和后加工。普通消费者不导入该适配器。明确目标不安全解析时交回原 ReAct；URL-only 的两组共用可信首帧选目标规则。详见[AB8 试验](消费者模板AB8试验-20261103.md)。",
+      "./docs/版本维护代码索引-20261111.md:227:### [consumer_template_experiment.py](../projects/code/webcollect/consumer_template_experiment.py)",
+      "./docs/消费者模板AB8试验-20261103.md:7:`webcollect.consumer_templates` 为可选会话适配器，普通消费者不导入它。Matcher 检查当前可信页面及目标适用性；Executor 直接调用原会话的 observe/act/finish 宿主实现，原 inspect 及 ReAct 随时可用；Verifier 绑定可见结果或正文引用，不授予 QC PASS。入口 `webcollect.consumer_template_experiment` 只接收显式冻结八条，复用原 scope、候选池、派发门禁、独占领取、账本、注册库与正式后加工/verified_saved。"
+    ],
+    "code_references_after": []
+  },
+  "browser_planner": {
+    "path": "projects/code/webcollect/browser_planner.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:53:      \"projects/code/webcollect/browser_planner.py\": \"83c2b1b76b2f9653c4aa4a1f059cb2d434ad02adc717acfeefaeb508cf62a853\",",
+      "./docs/P0快速闭环实施计划-20261030.md:173:失败记录保留：[r01](../verify_results/p0-offline-20261030-r01/summary.json)含新增夹具的不可变写入/调用参数与mock清理错误；[r02](../verify_results/p0-offline-20261030-r02/summary.json)仍有2项新夹具调用/构造错误及3项既有观察规划支路失败。前两项已修正；后3项是`NativeSelectLocalBrowser`的正常执行、透明文字、裁切文字测试，`browser_planner.operation_from_decision`将无目标/有目标观察派生的`paint_borders`差异纳入`_core`比较，先报“Native select changed”而未到标签检查。本轮未修改该观察规划支路、`browser.py`、`snapshot.js`或旧核心状态合同；r04显式选择原件标签协议用例，新P0临时HTML另经实际`capture → prepare_action → execute`验证原生select。此处不是完整`test_native_select_label`通过，不把观察规划支路或全量回归标为PASS。该未解决问题不在现有`workflow-model → compile → single_record`短路径中，若后续选用观察规划入口应先处理。",
+      "./projects/code/webcollect/browser_planner.py:57:            ('browser.py', 'snapshot.js', 'production_identity.py', 'browser_planner.py', 'observed_workflow.py')}",
+      "./docs/动态区域统一比较规则与离线验收-20261105.md:23:| `browser_planner` | 纯动态变化不产生新内容状态；原 `observed_workflow` 引用哈希仍精确核验。 |",
+      "./docs/工程说明.md:406:| 兼容规划 | `browser_planner.py`、`observed_workflow.py`、`task_admission.py`、`admission_cohort.py`、`fixed_cohort.py`、`task_replanning.py`：观察/准入、旧固定队列及修复关闭协议 |",
+      "./docs/版本维护代码索引-20261111.md:114:### [browser_planner.py](../projects/code/webcollect/browser_planner.py)"
+    ],
+    "code_references_after": []
+  },
+  "search_capture_audit": {
+    "path": "projects/code/webcollect/search_capture_audit.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:128:      \"projects/code/webcollect/search_capture_audit.py\": \"382a577b1309d4252c2a84f22e589cedbd50fcb89076186acf29bcb41e4e397c\",",
+      "./docs/具体词条直接阅读本地契约-20261105.md:39:本轮未验证的 R16 search_capture_audit 结算接线已从 Runtime 与共享 guard 精确撤下，正常入口仍仅识别此前已验证的既有审计。研发模块和正向补丁保留于 `verify_results/dual-baseline-20261105-r01/search-audit-disable/`。没有用旧测试宣称新规则通过；原 R16 UNKNOWN / hold、图树、费用及失败保留。新直接词条协议不依赖解除旧占用。",
+      "./docs/版本维护代码索引-20261111.md:510:### [search_capture_audit.py](../projects/code/webcollect/search_capture_audit.py)",
+      "./projects/code/webcollect/search_capture_audit.py:26:def search_capture_audit(raw_root,authorization):"
+    ],
+    "code_references_after": []
+  },
+  "template_learning": {
+    "path": "projects/code/webcollect/template_learning.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:148:      \"projects/code/webcollect/template_learning.py\": \"160b38105ec424e02e24262c84cf7f6260a764ca0ce3bf7cfd78741db3cbb5cf\",",
+      "./docs/无版本运行改造清单与方案-20261111.md:75:| 12 任务编译和模板 | task_generation.py 的 compiler-20、strategy-9；各 *_strategy.py 的 ADAPTER_ID、STRATEGY_ID；template_learning 等 | 编译器和模板用稳定业务名称，修复直接落当前函数；取消用实现号构造任务身份 |",
+      "./docs/工程说明.md:763:`webcollect.template_learning.TemplateLibrary` 使用当前工程 manifest/候选池绑定的本地 SQLite 库。`learn(pool, claim_id, qc=None)` 仅接收 RuntimeStore 正式保存且原始连续轨迹核验成功的样本，从实际输入原语、提交位置、提交后滚动以及可见结果形态提炼程序。原参数和坐标仅作溯源，不进入可执行程序。`apply_qc` 回读原独立报告、审核记录、队列和原作业，核对同一样本字节后追加结论；重复导入与进程重启幂等。普通入口不自动启用该库。",
+      "./docs/版本维护代码索引-20261111.md:612:### [template_learning.py](../projects/code/webcollect/template_learning.py)",
+      "./projects/code/webcollect/template_learning_experiment.py:19:from .template_learning import TemplateLibrary, enabled, qc_binding, SESSION_WIRING",
+      "./projects/code/webcollect/goal_evidence.py:106:    from .template_learning import result_evidence",
+      "./projects/code/webcollect/session_objective.py:89:        from .template_learning import result_evidence"
+    ],
+    "code_references_after": []
+  },
+  "consumer_templates": {
+    "path": "projects/code/webcollect/consumer_templates.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:75:      \"projects/code/webcollect/consumer_templates.py\": \"26362c228576f33e33f22316690e061eb5f510b8a6b092b6d49a37544ba4b1c1\",",
+      "./docs/策略2子规划研发与双站20进程实采启动Prompt-20261115.md:22:- 沿实际调用链覆盖普通消费者、任务生成、直接Session调用、批量启动器、恢复/重试、旧模板实验及异常回退。当前`collection_strategy.DEFAULT_STRATEGY`、`select()`的else、消费者CLI、`session_core`、`task_generation`、`collect_runtime`均存在需要处理的默认值或分支；`consumer_templates`依赖`ReactSession`的执行入口也必须禁用。检查其他入口，不能认为这些列举已覆盖全工程。复用简单的执行校验并接到必要入口，不新增策略管理框架。",
+      "./docs/工程说明.md:743:`consumer_templates.py` 提供计算器填值和百科正文定向阅读；`consumer_template_experiment.py` 在自己的进程中临时替换会话类，核对冻结八条、源码与离线报告后复用正式候选领取、原账、同会话四工具和后加工。普通消费者不导入该适配器。明确目标不安全解析时交回原 ReAct；URL-only 的两组共用可信首帧选目标规则。详见[AB8 试验](消费者模板AB8试验-20261103.md)。",
+      "./docs/消费者模板AB8试验-20261103.md:7:`webcollect.consumer_templates` 为可选会话适配器，普通消费者不导入它。Matcher 检查当前可信页面及目标适用性；Executor 直接调用原会话的 observe/act/finish 宿主实现，原 inspect 及 ReAct 随时可用；Verifier 绑定可见结果或正文引用，不授予 QC PASS。入口 `webcollect.consumer_template_experiment` 只接收显式冻结八条，复用原 scope、候选池、派发门禁、独占领取、账本、注册库与正式后加工/verified_saved。",
+      "./docs/版本维护代码索引-20261111.md:231:### [consumer_templates.py](../projects/code/webcollect/consumer_templates.py)",
+      "./projects/code/webcollect/consumer_template_experiment.py:15:from .consumer_templates import enabled, GOAL_RULE",
+      "./projects/code/webcollect/template_learning.py:18:from .consumer_templates import (TemplateSession, ResultRegions, Inapplicable,"
+    ],
+    "code_references_after": []
+  },
+  "fixed_cohort": {
+    "path": "projects/code/webcollect/fixed_cohort.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:85:      \"projects/code/webcollect/fixed_cohort.py\": \"fe19e65adfbb581e0d0b78f1c355ec39c424508ab62d5995e6edb2606ff96d74\",",
+      "./docs/无版本运行改造清单与方案-20261111.md:86:| 23 运行编排和计数 | consumer_campaign.py 的 campaign-3/4/5；consumer_roster、consumer_ab、fixed_cohort、site_scheduler、batch_protocol 等快照号 | 参数表达目标数、站点、策略等业务选择；不再根据状态文件版本改变计数或停止方式 |",
+      "./docs/工程说明.md:406:| 兼容规划 | `browser_planner.py`、`observed_workflow.py`、`task_admission.py`、`admission_cohort.py`、`fixed_cohort.py`、`task_replanning.py`：观察/准入、旧固定队列及修复关闭协议 |",
+      "./docs/版本维护代码索引-20261111.md:282:### [fixed_cohort.py](../projects/code/webcollect/fixed_cohort.py)",
+      "./docs/额度限制清单与取消说明-20261101.md:35:| 单项错误与恢复 | `max_job_attempts`、`max_retries`、固定队列的每任务或每位置重试次数、模型响应格式纠正次数、捕获重取证次数和网络超时。重复观察仍作为工具反馈返回，新的 GLM 会话按实际请求数计量。域级未决、认证失败、在途派发、重复领取与缓存重放分别按原身份处理。[固定队列](../projects/code/webcollect/fixed_cohort.py) · [站点位置](../projects/code/webcollect/site_progress.py) · [提供方对账](../projects/code/webcollect/provider_recovery.py) |",
+      "./projects/code/webcollect/candidate_batch.py:218:    from .fixed_cohort import _lock"
+    ],
+    "code_references_after": []
+  },
+  "difference_batch": {
+    "path": "projects/quality-inspector/quality_inspector/difference_batch.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:171:      \"projects/quality-inspector/quality_inspector/difference_batch.py\": \"8e68a3dbb7be9d051ae0ef48cf6a726cb2d8e042cea2a75af4ec3bf6e1444c39\",",
+      "./projects/quality-inspector/README.md:301:独立`quality_inspector.difference_batch`用于成本对照，未改正式`ai_worker.do_difference`。相同本条11帧与三个邻居8/6/11帧共36张原PNG全部发送，本条不再在三个请求里重复；原图、图树和标注逐文件SHA绑定，每对有独立身份、完整step覆盖及必要证据。超限停止，不缩图、不删帧或少比较对象。输入文字复用原worker的精简动作/结果/目标树上下文，不声称传输了全部UI树JSON。",
+      "./docs/版本维护代码索引-20261111.md:927:### [difference_batch.py](../projects/quality-inspector/quality_inspector/difference_batch.py)"
+    ],
+    "code_references_after": []
+  },
+  "sampling_packet": {
+    "path": "projects/quality-inspector/quality_inspector/sampling_packet.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:189:      \"projects/quality-inspector/quality_inspector/sampling_packet.py\": \"32f8b6415f08793e95b560e60fde3a00326c50776b79490744ebb5be8da48514\",",
+      "./docs/版本维护代码索引-20261111.md:1019:### [sampling_packet.py](../projects/quality-inspector/quality_inspector/sampling_packet.py)",
+      "./projects/quality-inspector/README.md:329:无模型会话审核包用 `python -m quality_inspector.sampling_packet --config <无模型配置> --ledger <同运行账> --plan <冻结plan> --output <包外新目录>`。它复用E3队列及`compact_trajectory`，导出全部选中原帧的路径/摘要、实际动作和近邻全帧比较，以及空白`review-template.json`；不预填观察、身份或通过结论。复制模板另存实际审核记录，如实填写会话来源，再交原`sampling report --reviews`/`expand`验证。新实际审核数及模型请求数均为0；该命令已在2条受控浏览器样本上运行并复跑，12个焦点原帧全部保留。程序化模型和会话审核仍须分别记账。"
+    ],
+    "code_references_after": []
+  },
+  "document_auth_recovery": {
+    "path": "projects/quality-inspector/quality_inspector/document_auth_recovery.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:172:      \"projects/quality-inspector/quality_inspector/document_auth_recovery.py\": \"e83c3d27b772bea44289f1234d13c78a726a80d3c8c6e401a04c606681f5714d\",",
+      "./projects/quality-inspector/README.md:27:2026-10-28认证恢复：新增独立`python -m quality_inspector.document_auth_recovery`，只为已持久记录的资料HTTP401/provider1000提供一次明确有界的恢复增量，不改原请求、UNKNOWN费用、原预算和冻结源码。`prepare`需要绑定原资料receipt/原request ID的单次授权JSON及独立同模型/同一请求预算配置；只生成control receipt，不生成可直接派发的资料receipt。`run`还必须接收`--auth-proof`：`webcollect-model-authentication-evidence-1`的`ledger`、`config:{path,sha256}`、`request_id`，程序从原SQLite重核同服务、同模型的一次真实成功认证诊断及其原响应/usage，不能用手写PASS或凭据重发声明替代。凭据是否改变不作推定，仍401时不能重发完整资料。",
+      "./docs/额度限制清单与取消说明-20261101.md:38:| 历史协议与专用诊断 | 冻结任务的决策或尝试边界、旧 controller/browser planner、旧试点整站停派。登记旧式延期收据时仍验证其 10 次与 24 小时的格式边界，当前批次派发无需这份收据。一次模型冒烟、单次认证恢复和订阅诊断按各自的调用范围执行。独立来源的 UNKNOWN 隔离仍须原账证明。[原续跑收据](../projects/code/webcollect/batch_core.py) · [发现隔离](../projects/site-planner/site_planner/producer_authority.py) · [认证恢复](../projects/quality-inspector/quality_inspector/document_auth_recovery.py) · [订阅诊断](../projects/quality-inspector/quality_inspector/codex_subscription.py) |",
+      "./docs/额度限制清单与取消说明-20261101.md:54:- 订阅诊断的 `transport_smoke` 默认 1 次，专用追加收据绑定 2 次执行，每次最多 120 秒、8 张图。文档认证恢复的 `maximum_additional_requests` 为 1。这些收据各自校验其授权范围。[订阅诊断](../projects/quality-inspector/quality_inspector/codex_subscription.py) · [认证恢复](../projects/quality-inspector/quality_inspector/document_auth_recovery.py)",
+      "./docs/工程说明.md:420:| 人工与资料 | `blind.py`、`reporting.py`、`review.html`：空白审核台与报告；`document_text_qc.py`、`document_request_dedup.py`：资料一致性与无损请求去重；`document_auth_recovery.py`：有界认证恢复 |",
+      "./docs/版本维护代码索引-20261111.md:933:### [document_auth_recovery.py](../projects/quality-inspector/quality_inspector/document_auth_recovery.py)"
+    ],
+    "code_references_after": []
+  },
+  "codex_subscription": {
+    "path": "projects/quality-inspector/quality_inspector/codex_subscription.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:164:      \"projects/quality-inspector/quality_inspector/codex_subscription.py\": \"c086bb6bfa9a92131f0df53daf235339befb20be9faeefed0400acec014ce2a5\",",
+      "./docs/额度限制清单与取消说明-20261101.md:38:| 历史协议与专用诊断 | 冻结任务的决策或尝试边界、旧 controller/browser planner、旧试点整站停派。登记旧式延期收据时仍验证其 10 次与 24 小时的格式边界，当前批次派发无需这份收据。一次模型冒烟、单次认证恢复和订阅诊断按各自的调用范围执行。独立来源的 UNKNOWN 隔离仍须原账证明。[原续跑收据](../projects/code/webcollect/batch_core.py) · [发现隔离](../projects/site-planner/site_planner/producer_authority.py) · [认证恢复](../projects/quality-inspector/quality_inspector/document_auth_recovery.py) · [订阅诊断](../projects/quality-inspector/quality_inspector/codex_subscription.py) |",
+      "./docs/额度限制清单与取消说明-20261101.md:54:- 订阅诊断的 `transport_smoke` 默认 1 次，专用追加收据绑定 2 次执行，每次最多 120 秒、8 张图。文档认证恢复的 `maximum_additional_requests` 为 1。这些收据各自校验其授权范围。[订阅诊断](../projects/quality-inspector/quality_inspector/codex_subscription.py) · [认证恢复](../projects/quality-inspector/quality_inspector/document_auth_recovery.py)",
+      "./projects/quality-inspector/quality_inspector/codex_subscription.py:58:            for name in ('codex_subscription.py', 'ai_worker.py', 'reviews.py')}",
+      "./projects/quality-inspector/README.md:52:2026-10-26新增独立订阅适配入口`python -m quality_inspector.codex_subscription preflight/run`，使用现有ChatGPT登录、完整原帧和既有审核schema，独立持久请求账限制1次exec及最长120秒，未知结果不自动重试，禁止API回退。它尚未接通现有批量worker：25项离线定向测试通过，但首次真实冒烟因CLI内置provider配置覆盖被拒，修复后未补发，真实传输与usage仍未验证。单包视觉结果强制保留实质差异待定；受控传输输出不能导入为正式审核。结果见`verify_results/three-program-acceleration-20261026/subscription-r01/result-summary.json`，不要直接对生产批量调用。",
+      "./docs/版本维护代码索引-20261111.md:888:### [codex_subscription.py](../projects/quality-inspector/quality_inspector/codex_subscription.py)",
+      "./projects/quality-inspector/tests/test_codex_subscription.py:15:from quality_inspector import codex_subscription as adapter"
+    ],
+    "code_references_after": []
+  },
+  "document_request_dedup": {
+    "path": "projects/quality-inspector/quality_inspector/document_request_dedup.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:173:      \"projects/quality-inspector/quality_inspector/document_request_dedup.py\": \"17f5727d53165bdafef649ce34312d596124b084d8a2abfcff268c815eceacd6\",",
+      "./docs/无版本运行改造清单与方案-20261111.md:91:| 28 QC 模型协议 | ai_worker.py 的视觉/文档 prompt_version；document_text_qc、document_request_dedup、qc_recovery 等 | 当前提示和工具结构直接生效；取消版本兼容特例；压缩传输、引用整理作为当前普通功能 |",
+      "./docs/工程说明.md:420:| 人工与资料 | `blind.py`、`reporting.py`、`review.html`：空白审核台与报告；`document_text_qc.py`、`document_request_dedup.py`：资料一致性与无损请求去重；`document_auth_recovery.py`：有界认证恢复 |",
+      "./docs/版本维护代码索引-20261111.md:939:### [document_request_dedup.py](../projects/quality-inspector/quality_inspector/document_request_dedup.py)",
+      "./projects/quality-inspector/tests/test_document_request_dedup.py:11:from quality_inspector import document_request_dedup as dedup"
+    ],
+    "code_references_after": []
+  },
+  "batch_decision": {
+    "path": "projects/quality-inspector/quality_inspector/batch_decision.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:160:      \"projects/quality-inspector/quality_inspector/batch_decision.py\": \"f0e534fe2b33fdb9b2df60710771b5a1c5cb8df700054df304d37c0111cf6198\",",
+      "./docs/无版本运行改造清单与方案-20261111.md:93:| 30 抽样和审核流水线 | delivery_sampling.py、delivery_pipeline.py 的 sampling_rules_version、pipeline_rules_version；batch_decision.py 的实现绑定；plan_revision 比较 | 当前抽样和封包逻辑直接使用；保留抽样事实、有效集合和当前审核任务，移除按实现号/源码号拒绝运行 |",
+      "./docs/版本维护代码索引-20261111.md:871:### [batch_decision.py](../projects/quality-inspector/quality_inspector/batch_decision.py)",
+      "./projects/quality-inspector/quality_inspector/batch_decision.py:52:        'batch_decision.py', 'engine.py', 'format_checks.py', 'reviews.py', 'profiles.py',",
+      "./projects/quality-inspector/tests/test_batch_decision.py:15:from quality_inspector import batch_decision as decision"
+    ],
+    "code_references_after": []
+  },
+  "date_validator": {
+    "path": "projects/quality-inspector/quality_inspector/date_validator.py",
+    "references_before": [
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:167:      \"projects/quality-inspector/quality_inspector/date_validator.py\": \"46c181a1efc5d4ba099a033234751908552de5b5912a278f221e99e188768491\",",
+      "./docs/版本维护代码索引-20261111.md:904:### [date_validator.py](../projects/quality-inspector/quality_inspector/date_validator.py)",
+      "./projects/quality-inspector/tests/test_date_validator.py:11:from quality_inspector import date_validator as v"
+    ],
+    "code_references_after": []
+  },
+  "qc_recovery": {
+    "path": "projects/quality-inspector/quality_inspector/qc_recovery.py",
+    "references_before": [
+      "./request/attachments/zcode-qc小范围修复结果-20261109.txt:53:| `projects/quality-inspector/quality_inspector/qc_recovery.py` | 三项修复主体（+226/−108 中大部分） |",
+      "./request/attachments/zcode-qc执行结果-20261108.txt:35:现在重新干净地重写 `qc_recovery.py`，并应用所有修复：",
+      "./request/attachments/zcode-qc执行结果-20261108.txt:105:1. **新模块 `quality_inspector/qc_recovery.py`**：",
+      "./request/consumer-baselines/frozen/wiki-reading-high-high-20261109-r1/freeze.json:185:      \"projects/quality-inspector/quality_inspector/qc_recovery.py\": \"13384927f1a4955ba2e8c40771fd0dbd678c716dd0522e9fa00072bbe3ceb468\",",
+      "./projects/quality-inspector/README.md:266:`python -m quality_inspector.qc_recovery` 提供两个显式入口，不改变普通采集、四路判重、人工审核、发布与客户验收口径：",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:19:from quality_inspector import qc_recovery",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:116:    return qc_recovery.extract_evidence_references(note, allowed)",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:151:        plan = qc_recovery.visual_recovery_plan(harness.ledger, harness.job())",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:153:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:172:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:186:        self.assertEqual(audit['protocol'], qc_recovery.RECOVERY_PROTOCOL)",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:206:            qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:219:            qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:236:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:250:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:264:        plan = qc_recovery.visual_recovery_plan(harness.ledger, harness.job())",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:269:            receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:291:        plan = qc_recovery.visual_recovery_plan(harness.ledger, harness.job())",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:297:            receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:330:        with patch.object(qc_recovery, 'ModelGateway', lambda ledger: UnknownGateway(ledger)):",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:332:                qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:352:        with patch.object(qc_recovery.semantic_runtime, 'bind_result',",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:355:                qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:373:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:386:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:397:        receipt = qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:408:        plan = qc_recovery.visual_recovery_plan(harness.ledger, harness.job())",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:419:            qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:427:        with patch.object(qc_recovery, 'rule_ids', lambda: tampered):",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:429:                qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:440:            qc_recovery.recover_visual(harness.config_path, harness.ledger.path, harness.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:469:        receipt = qc_recovery.recover_visual(self.config_path, self.ledger.path,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:484:        self.assertEqual(record['evidence_recovery']['protocol'], qc_recovery.RECOVERY_PROTOCOL)",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:521:        receipt = qc_recovery.reconcile(self.config_path, self.ledger.path, self.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:537:        receipt = qc_recovery.reconcile(self.config_path, self.ledger.path, self.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:546:        receipt = qc_recovery.reconcile(self.config_path, self.ledger.path, self.job_id,",
+      "./projects/quality-inspector/tests/test_qc_recovery_20261108.py:558:            qc_recovery.reconcile(path, self.ledger.path, self.job_id, self.root / 'x.json')",
+      "./docs/无版本运行改造清单与方案-20261111.md:91:| 28 QC 模型协议 | ai_worker.py 的视觉/文档 prompt_version；document_text_qc、document_request_dedup、qc_recovery 等 | 当前提示和工具结构直接生效；取消版本兼容特例；压缩传输、引用整理作为当前普通功能 |",
+      "./docs/设计说明.md:450:| 回执完整逐帧审核但检查项缺 `evidence_steps` 判 invalid | 仅 `qc_recovery.visual-recover` 可恢复：先用原始 bound Schema 对完整回复整体校验，可恢复错误只允许位于 `checks.<name>.evidence_steps`（或该检查仅缺该字段的 required）；额外根字段、`failure_assessment` 缺陷、`step_observations` 损坏一律不可恢复。原 note 内确定性帧引用（`qc-evidence-reference-normalization-1`，规则、匹配文本与步骤一并留档）归一化可确定项；不可确定项仅经显式授权的一次有界纠正请求（`qc-visual-evidence-recovery-1`，同帧同 SHA 原图+原回执重述）取得真实引用。claim 前按 plan 判定派发需求：从未派发分段回 normal worker、多段 whole-continuity 合并请求超出既有授权如实停止，二者 0 派发不改作业状态；`--allow-correction` 不隐式授权其他请求。全部终态回执按原账新增请求行实记派发（含 UNKNOWN 费用预留，另列历史 recovery 请求）。原 invalid 字节与费用永不改写，纠正请求独立记账且失败不重发 |",
+      "./docs/设计说明.md:451:| 传输超时等 UNKNOWN | `qc_recovery.reconcile` 只读核对原账与迟到已结算答案；无迟到结果保持 UNKNOWN 与费用预留，不自动重试、不记零费用、不当作 PASS |",
+      "./docs/版本维护代码索引-20261111.md:996:### [qc_recovery.py](../projects/quality-inspector/quality_inspector/qc_recovery.py)",
+      "./docs/工程说明.md:150:2026-11-08 独立 AI QC 回执修复一轮（`qc/ai-review-20261108`，只改 quality-inspector）：新增 `python -m quality_inspector.qc_recovery`（`visual-recover`/`reconcile`）。`visual-recover` 针对\"回执为完整逐帧审核、四项结论合法、仅每项缺 `evidence_steps`\"被网关判 invalid_response 的 ai-visual 作业：先按 `qc-evidence-reference-normalization-1` 确定性规则从原 note 提取帧引用（`帧a至帧b`/`帧n`/`第n步`/与供应帧数完全相等的\"N帧\"全称引用；越界、计数不符或无引用一律视为不可确定，不默认填空、不自动补全部步骤）；不可确定的检查项须经显式 `--allow-correction` 才发一次有界纠正请求（新 purpose `visual-part-N-evidence-recovery`，携带原回执与原 prompt 重建字节一致的材料、同帧同 SHA 原图，模型只重述指定检查并给出真实帧引用；失败/UNKNOWN 不再重发）。原 invalid 回执、请求字节和费用永不改写；恢复后在作业结果与 qc-review-2 记录内保留 `evidence_recovery` 审计（原请求 ID/状态、逐项匹配文本与规则、纠正请求账）。`reconcile` 为只读对账入口：核对原账请求行（含 SHA）、迟到已结算答案与 UNKNOWN/费用预留，无迟到结果时保持 UNKNOWN、不重发、不把 UNKNOWN 记零或当 PASS（ai-documents 传输超时按此处理；ai-difference 单样本 NOT_APPLICABLE_EMPTY_SET 为如实结果，不虚构邻居）。离线：`tests/test_qc_recovery_20261108.py` 19 例（合法回复/缺 evidence_steps/越界引用/可确定与不可确定映射/原 invalid 保留/单次有界纠正/样本与规则哈希绑定/SYNTHETIC 标记/prepare→invalid→恢复→report 全链）；quality-inspector 全量 473 例与基线 f4db1fe 逐例对比新增全过、既有 35 失败集完全一致（预存）。真实纠正请求与真实独立 QC 重跑待 A/B 窗口后另行授权（REAL_GLM_VALIDATION_PENDING）。[验证目录](../verify_results/qc-ai-review-20261108/)（worktree 内，含主区原件 SHA 核对副本）",
+      "./docs/工程说明.md:421:| 回执恢复对账 | `qc_recovery.py`：`visual-recover`（确定性帧引用归一化 + 一次有界纠正请求，原 invalid 保留）与 `reconcile`（原账只读对账，UNKNOWN 不重发） |"
+    ],
+    "code_references_after": []
+  }
+}

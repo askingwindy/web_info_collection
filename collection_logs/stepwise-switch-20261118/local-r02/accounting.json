@@ -1,0 +1,160 @@
+{
+  "round": "local-r02",
+  "checks": 136,
+  "passed_checks": 132,
+  "elapsed_seconds": 37.64719270798378,
+  "rows": [
+    {
+      "chain": "operation",
+      "seconds": 6.720072874915786,
+      "saved": true,
+      "effective_steps": 5,
+      "actual_dispatches": 5,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 8
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ]
+    },
+    {
+      "chain": "reading",
+      "seconds": 8.867274207994342,
+      "saved": true,
+      "effective_steps": 5,
+      "actual_dispatches": 5,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 8
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ]
+    },
+    {
+      "chain": "shortflow",
+      "seconds": 3.3336893329396844,
+      "saved": false,
+      "effective_steps": 0,
+      "actual_dispatches": 2,
+      "failure_class": "collector",
+      "stop_reason": "short_flow",
+      "requests": {
+        "succeeded": 3
+      },
+      "claims": {
+        "failed": 1
+      },
+      "CLI_exports": [
+        "NOT_RUN"
+      ]
+    },
+    {
+      "chain": "protocol",
+      "seconds": 2.0096022919751704,
+      "saved": false,
+      "effective_steps": 0,
+      "actual_dispatches": 0,
+      "failure_class": "model",
+      "stop_reason": "protocol_error",
+      "requests": {
+        "invalid_response": 2
+      },
+      "claims": {
+        "failed": 1
+      },
+      "CLI_exports": [
+        "NOT_RUN"
+      ]
+    },
+    {
+      "chain": "network",
+      "seconds": 2.0809961250051856,
+      "saved": false,
+      "effective_steps": 0,
+      "actual_dispatches": 1,
+      "failure_class": "network",
+      "stop_reason": "error",
+      "requests": {
+        "succeeded": 1
+      },
+      "claims": {
+        "failed": 1
+      },
+      "CLI_exports": [
+        "NOT_RUN"
+      ]
+    },
+    {
+      "chain": "select",
+      "seconds": 7.384126625023782,
+      "saved": true,
+      "effective_steps": 6,
+      "actual_dispatches": 6,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 10
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ]
+    },
+    {
+      "chain": "rotated",
+      "seconds": 6.47100387501996,
+      "saved": true,
+      "effective_steps": 5,
+      "actual_dispatches": 5,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 8
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ]
+    }
+  ],
+  "failed_checks": [
+    {
+      "chain": "operation",
+      "name": "export_stepwise_chapter",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "export_stepwise_chapter",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "export_stepwise_chapter",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "export_stepwise_chapter",
+      "pass": false,
+      "detail": null
+    }
+  ]
+}

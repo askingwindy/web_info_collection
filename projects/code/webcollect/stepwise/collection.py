@@ -18,7 +18,7 @@ from ..runtime import ImageCommitConflict
 from ..storage import write_json
 from . import annotation as annotation_module
 from . import finalize, prompt, records
-from .session import StepwiseSession, stepwise_caller
+from .session import StepwiseSession, exception_classification, stepwise_caller
 
 STEPWISE_FINALIZATION = 'stepwise-finalization.json'
 
@@ -188,6 +188,7 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
                 task_goal=session.goal, actions_summary=actions_summary, site_tasks=site_tasks),
             images=[first_frame['png'], final_frame['png']],
             reasoning_effort='high', dispatch_deadline=session._soft_deadline(),
+            request_deadline=session._hard_deadline(),
             round_index=session.decision_round + 1, tool_name='submit_writeback')
         writeback = finalize.validate_writeback(
             response.get('arguments') or {}, mode=session.mode,
@@ -211,12 +212,20 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
                 actions_summary=actions_summary, final_result=writeback['final_result'],
                 completion_judgement=writeback['completion_judgement']),
             images=unique_images, reasoning_effort='high',
-            dispatch_deadline=session._soft_deadline(),
+            dispatch_deadline=session._soft_deadline(), request_deadline=session._hard_deadline(),
             round_index=session.decision_round + 2, tool_name='submit_judgement')
         judgement = finalize.validate_judgement(response.get('arguments') or {})
         judgement['request_id'] = response.get('request_id')
     except finalize.FinalizationRejected as error:
         return await settle_failure('collector', 'stepwise_' + str(error))
+    except Exception as error:
+        from ..batch_core import OutcomeUnknown
+        if isinstance(error, OutcomeUnknown):
+            summary['unknown'] = True
+            return await settle_failure('interrupted', 'stepwise_unknown:' + str(error))
+        reason, failure_class = exception_classification(error)
+        return await settle_failure(failure_class,
+            'stepwise_' + reason + ':' + type(error).__name__ + ': ' + str(error))
     if not finalize.judgement_passed(judgement):
         return await settle_failure('collector', 'stepwise_judgement_failed:'
                                     + judgement['reason'][:200])

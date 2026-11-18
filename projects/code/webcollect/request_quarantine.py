@@ -185,7 +185,6 @@ def _closed_execution(registry, attempt_id, authorization, *, definite=False, tr
     if ((not transport and (closed.get('pid') != started.get('pid')
                             or closed.get('started_at') != started.get('started_at')))
             or closed.get('finished_at', 0) <= started.get('started_at', 0)
-            or closed.get('source_drift') != []
             or authorization.get('reviewed_normal_entry_browser_cleanup') is not True):
         raise ValueError('Original launch/exit binding and reviewed normal-entry browser cleanup required')
     if (primary.get('attempt_id') != attempt_id or not primary.get('failure_class')

@@ -82,12 +82,14 @@ def disjoint_requests(ledger, *, scope=None, urls=(), categories=(), independent
         # These new protocols record their semantic work unit before dispatch.
         # A refusal/timeout stays on that unit, even across later batches.
         with ledger.connect() as con:
-            rows=con.execute("SELECT r.id,r.error,r.response,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
-                "WHERE r.state='unknown' AND r.finished IS NOT NULL AND j.state IN ('review_required','queued') AND j.attempts>0")
+            rows=con.execute("SELECT r.id,r.state,r.error,r.response,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
+                "WHERE r.state IN ('unknown','failed') AND r.finished IS NOT NULL AND j.state IN ('review_required','queued','failed') AND j.attempts>0")
             for row in rows:
                 response=json.loads(row['response'] or '{}')
                 code=response.get('provider_error',{}).get('provider_code')
-                if row['error']!='TimeoutError' and code not in ('1113','1301','1302','1305'):
+                status=response.get('provider_error',{}).get('http_status')
+                rejected=row['state']=='failed' and type(status) is int and 400<=status<500
+                if not rejected and row['error']!='TimeoutError' and code not in ('1113','1301','1302','1305'):
                     continue
                 original=json.loads(row['payload']).get('input',{})
                 # New plans stamp the stable name; old rows keep their generational values.
@@ -99,6 +101,9 @@ def disjoint_requests(ledger, *, scope=None, urls=(), categories=(), independent
                         allowed.add(row['id'])
                 elif row['kind']=='ai-target-page-purpose-1' and original.get('source_uris'):
                     if set(urls).intersection(original['source_uris']):
+                        if rejected:
+                            from webcollect.model_gateway import ProviderRejected
+                            raise ProviderRejected(status, row['id'], response['provider_error'])
                         raise OutcomeUnknown('Original target purpose request unsettled; reconcile original job: '+str(row['id']))
                     allowed.add(row['id'])
                 elif row['kind']=='ai-grounded-entry-ids-1' and original.get('target_site_categories') and original.get('source_hosts'):

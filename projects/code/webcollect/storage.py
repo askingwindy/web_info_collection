@@ -11,8 +11,6 @@ from zoneinfo import ZoneInfo
 
 def write_json(path, data):
     path = Path(path)
-    from .workspace_paths import bind
-    bind(path)
     with path.open('x', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
         f.write('\n')

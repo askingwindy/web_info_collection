@@ -125,6 +125,8 @@ class ScreenshotPlanSession(RawSessionCore):
     # ------------------------------------------------------------------ run
 
     async def run(self):
+        from webcollect.collection_strategy import Strategy2Frozen
+        raise Strategy2Frozen()
         stop = None
         try:
             if self.native or self.glm_session_id:

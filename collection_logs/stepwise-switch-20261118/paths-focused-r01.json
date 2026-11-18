@@ -1,0 +1,13 @@
+{
+  "command": [
+    "projects/code/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "projects/code/tests/test_candidate_storage_core.py",
+    "projects/code/tests/test_core_contract.py::QCSourceAuditContract"
+  ],
+  "returncode": 0,
+  "elapsed_seconds": 0.465,
+  "log": "verify_results/stepwise-switch-20261118-r01/paths-focused-r01.log"
+}

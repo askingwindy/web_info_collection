@@ -295,11 +295,6 @@ def validate_preflight_binding(plan, plan_path=None):
     report = json.loads(path.read_text())
     if report.get('schema_version') != 'webcollect-preflight-report-1':
         raise ValueError('预检报告格式错误')
-    if report.get('source_changed_during_run'):
-        raise ValueError('预检运行中源码变化，不能交给正式采集')
-    sources = report.get('source_files_sha256', {})
-    if set(sources) != set(SOURCE_FILES) or any(digest(Path(__file__).parent / name) != value for name, value in sources.items()):
-        raise ValueError('预检运行源码已变化，请重新预检')
     original_path = path.parent / 'input-plan.json'
     if digest(original_path) != report['input_plan_sha256']:
         raise ValueError('预检原始计划SHA变化')
@@ -350,6 +345,9 @@ async def preflight_plan(plan_path, output, samples=3, interval_ms=400,
     plan_path = Path(plan_path)
     source_input_bytes = plan_path.read_bytes()
     plan = json.loads(source_input_bytes)
+    from .collection_strategy import select
+    for task in plan['tasks']:
+        select(task)
     validate_plan(plan)
     if plan.get('media_preflight'):
         validate_preflight_binding(plan)
@@ -444,8 +442,6 @@ async def preflight_plan(plan_path, output, samples=3, interval_ms=400,
               'actions_executed': [], 'sample_ids_allocated': 0, 'QC_executed': False,
               'scope': 'Read-only planning advice, not synchronized delivery evidence or QC approval.'}
     write_json(output / 'report.json', report)
-    if changed:
-        raise ValueError('预检运行中源码变化，证据已保留但不输出可采集计划：' + ','.join(changed))
     scheduled = schedule_plan(plan, records, output / 'report.json', digest(output / 'report.json'), preserve_order)
     write_json(output / 'scheduled-plan.json', scheduled)
     validate_preflight_binding(scheduled)

@@ -1,0 +1,208 @@
+{
+  "status": "LOCAL_OFFLINE_PASS",
+  "head": "5bf37d7",
+  "core": {
+    "maintained_items": 39,
+    "passed": 39,
+    "pytest_seconds": 2.42,
+    "command": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "-q"
+    ],
+    "returncode": 0,
+    "wall_seconds": 2.638
+  },
+  "baseline": {
+    "passed": 50,
+    "subtests_passed": 3,
+    "pytest_seconds": 35.3
+  },
+  "offline_coverage": {
+    "scenarios": 7,
+    "selected_checks_passed": 136,
+    "source_rounds": {
+      "local-r03": 85,
+      "local-r02_failure_cases_only": 51
+    },
+    "rows": [
+      {
+        "chain": "operation",
+        "seconds": 6.7399621669901535,
+        "saved": true,
+        "effective_steps": 5,
+        "actual_dispatches": 5,
+        "failure_class": null,
+        "stop_reason": "complete_success",
+        "requests": {
+          "succeeded": 8
+        },
+        "claims": {
+          "succeeded": 1
+        },
+        "CLI_exports": [
+          "EXPORTED_FORMAT_VALID"
+        ],
+        "candidate_receipts": [
+          "verify_results/stepwise-switch-20261118-r01/local-r03/operation/collections/consumer/1f48f06a-f77e-405b-aeb3-fee50ae2fb7e/execution/candidate-receipt.json"
+        ],
+        "evidence_round": "local-r03"
+      },
+      {
+        "chain": "reading",
+        "seconds": 8.461416790960357,
+        "saved": true,
+        "effective_steps": 5,
+        "actual_dispatches": 5,
+        "failure_class": null,
+        "stop_reason": "complete_success",
+        "requests": {
+          "succeeded": 8
+        },
+        "claims": {
+          "succeeded": 1
+        },
+        "CLI_exports": [
+          "EXPORTED_FORMAT_VALID"
+        ],
+        "candidate_receipts": [
+          "verify_results/stepwise-switch-20261118-r01/local-r03/reading/collections/consumer/6b3ca336-ce6a-4a10-8f34-60c2edf80d85/execution/candidate-receipt.json"
+        ],
+        "evidence_round": "local-r03"
+      },
+      {
+        "chain": "select",
+        "seconds": 7.274817124940455,
+        "saved": true,
+        "effective_steps": 6,
+        "actual_dispatches": 6,
+        "failure_class": null,
+        "stop_reason": "complete_success",
+        "requests": {
+          "succeeded": 10
+        },
+        "claims": {
+          "succeeded": 1
+        },
+        "CLI_exports": [
+          "EXPORTED_FORMAT_VALID"
+        ],
+        "candidate_receipts": [
+          "verify_results/stepwise-switch-20261118-r01/local-r03/select/collections/consumer/7b3cd343-1bea-41b2-b6c0-29491b2c5935/execution/candidate-receipt.json"
+        ],
+        "evidence_round": "local-r03"
+      },
+      {
+        "chain": "rotated",
+        "seconds": 6.498159082955681,
+        "saved": true,
+        "effective_steps": 5,
+        "actual_dispatches": 5,
+        "failure_class": null,
+        "stop_reason": "complete_success",
+        "requests": {
+          "succeeded": 8
+        },
+        "claims": {
+          "succeeded": 1
+        },
+        "CLI_exports": [
+          "EXPORTED_FORMAT_VALID"
+        ],
+        "candidate_receipts": [
+          "verify_results/stepwise-switch-20261118-r01/local-r03/rotated/collections/consumer/1fa7d39f-d2d3-4a30-94c2-b9ad0f6849a9/execution/candidate-receipt.json"
+        ],
+        "evidence_round": "local-r03"
+      },
+      {
+        "chain": "shortflow",
+        "seconds": 3.3336893329396844,
+        "saved": false,
+        "effective_steps": 0,
+        "actual_dispatches": 2,
+        "failure_class": "collector",
+        "stop_reason": "short_flow",
+        "requests": {
+          "succeeded": 3
+        },
+        "claims": {
+          "failed": 1
+        },
+        "CLI_exports": [
+          "NOT_RUN"
+        ],
+        "evidence_round": "local-r02"
+      },
+      {
+        "chain": "protocol",
+        "seconds": 2.0096022919751704,
+        "saved": false,
+        "effective_steps": 0,
+        "actual_dispatches": 0,
+        "failure_class": "model",
+        "stop_reason": "protocol_error",
+        "requests": {
+          "invalid_response": 2
+        },
+        "claims": {
+          "failed": 1
+        },
+        "CLI_exports": [
+          "NOT_RUN"
+        ],
+        "evidence_round": "local-r02"
+      },
+      {
+        "chain": "network",
+        "seconds": 2.0809961250051856,
+        "saved": false,
+        "effective_steps": 0,
+        "actual_dispatches": 1,
+        "failure_class": "network",
+        "stop_reason": "error",
+        "requests": {
+          "succeeded": 1
+        },
+        "claims": {
+          "failed": 1
+        },
+        "CLI_exports": [
+          "NOT_RUN"
+        ],
+        "evidence_round": "local-r02"
+      }
+    ],
+    "local_r03_wall_seconds": 29.593438958050683,
+    "local_r02_whole_round_seconds": 37.64719270798378,
+    "local_r02_whole_round_passed": false,
+    "mock_model_requests_in_selected_scenarios": 40,
+    "external_model_requests": 0,
+    "external_target_requests": 0,
+    "production_samples_added": 0
+  },
+  "static": {
+    "python_files_parsed": 270,
+    "git_diff_check": "PASS",
+    "stepwise_prompt_records_finalize_unchanged": true,
+    "original_stepwise_SDD_body_unchanged": true,
+    "staging_empty": true,
+    "final_product_matches_local_r03": true,
+    "final_product_source_files_checked": 239,
+    "deleted_module_python_references": 0,
+    "specified_source_gate_patterns_found": 0
+  },
+  "production_or_history_database_mutations_performed": false,
+  "commit_performed": false,
+  "push_PR_upload_performed": false,
+  "pending_decisions": {
+    "D5": "local commit not performed",
+    "D6": "historical claim release not performed"
+  },
+  "D8": "user approved selective replacement",
+  "real_20_or_100_page_collection": "NOT_RUN",
+  "QC": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "published": false,
+  "customer_acceptance": "UNKNOWN"
+}

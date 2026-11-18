@@ -317,12 +317,11 @@ def _validate(packet_ref, review_ref, task, *, current=None, live=False, mode=No
     observer = source.get('snapshot.js') if isinstance(source, dict) else None
     _require(isinstance(observer, str) and re.fullmatch(r'[0-9a-f]{64}', observer),
              'bound packet observer identity missing or malformed')
-    # Historical meaning is recompiled against its own SHA-bound observation.
-    # Live entry still compiles with the current observer and checks all sources.
+    # Recompile against the original observation, independently of current source bytes.
     meaning = descriptor(packet)
     _require(packet['task'] == _base(task) and packet['roles'] == _native_roles(
                  packet['capability'], packet['spec'], task,
-                 _observer_sha256=None if live else observer)
+                 _observer_sha256=observer)
              and packet.get('meaning') in (meaning, {**meaning, 'schema_version': LEGACY_MEANING}),
              'compiled proposal/roles/meaning changed')
     pairs = [_frame(frame, actual_mode) for frame in packet['frames']]
@@ -355,8 +354,6 @@ def _validate(packet_ref, review_ref, task, *, current=None, live=False, mode=No
         current = timestamp(current)
         _require(reviewed <= current < expiry, 'review expired or future')
         validate_capability(packet['capability'], now=current, require_ready=True)
-        from .task_generation import generation_source_identity
-        _require(packet['source_identity'] == generation_source_identity(), 'admission source version changed')
     return packet, review, signature
 
 
@@ -395,12 +392,10 @@ def verify_collection_entry(plan, registry, capture_output):
     admitted = [task for task in plan.get('tasks', []) if 'task_admission' in task]
     if not admitted:
         return
-    from .task_generation import (generation_source_identity, read_customer_history,
+    from .task_generation import (read_customer_history,
                                   bind_formal_history, verify_task_admissions)
     generation = plan.get('generation', {})
     _require(generation.get('mode') == 'real', 'direct admission collection requires real generation')
-    sources = generation_source_identity()
-    _require(generation.get('source_identity') == sources, 'generation source changed before direct collection')
     capture = Path(capture_output).resolve()
     _require(Path(capture_output).name == 'capture' and capture.name == 'capture',
              'admitted direct output must be the generation wrapper output/capture; use generation execute')
@@ -420,7 +415,6 @@ def verify_collection_entry(plan, registry, capture_output):
             records.append(packet['capability'])
     verify_task_admissions(plan, {'records': records}, registry, capture.parent,
                            customer_history=history, history_scope=current_scope)
-    _require(generation_source_identity() == sources, 'source changed during direct admission validation')
     return {'machine_status': 'PASS', 'scope': 'live admission binding only; not QC approval',
             'admitted_tasks_checked': len(admitted), 'history_records_checked': len(history)}
 
@@ -510,8 +504,7 @@ def completion_scroll(capability, spec, operations, assertions, *, _observer_sha
     _require(len(actions) == len(operations) and len(frames) == len(actions) + 2, 'functional action/frame sequence incomplete')
     pairs = [_frame(frame, mode) for frame in frames]; states = [pair[0] for pair in pairs]
     _require(all(state.get('url') == spec['page_uri'] for state in states), 'functional frames changed exact page')
-    from .task_generation import generation_source_identity
-    observer = generation_source_identity()['snapshot.js'] if _observer_sha256 is None else _observer_sha256
+    observer = pairs[0][1].get('observer_sha256') if _observer_sha256 is None else _observer_sha256
     _require(isinstance(observer, str) and re.fullmatch(r'[0-9a-f]{64}', observer),
              'functional observer identity missing or malformed')
     _require(all(capture.get('observer_sha256') == observer for _, capture in pairs), 'functional observer/source drift')

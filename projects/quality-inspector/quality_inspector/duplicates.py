@@ -168,14 +168,14 @@ def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, veri
     if len(paths)!=len(set(paths)):raise ValueError('Duplicate annotation input path')
     if cache and any(Path(cache).resolve().is_relative_to(p.parent) for p in paths):
         raise ValueError('Fingerprint cache must be outside inspected samples')
-    # A source/runtime change invalidates acceleration facts independently of
-    # review migration. The cache never supplies image SHA or release evidence.
+    # Source/runtime identity is audit information. Reuse fingerprints by the
+    # original annotation and image bytes; a cache never grants release evidence.
     import PIL
     implementation=hashlib.sha256((sha(__file__)+'|Pillow='+PIL.__version__).encode()).hexdigest()
     cached={}; hits=0; mismatches=[]
     if cache and Path(cache).is_file():
         value=json.loads(Path(cache).read_text())
-        if isinstance(value,dict) and value.get('schema_version')==CACHE_VERSION and value.get('implementation_sha256')==implementation and isinstance(value.get('records'),dict):cached=value['records']
+        if isinstance(value,dict) and value.get('schema_version')==CACHE_VERSION and isinstance(value.get('records'),dict):cached=value['records']
     updated={};rows=[];hashes=defaultdict(list);seen=set()
     for p in paths:
         a=json.loads(p.read_text());sid=a['sample_id']
@@ -192,7 +192,7 @@ def analyze_inputs(annotation_paths, evidence_contexts=None, *, cache=None, veri
             raw=directory/f'step_{st["step_id"]:03}.json' if directory else None;rr=json.loads(raw.read_text()) if raw and raw.is_file() else {}
             hashes[h].append({'sample_id':sid,'step':st['step_id'],'image_path':str(im),'tree_path':str(p.parent/st['ui_tree_path']),'raw_evidence':str(raw),'page_name':st['page_name'],'url':rr.get('state',{}).get('url',''),'action':st['action'],'visible_text':rr.get('state',{}).get('visible_text',''),'focused_values':[v for v in rr.get('state',{}).get('values',[]) if v.get('focused')]})
         annotation_sha=sha(p)
-        key=hashlib.sha256(canonical({'version':CACHE_VERSION,'implementation':implementation,'annotation':annotation_sha,'images':images}).encode()).hexdigest()
+        key=hashlib.sha256(canonical({'version':CACHE_VERSION,'annotation':annotation_sha,'images':images}).encode()).hexdigest()
         value=cached.get(key)
         valid=isinstance(value,dict) and set(value)=={'first_dhash','last_dhash','instruction_simhash'} and all(type(v)is int and 0<=v<2**64 for v in value.values())
         if not valid or verify_exhaustive:

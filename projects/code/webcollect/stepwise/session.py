@@ -46,7 +46,7 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
     from copy import deepcopy
 
     from ..agent_controller import _job_request_count
-    from ..model_gateway import ModelGateway
+    from ..model_gateway import ModelGateway, ProviderRejected
     from ..planning import object_sha256
 
     gateway = None
@@ -61,7 +61,7 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
             raise OutcomeUnknown('Original attempt has an unresolved request; no new dispatch: ' + pending)
 
     async def call(*, phase, system, tools, user_text, images, reasoning_effort,
-                   dispatch_deadline, round_index, tool_name):
+                   dispatch_deadline, round_index, tool_name, request_deadline=None):
         nonlocal gateway
         payload = {'protocol': 'stepwise', 'attempt_id': attempt_id,
                    'task_id': task['task_id'], 'site_uri': task['site_uri'],
@@ -94,9 +94,13 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
                 system=system, images=list(images), attempts=2,
                 output_limit=output_limit, reasoning_effort=reasoning_effort,
                 attempt_id=attempt_id, dispatch_deadline=dispatch_deadline,
+                request_deadline=request_deadline,
                 tool_choice=prompt.forced_tool_choice(tool_name))
             ledger.finish(job, result=response)
             return response
+        except ProviderRejected as error:
+            ledger.finish(job, 'failed', error=type(error).__name__ + ': ' + str(error))
+            raise
         except OutcomeUnknown as error:
             ledger.finish(job, 'review_required', error='unknown:' + type(error).__name__)
             raise
@@ -108,6 +112,25 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
     call.requests_used = lambda: usage()['used']
     call.guard_unresolved = guard_unresolved
     return call
+
+
+def exception_classification(error):
+    """确定异常责任；只分类，不重试或改写已派发请求。"""
+    from playwright.async_api import Error as BrowserError
+    from ..model_gateway import ProviderFinishIncomplete
+
+    if (isinstance(error, ProviderFinishIncomplete)
+            or isinstance(error, ValueError)
+            and str(error).startswith(('bounded_', 'consumer_protocol_no_progress'))):
+        return 'protocol_error', 'model'
+    failure_class = getattr(error, 'failure_class', None)
+    if failure_class:
+        return 'error', failure_class
+    if isinstance(error, BrowserError) and 'UNSUPPORTED_GEOMETRY' in str(error):
+        return 'capture_stale', 'collector'
+    if isinstance(error, BrowserError) and 'net::ERR_' in str(error):
+        return 'error', 'network'
+    return 'error', 'program'
 
 
 class StepwiseSession:
@@ -161,6 +184,11 @@ class StepwiseSession:
             return None
         return self.host_limits['started_monotonic'] + self.host_limits['soft_seconds']
 
+    def _hard_deadline(self):
+        if not self.host_limits:
+            return None
+        return self.host_limits['started_monotonic'] + self.host_limits['hard_seconds']
+
     def _soft_deadline_hit(self):
         deadline = self._soft_deadline()
         return deadline is not None and time.monotonic() >= deadline
@@ -193,8 +221,12 @@ class StepwiseSession:
             self.failure_class = 'model'
         except (EvidenceStale, browser.SnapshotFault) as error:
             self.stop_reason = 'capture_stale'
-            self.stop_summary = str(error)
-            self.failure_class = 'program'
+            self.stop_summary = type(error).__name__ + ': ' + str(error)
+            self.failure_class = ('collector' if isinstance(error, EvidenceStale)
+                                  or 'UNSUPPORTED_GEOMETRY' in str(error) else 'program')
+        except Exception as error:
+            self.stop_reason, self.failure_class = exception_classification(error)
+            self.stop_summary = type(error).__name__ + ': ' + str(error)
         receipt = self._close()
         return self._summary(receipt)
 
@@ -247,6 +279,7 @@ class StepwiseSession:
                 tools=prompt.next_action_tools(autonomous=self.mode == 'autonomous'),
                 user_text=user_text, images=[frame['refs']['numbered']['path']],
                 reasoning_effort='low', dispatch_deadline=self._soft_deadline(),
+                request_deadline=self._hard_deadline(),
                 round_index=self.decision_round + 1, tool_name='next_action')
             arguments = response.get('arguments') or {}
             self.decision_round += 1
@@ -379,16 +412,30 @@ class StepwiseSession:
             await browser.execute(self.page, action, dict(operation['arguments']), execution)
         except TimeoutError as error:
             execution_error, unknown_dispatch = 'dispatch_unknown:' + str(error), True
-        except ValueError as error:
-            execution_error = 'dispatch_failed:' + str(error)
+        except Exception as error:
+            if type(error) is ValueError:
+                execution_error = 'dispatch_failed:' + type(error).__name__ + ': ' + str(error)
+            else:
+                # A transport/program exception may occur after dispatch.
+                # Preserve the dispatch and its unsettled action result first.
+                record = self.journal.finish_step(
+                    seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=element,
+                    dispatched=True, action_executed=None,
+                    execution_error=type(error).__name__ + ': ' + str(error),
+                    before_frame=frame['frame_id'], after_frame=None, effect='dispatch_error',
+                    effective=False, omittable=False, omit_reason='dispatch_error',
+                    postconditions_checked=False)
+                self._remember_failed_dispatch(seq, record, None)
+                raise
         if unknown_dispatch:
             # 派发结果未知：保留 unknown，不重做点击或输入。
-            self.journal.finish_step(
+            record = self.journal.finish_step(
                 seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=element,
                 dispatched=True, action_executed=None, execution_error=execution_error,
                 before_frame=frame['frame_id'], after_frame=None, effect='unknown',
                 effective=False, omittable=False, omit_reason='dispatch_result_unknown',
                 postconditions_checked=False)
+            self._remember_failed_dispatch(seq, record, None)
             self._stop('unknown_dispatch', '浏览器派发结果未知，保留原始记录不重发',
                        'unknown', unknown=True)
             return  # 不可达：_stop 必然抛出
@@ -399,11 +446,19 @@ class StepwiseSession:
             after = self.journal.add_frame(captured)
             after_frame = after['frame_id']
             postconditions_checked = True
-        except (EvidenceStale, browser.SnapshotFault):
-            if execution_error is None:
-                execution_error = 'after_capture_failed'
+        except Exception as error:
+            record = self.journal.finish_step(
+                seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=element,
+                dispatched=True, action_executed=execution_error is None,
+                execution_error=(execution_error + '; ' if execution_error else '')
+                                + 'after_capture:' + type(error).__name__ + ': ' + str(error),
+                before_frame=frame['frame_id'], after_frame=None, effect='capture_failed',
+                effective=False, omittable=False, omit_reason='after_capture_failed',
+                postconditions_checked=False)
+            self._remember_failed_dispatch(seq, record, None)
+            raise
         if execution_error:
-            # 派发失败（如 select 选项不存在）：留证、反馈，不计交付。
+            # 派发失败：留证、反馈，不计交付；不存在的 select 选项已在派发前拒绝。
             record = self.journal.finish_step(
                 seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=element,
                 dispatched=True, action_executed=False, execution_error=execution_error,
@@ -411,10 +466,7 @@ class StepwiseSession:
                 effect='dispatch_failed', effective=False, omittable=False,
                 omit_reason=execution_error, postconditions_checked=postconditions_checked,
                 after_state=self.journal.frames[after_frame]['state'] if after_frame else None)
-            self.failed_dispatches.append({'dispatch_seq': seq,
-                                           'after_frame': after_frame,
-                                           'ended_at': record['ended_at'],
-                                           'error': execution_error})
+            self._remember_failed_dispatch(seq, record, after_frame)
             self.feedback = '动作派发失败：%s。请换一种方式。' % execution_error[:120]
             return 'recaptured' if after_frame else 'failed'
         # 落地范围与排除检查（重定向/popup 落地后再检查）。
@@ -424,13 +476,14 @@ class StepwiseSession:
                                                                  self.allowed_hosts):
             issue = 'out_of_scope:' + str(after_state.get('url'))
         if issue:
-            self.journal.finish_step(
+            record = self.journal.finish_step(
                 seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=element,
                 dispatched=True, action_executed=True, execution_error=None,
                 before_frame=frame['frame_id'], after_frame=after_frame,
                 effect='landing_rejected', effective=False, omittable=False,
                 omit_reason=issue, postconditions_checked=postconditions_checked,
                 after_state=after_state)
+            self._remember_failed_dispatch(seq, record, after_frame)
             self._stop('landing_rejected', '落地页超出候选范围或触发排除规则：' + issue, 'collector')
         # 效果判断：wait 不计有效步；确认无效果才可省略。
         before_state = frame['state']
@@ -473,6 +526,14 @@ class StepwiseSession:
             self._stop('no_effect', '连续 %d 次确认无效果' % NO_EFFECT_LIMIT, 'model')
         self.feedback = ''
         return 'delivered'
+
+    def _remember_failed_dispatch(self, seq, record, after_frame):
+        self.failed_dispatches.append({
+            'dispatch_seq': seq,
+            'step_file': str((self.root / ('failed-%03d.json' % seq)).resolve()),
+            'after_frame': after_frame, 'ended_at': record['ended_at'],
+            'action_executed': record['action_executed'],
+            'error': record['execution_error']})
 
     def _history_append(self, row, document_changed):
         action = row['operation']['action_type']
@@ -531,8 +592,9 @@ class StepwiseSession:
                           'after_frame': row['after_frame'], 'ended_at': row['ended_at'],
                           'effective': row['effective'], 'omittable': row['omittable']}
                          for row in self.dispatch_rows]
-        steps_payload += [{'step_file': 'step_%03d.json' % item['dispatch_seq'],
-                           'dispatched': True, 'after_frame': item.get('after_frame'),
+        steps_payload += [{'step_file': item['step_file'],
+                           'dispatched': True, 'action_executed': item['action_executed'],
+                           'after_frame': item.get('after_frame'),
                            'ended_at': item['ended_at'], 'effective': False,
                            'omittable': False, 'failed': True}
                           for item in self.failed_dispatches]

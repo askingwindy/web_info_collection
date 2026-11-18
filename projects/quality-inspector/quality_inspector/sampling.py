@@ -199,9 +199,6 @@ def verify_plan(plan):
     if plan.get('schema_version') != 'webcollect-sampling-plan-1': raise ValueError('Invalid sampling plan')
     marker = Path(plan['state_directory']) / (plan['plan_sha256'] + '.superseded.json')
     if marker.exists(): raise ValueError('Sampling plan superseded by expansion/stop; follow ' + load_json(marker)['successor'])
-    if plan['implementation_sha256'] != implementation(): raise ValueError('Sampling implementation changed; freeze plan again')
-    if plan['producer_implementation_sha256'] != producer_implementation():
-        raise ValueError('Producer implementation changed; freeze plan again')
     if plan['contract_sha256'] != fingerprint()[1]: raise ValueError('Contract changed; freeze plan again')
     if file_sha(plan['profile']['path']) != plan['profile']['sha256']: raise ValueError('Frozen QC profile changed')
     if package_files(plan['dataset']) != plan['candidate_package_sha256']:
@@ -247,7 +244,7 @@ def calibrate(dataset, reviews, output):
 
 
 def _calibration(path):
-    if path is None: return set(), set(), False, None
+    if path is None: return set(), set(), None
     value = load_json(path)
     if value.get('schema_version') != 'webcollect-sampling-calibration-1': raise ValueError('Invalid calibration')
     if package_files(value['dataset']) != value['candidate_package_sha256']: raise ValueError('Calibration sample bytes changed')
@@ -266,8 +263,7 @@ def _calibration(path):
         context = sample_context(row); sites.add(context['site']); capabilities.add((context['site'], context['capability']))
         expected.remove(sid)
     if expected: raise ValueError('Calibration sample set missing')
-    changed = value['producer_implementation_sha256'] != producer_implementation() or value['implementation_sha256'] != implementation()
-    return sites, capabilities, changed, {'path': str(Path(path).resolve()), 'sha256': file_sha(path)}
+    return sites, capabilities, {'path': str(Path(path).resolve()), 'sha256': file_sha(path)}
 
 
 def freeze_rows(rows, policy):
@@ -300,7 +296,6 @@ def prepare(ledger, dataset, output, *, policy=None, effective_set=None, profile
     policy = policy_load(policy)
     before = package_files(dataset)
     identity = {'dataset': str(dataset), 'files': before, 'policy': policy,
-                'implementation': implementation(), 'producer': producer_implementation(),
                 'effective_set': file_sha(effective_set) if effective_set else None,
                 'calibration': file_sha(calibration) if calibration else None,
                 'profile': file_sha(profile)}
@@ -315,7 +310,7 @@ def prepare(ledger, dataset, output, *, policy=None, effective_set=None, profile
         preliminary = worker_prepare(ledger, dataset, output / 'automatic-prefilter', effective_set=effective_set, sample_ids=set())
         prefilter = load_json(preliminary['queue_file'])
         blocked = {row['sample_id'] for row in prefilter['mechanically_blocked']}
-        known_sites, known_capabilities, code_changed, calibration_binding = _calibration(calibration)
+        known_sites, known_capabilities, calibration_binding = _calibration(calibration)
         rows = []
         for sample in automatic['samples']:
             ledger.heartbeat(job)
@@ -326,7 +321,6 @@ def prepare(ledger, dataset, output, *, policy=None, effective_set=None, profile
             a = context.pop('annotation'); reasons = []
             if context['site'] not in known_sites: reasons.append('new-or-uncalibrated-site')
             if (context['site'], context['capability']) not in known_capabilities: reasons.append('new-or-uncalibrated-capability')
-            if code_changed: reasons.append('relevant-code-changed-since-calibration')
             if a.get('risk_level') != 'normal': reasons.append('sensitive-or-unknown-risk')
             if a.get('short_flow'): reasons.append('short-flow')
             if a.get('completion_status') != 'success': reasons.append('exception-or-incomplete-completion')

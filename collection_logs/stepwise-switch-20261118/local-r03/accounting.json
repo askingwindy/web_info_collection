@@ -1,0 +1,95 @@
+{
+  "round": "local-r03",
+  "checks": 85,
+  "passed_checks": 85,
+  "elapsed_seconds": 29.593438958050683,
+  "rows": [
+    {
+      "chain": "operation",
+      "seconds": 6.7399621669901535,
+      "saved": true,
+      "effective_steps": 5,
+      "actual_dispatches": 5,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 8
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ],
+      "candidate_receipts": [
+        "verify_results/stepwise-switch-20261118-r01/local-r03/operation/collections/consumer/1f48f06a-f77e-405b-aeb3-fee50ae2fb7e/execution/candidate-receipt.json"
+      ]
+    },
+    {
+      "chain": "reading",
+      "seconds": 8.461416790960357,
+      "saved": true,
+      "effective_steps": 5,
+      "actual_dispatches": 5,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 8
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ],
+      "candidate_receipts": [
+        "verify_results/stepwise-switch-20261118-r01/local-r03/reading/collections/consumer/6b3ca336-ce6a-4a10-8f34-60c2edf80d85/execution/candidate-receipt.json"
+      ]
+    },
+    {
+      "chain": "select",
+      "seconds": 7.274817124940455,
+      "saved": true,
+      "effective_steps": 6,
+      "actual_dispatches": 6,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 10
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ],
+      "candidate_receipts": [
+        "verify_results/stepwise-switch-20261118-r01/local-r03/select/collections/consumer/7b3cd343-1bea-41b2-b6c0-29491b2c5935/execution/candidate-receipt.json"
+      ]
+    },
+    {
+      "chain": "rotated",
+      "seconds": 6.498159082955681,
+      "saved": true,
+      "effective_steps": 5,
+      "actual_dispatches": 5,
+      "failure_class": null,
+      "stop_reason": "complete_success",
+      "requests": {
+        "succeeded": 8
+      },
+      "claims": {
+        "succeeded": 1
+      },
+      "CLI_exports": [
+        "EXPORTED_FORMAT_VALID"
+      ],
+      "candidate_receipts": [
+        "verify_results/stepwise-switch-20261118-r01/local-r03/rotated/collections/consumer/1fa7d39f-d2d3-4a30-94c2-b9ad0f6849a9/execution/candidate-receipt.json"
+      ]
+    }
+  ],
+  "source_unchanged": true,
+  "driver_unchanged": true,
+  "active_fixture_processes": []
+}

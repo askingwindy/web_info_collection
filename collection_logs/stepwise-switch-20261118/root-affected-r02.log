@@ -1,0 +1,80 @@
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+_ StrategyResultContract.test_execute_allows_source_changes_without_registry_snapshot _
+
+self = <test_core_contract.StrategyResultContract testMethod=test_execute_allows_source_changes_without_registry_snapshot>
+
+    def test_execute_allows_source_changes_without_registry_snapshot(self):
+        import asyncio
+        import sqlite3
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock, patch
+        from webcollect import task_generation as generation
+        from webcollect.batch_core import file_sha
+        from webcollect.session_core import build_url_task
+        task = build_url_task(url='https://example.org/tool', task_version='offline')
+        freeze(task)
+        from webcollect.planning import object_sha256
+        task['task_id'] = 'react-' + object_sha256({'url': task['initial_url'], 'spec': task['workflow_proposal']['spec']})[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / 'history.json'; manifest.write_text('{}')
+            history = {'schema_version': 'webcollect-task-history-scope-1',
+                       'manifest': {'path': str(manifest), 'sha256': file_sha(manifest)}}
+            plan = {'schema_version': 'plan-m4', 'tasks': [task], 'generation': {
+                'mode': 'real', 'history_scope': history, 'source_identity': {'old.py': 'old'}}}
+            for name, value in (('plan.json', plan), ('catalog.json', {'mode': 'real', 'records': []}),
+                                ('policy.json', {'campaign_id': 'offline'})):
+                (root / name).write_text(json.dumps(value))
+            registry = root / 'registry.sqlite3'
+            with sqlite3.connect(registry) as con:
+                con.execute('CREATE TABLE m4_campaigns(campaign_id,policy_json)')
+                con.execute('INSERT INTO m4_campaigns VALUES(?,?)', ('offline', '{}'))
+            ledger = SimpleNamespace(config={'mode': 'real'}, enqueue=Mock(return_value='job'),
+                get=Mock(return_value={'state': 'queued'}), finish=Mock(), heartbeat=Mock())
+            collected = AsyncMock(return_value={'collection_status': 'complete', 'collected': 0})
+            with patch.object(generation, 'generation_source_identity', return_value={'new.py': 'new'}), \
+                 patch.object(generation, 'read_customer_history', return_value=([], history)), \
+                 patch.object(generation, 'bind_formal_history', side_effect=lambda value: value), \
+                 patch('webcollect.current_chain.require_plan', return_value=False), \
+                 patch('webcollect.current_chain.registry_snapshot', side_effect=AssertionError('full history read')), \
+                 patch('webcollect.planning.publish_plan', return_value={'tasks': []}), \
+                 patch('webcollect.consumer_lifecycle.claim_job', new=AsyncMock(return_value={'id': 'job'})), \
+                 patch('webcollect.collect_runtime.collect_m4', collected):
+>               result = asyncio.run(generation.execute(ledger, root/'plan.json', root/'catalog.json',
+                    root/'output', registry, root/'policy.json'))
+
+projects/code/tests/test_core_contract.py:392: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:204: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+projects/code/webcollect/task_generation.py:1366: in execute
+    validate_plan(plan)
+projects/code/webcollect/collect.py:952: in validate_plan
+    return _validate_plan(plan)
+           ^^^^^^^^^^^^^^^^^^^^
+projects/code/webcollect/collect.py:1004: in _validate_plan
+    validate_m4_plan(plan)
+projects/code/webcollect/task_contract.py:213: in validate_m4_plan
+    validate_prompt_stages(plan.get('production_facts'))
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+declaration = None
+
+    def validate_prompt_stages(declaration):
+        """Validate actual declarations before any browser/ID allocation, not invent them."""
+        if not isinstance(declaration, dict):
+>           raise ValueError('M4 requires production_facts before collection')
+E           ValueError: M4 requires production_facts before collection
+
+projects/code/webcollect/task_contract.py:33: ValueError
+=========================== short test summary info ============================
+FAILED projects/code/tests/test_core_contract.py::StrategyResultContract::test_execute_allows_source_changes_without_registry_snapshot
+1 failed, 1 passed in 0.27s

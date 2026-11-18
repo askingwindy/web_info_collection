@@ -1,4 +1,4 @@
-"""Three offline core contracts for strategy 2; no model or real browser."""
+"""Shared visual and historical strategy contracts; only local browser fixtures, no model."""
 import asyncio
 from copy import deepcopy
 from io import BytesIO
@@ -97,8 +97,9 @@ class Strategy2VisualCore(unittest.TestCase):
         profile_ledger = SimpleNamespace(real_glm=False, config={'model': {'max_images': 2, 'reasoning_effort': 'low'}})
         profile_task = {'fragment': {'decision_protocol': 'conditional-plan',
             'reasoning_effort_profile': {'first_plan': 'high', 'branch': 'max'}}}
-        chooser = screenshot_chooser(profile_ledger, profile_task, 'profile-offline')
-        self.assertEqual((chooser.first_plan_reasoning_effort, chooser.branch_reasoning_effort), ('high', 'max'))
+        from webcollect.collection_strategy import Strategy2Frozen
+        with self.assertRaises(Strategy2Frozen):
+            screenshot_chooser(profile_ledger, profile_task, 'profile-offline')
         # A native form popup is earned by its frozen form, trusted default
         # submit event, exact opener and actual first navigation request.
         from webcollect.plan_evidence import validate_native_form_popup
@@ -383,6 +384,48 @@ class Strategy2VisualCore(unittest.TestCase):
             self.assertEqual(bind_target(reading, {'role': 'a'}), ['link-body', 'link-chrome'])
 
     def test_visual_overview_crop_preserves_original_and_bound_sources(self):
+        # A rotated decoration or unrelated control is raw-only evidence;
+        # a requested target or transformed target ancestor still rejects.
+        async def local_geometry():
+            from playwright.async_api import async_playwright, Error as BrowserError
+            from webcollect import browser
+            from webcollect.action_stability import post_action_document_scope
+            async with async_playwright() as runtime:
+                chrome = await runtime.chromium.launch(channel='chrome', headless=True)
+                try:
+                    page = await chrome.new_page(viewport={'width': 900, 'height': 600})
+                    await page.route('**/*', lambda route: route.abort())
+                    await page.set_content("""<!doctype html><html><head><style>
+                        body { font:20px sans-serif; margin:30px; }
+                        #decoration { position:absolute; left:500px; top:80px; transform:rotate(25deg); }
+                        #turned { position:absolute; left:500px; top:220px; transform:rotate(15deg); }
+                        #parent { position:absolute; left:500px; top:350px; transform:skewX(12deg); }
+                        </style></head><body><button id="safe">正常操作</button>
+                        <p>这里是正常正文。</p><div id="decoration">旋转装饰文字</div>
+                        <button id="turned">旋转控件</button><div id="parent"><button id="nested">子控件</button></div>
+                        <select id="unit"><option>厘米</option><optgroup disabled label="不可选"><option>米</option></optgroup></select>
+                        </body></html>""")
+                    captured = await browser.capture(page, retries=1,
+                        action_scope=post_action_document_scope({'url': page.url}))
+                    state = captured['state']
+                    self.assertTrue(captured['png'])
+                    self.assertIn('正常正文', state['visible_text'])
+                    self.assertNotIn('旋转装饰文字', state['visible_text'])
+                    self.assertTrue({'decoration', 'turned', 'parent'} <=
+                                    {item['id'] for item in state['geometry_exclusions']})
+                    self.assertTrue(all(not item['pixel_exclusion_allowed']
+                                        for item in state['geometry_exclusions']))
+                    self.assertFalse(any(item.get('text') in ('旋转控件', '子控件', '旋转装饰文字')
+                                         for item in state['elements']))
+                    self.assertTrue((await browser.observe(page, '#safe'))['target']['hit_valid'])
+                    for selector in ('#turned', '#nested'):
+                        with self.assertRaisesRegex(BrowserError, 'UNSUPPORTED_GEOMETRY'):
+                            await browser.observe(page, selector)
+                    choice = next(item for item in state['capture_controls'] if item['tag'] == 'select')
+                    self.assertTrue(next(item for item in choice['options'] if item['label'] == '米')['disabled'])
+                finally:
+                    await chrome.close()
+        asyncio.run(local_geometry())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             obs = observation()

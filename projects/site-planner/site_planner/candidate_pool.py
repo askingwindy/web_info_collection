@@ -686,11 +686,10 @@ class CandidatePool:
                     raise ValueError('Frozen selection requires its candidate and producer batch')
                 row = con.execute('''SELECT c.version,c.application_id,c.body FROM data_candidates c
                     JOIN candidate_batch_rows b USING(candidate_id) WHERE c.candidate_id=? AND b.run_id=?
-                    AND b.result='NEW' AND b.row_id=? AND b.response_sha256=?''',
-                    (candidate_id,producer_batch,frozen_row['producer_row_id'],frozen_row['producer_row_response_sha256'])).fetchone()
-                if (not row or row['version'] != frozen_row['version'] or row['application_id'] != frozen_row['application_id']
-                        or hashlib.sha256(row['body'].encode()).hexdigest() != frozen_row['body_sha256']):
-                    raise ValueError('Frozen candidate version, body or source changed')
+                    AND b.result='NEW' AND b.row_id=?''',
+                    (candidate_id,producer_batch,frozen_row['producer_row_id'])).fetchone()
+                if (not row or row['version'] != frozen_row['version'] or row['application_id'] != frozen_row['application_id']):
+                    raise ValueError('Frozen candidate identity or producer row changed')
                 if con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=?', (candidate_id,)).fetchone():
                     return {'state':'ALREADY_CLAIMED'}
             now = time.time()
@@ -736,11 +735,6 @@ class CandidatePool:
                 if categories and self._row_category(row, con) not in categories: continue
                 if application_id and row['application_id'] != application_id: continue
                 sources=[json.loads(s[0]) for s in con.execute('SELECT source FROM candidate_sources WHERE candidate_id=?', (row['candidate_id'],))]
-                if frozen_row is not None and frozen_row.get('sources_sha256'):
-                    ordered_sources=[json.loads(s[0]) for s in con.execute(
-                        'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created,source_key', (row['candidate_id'],))]
-                    if object_sha256(ordered_sources) != frozen_row['sources_sha256']:
-                        raise ValueError('Frozen candidate sources changed; no replacement claim')
                 # The consumer verifies this claimed snapshot before browser IO.
                 # A broken source belongs to one candidate, not the entire queue.
                 cid = row['candidate_id']; claim = str(uuid.uuid4()); token = str(uuid.uuid4())

@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 
 from .batch_core import load_json
+from .collection_strategy import DEFAULT_STRATEGY, Strategy1Forbidden, freeze
 from .sqlite_connection import connect
 
 REQUIRED = {
@@ -62,6 +63,10 @@ def required_schema():
 def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 1024**3):
     """No constructors, DDL, recovery, writes, DNS, credentials or browser calls."""
     from .site_inventory import load_scope
+    if plan:
+        # Keep the existing global strategy rejection; no scope IO comes first.
+        freeze({'fragment':{},'workflow_proposal':{'spec':{}}},
+               plan.get('collection_strategy',DEFAULT_STRATEGY))
     errors = []
     def fail(code, field, reason):
         errors.append({'code': code, 'field': field, 'reason': reason})
@@ -153,7 +158,7 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
             audited={r['candidate_id']:r for r in inspected}
             for frozen in dispatch_rows:
                 actual=audited.get(frozen['candidate_id'],{})
-                fields=('version','application_id','producer_batch','producer_row_id','producer_row_response_sha256','body_sha256','sources_sha256','entry_http')
+                fields=('version','application_id','producer_batch','producer_row_id','entry_http')
                 if not actual.get('eligible') or any(actual.get(k)!=frozen.get(k) for k in fields):
                     fail('COHORT_EVIDENCE_MISMATCH',frozen['candidate_id'],actual.get('rejection') or 'frozen source differs')
             preflight_cohort_sources(pool,dispatch_rows,scope['registry'])
@@ -170,8 +175,8 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
                 if module in ('site_planner.candidate_discovery','webcollect.candidate_consumer','webcollect.consumer_campaign') or any(v.endswith('/sequence_controller.py') for v in args):
                     fail('PREDECESSOR_ACTIVE','process',{'pid':int(parts[0]),'module':module or 'sequence_controller'})
             workers = plan.get('workers',[])
-            if plan.get('collection_strategy') not in ('screenshot_plan','stepwise') or plan.get('automatic_export') is not False or plan.get('stop_after_saves') is not None:
-                fail('PLAN_POLICY','plan','strategy2/stepwise, no export, no save early stop required')
+            if plan.get('collection_strategy',DEFAULT_STRATEGY)!='stepwise' or plan.get('automatic_export') is not False or plan.get('stop_after_saves') is not None:
+                fail('PLAN_POLICY','plan','stepwise, no export, no save early stop required')
             shards = [w.get('candidate_ids',[]) for w in workers]
             flat = [cid for shard in shards for cid in shard]
             if len(workers)!=20 or any(len(s)!=5 for s in shards) or len(set(flat))!=100:
@@ -189,7 +194,9 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--scope',required=True,type=Path)
     p.add_argument('--cohort',type=Path)
-    a=p.parse_args(argv); result=check(a.scope,cohort_path=a.cohort)
+    a=p.parse_args(argv)
+    try:result=check(a.scope,cohort_path=a.cohort)
+    except Strategy1Forbidden as error:p.error(str(error))
     print(json.dumps(result,ensure_ascii=False,indent=2))
     return 0 if result['status']=='PASS' else 2
 

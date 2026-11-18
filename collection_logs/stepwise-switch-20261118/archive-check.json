@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-11-18T07:04:39.496038+00:00",
+  "copied_files_verified": 47,
+  "copied_bytes_verified": 593907,
+  "json_files_parsed": 20,
+  "credential_pattern_findings": [],
+  "credential_scan_scope": "Only the selected text files; no credential files read; pattern checks do not prove all possible secrets absent",
+  "original_source_bytes_unchanged": true,
+  "pass": true
+}

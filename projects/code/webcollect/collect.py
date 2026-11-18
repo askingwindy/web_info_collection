@@ -1452,8 +1452,6 @@ def checkpoint_json(path, value):
     temporary=None
     try:
         path=Path(path)
-        from .workspace_paths import bind
-        bind(path)
         with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,prefix='.'+path.stem+'-',suffix='.tmp',delete=False) as file:
             temporary=Path(file.name)
             json.dump(value,file,ensure_ascii=False,indent=2,allow_nan=False)
@@ -1490,7 +1488,11 @@ async def collect_plan(plan_path, output, registry, channel='chrome', headless=T
                        *, publication_path=None, policy_path=None, resume=False,
                        controller_ledger=None, log_level='INFO', log_dir=None):
     from playwright.async_api import async_playwright
-    plan=read_json(Path(plan_path));validate_plan(plan)
+    plan=read_json(Path(plan_path))
+    from .collection_strategy import select
+    for task in plan['tasks']:
+        select(task)
+    validate_plan(plan)
     if plan.get('schema_version') == PLAN_SCHEMA:
         from .collect_runtime import collect_m4
         return await collect_m4(plan_path, output, registry, publication_path=publication_path,

@@ -9,7 +9,7 @@ SCHEMA={'type':'object','properties':{'ok':{'const':True}},'required':['ok'],'ad
 
 def originals(con):
     return {row['id']:object_sha256(dict(row)) for row in con.execute(
-        "SELECT * FROM model_requests WHERE state='unknown' AND error IN ('HTTPError:401','HTTPError:403') ORDER BY id")}
+        "SELECT * FROM model_requests WHERE state IN ('unknown','failed') AND error IN ('HTTPError:401','HTTPError:403') ORDER BY id")}
 
 
 def _probe(con, job_id):
@@ -69,7 +69,7 @@ def complete(ledger, job_id):
         proof={'probe_job_id':job_id,'diagnostic_request_id':request['id'],
             'diagnostic_request_sha256':object_sha256(dict(request)),
             'original_auth_errors':payload['original_auth_errors'],
-            'original_usage_and_cost':'UNKNOWN; retained reservations',
+            'original_usage_and_cost':'Retained original usage and cost; settled 4xx cost is zero',
             'old_request_replay_authorized':False}
         saved=list(con.execute("SELECT detail FROM batch_events WHERE event='provider_authorization_recovered'"))
         if not any(json.loads(row[0])==proof for row in saved):ledger.event(con,'provider_authorization_recovered',proof)

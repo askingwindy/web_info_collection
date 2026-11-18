@@ -32,38 +32,13 @@ def backup(source, destination):
         src.backup(dst)
 
 
-class _WorkspaceSQL:
-    """Apply the owning database's root at scalar/JSON SQL boundaries."""
-    def execute(self, sql, parameters=(), /):
-        from .workspace_paths import _root, encode
-        _root.set(self.workspace_root)
-        import re
-        field='path' if re.search(r'\b(?:path|\w+_path|m4_exact_images)\b',sql) else None
-        parameters=({k:encode(v,field) for k,v in parameters.items()} if isinstance(parameters,dict)
-                    else tuple(encode(v,field) for v in parameters))
-        return super().execute(sql,parameters)
-
-    def executemany(self, sql, parameters, /):
-        from .workspace_paths import _root, encode
-        _root.set(self.workspace_root)
-        import re
-        field='path' if re.search(r'\b(?:path|\w+_path|m4_exact_images)\b',sql) else None
-        return super().executemany(sql,({k:encode(v,field) for k,v in p.items()} if isinstance(p,dict)
-                                       else tuple(encode(v,field) for v in p) for p in parameters))
-
-
 def raw_connect(database, *args, **kwargs):
-    """Same sqlite3 API; explicit per-file root, with no cwd-based reference resolution."""
+    """Use sqlite3 unchanged for SQL parameters and returned text."""
     from urllib.parse import urlsplit, unquote
-    from .workspace_paths import bind, decode, _root
     database=str(database)
     path=unquote(urlsplit(database).path) if database.startswith('file:') else database
-    root=bind(path) if database!=':memory:' else None
-    factory=kwargs.pop('factory',sqlite3.Connection)
-    cls=type('WorkspaceConnection',(_WorkspaceSQL,factory),{})
     kwargs.setdefault('timeout',90)
-    con=sqlite3.connect(database,*args,**kwargs,factory=cls)
-    con.workspace_root=root
+    con=sqlite3.connect(database,*args,**kwargs)
     timeout=kwargs['timeout']
     con.execute('PRAGMA busy_timeout='+str(int(timeout*1000)))
     readonly=database.startswith('file:') and 'mode=ro' in database
@@ -71,12 +46,6 @@ def raw_connect(database, *args, **kwargs):
         con.execute('PRAGMA query_only=ON')
     else:
         con.execute('PRAGMA synchronous='+('NORMAL' if Path(path).name in ('candidate-pool.sqlite3','site-facts.sqlite3') else 'FULL'))
-    con.workspace_root=root
-    def text_factory(raw):
-        _root.set(root)
-        value=raw.decode('utf-8')
-        return decode(value) if value.startswith('workspace:/') else value
-    con.text_factory=text_factory
     return con
 
 

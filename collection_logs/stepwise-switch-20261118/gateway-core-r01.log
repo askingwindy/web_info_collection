@@ -1,0 +1,191 @@
+......F....                                                              [100%]
+=================================== FAILURES ===================================
+_______ GatewayRunlogTests.test_invalid_response_still_records_its_usage _______
+webcollect.model_gateway.ProviderFinishIncomplete: output_exhausted: length
+
+During handling of the above exception, another exception occurred:
+
+self = <test_strategy2_runlog_20261111.GatewayRunlogTests testMethod=test_invalid_response_still_records_its_usage>
+
+    def test_invalid_response_still_records_its_usage(self):
+        from webcollect.screenshot_plan import decision_tools, normalize_decision
+        from webcollect.model_gateway import field_repair_plan, merge_field_repair
+        from jsonschema import Draft202012Validator, ValidationError
+        ledger, job, gateway, runlog = self._gateway()
+        step = {'action': 'click', 'purpose': '打开参考内容', 'rationale': '当前页面有参考入口',
+                'expected_result': '参考内容进入视口'}
+        original_arguments = {'decision': 'revise', 'reason': '保留已确认事项，只修订尾部', 'answers': [],
+                              'remaining_plan': [{**step, 'target': {'text': '参考说明'}}, deepcopy(step)]}
+        tools = decision_tools(['revise'], ['click'])
+        original_open = self.f.opener.open
+    
+        def send(request, timeout):
+            if not self.f.opener.calls:
+                self.f.response(self.f.message(name='plan_decision', arguments=json.dumps(original_arguments)))
+            else:
+                payload = json.loads(request.data)
+                self.assertEqual(payload['tool_choice'],
+                                 {'type': 'function', 'function': {'name': 'repair_tool_arguments'}})
+                self.assertEqual(len(payload['tools']), 1)
+                self.assertEqual(payload['tools'][0]['function']['name'], 'repair_tool_arguments')
+                self.assertEqual(list(payload['tools'][0]['function']['parameters']['properties']), ['field_0'])
+                self.f.response(self.f.message(cid='patch-call', name='repair_tool_arguments',
+                    arguments=json.dumps({'field_0': {'text': '计算公式'}})))
+            return original_open(request, timeout)
+    
+        self.f.opener.open = send
+        result = gateway.call_tool(job, 'tools', 'current observation', tools,
+            system='trusted policy', reasoning_effort='low', attempt_id='claim-1', attempts=2,
+            plan_normalizer=lambda value: normalize_decision(value, ['revise'], ['click']))
+        expected = deepcopy(original_arguments)
+        expected['remaining_plan'][1]['target'] = {'text': '计算公式'}
+        self.assertEqual(result['arguments'], expected)
+        self.assertEqual(result['name'], 'plan_decision')
+        self.assertEqual(result['assistant_message_origin'], 'host_field_patch')
+        self.assertEqual(result['provider_assistant_message']['tool_calls'][0]['function']['name'], 'repair_tool_arguments')
+        self.assertEqual(result['argument_repair']['base_arguments'], original_arguments)
+        self.assertEqual(result['argument_repair']['provider_patch'], {'field_0': {'text': '计算公式'}})
+        self.assertEqual(result['argument_repair']['validated_arguments'], expected)
+        finished = [row for row in self._calls(runlog) if row['event'] == 'request_finished']
+        self.assertEqual([row['state'] for row in finished], ['invalid_response', 'succeeded'])
+        self.assertEqual(finished[0]['inputTokens'], 250)
+        self.assertIn(['remaining_plan', 1, 'target'],
+                      [row['field_path'] for row in finished[0]['diagnostics']['schema_errors']])
+        with ledger.connect() as con:
+            retained = [json.loads(row['response']) for row in con.execute('SELECT response FROM model_requests ORDER BY attempt')]
+        self.assertEqual(json.loads(retained[0]['provider_response']['choices'][0]['message']['tool_calls'][0]['function']['arguments']), original_arguments)
+        self.assertEqual(retained[1]['provider_response']['choices'][0]['message']['tool_calls'][0]['function']['name'], 'repair_tool_arguments')
+        self.assertEqual(retained[1]['result']['argument_repair']['merged_arguments'], expected)
+        # The patch schema cannot rewrite a valid sibling or bypass full validation.
+        schema = tools[0]['function']['parameters']
+        error = next(Draft202012Validator(schema).iter_errors(original_arguments))
+        repair = field_repair_plan(error, original_arguments, schema, 'plan_decision')
+        with self.assertRaises(ValidationError):
+            merge_field_repair(repair, {'field_0': {'text': '计算公式'}, 'reason': '越权修改'})
+        with self.assertRaises(ValidationError):
+            merge_field_repair(repair, {'field_0': 7})
+        # A bounded patch covers every independent missing leaf, not only the first.
+        from webcollect.screenshot_plan import submit_plan_schema, decision_schema
+        from webcollect.model_gateway import schema_errors_feedback
+        multi = {'goal': '读取两项正文',
+            'requirements': [{'id': f'r{index}', 'kind': 'content',
+                              'acceptance': {'mode': 'presence', 'subject': f'正文{index}',
+                                             'source_quote': '读取两项正文'}}
+                             for index in range(2)],
+            'steps': [{'action': 'click', 'target': {'text': '正文'}, 'purpose': f'打开正文{index}',
+                       'rationale': '正文入口可见', 'expected_result': '正文进入视口'} for index in range(5)]}
+        multi_schema = submit_plan_schema(['click'])
+        multi_errors = list(Draft202012Validator(multi_schema).iter_errors(multi))
+        self.assertEqual([list(error.absolute_path) for error in multi_errors],
+                         [['requirements', 0], ['requirements', 1]])
+        multi_repair = field_repair_plan(multi_errors[0], multi, multi_schema, 'submit_plan',
+                                         validation_errors=multi_errors)
+        self.assertEqual(multi_repair['paths'], [
+            ['requirements', 0, 'description'],
+            ['requirements', 1, 'description']])
+        merged = merge_field_repair(multi_repair, {'field_0': '读取第一项正文', 'field_1': '读取第二项正文'})
+        Draft202012Validator(multi_schema).validate(merged)
+        # continue携带替换计划是独立语义错误；反馈必须同时指出它和具体缺失target，
+        # 不能先做一个注定仍失败的局部补丁，也不能只回传整段False schema。
+        semantic = deepcopy(original_arguments)
+        semantic['decision'] = 'continue'
+        semantic_schema = decision_schema(['continue', 'revise'], ['click'])
+        semantic_errors = list(Draft202012Validator(semantic_schema).iter_errors(semantic))
+        feedback = schema_errors_feedback(semantic_errors)
+        paths = [row['field_path'] for row in feedback]
+        self.assertIn(['remaining_plan'], paths)
+        self.assertIn(['remaining_plan', 1, 'target'], paths)
+        self.assertTrue(all('False schema' not in row['detail'] for row in feedback))
+        self.assertIsNone(field_repair_plan(semantic_errors[0], semantic, semantic_schema, 'plan_decision',
+                                            validation_errors=semantic_errors))
+        pending = expected['remaining_plan']
+        repeated = {'decision': 'continue', 'reason': '原路线仍适用', 'remaining_plan': deepcopy(pending)}
+        compact, record = normalize_decision(repeated, ['continue', 'revise'], ['click'], pending_steps=pending)
+        Draft202012Validator(semantic_schema).validate(compact)
+        self.assertNotIn('remaining_plan', compact)
+        self.assertEqual(record['transforms'][0]['transform'], 'exact_pending_tail_removed')
+        changed = deepcopy(repeated)
+        changed['remaining_plan'][0]['target']['text'] = '不同业务目标'
+        retained, _ = normalize_decision(changed, ['continue', 'revise'], ['click'], pending_steps=pending)
+        self.assertIn('remaining_plan', retained)
+        self.assertFalse(Draft202012Validator(semantic_schema).is_valid(retained))
+        # JSON booleans are not numeric durations, even though Python True == 1.
+        waiting = [{'action': 'wait', 'duration_ms': 1, 'purpose': '等候加载',
+                    'rationale': '加载尚未结束', 'expected_result': '页面加载结束'}]
+        bool_tail = deepcopy(waiting)
+        bool_tail[0]['duration_ms'] = True
+        typed, typed_record = normalize_decision(
+            {'decision': 'continue', 'reason': '继续', 'remaining_plan': bool_tail},
+            ['continue', 'revise'], ['wait'], pending_steps=waiting)
+        self.assertIn('remaining_plan', typed)
+        self.assertFalse(typed_record['transforms'])
+        self.assertFalse(Draft202012Validator(decision_schema(['continue', 'revise'], ['wait'])).is_valid(typed))
+        # The active click schema requests a target, never a null control or
+        # unrelated scroll/type parameters from inactive branches.
+        full_schema = decision_schema(['revise'], ['click', 'type', 'scroll', 'back'])
+        active_errors = list(Draft202012Validator(full_schema).iter_errors(original_arguments))
+        active_repair = field_repair_plan(active_errors[0], original_arguments, full_schema, 'plan_decision',
+                                          validation_errors=active_errors)
+        self.assertEqual(active_repair['paths'], [['remaining_plan', 1, 'target']])
+        with self.assertRaises(ValidationError):
+            merge_field_repair(active_repair, {'field_0': {'control': None}})
+    
+        self.f.opener.open = original_open
+    
+        # F output_exhausted/refused分别处理：length不执行截断参数，只允许
+        # 一次紧凑重提（实质变化），第二笔仍失败则有界结束，无第三笔请求；
+        # refused有界结束不重发。
+        self.serial += 1
+        ledger2, job2, gateway2, _ = self._gateway()
+        self.f.opener.raw = {'id': 'offline-length', 'model': 'offline-model-version',
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 50,
+                      'prompt_tokens_details': {'cached_tokens': 0}},
+            'choices': [{'finish_reason': 'length', 'message': {'content': '{"answer": 4'}}]}
+        before_length_calls = len(self.f.opener.calls)
+        material = {'goal': '保留目标', 'inputs': {'title': '原值', 'n': 7},
+                    'depends_on': [1], 'evidence': ['frame-1'],
+                    'facts': list(range(80))}
+        padded_tools = deepcopy(self.f.tools)
+        padded_tools[0]['function']['parameters']['title'] = 'annotation ' * 100
+        padded_system = 'trusted policy' + '\n' * 1000 + 'preserve evidence'
+        def compact_call(gateway, job, **kw):
+            return gateway.call_tool(job, 'tools', json.dumps(material, indent=40), padded_tools,
+                system=padded_system, reasoning_effort='low', attempts=5, attempt_id='claim-1', **kw)
+        with self.assertRaises(ValueError):
+            compact_call(gateway2, job2)
+        self.assertEqual(len(self.f.opener.calls) - before_length_calls, 2)
+        correction_payload = json.loads(self.f.opener.calls[before_length_calls + 1].data.decode())
+        self.assertIn('紧凑', correction_payload['messages'][-1]['content'][-1]['text'])
+        first_payload = json.loads(self.f.opener.calls[before_length_calls].data)
+        self.assertLess(len(self.f.opener.calls[before_length_calls + 1].data),
+                        len(self.f.opener.calls[before_length_calls].data))
+        self.assertEqual(json.loads(correction_payload['messages'][-1]['content'][0]['text']), material)
+        self.assertLess(len(correction_payload['messages'][0]['content']), len(first_payload['messages'][0]['content']))
+        self.assertNotIn('title', correction_payload['tools'][0]['function']['parameters'])
+        from webcollect.model_gateway import compact_retry_context
+        annotated = deepcopy(padded_tools)
+        annotated_schema = annotated[0]['function']['parameters']
+        annotated_schema['properties']['title'] = {'const': {'title': 'literal'},
+                                                   'default': {'$comment': 'literal'}}
+        immutable_image={'type':'image_url','image_url':{'url':'data:image/png;base64,'+'A'*100000}}
+        _, cleaned_parts, cleaned = compact_retry_context(padded_system,
+            [{'type': 'text', 'text': json.dumps(material, indent=40)},immutable_image], annotated)
+        self.assertEqual(cleaned_parts[-1],immutable_image)
+        self.assertEqual(cleaned[0]['function']['parameters']['properties']['title'],
+                         annotated_schema['properties']['title'])
+        with ledger2.connect() as con:
+            settled = [json.loads(row[0]) for row in
+                       con.execute('SELECT response FROM model_requests ORDER BY rowid')]
+        self.assertEqual([row['failure_diagnostic']['source'] for row in settled],
+                         ['output_exhausted', 'output_exhausted'])
+        # Already compact input cannot authorize a second paid length request.
+        _, compact_job, compact_gateway, _ = self._gateway()
+        before = len(self.f.opener.calls)
+>       with self.assertRaisesRegex(ValueError, 'no lossless compact'):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: "no lossless compact" does not match "output_exhausted: length"
+
+projects/code/tests/test_strategy2_runlog_20261111.py:821: AssertionError
+=========================== short test summary info ============================
+FAILED projects/code/tests/test_strategy2_runlog_20261111.py::GatewayRunlogTests::test_invalid_response_still_records_its_usage
+1 failed, 10 passed in 0.53s

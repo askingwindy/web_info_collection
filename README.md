@@ -1,5 +1,7 @@
 # WebCollect
 
+2026-11-18 策略3切换与工程减负已完成本地修复及离线验证：新采集仅允许 `stepwise`，缺省同为 `stepwise`；策略1/2及历史任务续跑在领取、浏览器、模型之前拒绝，历史保存资格、导出、报表与 QC 读回保留。源码 SHA 只作审计，删除指定源码/全历史快照门禁与排队锁；回退绝对路径，删除授权退役模块及 QC 历史测试。已修异常封存/分类、select 预检、几何剔除、ui_tree 投影、4xx 确定失败、发布渲染要求、事务前图片校验及硬截止接线。核心维护39项（≤50）；七种离线场景的正常保存和必要失败出口已验证，详细次数、耗时、失败原件及边界见报告。真实模型/目标站/生产新增0，QC/人审NOT_RUN、发布false、验收UNKNOWN；未commit/push、未释放历史claim。 见[实施 SSD](docs/无版本无SHA减负与必经缺陷修复SSD-20261118.md)与[本轮报告](collection_logs/stepwise-switch-20261118/report.md)。下方早期记录按各自日期及范围解释，以本段与现行策略条款为准。
+
 2026-11-18 策略3 stepwise 首版研发与隔离离线验证完成：新增独立包 `webcollect/stepwise/`（自有提示词/协议/循环/记录/回写/判定/annotation/保存资格，每步一次调用一个动作），公共接线含静态策略分流（保存资格、导出映射、runtime 提交复核、campaign/QC/collection_report）、CLI `--collection-strategy stepwise`、`stepwise-decision` job kind 与网关 `tool_choice`。缺省仍策略2、策略1继续全入口拒绝、失败不换策略。核心测试 50/50；隔离离线集成两轮 37/37×2（操作类+阅读类经真实本地 Chrome 正常消费者全链保存/回写/导出读回，另含短流程失败出口）；真实 GLM/目标站/QC/人审/发布全部未运行。详见[SDD](docs/策略3独立逐步采集代码实现SDD-20261118.md)与[验证回执](verify_results/stepwise-offline-20261118-r01/report.md)。
 
 2026-11-18 Table2 策略2固定100次、20进程采集已结束：工程修复与实际结果见[运行记录](docs/Table2策略2百次采集运行记录-20261118.md)，采集过程和结果日志见 [Git 日志归档](collection_logs/table2-strategy2-100-20261118/README.md)。本轮未调整规划准确度；数据库、截图和原始模型请求保留本地。下述 S1–S6 审核结论保持其原范围。
@@ -493,7 +495,7 @@ QC 安装包的需求原文、日期优先关系及摘要由 `contract-authority
 
 隔离研发新增显式 `--producer-optimization observation-feedback-1`（仅新 `entry-tools-13` 批次）：有界就绪等待、已确认 HTTP 4xx/5xx 提前失败收据、找站 Agent 的近期页面失败摘要。缺省及旧批次保持原行为，原 URI 请求身份、UNKNOWN、V13 业务资格及消费者/QC 契约不变；当前 1000 页正式批次不切换。[实施与验证记录](docs/生产者固定等待优化与明确失败前置及Agent反馈实施方案-20261109.md) · [zcode 实现提示词](request/zcode-生产者等待失败与Agent反馈实现提示词-20261109.md)
 
-2026-11-03 独立可选的消费者模板对照入口为 `webcollect.consumer_template_experiment`，两个模板通过原同会话四工具驱动浏览器，普通消费者继续原 ReAct。[实现、目标规则与有界八条试验](docs/消费者模板AB8试验-20261103.md)。仅此固定八条采集及同样本独立 AI QC 获授权，不恢复其他生产或发布。
+历史记录（入口已于2026-11-18删除，不再执行）：2026-11-03 的消费者模板对照入口为 `webcollect.consumer_template_experiment`，两个模板通过原同会话四工具驱动浏览器，普通消费者继续原 ReAct。[实现、目标规则与有界八条试验](docs/消费者模板AB8试验-20261103.md)。仅此固定八条采集及同样本独立 AI QC 获授权，不恢复其他生产或发布。
 
 2026-11-03 消费者新增冻结扩展 `webcollect-banded-conditional-plan-1`。普通新候选通过正式 `task_generation` 入口进入首轮单 `submit_plan` 工具规划，宿主按当前观察重绑语义目标并直接执行已证步骤；有分支时用无工具历史的普通 JSON 消息。旧任务仍按原冻结协议运行。预排档、首次派发前锁档、真实待审步数和显式接纳集合分别记账；内部 80% 五步／19% 长档／≤1% 短流程预留不改变外部 QC 门槛。推理图为派生 JPEG，审核仍用原 PNG。实现、只读 27 候选回放和离线检查见[实施交接](verify_results/consumer-banded-plan-implementation-20261103-r01/handoff.md)。生产保持 `STOPPED_BY_USER`，没有新增真实请求、采集或审核。
 
@@ -643,8 +645,8 @@ Agent 只复用同站页面结构、控件语义、动作能力及绑定/重规�
 
 2026-11-10 生产者新增显式 `entry-tools-14`，修复分类缺项、选页证据及跳转失败留证；旧协议保持。九站累计20页有界重启、集成边界与后台进度见[本轮记录](verify_results/producer-repair-nine20-20261110-r01/report.md)，不启动消费者或QC。
 
-### 单独消费者启动与策略2编号
+### 单独消费者启动与当前策略
 
-`candidate_consumer run` 在工程绑定检查后，仅当模型账户池不可用时执行已有启动探测；同一 `request-prefix` 视为同一次 launch，已有 UNKNOWN 探测不重发。campaign 的 worker 复用协调器健康记录。池仍不可用时返回 `key_pool_unavailable`，不无限轮询。策略2可引用当前观察 controls 中的 control ID 或对应 number。
+`candidate_consumer run` 在工程绑定检查后，仅当模型账户池不可用时执行已有启动探测；同一 `request-prefix` 视为同一次 launch，已有 UNKNOWN 探测不重发。campaign 的 worker 复用协调器健康记录。池仍不可用时返回 `key_pool_unavailable`，不无限轮询。当前新采集只接受 stepwise，省略策略参数也使用 stepwise；旧策略在账户探测之前拒绝。历史策略2编号解释继续供读回使用。
 
 2026-11-12 策略2整体Agent状态、证据与输入契约统一修复及有界Muxtly验证见 [本轮记录](docs/策略2整体Agent修复与Muxtly有界验证-20261112.md)。真实完成与正式保存以逐轮收据为准。

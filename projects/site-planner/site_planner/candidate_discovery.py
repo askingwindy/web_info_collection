@@ -433,10 +433,10 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
     # Reuse the original rendered observation; never issue a replacement GET.
     from .producer_observation import from_pool
     shared_language = from_pool(pool, ledger, candidate['entry_url'])
+    if shared_language is None:
+        return pool.record_row_conclusion(header, result='HELD',
+            reason='rendered_observation_missing', original_row=row)
     if source.get('simplified_chinese_only'):
-        if shared_language is None:
-            return pool.record_row_conclusion(header, result='HELD',
-                reason='simplified_chinese_observation_missing', original_row=row)
         script = selection.simplified_chinese_evidence(shared_language[0])
         if not script['eligible']:
             return pool.record_row_conclusion(header, result='REJECTED',

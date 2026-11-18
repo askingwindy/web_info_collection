@@ -14,6 +14,7 @@ from site_planner.application_discovery import Discovery, classify_homepage, sit
 from site_planner.candidate_pool import CandidatePool
 from site_planner.entry_selection import compile_entry_exclusions, entry_is_excluded
 from webcollect.batch_core import BatchLedger, file_sha
+from webcollect.collection_strategy import DEFAULT_STRATEGY, Strategy1Forbidden, freeze
 from webcollect.current_chain import current_evidence_roots, read_chain_scope
 from webcollect.planning import object_sha256, verify_evidence
 from .site_inventory import load_scope, resolve_sites, site_statistics
@@ -219,6 +220,7 @@ def consumer_plan(scope_path, selectors, *, workers):
     selected = resolve_sites(pool, selectors)
     sites = [site_statistics(pool, site) for site in selected]
     plan = new_plan('consumer', scope_path, scope, sites)
+    plan['collection_strategy'] = DEFAULT_STRATEGY
     for site, worker_quota in zip(selected, split_even(workers, len(selected))):
         for _ in range(worker_quota):
             number = len(plan['workers']) + 1
@@ -230,7 +232,7 @@ def consumer_plan(scope_path, selectors, *, workers):
                        '--registry', scope['registry'], '--policy', scope['policy'],
                        '--history-set', scope['history_set'], '--worker-id', worker_id,
                        '--request-prefix', request_prefix, '--application-id', site['id'],
-                       '--stop-when-empty']
+                       '--stop-when-empty', '--collection-strategy', DEFAULT_STRATEGY]
             if scope.get('qc_policy'):
                 command.extend(['--qc-policy', scope['qc_policy']])
             plan['workers'].append({'worker_id': worker_id, 'application_id': site['id'],
@@ -248,20 +250,21 @@ def fixed_consumer_plan(scope_path, cohort_path, log_root, *, resume_from=None):
     sites=sorted({r['application_id'] for r in rows})
     if len(rows)!=100 or len({r['candidate_id'] for r in rows})!=100:
         raise ValueError('Fixed collection requires 100 unique candidates')
-    root=Path(log_root).resolve();root.mkdir(parents=True,exist_ok=False)
-    from .workspace_paths import prepare_output
-    prepare_output(root,scope_path)
-    plan=new_plan('consumer',scope_path,scope,sites)
-    plan.update(log_root=str(root),cohort=str(Path(cohort_path).resolve()), collection_strategy='screenshot_plan',
-                automatic_export=False, stop_after_saves=None, fixed=True)
     if resume_from:
         previous=load_json(resume_from)
+        freeze({'fragment':{},'workflow_proposal':{'spec':{}}},
+               previous.get('collection_strategy','screenshot_plan'))
         if (Path(previous['scope']).resolve()!=scope_path or Path(previous['cohort']).resolve()!=Path(cohort_path).resolve()
-                or previous.get('collection_strategy')!='screenshot_plan'):
+                or previous.get('collection_strategy')!='stepwise'):
             raise ValueError('Resume must retain the same scope, cohort and strategy')
         summary=load_json(Path(previous['log_root'])/'summary.json')
         if any(w.get('returncode') is None for w in summary['workers']):
             raise ValueError('Previous workers must exit before resume')
+    root=Path(log_root).resolve();root.mkdir(parents=True,exist_ok=False)
+    plan=new_plan('consumer',scope_path,scope,sites)
+    plan.update(log_root=str(root),cohort=str(Path(cohort_path).resolve()), collection_strategy='stepwise',
+                automatic_export=False, stop_after_saves=None, fixed=True)
+    if resume_from:
         plan.update(resume_from=str(Path(resume_from).resolve()),
             prior_worker_ids=list(dict.fromkeys(previous.get('prior_worker_ids',[])+[w['worker_id'] for w in previous['workers']])),
             previous_run_roots=list(dict.fromkeys(previous.get('previous_run_roots',[])+[previous['log_root']])))
@@ -275,7 +278,7 @@ def fixed_consumer_plan(scope_path, cohort_path, log_root, *, resume_from=None):
             '--pool',scope['pool'],'--config',scope['consumer_config'],'--ledger',scope['consumer_db'],
             '--registry',scope['registry'],'--history-set',scope['history_set'],'--policy',scope['policy'],
             '--output',str(output),'--worker-id',wid,'--request-prefix',wid,'--limit','5',
-            '--cohort',str(path),'--collection-strategy','screenshot_plan',
+            '--cohort',str(path),'--collection-strategy','stepwise',
             '--log-dir',str(root/'runtime'/wid)]
         plan['workers'].append({'worker_id':wid,'application_ids':sorted({r['application_id'] for r in shard}),'candidate_ids':[r['candidate_id'] for r in shard],
                                 'command':command})
@@ -292,8 +295,6 @@ def child_environment():
 
 
 def write_json(path, value):
-    from .workspace_paths import bind
-    bind(path)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
@@ -326,7 +327,27 @@ def launch(plan):
     import signal
     from .failure_policy import RoundFailures
     from .collection_startup import check
-    from .workspace_paths import prepare_output
+    if plan['role']=='consumer':
+        # Refuse frozen plans and worker overrides before any output or probe.
+        strategy=plan.get('collection_strategy',DEFAULT_STRATEGY)
+        freeze({'fragment':{},'workflow_proposal':{'spec':{}}},strategy)
+        workers=[]
+        for worker in plan['workers']:
+            command=list(worker['command']);explicit=False
+            for index,argument in enumerate(command):
+                if argument=='--collection-strategy':
+                    if index+1==len(command):
+                        raise ValueError('Missing --collection-strategy value')
+                    worker_strategy=command[index+1]
+                elif argument.startswith('--collection-strategy='):
+                    worker_strategy=argument.split('=',1)[1]
+                else:
+                    continue
+                freeze({'fragment':{},'workflow_proposal':{'spec':{}}},worker_strategy)
+                explicit=True
+            if not explicit:command.extend(['--collection-strategy',DEFAULT_STRATEGY])
+            workers.append({**worker,'command':command})
+        plan={**plan,'collection_strategy':DEFAULT_STRATEGY,'workers':workers}
     root=Path(plan['log_root'])
     root.mkdir(parents=True,exist_ok=bool(plan.get('fixed')))
     stop=root/'stop.request';failures=RoundFailures(root/'failure-events.jsonl')
@@ -344,7 +365,6 @@ def launch(plan):
         if preflight['status']!='PASS':
             stop_reason='preflight_failed'
             raise ValueError('Launch preflight failed; see preflight errors')
-        prepare_output(root,plan['scope'])
         write_json(root/'plan.json',plan)
         if plan['role']=='consumer':
             from .batch_core import load_json
@@ -362,8 +382,6 @@ def launch(plan):
                 raise ValueError('No available model account')
         env={**child_environment(),'WEBCOLLECT_STOP_FILE':str(stop),'WEBCOLLECT_PRODUCER_STOP_FILE':str(stop),
              'WEBCOLLECT_ROUND_EVENTS':str(failures.path),'WEBCOLLECT_CENTRAL_KEY_HEALTH':'1'}
-        if plan.get('fixed') and plan.get('role')=='consumer':
-            env['WEBCOLLECT_SERIAL_HISTORY']='1'
         if plan['role']=='producer':
             for index,worker in enumerate(plan['workers'],1):
                 command=worker['command'];at=command.index('--sources')+1
@@ -510,7 +528,7 @@ def main(argv=None):
                 summary = launch(plan)
                 result = {'launched': True, **plan, 'launch_summary': summary}
                 code = 130 if summary['interrupted'] else 0 if summary['succeeded'] else 1
-    except (KeyError, ValueError, OSError) as error:
+    except (KeyError, ValueError, OSError, Strategy1Forbidden) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return code

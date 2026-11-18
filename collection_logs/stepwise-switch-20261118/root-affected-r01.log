@@ -1,0 +1,193 @@
+.F.....F..........                                                       [100%]
+=================================== FAILURES ===================================
+______ PlanProtocolContract.test_stable_names_are_the_single_owner_values ______
+
+self = <test_core_contract.PlanProtocolContract testMethod=test_stable_names_are_the_single_owner_values>
+
+    def test_stable_names_are_the_single_owner_values(self):
+        self.assertEqual(PLAN_PROTOCOL, 'conditional-plan')
+        self.assertEqual(ENDING_POLICY, 'goal-completion-ending')
+        self.assertEqual(RESULT_EXECUTION_POLICY, 'result-execution')
+        self.assertEqual(RESULT_COMPLETION_PROTOCOL, 'result-completion')
+        self.assertEqual(REACT_PROTOCOL, 'react-native')
+        self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan', 'stepwise'))
+        # 策略1完全冻结：新任务缺省策略2；策略3（stepwise）显式选择。身份表
+        # 保留react供历史只读解析。
+>       self.assertEqual(DEFAULT_STRATEGY, STRATEGY_STEPWISE)
+                                           ^^^^^^^^^^^^^^^^^
+E       UnboundLocalError: cannot access local variable 'STRATEGY_STEPWISE' where it is not associated with a value
+
+projects/code/tests/test_core_contract.py:38: UnboundLocalError
+_ StrategyResultContract.test_execute_allows_source_changes_without_registry_snapshot _
+
+self = <test_core_contract.StrategyResultContract testMethod=test_execute_allows_source_changes_without_registry_snapshot>
+
+    def test_execute_allows_source_changes_without_registry_snapshot(self):
+        import asyncio
+        import sqlite3
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock, patch
+        from webcollect import task_generation as generation
+        from webcollect.batch_core import file_sha
+        from webcollect.session_core import build_url_task
+        task = build_url_task(url='https://example.org/tool', task_version='offline')
+        freeze(task)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / 'history.json'; manifest.write_text('{}')
+            history = {'schema_version': 'webcollect-task-history-scope-1',
+                       'manifest': {'path': str(manifest), 'sha256': file_sha(manifest)}}
+            plan = {'schema_version': 'plan-m4', 'tasks': [task], 'generation': {
+                'mode': 'real', 'history_scope': history, 'source_identity': {'old.py': 'old'}}}
+            for name, value in (('plan.json', plan), ('catalog.json', {'mode': 'real', 'records': []}),
+                                ('policy.json', {'campaign_id': 'offline'})):
+                (root / name).write_text(json.dumps(value))
+            registry = root / 'registry.sqlite3'
+            with sqlite3.connect(registry) as con:
+                con.execute('CREATE TABLE m4_campaigns(campaign_id,policy_json)')
+                con.execute('INSERT INTO m4_campaigns VALUES(?,?)', ('offline', '{}'))
+            ledger = SimpleNamespace(config={'mode': 'real'}, enqueue=Mock(return_value='job'),
+                get=Mock(return_value={'state': 'queued'}), finish=Mock(), heartbeat=Mock())
+            collected = AsyncMock(return_value={'collection_status': 'complete', 'collected': 0})
+            with patch.object(generation, 'generation_source_identity', return_value={'new.py': 'new'}), \
+                 patch.object(generation, 'read_customer_history', return_value=([], history)), \
+                 patch.object(generation, 'bind_formal_history', side_effect=lambda value: value), \
+                 patch('webcollect.current_chain.require_plan', return_value=False), \
+                 patch('webcollect.current_chain.registry_snapshot', side_effect=AssertionError('full history read')), \
+                 patch('webcollect.planning.publish_plan', return_value={'tasks': []}), \
+                 patch('webcollect.consumer_lifecycle.claim_job', new=AsyncMock(return_value={'id': 'job'})), \
+                 patch('webcollect.collect_runtime.collect_m4', collected):
+>               result = asyncio.run(generation.execute(ledger, root/'plan.json', root/'catalog.json',
+                    root/'output', registry, root/'policy.json'))
+
+projects/code/tests/test_core_contract.py:390: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:204: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+projects/code/webcollect/task_generation.py:1366: in execute
+    validate_plan(plan)
+projects/code/webcollect/collect.py:952: in validate_plan
+    return _validate_plan(plan)
+           ^^^^^^^^^^^^^^^^^^^^
+projects/code/webcollect/collect.py:966: in _validate_plan
+    validate_react(task)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+task = {'task_id': 'react-941961e1d5a99242abab019f', 'task_version': 'offline', 'capability_id': 'react-url-ceb0e3b7018e5e45', 'capability_version': 'react-session', ...}
+
+    def validate_task(task):
+        from jsonschema import Draft202012Validator
+        from .task_instruction import validate_task_instruction
+        fragment = task.get('fragment', {})
+        if fragment.get('schema_version') != REACT_VERSION or fragment.get('controller_version') != REACT_VERSION:
+            raise ValueError('React task requires its protocol boundary')
+        if (fragment.get('business_completion') != 'NOT_CLAIMED' or task.get('stop_when_final') is not False
+                or task.get('content_preparation') is not False
+                or task.get('operations') != [] or task.get('required_actions') != []
+                or task.get('final_assertions') != []):
+            raise ValueError('React boundary must stay a dynamic raw-execution scope')
+        if (fragment.get('reference_protocol') not in (None, REFERENCE_PROTOCOL)
+                or (fragment.get('reference_protocol') is not None and fragment.get('decision_protocol') != NATIVE_VERSION)):
+            raise ValueError('Unknown observation reference protocol')
+        budgets = fragment.get('budgets')
+        native = fragment.get('decision_protocol') == NATIVE_VERSION
+        if fragment.get('decision_protocol') not in (None, NATIVE_VERSION):
+            raise ValueError('Unknown React decision protocol')
+        if (not isinstance(budgets, dict) or set(budgets) != set(BUDGET_KEYS)
+                or any(type(limit) is not int or limit < 1 for limit in budgets.values() if limit is not None)
+                or False):
+            raise ValueError('React budgets exceed the frozen protocol limits')
+        actions = fragment.get('allowed_actions')
+        if not isinstance(actions, list) or not actions or any(action not in ALLOWED_TOOL_ACTIONS for action in actions):
+            raise ValueError('React task needs a nonempty supported action whitelist')
+        spec = (task.get('workflow_proposal') or {}).get('spec') or {}
+        for extension in ('delayed_navigation_protocol','planning_intent_protocol','reading_progress_protocol','ending_policy','plan_protocol','session_objective','action_stability_protocol','trusted_prefix_protocol','reading_completion_policy','plan_execution_policy','wiki_reading_completion_protocol','numeric_result_evidence_policy','result_execution_policy','result_completion_protocol','collection_strategy'):
+            if spec.get(extension) != fragment.get(extension):
+                raise ValueError('Mismatched frozen React extension: ' + extension)
+        from .collection_strategy import strategy_id as _frozen_strategy
+        _frozen_strategy(task)  # Absent markers keep the react-chain reading; sealed
+        # pre-rename strategy ids map to the same current strategies; unknown ids fail.
+        if fragment.get('wiki_reading_completion_protocol') not in (None, WIKI_READING_COMPLETION):
+            raise ValueError('Unknown ordinary Wiki reading completion protocol')
+        if fragment.get('wiki_reading_completion_protocol') and fragment.get('plan_protocol') != PLAN_PROTOCOL:
+            raise ValueError('Wiki completion requires the conditional plan')
+        if fragment.get('result_completion_protocol') not in (None, RESULT_COMPLETION_PROTOCOL):
+            raise ValueError('Unknown ordinary result completion protocol')
+        if fragment.get('result_completion_protocol') and fragment.get('result_execution_policy') != RESULT_EXECUTION_POLICY:
+            raise ValueError('Result completion requires frozen result-execution evidence')
+        if fragment.get('result_execution_policy') not in (None, RESULT_EXECUTION_POLICY):
+            raise ValueError('Unknown result execution policy')
+        if fragment.get('result_execution_policy') and fragment.get('plan_protocol') != PLAN_PROTOCOL:
+            raise ValueError('Result execution policy requires the conditional plan')
+        if fragment.get('numeric_result_evidence_policy') not in (None, NUMERIC_RESULT_EVIDENCE_POLICY):
+            raise ValueError('Unknown numeric result evidence policy')
+        if fragment.get('session_objective'):
+            from .session_objective import bind
+            binding=fragment['session_objective']
+            claim=load_json(task['candidate_binding']['claim_reference']['path'])
+            if bind(binding['reference'],claim)!=binding:raise ValueError('Frozen session objective was changed')
+        from .goal_evidence import contract_for, validate_contract
+        contract = contract_for(task)
+        if contract is not None:
+            validate_contract(contract)
+        if fragment.get('plan_protocol') not in (None, PLAN_PROTOCOL) or (fragment.get('plan_protocol') and fragment.get('decision_protocol') != NATIVE_VERSION):
+            raise ValueError('Invalid frozen plan protocol')
+        if fragment.get('reading_completion_policy') is not None:
+            if (fragment['reading_completion_policy'] != READING_PLAN_COMPLETION_POLICY
+                    or fragment.get('plan_protocol') != PLAN_PROTOCOL
+                    or fragment.get('ending_policy') != ENDING_POLICY):
+                raise ValueError('Unknown frozen reading completion policy or incompatible task')
+        if fragment.get('plan_execution_policy') is not None:
+            if (fragment['plan_execution_policy'] != PLAN_EXECUTION_POLICY
+                    or fragment.get('plan_protocol') != PLAN_PROTOCOL
+                    or fragment.get('ending_policy') != ENDING_POLICY
+                    or fragment.get('reading_completion_policy') != READING_PLAN_COMPLETION_POLICY):
+                raise ValueError('Unknown frozen plan execution policy or incompatible task')
+        if fragment.get('action_stability_protocol') not in (None, ACTION_STABILITY_PROTOCOL):
+            raise ValueError('Unknown frozen action stability protocol')
+        if fragment.get('trusted_prefix_protocol') not in (None, TRUSTED_PREFIX_POLICY):
+            raise ValueError('Unknown frozen trusted prefix protocol')
+        if fragment.get('ending_policy') == ENDING_POLICY:
+            if fragment.get('trusted_prefix_protocol') is not None or fragment.get('allow_controlled_exception'):
+                raise ValueError('Complete-goal tasks cannot enable trusted-prefix or controlled-exception delivery')
+        if fragment.get('reasoning_effort_profile') is not None:
+            if not native:
+                raise ValueError('reasoning_effort_profile requires a native decision task')
+            if validate_effort_profile(fragment['reasoning_effort_profile']) != spec.get('reasoning_effort_profile'):
+                raise ValueError('Invalid frozen reasoning effort profile')
+        if fragment.get('plan_protocol') and fragment.get('ending_policy') != ENDING_POLICY:
+            raise ValueError('Conditional plan and ending policy do not match')
+        if fragment.get('ending_policy') not in (None, ENDING_POLICY):
+            raise ValueError('Unknown frozen ending policy')
+        if 'glm_http_call_limit' in spec or 'glm_http_call_limit' in fragment:
+            # 读侧双接受：历史冻结值25与当前上限40都合法，仅改写仍被拒绝。
+            legacy_limits = (SessionGLMCallLimit.limit, 25)
+            if not native or any(type(part.get('glm_http_call_limit')) is not int or
+                                 part['glm_http_call_limit'] not in legacy_limits for part in (fragment, spec)):
+                raise ValueError('Invalid signed ReAct GLM session limit')
+        if native and (spec.get('decision_protocol') != fragment.get('decision_protocol')
+                       or fragment.get('effective_action_rule') != EFFECTIVE_ACTION_RULE
+                       or spec.get('effective_action_rule') != fragment.get('effective_action_rule')
+                       or spec.get('budgets') != budgets
+                       or spec.get('allowed_actions') != actions
+                       or spec.get('allow_controlled_exception') != fragment.get('allow_controlled_exception')
+                       or spec.get('navigation_protocol') != fragment.get('navigation_protocol')
+                       or spec.get('skip_wechat_articles') != fragment.get('skip_wechat_articles')
+                       or spec.get('reference_protocol') != fragment.get('reference_protocol')):
+            raise ValueError('Native React policy/budgets differ from frozen spec')
+        if task['task_id'] != 'react-' + object_sha256({'url': spec.get('entry_url'), 'spec': spec})[:24]:
+>           raise ValueError('React task identity must bind its URL and spec')
+E           ValueError: React task identity must bind its URL and spec
+
+projects/code/webcollect/session_core.py:441: ValueError
+=========================== short test summary info ============================
+FAILED projects/code/tests/test_core_contract.py::PlanProtocolContract::test_stable_names_are_the_single_owner_values
+FAILED projects/code/tests/test_core_contract.py::StrategyResultContract::test_execute_allows_source_changes_without_registry_snapshot
+2 failed, 16 passed, 1 deselected in 0.54s

@@ -1,0 +1,357 @@
+{
+  "archived_at": "2026-11-18T07:04:39.488447+00:00",
+  "archive_kind": "authorized-repair-verification-text",
+  "source_root": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01",
+  "archive_location": "collection_logs/stepwise-switch-20261118",
+  "selection": "Explicit whitelist of 47 report, script, log and receipt files; no recursive copy",
+  "copied_files": 47,
+  "copied_bytes": 593907,
+  "entries": [
+    {
+      "path": "baseline-pytest.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/baseline-pytest.log",
+      "bytes": 116,
+      "sha256": "d1a726452921b48717c632fb80e994f3fa82583f55ce42c1254c62df9e3450a2",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "collect-only.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/collect-only.log",
+      "bytes": 4808,
+      "sha256": "e85d56196e5c1f6b65f7955984db03b42e0a32ba1a97176bcf1c4cee4731d718",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "deleted-qc-tests.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/deleted-qc-tests.json",
+      "bytes": 3370,
+      "sha256": "4900c2903a7fe37e4016220b2d6d8332db5c9305f8428b099a8d9682a828d23f",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "deletion-reference-audit.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/deletion-reference-audit.json",
+      "bytes": 36406,
+      "sha256": "c71b5a8d74ec92bcf7b73d0eb5289327103392d6aadb9093704cc212cca6c1bd",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "final-core-r01.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/final-core-r01.json",
+      "bytes": 124,
+      "sha256": "dbc2b38e0032bf4567d88ccc5dc5a8544000bd4d872b57bf897748438d724baf",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "final-core-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/final-core-r01.log",
+      "bytes": 99,
+      "sha256": "86d078b246f32c3dda80d2393eb509baf906e2268a4e3b3b8afc1bee1bab266d",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "final-core-r02.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/final-core-r02.json",
+      "bytes": 124,
+      "sha256": "f64fdde9affa92399c0503224b0be5437e8f1f7889763d6c87c6237476adf74d",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "final-core-r02.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/final-core-r02.log",
+      "bytes": 99,
+      "sha256": "e4190ed36de5802467a2a9bf23ac82157f0c9aacce2858e3e3518890e0647bbe",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "final-cross-review.md",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/final-cross-review.md",
+      "bytes": 6959,
+      "sha256": "c4dc1475a48f66728a39216981ef5472ed830034fd993c6bf4edbebe9854fac4",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "final-summary.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/final-summary.json",
+      "bytes": 5770,
+      "sha256": "1785c6073bb00851c219e82297be944bca0a16c7ddaa0167235e685a887ac414",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "gateway-core-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/gateway-core-r01.log",
+      "bytes": 13921,
+      "sha256": "ec74fd0ef327c599d3861df4507acee96d2947cedc6b4d7a5b5d1055004e4c2a",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "gateway-core-r02.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/gateway-core-r02.log",
+      "bytes": 98,
+      "sha256": "3be62f393f5921607a873beb897436b1f6af7bf8e959115d728ee0ecc5bd3a34",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "gateway-notes.md",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/gateway-notes.md",
+      "bytes": 3148,
+      "sha256": "dc54e795c399d7adab54939b164a92d33897a7808c9cd3a05ec4f9feb038afd3",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "grounded-cleanup-check.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/grounded-cleanup-check.json",
+      "bytes": 99,
+      "sha256": "f07f3936563c6ed9259151e99415c9d1fff86402214b01181dd573014840ef00",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "independent-readonly-review.md",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/independent-readonly-review.md",
+      "bytes": 7397,
+      "sha256": "c11b56b3c4edc4755a6ea1a3a23c1b86372188e9af1ac8e1be660cec3ade56d1",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "integration-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/integration-r01.log",
+      "bytes": 70866,
+      "sha256": "e7aedab7d2bff8b3060efcd01ddad1c71650e15dbefaeda179418243e2b83215",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r02.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r02.log",
+      "bytes": 64344,
+      "sha256": "4562c048bc4a87af54280844c32e6c04df029502393cadfbbb84c7e2f15acf87",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r03.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r03.log",
+      "bytes": 35906,
+      "sha256": "e01f1038a657bd82abeac2ce71c31d1995065b1c35a14545d767c5671e4960e4",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "paths-focused-r01.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/paths-focused-r01.json",
+      "bytes": 349,
+      "sha256": "fce27d96c100f5a468a0562dda6a0955c87223d6b2eefaa297cab00386a71eb6",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "paths-focused-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/paths-focused-r01.log",
+      "bytes": 98,
+      "sha256": "36628d9288a7053a36fef344f7d77295a6fb21e8ab5726fbbb262ff5e21f2dc0",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "paths-notes.md",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/paths-notes.md",
+      "bytes": 4186,
+      "sha256": "ec6515cc940032d851cb20374209418ac9a3240614ab53a2ce9fa36d9c6b643d",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "remaining-gates-core-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/remaining-gates-core-r01.log",
+      "bytes": 98,
+      "sha256": "78419627264031e09b8d27d312febff809c752c4503708de329ca11ad2b11318",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "report.md",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/report.md",
+      "bytes": 8603,
+      "sha256": "d0738eea05a6a386aa12f132d49612c904a3b8fa0c6db7fafc45d599d1196d7f",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "root-affected-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/root-affected-r01.log",
+      "bytes": 14580,
+      "sha256": "06d2cb5a5c31f40644b3f0cfe36a90503a11d8995d90b8a3d80d594d9c1eb3e7",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "root-affected-r02.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/root-affected-r02.log",
+      "bytes": 5224,
+      "sha256": "468b0218c41e2d218231dbc19fb4df1b4493c5379179e77ce9b352629d501287",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "root-affected-r03.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/root-affected-r03.log",
+      "bytes": 98,
+      "sha256": "59907462a8d5fd93406cdf4c7d1eb2f7b7a96664ae85c4ec202693d419cd019e",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "scheduler-resume-core-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/scheduler-resume-core-r01.log",
+      "bytes": 98,
+      "sha256": "c91dad03511eb111dba9f317cdb7962c64ec389c7d259de488e167c78aac1b31",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "startup-final-gaps-r01.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/startup-final-gaps-r01.json",
+      "bytes": 324,
+      "sha256": "ae9bf49234924962a396a27de583d0c511113b4de8c91a34febb284c1658d2ed",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "startup-final-gaps-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/startup-final-gaps-r01.log",
+      "bytes": 98,
+      "sha256": "976ea3fe6dfa65b827ec05fc16bf49cec94d3fda3b2d6ad4719708e74a38b32d",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "startup-final-gaps-r02.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/startup-final-gaps-r02.json",
+      "bytes": 324,
+      "sha256": "59699d29c9764b6c537f7edd839d5c13d6d4719463baf9094053b1603cbd788d",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "startup-final-gaps-r02.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/startup-final-gaps-r02.log",
+      "bytes": 98,
+      "sha256": "09229b326b028651d725fa47cd1bae9fd8e0145ff8779bdb84ae2762c00ab737",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "stepwise-affected-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/stepwise-affected-r01.log",
+      "bytes": 14760,
+      "sha256": "871db2ae8eb9b762dfc5b48984471fee2ab28834078b70cde6eaab816f1eb5ce",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "stepwise-notes.md",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/stepwise-notes.md",
+      "bytes": 7155,
+      "sha256": "1b92ee38282d84a7dca1b8295f3d21a5608c0ada9d68f201443763fe1b86f939",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "stepwise-visual-r02.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/stepwise-visual-r02.log",
+      "bytes": 98,
+      "sha256": "77867685350b6877d0d59307683c52e13b4367bc73e0ba811df040b46ae5a6c7",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "stepwise_offline.py",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/stepwise_offline.py",
+      "bytes": 37308,
+      "sha256": "b9771f8770449744e58650ca6b3b1e3ea4594984ae428111f70bc5441e447ef5",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "strategy-entry-core-r01.log",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/strategy-entry-core-r01.log",
+      "bytes": 98,
+      "sha256": "976ea3fe6dfa65b827ec05fc16bf49cec94d3fda3b2d6ad4719708e74a38b32d",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "integration-r01/report.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/integration-r01/report.json",
+      "bytes": 20387,
+      "sha256": "97807f2b7b99ecb70286f97807d5f052729bf7642e5a544db8c10f941bfdb82a",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "integration-r01/source-before.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/integration-r01/source-before.json",
+      "bytes": 29214,
+      "sha256": "765ef2a2b0b099a1480dd669ee499563bb4462b097db7348082207da3a64e6e5",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "integration-r01/source-after.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/integration-r01/source-after.json",
+      "bytes": 29214,
+      "sha256": "765ef2a2b0b099a1480dd669ee499563bb4462b097db7348082207da3a64e6e5",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r02/report.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r02/report.json",
+      "bytes": 26679,
+      "sha256": "224c3906eae59dbf45dd8821f0def63b23e1d613bd888259b369f04d456fd278",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r02/accounting.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r02/accounting.json",
+      "bytes": 3322,
+      "sha256": "e91761aa0dc78502b8aae28f38ffeee739d08bcb58c2bde0dea0273afde5e841",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r02/source-before.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r02/source-before.json",
+      "bytes": 29214,
+      "sha256": "cb44391c2e74e21566c3c71e5dace0dc0cf042de8875b6fb430c64cc5e7eced5",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r02/source-after.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r02/source-after.json",
+      "bytes": 29214,
+      "sha256": "cb44391c2e74e21566c3c71e5dace0dc0cf042de8875b6fb430c64cc5e7eced5",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r03/report.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r03/report.json",
+      "bytes": 18404,
+      "sha256": "8a2edf432021caac48a77141761f01b213d4c2e5652227867510e0d05bab7af6",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r03/accounting.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r03/accounting.json",
+      "bytes": 2580,
+      "sha256": "f2a13a1cf11959abf0c8e9d9e5f14829066d0b51b51536940f876c10a15cf2da",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r03/source-before.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r03/source-before.json",
+      "bytes": 29214,
+      "sha256": "428fa3ff607e7bb30a46fcbdb95af10a59141b0e1ff8c422b55fbe0a1e56eb0a",
+      "kind": "unchanged_copy"
+    },
+    {
+      "path": "local-r03/source-after.json",
+      "source": "/Users/hemiao/projects/2610/WebCollect/verify_results/stepwise-switch-20261118-r01/local-r03/source-after.json",
+      "bytes": 29214,
+      "sha256": "428fa3ff607e7bb30a46fcbdb95af10a59141b0e1ff8c422b55fbe0a1e56eb0a",
+      "kind": "unchanged_copy"
+    }
+  ],
+  "omitted": {
+    "files": 1765,
+    "bytes": 75908608,
+    "groups": [
+      "browser screenshots and capture payloads",
+      "raw model request/response material",
+      "SQLite stores and local project configuration",
+      "nested sample and export directories",
+      "desktop metadata"
+    ]
+  },
+  "notes": [
+    "Copies retain original bytes, failed intermediate results and local absolute evidence references.",
+    "Reports describe the completed offline repair turn; later publication/producer authorization does not rewrite those facts.",
+    "SHA values verify archive fidelity only; they are not business identities or runtime gates.",
+    "Current producer-new100 live logs are outside this archive."
+  ]
+}

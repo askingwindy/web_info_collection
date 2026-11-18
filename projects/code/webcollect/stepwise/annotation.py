@@ -14,6 +14,9 @@ from ..action_normalization import normalize_delivery_step
 from ..batch_core import file_sha
 
 POINTER_WITH_COORDINATE = ('click', 'double_click', 'right_click', 'scroll', 'select')
+UI_ELEMENT_FIELDS = ('element_id', 'parent_id', 'element_type', 'native_role', 'text',
+                     'visible_text', 'bbox', 'clickable', 'inputable', 'scrollable',
+                     'visible', 'enabled', 'state')
 
 
 def _context_host(url, fallback):
@@ -140,7 +143,10 @@ def build_delivery(sample_dir, journal, task, *, delivered, complete_row, omitte
 
 
 def write_tree(path, tree):
-    Path(path).write_text(json.dumps(tree, ensure_ascii=False) + '\n', encoding='utf-8')
+    projected = {**tree, 'elements': [
+        {key: element[key] for key in UI_ELEMENT_FIELDS if key in element}
+        for element in tree.get('elements') or []]}
+    Path(path).write_text(json.dumps(projected, ensure_ascii=False) + '\n', encoding='utf-8')
 
 
 def _write_json(path, value):

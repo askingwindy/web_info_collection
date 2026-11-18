@@ -20,8 +20,8 @@ STRATEGY_BANDED_REACT = 'react'
 STRATEGY_SCREENSHOT_PLAN = 'screenshot_plan'
 # 策略 3: independent stepwise one-action-per-call loop (webcollect.stepwise).
 STRATEGY_STEPWISE = 'stepwise'
-# 新任务缺省策略 2；策略 1 已完全冻结（见 Strategy1Forbidden），策略 3 显式选择。
-DEFAULT_STRATEGY = STRATEGY_SCREENSHOT_PLAN
+# 新任务只允许策略 3；旧策略标记继续供历史读取。
+DEFAULT_STRATEGY = STRATEGY_STEPWISE
 STRATEGIES = (STRATEGY_BANDED_REACT, STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE)
 # Sealed fragments frozen before the marker existed belong to the react chain;
 # their identity stays react (read-only) and is never migrated to 策略 2.
@@ -38,6 +38,13 @@ class Strategy1Forbidden(RuntimeError):
 
     def __init__(self, message=None):
         super().__init__(message or self.MESSAGE)
+
+
+class Strategy2Frozen(Strategy1Forbidden):
+    """策略 2 仅供历史读取、导出、报表和 QC 交接。"""
+
+    MESSAGE = ('STRATEGY2_FROZEN: 策略2(screenshot_plan)已冻结，禁止新采集或续跑；'
+               '历史任务保持只读，新采集仅允许 stepwise')
 
 # Internal result contract shared by both strategies.
 RESULT_CONTRACT = 'strategy-result'
@@ -61,8 +68,11 @@ def freeze(task, strategy=DEFAULT_STRATEGY):
     completely frozen: an explicit react strategy is refused here, at task
     construction, before any browser, model or collection action.
     """
+    strategy = LEGACY_STRATEGY_IDS.get(strategy, strategy)
     if strategy == STRATEGY_BANDED_REACT:
         raise Strategy1Forbidden()
+    if strategy == STRATEGY_SCREENSHOT_PLAN:
+        raise Strategy2Frozen()
     if strategy not in STRATEGIES:
         raise ValueError('Unknown collection strategy: ' + str(strategy))
     record = {'id': strategy, 'result_contract': RESULT_CONTRACT}
@@ -116,18 +126,11 @@ def select(task):
     read-only parsing elsewhere; they never reach an executing session.
     """
     if enabled(task):
-        from . import screenshot_plan
-        return screenshot_plan
+        raise Strategy2Frozen()
     if is_stepwise(task):
         from . import stepwise
         return stepwise
     raise Strategy1Forbidden()
-
-
-def _banded_strategy_module():
-    """策略 1 stays the ReactSession chain; the adapter is the session itself."""
-    from . import react_session
-    return react_session
 
 
 def outcome_facts(*, goal_status, end_reason, eligibility, save_status, details=None):

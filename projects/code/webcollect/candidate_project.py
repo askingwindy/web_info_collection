@@ -80,10 +80,6 @@ def initialize(root, project_id, policy_template, producer_template, consumer_te
     # The fixed root may contain unrelated legacy project subdirectories. Only
     # this root's own scope/config/database files exclude a new initialization.
     root.mkdir(parents=True,exist_ok=True)
-    from .workspace_paths import prepare
-    common = Path(__import__('os').path.commonpath((root, results)))
-    prepare(root, common)
-    prepare(results, common)
     # An incomplete initialization keeps its files for diagnosis. The scope is published last.
     results.mkdir(parents=True, exist_ok=True)
     owner = initialize_chain(manifest,registry,chain_id=project_id,current_result_roots=[results],

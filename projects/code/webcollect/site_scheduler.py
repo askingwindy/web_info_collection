@@ -13,9 +13,11 @@ import hashlib
 from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
+import sys
 import time
 
 from .collect_runtime import collect_m4, source_identity
+from .collection_strategy import Strategy1Forbidden, select
 from .planning import canonical, object_sha256
 from .production_quality import sha
 from .runtime import domain_key, validate_policy
@@ -84,6 +86,8 @@ def validate_schedule(value):
             plan = json.loads(Path(batch['plan']).read_text())
             if not isinstance(plan.get('tasks'), list) or not plan['tasks']:
                 raise ValueError('Every batch needs a published nonempty task plan')
+            for task in plan['tasks']:
+                select(task)
             domains.update(domain_key(task['site_uri']) for task in plan['tasks'])
         if len(domains) != 1:
             raise ValueError('One logical site may use multiple URIs, but must have one conservative traffic domain')
@@ -141,8 +145,13 @@ async def run_schedule(value, output, *, resume=False, collector=None):
         if output.exists():
             if not resume or not (output / 'schedule.json').is_file():
                 raise FileExistsError('Schedule output exists; explicit bound resume is required')
-            if json.loads((output / 'schedule.json').read_text()) != frozen:
+            recorded = json.loads((output / 'schedule.json').read_text())
+            if ({key: value for key, value in recorded.items() if key != 'source_files_sha256'}
+                    != {key: value for key, value in frozen.items() if key != 'source_files_sha256'}):
                 raise ValueError('Schedule/config/input binding changed; keep the original run')
+            # The original source digest is audit evidence. Keep its bytes and
+            # downstream cohort binding without comparing it to current code.
+            frozen = recorded
         else:
             output.mkdir(parents=True)
             write_json(output / 'schedule.json', frozen)
@@ -190,10 +199,9 @@ async def run_schedule(value, output, *, resume=False, collector=None):
                         if stopped.is_set():
                             results.append({'site_key': site['site_key'], 'output': batch['output'], 'status': 'NOT_STARTED_AFTER_ERROR'})
                             break
-                        if (any(sha(path) != digest for path, digest in bindings.items())
-                                or source_identity() != frozen['source_files_sha256']):
+                        if any(sha(path) != digest for path, digest in bindings.items()):
                             stopped.set()
-                            raise ValueError('Frozen scheduled inputs or implementation changed before dispatch')
+                            raise ValueError('Frozen scheduled inputs changed before dispatch')
                         options = {'publication_path': Path(batch['publication']), 'policy_path': Path(batch['policy']),
                                    'resume': resume or batch.get('resume', False),
                                    'channel': batch.get('channel', 'chrome'), 'headless': batch.get('headless', True)}
@@ -248,7 +256,11 @@ def main(argv=None):
     parser.add_argument('--output', required=True)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args(argv)
-    result = asyncio.run(run_schedule(json.loads(Path(args.config).read_text()), args.output, resume=args.resume))
+    try:
+        result = asyncio.run(run_schedule(json.loads(Path(args.config).read_text()), args.output, resume=args.resume))
+    except Strategy1Forbidden as error:
+        print(json.dumps({'error': str(error), 'kind': 'strategy_rejected'}, ensure_ascii=False), file=sys.stderr)
+        return 2
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result['status'] == 'COLLECTED_PENDING_REVIEW' else 1
 

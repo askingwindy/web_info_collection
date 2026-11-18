@@ -142,10 +142,6 @@ def bind_action(state, rows, arguments):
             x, y = width // 2, height // 2
         if arguments.get('direction') not in ('up', 'down', 'left', 'right'):
             raise ActionRejected('SCROLL_DIRECTION_REQUIRED')
-    elif action == 'select':
-        option = arguments.get('option')
-        if not isinstance(option, str) or not option:
-            raise ActionRejected('SELECT_OPTION_REQUIRED')
     elif action == 'wait':
         pass
     elif action == 'back':
@@ -153,6 +149,16 @@ def bind_action(state, rows, arguments):
     elif action == 'complete':
         if arguments.get('status') not in ('success', 'infeasible'):
             raise ActionRejected('COMPLETE_STATUS_REQUIRED')
+    if action == 'select':
+        option = arguments.get('option')
+        if not isinstance(option, str) or not option:
+            raise ActionRejected('SELECT_OPTION_REQUIRED')
+        control = next((item for item in state.get('capture_controls') or []
+                        if item.get('element_id') == element['element_id']), {})
+        if (control.get('tag') != 'select'
+                or not any(item.get('label') == option and not item.get('disabled')
+                           for item in control.get('options') or [])):
+            raise ActionRejected('SELECT_OPTION_NOT_PRESENT')
     # 未声明参数不得随动作携带（不同动作只允许自身需要的参数）。
     allowed = {'last_step_result', 'page_name', 'precondition', 'thought',
                'user_goal', 'expected_result', 'note', 'action'}

@@ -1,5 +1,5 @@
 """策略 3 stepwise 核心契约（离线）：策略路由与保存资格、决策协议与动作绑定、
-原始记录/导出映射与 annotation 生成。全部离线；无真实 GLM、浏览器或生产库。
+原始记录/导出映射与 annotation 生成。全部离线；无真实 GLM 或生产库。
 """
 import io
 import json
@@ -45,7 +45,7 @@ def _state(url='https://example.org/tool', **extra):
 
 
 class StepwiseRoutingAndSaveGate(unittest.TestCase):
-    """策略路由：显式 stepwise 进入本包，缺省仍策略2，策略1拒绝；保存资格分流。"""
+    """策略路由：stepwise 执行与封存；历史策略的保存资格继续按原标记解释。"""
 
     def test_stepwise_gate_dispatch_and_eligibility(self):
         # task_type 标签与 QC 权威清单一致，不另起业务枚举。
@@ -100,6 +100,84 @@ class StepwiseRoutingAndSaveGate(unittest.TestCase):
             '在「面积计算器」上完成edit/fields：长度为12')
         with self.assertRaisesRegex(ValueError, 'STEPWISE_GOAL_NOT_DELIVERABLE'):
             finalize.specified_instruction({'unrelated': 1}, 'app')
+
+
+class StepwiseExceptionClosure(unittest.TestCase):
+    def test_session_exceptions_seal_raw_and_keep_failure_ownership(self):
+        # 同一 run 边界对已知模型/网络/采集错误和未知程序错误均封存原件。
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from playwright.async_api import Error as BrowserError
+        from webcollect.browser import EvidenceStale, SnapshotFault
+        from webcollect.failure_policy import disposition
+        from webcollect.model_gateway import ProviderFinishIncomplete, ProviderRejected
+        from webcollect.stepwise.session import StepwiseSession
+        from webcollect.stepwise import records
+        errors = [(ValueError('bounded_plan_correction_failed: invalid'), 'model', 'protocol_error'),
+                  (ValueError('consumer_protocol_no_progress'), 'model', 'protocol_error'),
+                  (ProviderFinishIncomplete('refused', 'declined'), 'model', 'protocol_error'),
+                  (ProviderRejected(400, 'request-400', {'message': 'bad request'}), 'model', 'error'),
+                  (BrowserError('page.goto: net::ERR_CONNECTION_CLOSED'), 'network', 'error'),
+                  (EvidenceStale('stale pixels'), 'collector', 'capture_stale'),
+                  (SnapshotFault('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
+                  (BrowserError('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
+                  (SnapshotFault('invalid capture record'), 'program', 'capture_stale'),
+                  (KeyError('missing fact'), 'program', 'error')]
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, (error, failure_class, stop_reason) in enumerate(errors):
+                evidence = Path(temporary) / str(index)
+                task = {'task_id': 'task-error', 'site_uri': 'https://example.org/tool',
+                        'initial_url': 'https://example.org/tool', 'fragment': {}}
+                session = StepwiseSession(task, evidence, AsyncMock(),
+                    SimpleNamespace(url=task['site_uri']), attempt_id='attempt-error', entry_ready=True)
+                with patch.object(session, '_capture', new=AsyncMock(return_value=_captured(_state()))), \
+                     patch.object(session, '_loop', new=AsyncMock(side_effect=error)):
+                    result = asyncio.run(session.run())
+                self.assertEqual(result['failure_class'], failure_class)
+                self.assertEqual(result['stop_reason'], stop_reason)
+                self.assertIn(type(error).__name__, result['stop_summary'])
+                self.assertTrue(Path(result['raw_receipt']['path']).is_file())
+                terminal = records.read_terminal(evidence)
+                self.assertEqual(terminal['failure_class'], failure_class)
+                self.assertFalse(terminal['unknown'])
+                expected = 'page_program' if failure_class == 'program' else 'business'
+                self.assertEqual(disposition(failure_class=failure_class)['disposition'], expected)
+
+
+        # Errors after a recorded dispatch must retain its receipt and actual
+        # execution fact; post-capture faults are never silently retried.
+        from webcollect import browser
+        for phase, error, failure_class in (
+                ('dispatch', BrowserError('net::ERR_CONNECTION_CLOSED'), 'network'),
+                ('dispatch', KeyError('execution defect'), 'program'),
+                ('capture', EvidenceStale('after pixels stale'), 'collector'),
+                ('capture', SnapshotFault('capture implementation defect'), 'program'),
+                ('capture', SnapshotFault('UNSUPPORTED_GEOMETRY: target'), 'collector')):
+            with tempfile.TemporaryDirectory() as temporary:
+                task = {'task_id': 'dispatched', 'site_uri': 'https://example.org/tool',
+                        'initial_url': 'https://example.org/tool', 'fragment': {}}
+                session = StepwiseSession(task, temporary, AsyncMock(),
+                    SimpleNamespace(url=task['site_uri']), attempt_id='dispatched', entry_ready=True)
+                async def dispatch_once():
+                    await session._dispatch(session.current,
+                        {'action_type': 'back', 'arguments': {}, 'evidence': {'collection_strategy': 'stepwise'}},
+                        None, {'action': 'back'})
+                captures = [_captured(_state())]
+                if phase == 'capture':
+                    captures.append(error)
+                with patch.object(session, '_capture', new=AsyncMock(side_effect=captures)), \
+                     patch.object(session, '_loop', new=dispatch_once), \
+                     patch.object(browser, 'execute', new=AsyncMock(side_effect=error if phase == 'dispatch' else None)):
+                    result = asyncio.run(session.run())
+                terminal = records.read_terminal(temporary)
+                self.assertEqual(result['failure_class'], failure_class)
+                self.assertEqual(terminal['actual_dispatches'], 1)
+                self.assertEqual(len(terminal['steps']), 1)
+                receipt = json.loads(Path(terminal['steps'][0]['step_file']).read_text())
+                self.assertEqual(receipt['action_executed'], True if phase == 'capture' else None)
+                self.assertIn(type(error).__name__, receipt['execution_error'])
+                self.assertEqual(len(list(records.unverified_actions(result['raw_receipt']))), 1)
 
 
 class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
@@ -163,6 +241,22 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
                          {'x': 640, 'y': 360, 'direction': 'down'})
         with self.assertRaisesRegex(observation.ActionRejected, 'UNEXPECTED_ACTION_FIELDS'):
             observation.bind_action(state, rows, {'action': 'back', 'text': '多余参数'})
+        # select 原文只允许当前捕获的非禁用选项，拒绝必须发生在派发前。
+        select_state = _state()
+        select_state['elements'][2].update(element_type='select', native_role='select')
+        select_state['capture_controls'] = [{'element_id': 'e2', 'tag': 'select',
+            'options': [{'label': '厘米', 'value': 'cm', 'disabled': False},
+                        {'label': '米', 'value': 'm', 'disabled': True}]}]
+        select_rows = observation.actionable_rows(select_state)
+        chosen, _ = observation.bind_action(select_state, select_rows,
+                                            {'action': 'select', 'element': 2, 'option': '厘米'})
+        self.assertEqual(chosen['arguments']['option'], '厘米')
+        for option in ('千米', '米', ' 厘米', 'cm'):
+            with self.assertRaisesRegex(observation.ActionRejected, 'SELECT_OPTION_NOT_PRESENT'):
+                observation.bind_action(select_state, select_rows,
+                                        {'action': 'select', 'element': 2, 'option': option})
+        with self.assertRaisesRegex(observation.ActionRejected, 'SELECT_OPTION_REQUIRED'):
+            observation.bind_action(select_state, select_rows, {'action': 'select', 'element': 2})
         # require_action（browser.validate_action_observation 的策略3校验器）复核同一事实。
         self.assertTrue(observation.require_action(state, operation))
         bad = {'action_type': 'click', 'arguments': {'x': 5, 'y': 5},
@@ -304,6 +398,7 @@ class StepwiseRecordsAndAnnotation(unittest.TestCase):
             writeback = {'task_type': ['数据查看'], 'model_instruction': '在「面积计算器」输入并查看结果',
                          'final_result': '结果区显示「面积」数值',
                          'completion_judgement': '末帧可见「面积」结果'}
+            frame_one['state']['elements'][0]['geometry_proof'] = {'raw_only': True}
             annotation, frame_texts = build_delivery(
                 sample, journal, task, delivered=delivered, complete_row=complete_row,
                 omitted=[{'dispatch_seq': 2, 'reason': 'no_effect_confirmed'}],
@@ -315,6 +410,12 @@ class StepwiseRecordsAndAnnotation(unittest.TestCase):
             self.assertEqual(len(annotation['steps']), 2)
             self.assertNotIn('screen_changed', annotation['steps'][-1]['tool_result']['return_value'])
             self.assertEqual(annotation['steps'][0]['action']['target_text'], '计算')
+            from webcollect.stepwise.annotation import UI_ELEMENT_FIELDS
+            tree = json.loads((sample / 'ui_tree' / 'step_001.json').read_text())
+            self.assertNotIn('geometry_proof', tree['elements'][0])
+            self.assertIn('geometry_proof', frame_one['state']['elements'][0])
+            self.assertTrue(all(set(item) <= set(UI_ELEMENT_FIELDS) for item in tree['elements']))
+
             ground_truth = json.loads((evidence / 'ground_truth.json').read_text())
             self.assertEqual(ground_truth[0]['element_id'], 'e2')
             # 引文核对：字段所属帧命中；末帧缺失引文如实报出。

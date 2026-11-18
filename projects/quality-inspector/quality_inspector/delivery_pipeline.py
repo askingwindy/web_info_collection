@@ -212,7 +212,7 @@ def prepare(ledger,dataset,plan_path,effective_set,output,*,profile=DEFAULT_DELI
                'mechanically_blocked':queue['mechanically_blocked'],
                'actual_human_reviews_created':0,'release_ready':False}
         value['receipt_sha256']=_digest(value)
-        if package_files(dataset)!=candidate or implementation!=_implementation():raise ValueError('Inputs/code changed during pipeline preparation')
+        if package_files(dataset)!=candidate:raise ValueError('Inputs changed during pipeline preparation')
         delivery_sampling.verify(plan_path,dataset)
         receipt=output/'pipeline-receipt.json';delivery_sampling.write(receipt,value)
         verify(receipt,ledger)

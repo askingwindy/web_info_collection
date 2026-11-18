@@ -833,7 +833,16 @@ class RuntimeStore:
         history_proof = self._customer_history_proof() if outcome == 'collected_pending_review' else None
         completion_facts = None
         with closing(self._connect(readonly=True)) as precheck:
-            prior_status = self._attempt(precheck, attempt_id)['status']
+            prior = self._attempt(precheck, attempt_id)
+            prior_status = prior['status']
+            sample_id = prior['sample_id']
+            original_task = json.loads(prior['task_json'])
+        checked = None
+        if exact_images is not None:
+            if outcome != 'collected_pending_review':
+                raise ValueError('精确图片声明只允许与成功保存同事务提交')
+            if prior_status in ACTIVE or derivation_recovery is not None:
+                checked = self._checked_images(exact_images, sample_id)
         if outcome == 'collected_pending_review' and (prior_status in ACTIVE or derivation_recovery is not None):
             # Load and hash files before taking the single-writer transaction.
             # Already terminal idempotent receipts retain historical meaning.
@@ -849,6 +858,8 @@ class RuntimeStore:
             if not expected or file_sha(annotation_path) != expected:
                 raise ValueError('Pending sample annotation differs from its original receipt')
             completion_facts = saved, load_json(annotation_path), receipt
+            from .production_identity import verify_saved
+            verify_saved(original_task, sample_id, evidence)
         with self._transaction() as con:
             current = timestamp(now)
             row = self._owned(con, attempt_id, worker_id, lease_token, current, terminal_ok=True)
@@ -867,6 +878,8 @@ class RuntimeStore:
                 raise ValueError('未开始的预留不能记为真实执行结果')
             if outcome == 'collected_pending_review':
                 saved, annotation, receipt = completion_facts
+                if row['sample_id'] != sample_id or json.loads(row['task_json']) != original_task:
+                    raise ValueError('Pending sample task identity changed during file validation')
                 if saved.get('sample_id') != row['sample_id'] or receipt.parent.name != row['sample_id']:
                     raise ValueError('Pending sample receipt identity differs')
                 # 统一保存资格入口：按封存记录的冻结策略静态分流（策略 1/2 走
@@ -886,14 +899,10 @@ class RuntimeStore:
             if outcome == 'collected_pending_review':
                 from .admission_cohort import guard_scope
                 guard_scope(con, self.registry, self.scope_id, history_proof=history_proof)
-                from .production_identity import guard as page_guard, verify_saved
+                from .production_identity import guard as page_guard
                 task = json.loads(row['task_json'])
                 page_guard(con, row['task_key'], task, required=self._policy(con).get('pilot_identity_required', False))
-                verify_saved(task, row['sample_id'], evidence)
             if exact_images is not None:
-                if outcome != 'collected_pending_review':
-                    raise ValueError('精确图片声明只允许与成功保存同事务提交')
-                checked = self._checked_images(exact_images, row['sample_id'])
                 conflicts = []
                 for path, digest in checked.items():
                     for other in con.execute('SELECT path,sample_id FROM m4_exact_images WHERE digest=? AND sample_id<>?',

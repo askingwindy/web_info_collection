@@ -176,8 +176,6 @@ def freeze(scope_path, output, *, count=50, seed='round2', candidate_ids=None, d
                  eligible_count=sum(r['eligible'] for r in rows), selected_count=len(selected),
                  selection_complete=len(selected)==expected, dry_run=dry_run)
     output.mkdir(parents=True, exist_ok=False)
-    from .workspace_paths import prepare_output
-    prepare_output(output,scope_path)
     save_json(output/'audit.json',audit); save_json(output/'rows.json',rows)
     if not dry_run and audit['selection_complete']:
         cohort = {'schema_version':'consumer-multibatch-cohort',
@@ -234,8 +232,6 @@ def freeze_round(scope_path, producer_plan, output):
             if row['producer_batch'] not in batches:raise ValueError('NEW provenance belongs to another producer round')
             selected.append(row);counts[pub['application_id']]+=1
     output=Path(output).resolve();output.mkdir(parents=True,exist_ok=False)
-    from .workspace_paths import prepare_output
-    prepare_output(output,scope_path)
     complete=len(counts)==2 and set(counts.values())=={50}
     save_json(output/'audit.json',{**audit,'producer_plan':reference(producer_plan),'round_batches':sorted(batches),
                                   'counts':dict(counts),'selection_complete':complete,'requested_denominator':100})

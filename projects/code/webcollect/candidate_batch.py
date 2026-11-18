@@ -1,12 +1,31 @@
 """Batch result accounting and evidence-bound recovery; no external transport."""
 from webcollect import workspace_json as json
 import re
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 
 from .batch_core import load_json, BudgetStop, SessionGLMCallLimit
 from .planning import verify_evidence
 
 VERSION = 'candidate-batch-routing'
+
+
+def _path(value):
+    path = Path(value)
+    if not path.is_absolute() or path.is_symlink():
+        raise ValueError('An absolute nonsymlink path is required: ' + str(path))
+    return path.resolve()
+
+
+@contextmanager
+def _lock(path):
+    path = _path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(path.name + '.lock').open('a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield path
+
 
 
 def batch_ids(pool, producer_batch):
@@ -215,7 +234,6 @@ def reprocess(pool, candidate_id, revision_root, *, reason, fix_version):
     ids = {**saved, 'site_id': saved['sample_id'].split('_sample_')[0], 'batch_id': manifest['batch_id']}
     # The existing local file lock serializes version-idempotence as well as
     # receipt registration. It never locks a browser/model operation.
-    from .fixed_cohort import _lock
     with _lock(Path(str(pool.path) + '.revision')):
         with pool.pool.connect() as con:
             for row in con.execute("SELECT record FROM candidate_events WHERE candidate_id=? AND kind='revision'", (candidate_id,)):

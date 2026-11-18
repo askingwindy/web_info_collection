@@ -1911,6 +1911,8 @@ def validate_ending_marker(record):
 
 def screenshot_chooser(ledger, task, attempt_id, *, parent_job=None, runlog=None):
     """Production chooser: same job/ledger identity rules as the native path."""
+    from webcollect.collection_strategy import Strategy2Frozen
+    raise Strategy2Frozen()
     from webcollect.agent_controller import _job_request_count
     from webcollect.collection_strategy import STRATEGY_SCREENSHOT_PLAN
     from webcollect.session_core import ReactStop

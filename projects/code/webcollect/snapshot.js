@@ -45,8 +45,31 @@
                   c:parent.a*c+parent.c*d,d:parent.b*c+parent.d*d};
     scaleCache.set(element,result);return result;
   };
+  // Unsupported geometry is local to its subtree. Keep the original pixels,
+  // but never invent actionable rectangles or text evidence for these nodes.
+  const geometryCache=new WeakMap(),geometryExclusions=[];
+  const geometrySupported=element=>{
+    if(!element)return true;
+    if(geometryCache.has(element))return geometryCache.get(element);
+    if(!geometrySupported(element.parentElement)){geometryCache.set(element,false);return false;}
+    try {axisScale(element);geometryCache.set(element,true);return true;}
+    catch(error) {
+      if(!String(error.message).includes('UNSUPPORTED_GEOMETRY'))throw error;
+      geometryCache.set(element,false);
+      if(!observer.ids.has(element))observer.ids.set(element,`e_${observer.next++}`);
+      const rect=element.getBoundingClientRect(),style=styleOf(element);
+      geometryExclusions.push({element_id:observer.ids.get(element),tag:element.localName,
+        id:element.id||'',bbox:[rect.left,rect.top,rect.right,rect.bottom],
+        transform:style.transform,rotate:style.rotate,reason:error.message,
+        subtree_excluded:true,actions_supported:false,pixel_exclusion_allowed:false});
+      return false;
+    }
+  };
+  if(target&&!geometrySupported(target))
+    throw new Error('UNSUPPORTED_GEOMETRY: action target or its ancestor has non-axis-aligned geometry');
   const clipCache=[new WeakMap(),new WeakMap()];
   const clipFor = (element,includeSelf=false) => {
+    if(!geometrySupported(element))return {left:0,top:0,right:0,bottom:0};
     const cache=clipCache[Number(includeSelf)];
     if(cache.has(element))return cache.get(element);
     let left=0,top=0,right=width,bottom=height;
@@ -147,7 +170,7 @@
     return xs.every(x=>ys.every(y=>textHit(x,y,owner)));
   };
   const nativeValueVisible = (node,allowEmptyPlaceholderTargetEvidence=false) => {
-    if(!node.matches('input,textarea,select'))return false;
+    if(!node.matches('input,textarea,select')||!geometrySupported(node))return false;
     const password=node.matches('input[type=password]');
     // Only the target-label call may expose an empty password placeholder.
     // Native password values and assertion values always keep the default false.
@@ -259,6 +282,7 @@
     if(textCache.has(node))return textCache.get(node);
     if(node.nodeType===Node.COMMENT_NODE)return '';
     if(node.nodeType===Node.ELEMENT_NODE) {
+      if(!geometrySupported(node))return '';
       const style=styleOf(node);
       if(style.display==='none'||style.visibility!=='visible'||Number(style.opacity)===0)return '';
       const text=[...node.childNodes].map(visibleText).join(' ');
@@ -266,6 +290,7 @@
     }
     if(node.nodeType!==Node.TEXT_NODE||!node.parentElement)return '';
     const owner=node.parentElement;
+    if(!geometrySupported(owner))return '';
     if(owner.checkVisibility&&!owner.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return '';
     const range=document.createRange();range.selectNodeContents(node);
     const rectangles=[...range.getClientRects()];
@@ -389,6 +414,7 @@
       if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||
          parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;
     }
+    if(!geometrySupported(owner))return null;
     const scale=axisScale(owner);if(scale.a!==1||scale.d!==1||scale.b!==0||scale.c!==0)return null;
     const style=styleOf(owner),r=owner.getBoundingClientRect(),w=px(pseudo.width),h=px(pseudo.height);
     if(w===null||h===null||w<=0||h<=0||owner.getClientRects().length!==1||
@@ -613,107 +639,22 @@
       (interactive ? visibleText(element) : direct) || element.getAttribute('placeholder') ||
       element.getAttribute('title') || selected || (element.matches('input[type=submit],input[type=button]') ? element.value : ''));
   };
-  const unrelatedTransforms=new WeakMap(),transformProofs=[];
-  const quarantinedRoots=[];
-  const inQuarantine = element => quarantinedRoots.some(root => root.contains(element));
-  const boundedDecoration = element => {
-    const st=styleOf(element),r=element.getBoundingClientRect();
-    if(element===target||!element.matches('img[alt=""][aria-hidden="true"]')||
-       !['presentation','none'].includes(element.getAttribute('role'))||st.pointerEvents!=='none'||
-       !element.complete||element.naturalWidth<=0||element.naturalHeight<=0||
-       ['title','aria-label','aria-labelledby','tabindex'].some(k=>element.hasAttribute(k))||
-       st.filter!=='none'||st.boxShadow!=='none'||st.clipPath!=='none'||st.maskImage!=='none'||
-       r.left<0||r.top<0||r.right>width||r.bottom>height)return null;
-    for(let p=element.parentElement;p;p=p.parentElement) {
-      const a=styleOf(p);
-      if(p.matches('a,button,label,figure,[tabindex],[contenteditable=true],[role=img]')||
-         [...p.attributes].some(x=>/^on/i.test(x.name))||a.transform!=='none'||
-         (a.rotate&&a.rotate!=='none')||a.perspective!=='none'||
-         !['visible','clip'].includes(a.overflowX)||!['visible','clip'].includes(a.overflowY))return null;
-    }
-    const overlap=b=>Math.min(r.right,b.right)>Math.max(r.left,b.left)&&Math.min(r.bottom,b.bottom)>Math.max(r.top,b.top);
-    const protectedRegions=[];
-    const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
-    while(walker.nextNode()) {
-      const text=walker.currentNode;
-      if(!clean(text.textContent)||text.parentElement.closest('script,style,noscript,template'))continue;
-      const range=document.createRange();range.selectNodeContents(text);
-      for(const box of range.getClientRects()) {if(overlap(box))return null;protectedRegions.push([box.left,box.top,box.right,box.bottom]);}
-    }
-    const selectors=['a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]',
-      ...protected_selectors,...assertions.filter(x=>x.selector).map(x=>x.selector)];
-    for(const selector of selectors)for(const control of document.querySelectorAll(selector)) {
-      const box=control.getBoundingClientRect();if(overlap(box))return null;
-      protectedRegions.push([box.left,box.top,box.right,box.bottom]);
-    }
-    return {schema_version:'webcollect-unrelated-transform-1',bbox:[r.left,r.top,r.right,r.bottom],
-      transform:st.transform,rotate:st.rotate,protected_regions:protectedRegions,
-      relation:'explicit decorative image disjoint from every text/control/protected region',
-      pixel_exclusion_allowed:false,actions_supported:false};
-  };
-  // 2026-11-06 R3: one unsupported-geometry decoration must not fail the whole
-  // page observation. Quarantine only provably task-irrelevant subtrees: no
-  // text, no own semantics, no interactive descendant, no protected/assertion
-  // member, disjoint from every other text/control box. Targets and anything
-  // they contain stay strict and keep the honest UNSUPPORTED_GEOMETRY failure.
-  const quarantineUnsupported = (element,error) => {
-    if(element===target||element.contains(target))return null;
-    const st=styleOf(element),r=element.getBoundingClientRect();
-    if(clean(element.textContent)||['aria-label','aria-labelledby','title','placeholder'].some(k=>element.hasAttribute(k)))return null;
-    if(element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,video,canvas,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio],[role=img]')
-       ||element.hasAttribute('onclick')||st.cursor==='pointer')return null;
-    if(element.querySelector('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio],[role=img],img,video,canvas,iframe,frame,[onclick]'))return null;
-    for(const selector of [...protected_selectors,...assertions.filter(x=>x.selector).map(x=>x.selector)])
-      if(element.matches(selector)||element.querySelector(selector))return null;
-    if(r.left<0||r.top<0||r.right>width||r.bottom>height)return null;
-    const overlap=b=>Math.min(r.right,b.right)>Math.max(r.left,b.left)&&Math.min(r.bottom,b.bottom)>Math.max(r.top,b.top);
-    const protectedRegions=[];
-    const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
-    while(walker.nextNode()) {
-      const text=walker.currentNode;
-      if(!clean(text.textContent)||text.parentElement.closest('script,style,noscript,template')||element.contains(text))continue;
-      const range=document.createRange();range.selectNodeContents(text);
-      for(const box of range.getClientRects()) {if(overlap(box))return null;protectedRegions.push([box.left,box.top,box.right,box.bottom]);}
-    }
-    const selectors=['a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]',
-      ...protected_selectors,...assertions.filter(x=>x.selector).map(x=>x.selector)];
-    for(const selector of selectors)for(const control of document.querySelectorAll(selector)) {
-      if(element.contains(control))continue;
-      const box=control.getBoundingClientRect();if(overlap(box))return null;
-      protectedRegions.push([box.left,box.top,box.right,box.bottom]);
-    }
-    return {schema_version:'webcollect-unrelated-transform-2',bbox:[Math.floor(r.left),Math.floor(r.top),Math.ceil(r.right),Math.ceil(r.bottom)],
-      transform:st.transform,rotate:st.rotate,error:error.message,protected_regions:protectedRegions,
-      relation:'unsupported-geometry subtree with no text/control/protected overlap; retained as bounded visual evidence',
-      pixel_exclusion_allowed:false,actions_supported:false};
-  };
   for (const element of document.querySelectorAll('body *')) {
     if (element.matches('script,style,noscript,template,svg,svg *')) continue;
-    if (inQuarantine(element)) continue;
+    if (!geometrySupported(element)) continue;
     const style = styleOf(element), rect = element.getBoundingClientRect();
     if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0 ||
         rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= height || rect.left >= width) continue;
     if (element.checkVisibility && !element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) continue;
-    // Empty, noninteractive decoration never enters the visible tree. Do not
-    // demand target geometry from it before applying that existing filter.
-    // Real text, controls, images, frames and explicit targets remain strict.
+    // Empty, noninteractive decoration never enters the visible tree.
+    // Unsupported subtrees have already been excluded above; explicit target
+    // geometry is checked before inventory construction.
     const candidateScroll=/(auto|scroll)/.test(style.overflowY+style.overflowX)&&
       (element.scrollHeight>element.clientHeight||element.scrollWidth>element.clientWidth);
     if(element!==target&&!clean(element.textContent)&&
        !['aria-label','aria-labelledby','title','placeholder'].some(k=>element.hasAttribute(k))&&
        !element.matches('a[href],button,select,summary,input,textarea,label,img,iframe,frame,[contenteditable=true],[role=button],[role=link],[role=option],[role=tab],[role=checkbox],[role=radio]')&&
        !element.hasAttribute('onclick')&&style.cursor!=='pointer'&&!candidateScroll)continue;
-    try {axisScale(element);} catch(error) {
-      const proof=boundedDecoration(element)||quarantineUnsupported(element,error);
-      if(!proof)throw error;
-      if(!observer.ids.has(element))observer.ids.set(element,`e_${observer.next++}`);
-      proof.element_id=observer.ids.get(element);unrelatedTransforms.set(element,proof);transformProofs.push(proof);
-      quarantinedRoots.push(element);
-      nodes.push(element);records.push({element_id:proof.element_id,parent_id:'root',element_type:'image',native_role:'img',
-        text:'',bbox:[Math.floor(rect.left),Math.floor(rect.top),Math.ceil(rect.right),Math.ceil(rect.bottom)],
-        clickable:false,inputable:false,scrollable:false,visible:true,enabled:false,state:'default',geometry_proof:proof});
-      continue;
-    }
     const opaqueFrame=element.matches('iframe,frame');
     const clip=clipFor(element);
     const bbox = [Math.max(0,Math.floor(Math.max(rect.left,clip.left))),Math.max(0,Math.floor(Math.max(rect.top,clip.top))),
@@ -1258,11 +1199,11 @@
     if(!image.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||r.width<=0||r.height<=0||
        r.right<=0||r.bottom<=0||r.left>=width||r.top>=height)continue;
     if(!observer.ids.has(image))observer.ids.set(image,`e_${observer.next++}`);
-    if(unrelatedTransforms.has(image)) {
+    if(!geometrySupported(image)) {
       captureImages.push({element_id:observer.ids.get(image),bbox:rawBox(image),
         src:image.getAttribute('src')||'',current_src:image.currentSrc||'',complete:image.complete,
         natural_width:image.naturalWidth,natural_height:image.naturalHeight,eligible:false,
-        exclusion_reasons:['transformed_image_pixels_must_remain_exact'],geometry_proof:unrelatedTransforms.get(image)});
+        exclusion_reasons:['UNSUPPORTED_GEOMETRY','transformed_image_pixels_must_remain_exact']});
       continue;
     }
     const b=rawBox(image),reasons=[],s=styleOf(image),clip=clipFor(image);
@@ -1331,6 +1272,7 @@
   // is a single-frame synchrony exception, never an action-effect proof.
   const captureMedia=[];
   for(const video of document.querySelectorAll('aside video,[role="complementary"] video,video[aria-hidden="true"]')) {
+    if(!geometrySupported(video))continue;
     if(!video.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
     const b=rawBox(video),c=styleOf(video),clip=clipFor(video);
     const controls=[...document.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=true],[role=button],[role=link]')];
@@ -1368,6 +1310,7 @@
       !['::before','::after'].every(p=>['none','normal'].includes(styleOf(n,p).content));
   });
   for(const node of document.querySelectorAll('input,button,select,textarea')) {
+    if(!geometrySupported(node))continue;
     const b=rawBox(node),c=styleOf(node);
     if(unknownBorderPaint||!b.every(Number.isInteger)||!node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||
        node===document.activeElement||node.checked||node.disabled||
@@ -1435,7 +1378,7 @@
     }
     return {element_id:records[i].element_id,selector:parts.join(' > '),index:0,tag:node.localName,href:node.localName==='a'?node.href:null,target:node.localName==='a'?(node.getAttribute('target')||''):null,input_type:node.type||'',form_submission:nativeFormSubmission(node),form_identity:node.form?{action:node.form.action,method:node.form.method,target:node.form.target}:null,form_index:node.form?[...document.forms].indexOf(node.form):null,
       result_region_selector:resultOwner(node)?evidenceSelector(resultOwner(node)):null,form_selector:(node.form||node.closest('form'))?evidenceSelector(node.form||node.closest('form')):null,validation_message:node.validationMessage||'',aria_invalid:node.getAttribute('aria-invalid'),aria_role:node.getAttribute('role'),
-      options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:clean(o.label),disabled:o.disabled})):[]};
+      options:node.localName==='select'?[...node.options].map(o=>({value:o.value,label:o.label,disabled:o.disabled||!!o.closest('optgroup[disabled]')})):[]};
   });
   // Shared semantic regions: original DOM/pixels remain intact. No arbitrary
   // data-* or model assertion can declare a business result ignorable.
@@ -1504,6 +1447,7 @@
   const candidates=[...document.querySelectorAll('*')].filter(n=>n!==document.body&&n!==document.documentElement&&categoryOf(n)&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
   const dynamicRegions=[];const allowedRoots=[];const suggestionMembers=new Set();
   for(const popup of [...new Set([...document.querySelectorAll('[role=listbox]')])]){
+    if(!geometrySupported(popup))continue;
     const owners=[...document.querySelectorAll('input')].filter(i=>i.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})
       &&!i.disabled&&!i.readOnly&&(i.type==='search'||i.type==='text'||i.getAttribute('role')==='combobox')).filter(i=>suggestionOwner(i)&&suggestionOwner(i).element===popup);
     const reasons=[];
@@ -1552,7 +1496,7 @@
     if(!reasons.length){allowedRoots.push(popup);for(const x of members)suggestionMembers.add(x);}
   }
   for(const n of candidates){
-    if(unrelatedTransforms.has(n))continue; // Preserve the existing bounded transformed-decoration proof.
+    if(!geometrySupported(n))continue;
     if(allowedRoots.some(p=>p!==n&&p.contains(n)))continue;
     const raw=rawBox(n),clip=clipFor(n),members=[n,...n.querySelectorAll('*')],memberSet=new Set(members);
     // A normal-flow descendant can extend its owner's box (e.g. a close
@@ -1598,6 +1542,7 @@
   // Empty native CSS graphics have a separate paint envelope. Their owner,
   // labels, values and targets remain in the complete semantic projection.
   for(const owner of document.querySelectorAll('*')){
+    if(!geometrySupported(owner))continue;
     if(!owner.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||allowedRoots.some(r=>r===owner||r.contains(owner)))continue;
     for(const which of ['::before','::after']){const proof=boundedGraphicPseudo(owner,which);if(!proof)continue;
       const box=proof.bbox,reasons=[];
@@ -1624,7 +1569,7 @@
   // a named finite object, repeated identical ordered DOM text, and no observed
   // mechanism that can reveal another portion of that object.
   observer.contentScopes ||= new WeakMap();
-  const scopeVisible=n=>n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+  const scopeVisible=n=>geometrySupported(n)&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
   const semanticScope='article,main,[role="main"],[role="article"]';
   const scopeCandidates=[...document.querySelectorAll(semanticScope)]
     .filter(n=>!n.querySelector(semanticScope));
@@ -1678,7 +1623,7 @@
     capture_readiness:{schema_version:'webcollect-capture-readiness-1',document_ready:document.readyState,
       fonts_ready:!document.fonts||document.fonts.status==='loaded',images_ready:captureImages.every(i=>i.complete&&i.natural_width>0&&i.natural_height>0)},
     disjoint_pseudo_paint_proofs:[...disjointPseudoProofs.values()],
-    unrelated_transform_proofs:transformProofs, capture_images:captureImages,capture_media:captureMedia,paint_borders:paintBorders,capture_controls:captureControls,
+    geometry_exclusions:geometryExclusions, unrelated_transform_proofs:[], capture_images:captureImages,capture_media:captureMedia,paint_borders:paintBorders,capture_controls:captureControls,
     geometry_witnesses:nodes.map((node,i)=>{const r=node.getBoundingClientRect(),clip=clipFor(node);
       // Annotation boxes deliberately round outwards. Hit witnesses must stay
       // inside the actual rendered rectangle, including fractional inline links.

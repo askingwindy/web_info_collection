@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.dont_write_bytecode = True
 sys.path[:0] = [str(REPO / value) for value in (
     'projects/code', 'projects/code/tests', 'projects/site-planner',
-    'projects/quality-inspector', 'projects/quality-inspector/tests')]
+    'projects/quality-inspector')]
 
 
 def snapshot():
@@ -32,7 +32,7 @@ def snapshot():
                    'projects/quality-inspector/quality_inspector'):
         files.extend(path for path in (REPO / folder).rglob('*')
                      if path.is_file() and '__pycache__' not in path.parts)
-    for folder in ('projects/code/tests', 'projects/quality-inspector/tests', 'projects/code/scripts'):
+    for folder in ('projects/code/tests', 'projects/code/scripts'):
         files.extend(path for path in (REPO / folder).rglob('*.py')
                      if path.is_file() and 'fixtures' not in path.parts and '__pycache__' not in path.parts)
     return {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest()

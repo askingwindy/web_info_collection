@@ -142,8 +142,8 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((result['processed'], result['unexamined']), (0, 2))
             self.assertEqual(result['stop_reason'], 'engineering_failure')
             self.assertEqual(result['stop_details']['evidence_context'], {'json_location': '$.nested'})
-            # Frozen source hashes imply the same original GET reference that
-            # claim_next consumes. Missing input must fail before claim/IO.
+            # Original GET bytes remain checked; candidate audit hashes do not
+            # block a stable business identity before claim/IO.
             import json
             from types import SimpleNamespace
             from webcollect.batch_core import file_sha
@@ -163,6 +163,110 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
                 closure.assert_not_called()
                 preflight_cohort_sources(SimpleNamespace(path=database),[{**fixed,'entry_http':ref}],'registry')
                 closure.assert_called_once()
+                preflight_cohort_sources(SimpleNamespace(path=database),
+                    [{**fixed,'sources_sha256':'outdated-audit','entry_http':ref}],'registry')
+                preflight_cohort_sources(SimpleNamespace(path=database),
+                    [{'candidate_id':'fixed','entry_http':ref}],'registry')
+                receipt.write_text('{"changed":true}')
+                with self.assertRaises(CurrentChainError):
+                    preflight_cohort_sources(SimpleNamespace(path=database),
+                        [{'candidate_id':'fixed','entry_http':ref}],'registry')
+            self._check_fixed_strategy_before_probes(Path(directory))
+            self._check_cohort_audit_hashes(Path(directory))
+
+    def _check_fixed_strategy_before_probes(self, root):
+        import json
+        from webcollect import site_workers, collection_startup
+        from webcollect.collection_strategy import Strategy1Forbidden, Strategy2Frozen
+        from webcollect.failure_policy import disposition
+        command=['python','-m','webcollect.candidate_consumer','run']
+        plan={'role':'consumer','fixed':True,'plan_id':'offline-fixed',
+            'scope':'scope.json','cohort':'cohort.json','log_root':str(root/'launcher'),
+            'workers':[{'worker_id':'w1','command':command}]}
+        rejected=[({**plan,'collection_strategy':name},fault)
+                  for name,fault in [('screenshot_plan',Strategy2Frozen),('react',Strategy1Forbidden)]]
+        rejected.extend(({**plan,'workers':[{'worker_id':'w1','command':command+flag}]},fault)
+            for flag,fault in [(['--collection-strategy','screenshot_plan'],Strategy2Frozen),
+                               (['--collection-strategy=react'],Strategy1Forbidden)])
+        with patch('webcollect.collection_startup.check') as preflight, \
+             patch('webcollect.key_health.probe_accounts') as probe, \
+             patch.object(site_workers.subprocess,'Popen') as process:
+            for old_plan,fault in rejected:
+                with self.assertRaises(fault) as caught:
+                    site_workers.launch(old_plan)
+                self.assertEqual(disposition(caught.exception)['disposition'],'global')
+                self.assertFalse(Path(plan['log_root']).exists())
+            preflight.assert_not_called();probe.assert_not_called();process.assert_not_called()
+        with patch('webcollect.site_inventory.load_scope') as read_scope:
+            with self.assertRaises(Strategy2Frozen) as caught:
+                collection_startup.check('scope.json',plan={**plan,'collection_strategy':'screenshot_plan'})
+            self.assertEqual(disposition(caught.exception)['disposition'],'global')
+            read_scope.assert_not_called()
+        cohort={'selected':[{'candidate_id':f'c{i}','application_id':'app'} for i in range(100)]}
+        for marker,fault in [({'collection_strategy':'screenshot_plan'},Strategy2Frozen),
+                             ({'collection_strategy':'react'},Strategy1Forbidden),({},Strategy2Frozen)]:
+            with patch.object(site_workers,'load_scope',return_value=(Path('scope.json'),{})), \
+                 patch('webcollect.batch_core.load_json',side_effect=[cohort,marker]), \
+                 patch('webcollect.batch_core.save_json') as shard:
+                with self.assertRaises(fault) as caught:
+                    site_workers.fixed_consumer_plan('scope.json','cohort.json',root/'old-resume',
+                        resume_from='previous.json')
+                self.assertEqual(disposition(caught.exception)['disposition'],'global')
+                self.assertFalse((root/'old-resume').exists());shard.assert_not_called()
+        with patch.object(site_workers,'fixed_consumer_plan',return_value=rejected[0][0]), \
+             patch('sys.stderr',new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as caught:
+                site_workers.main(['fixed-consumer','--scope','scope.json','--cohort','cohort.json',
+                    '--log-root',plan['log_root'],'--launch'])
+            self.assertEqual(caught.exception.code,2)
+        child=MagicMock();child.pid=12345;child.poll.return_value=0
+        with patch('webcollect.collection_startup.check',return_value={'status':'PASS'}), \
+             patch.object(site_workers,'load_scope',return_value=(Path('scope.json'),
+                 {'consumer_db':'offline.sqlite3','consumer_config':'offline.json'})), \
+             patch('webcollect.batch_core.load_json',return_value={}), \
+             patch.object(site_workers,'BatchLedger'), \
+             patch('webcollect.key_health.pool_available',return_value=True), \
+             patch('webcollect.key_health.probe_accounts') as probe, \
+             patch.object(site_workers.subprocess,'Popen',return_value=child) as process, \
+             patch.object(site_workers,'automatic_report'):
+            summary=site_workers.launch(plan)
+        self.assertTrue(summary['succeeded']);probe.assert_not_called()
+        persisted=json.loads((Path(plan['log_root'])/'plan.json').read_text())
+        self.assertEqual(persisted['collection_strategy'],'stepwise')
+        self.assertEqual(persisted['workers'][0]['command'][-2:],['--collection-strategy','stepwise'])
+        self.assertEqual(process.call_args.args[0],persisted['workers'][0]['command'])
+
+    def _check_cohort_audit_hashes(self, root):
+        from webcollect.collection_startup import check
+        config=root/'startup-config.json';config.write_text('{}')
+        cohort=root/'startup-cohort.json';cohort.write_text('{}')
+        scope={key:str(config) for key in ('producer_config','consumer_config','policy','history_set')}
+        scope.update(pool='pool',producer_db='producer',consumer_db='consumer',registry='registry',output=str(root))
+        rows=[{'candidate_id':f'c{i}','version':1,'application_id':'app',
+            'producer_batch':'batch','producer_row_id':f'r{i}','entry_http':{'path':'original','sha256':'receipt'},
+            'producer_row_response_sha256':'old','body_sha256':'old','sources_sha256':'old'} for i in range(100)]
+        current=[{**row,'eligible':True,'producer_row_response_sha256':'new',
+            'body_sha256':'new','sources_sha256':'new'} for row in rows]
+        connection=MagicMock();connection.execute.return_value.fetchone.return_value=('{}',)
+        pool=MagicMock();poolcon=pool.pool.connect.return_value.__enter__.return_value
+        poolcon.execute.return_value.fetchone.return_value={'version':1,'state':'pending'}
+        poolcon.execute.return_value.fetchall.return_value=[]
+        with patch('webcollect.site_inventory.load_scope',return_value=(config,scope)), \
+             patch('webcollect.collection_startup.required_schema',return_value={}), \
+             patch('webcollect.collection_startup.connect',return_value=connection), \
+             patch('webcollect.current_chain.read_chain_scope'), \
+             patch('webcollect.current_chain.assert_current_result_path'), \
+             patch('webcollect.current_chain.check_project_guard'), \
+             patch('site_planner.candidate_pool.CandidatePool',return_value=pool), \
+             patch('webcollect.candidate_consumer._cohort_rows',return_value=('batch',rows)), \
+             patch('webcollect.candidate_cohort.inspect_rows',return_value=(None,current,None)), \
+             patch('webcollect.candidate_consumer.preflight_cohort_sources') as originals:
+            result=check(config,cohort_path=cohort,minimum_free_bytes=0)
+            self.assertEqual(result['status'],'PASS',result)
+            originals.assert_called_once_with(pool,rows,scope['registry'])
+            current[0]['entry_http']={'path':'different','sha256':'different'}
+            result=check(config,cohort_path=cohort,minimum_free_bytes=0)
+            self.assertIn('COHORT_EVIDENCE_MISMATCH',[e['code'] for e in result['errors']])
 
     async def test_available_pool_and_campaign_workers_never_probe(self):
         from webcollect.consumer_campaign import stop_engineering_failure, stopped

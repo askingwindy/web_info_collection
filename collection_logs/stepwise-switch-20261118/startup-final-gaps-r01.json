@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "projects/code/tests/test_consumer_startup_core.py::ConsumerStartupCore::test_standalone_checks_scope_then_probes_once_and_stops_unavailable"
+  ],
+  "returncode": 0,
+  "wall_seconds": 0.359
+}

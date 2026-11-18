@@ -1,5 +1,6 @@
 """Observable answers to an explicitly contracted calculation or reading goal."""
 from decimal import Decimal, InvalidOperation
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import unicodedata
@@ -12,6 +13,147 @@ from .planning import verify_evidence
 from .plan_protocol import GOAL_EVIDENCE_PROTOCOL, PLAN_PROTOCOL, ACTION_STABILITY_PROTOCOL
 
 VERSION = GOAL_EVIDENCE_PROTOCOL
+
+
+def shown(element, state):
+    box = element.get('bbox', [])
+    width, height = state.get('screen_resolution', [0, 0])
+    return (element.get('visible') is True and len(box) == 4
+            and 0 <= box[0] < box[2] <= width and 0 <= box[1] < box[3] <= height)
+
+
+def label(element):
+    return (element.get('text') or '').strip()
+
+
+class ResultRegions(HTMLParser):
+    """Map synchronized DOM selectors to explicitly identified result regions.
+
+    Full pre-click HTML is used only to reject old/offscreen results. Positive
+    evidence still requires a visible tree node from the current synchronized PNG.
+    """
+    VOID = {'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'}
+
+    def __init__(self, html):
+        super().__init__();self.stack=[];self.nodes={};self.top={};self.feed(html or '')
+
+    def handle_starttag(self, tag, attrs):
+        attrs=dict(attrs);parent=self.stack[-1] if self.stack else None
+        counts=parent['counts'] if parent else self.top;counts[tag]=counts.get(tag,0)+1
+        path=(parent['path']+' > ' if parent else '')+f'{tag}:nth-of-type({counts[tag]})'
+        tokens=set(re.split(r'[^a-z0-9_-]+',(attrs.get('id','')+' '+attrs.get('class','')).lower()))
+        result=(tag=='output' or attrs.get('aria-live') in ('polite','assertive')
+                or bool(tokens & {'result','results','output','calculation-result','calc-result'}))
+        excluded=bool(tokens & {'help','example','examples','instruction','instructions','formula'}) or tag in ('label','script','style')
+        node={'path':path,'tag':tag,'counts':{},'text':'','input':tag in ('input','select','textarea'),
+              'result':result or bool(parent and parent['result']),
+              'excluded':excluded or bool(parent and parent['excluded'])}
+        self.nodes[path]=node
+        if tag in ('input','select','textarea'):
+            for old in self.stack:old['input']=True
+        if tag not in self.VOID:self.stack.append(node)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag,attrs)
+        if tag not in self.VOID:self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack)-1,-1,-1):
+            if self.stack[i]['tag']==tag:
+                del self.stack[i:];break
+
+    def handle_data(self,data):
+        if self.stack and self.stack[-1]['tag'] not in ('script','style'):
+            for node in self.stack:node['text']+=data
+
+
+class DOM(ResultRegions):
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        node = next(reversed(self.nodes.values()))
+        node['attrs'] = dict(attrs)
+        parent = self.stack[-2] if tag not in self.VOID and len(self.stack)>1 else self.stack[-1] if tag in self.VOID and self.stack else None
+        tokens = re.split(r'\s+', node['attrs'].get('id','')+' '+node['attrs'].get('class',''))
+        node['result'] = node['result'] or any(t.endswith(('-result','-results')) or t in ('result-area','result-tbl') for t in tokens) or bool(parent and parent['result'])
+
+    def handle_data(self,data):
+        if any(hidden(n) for n in self.stack):return
+        super().handle_data(data)
+
+
+def hidden(node):
+    attrs=node.get('attrs',{})
+    return ('hidden' in attrs or attrs.get('aria-hidden')=='true'
+            or re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)',attrs.get('style',''),re.I) is not None)
+
+
+def hidden_path(path,nodes):
+    while path in nodes:
+        if hidden(nodes[path]):return True
+        parent=path.rsplit(' > ',1)[0]
+        if parent==path:break
+        path=parent
+    return False
+
+
+def result_evidence(state, before_state, html, before_html, *, card_labels=None):
+    """A changed submitted result region and same-frame name/value pair.
+
+    Each quoted cell remains a separate exact string. Hidden HTML may reject
+    old results; only clipped current tree/PNG nodes supply positive evidence.
+    """
+    now, old = DOM(html).nodes, DOM(before_html).nodes
+    input_numbers={str(v.get('value')).replace(',','') for v in before_state.get('values',[])
+                   if re.fullmatch(r'[-+]?\d[\d,.]*',str(v.get('value','')))}
+    visible = state.get('visible_text','')
+    candidates = []
+    for e in state.get('elements',[]):
+        b = next((b for b in state.get('capture_controls',[]) if b['element_id']==e['element_id']),{})
+        path = b.get('selector'); n = now.get(path); text = label(e)
+        if (not n or not n['result'] or n['excluded'] or n['input'] or not text
+                or not shown(e,state) or text not in visible or e.get('inputable')): continue
+        ancestor = path
+        while ancestor in now and now[ancestor]['result']:
+            parent = ancestor.rsplit(' > ',1)[0]
+            if parent == ancestor or parent not in now or not now[parent]['result']:break
+            ancestor = parent
+        region = now[ancestor]; prior = old.get(ancestor,{})
+        numbers = re.findall(r'[-+]?\d[\d,.]*(?:%|％)?', region['text'])
+        if not numbers or numbers == re.findall(r'[-+]?\d[\d,.]*(?:%|％)?',prior.get('text','')):continue
+        candidates.append({'element_id':e['element_id'],'selector':path,'region':ancestor,
+                           'text':text,'bbox':e['bbox'],'role':e.get('native_role'),
+                           'input_echo':bool(re.findall(r'[-+]?\d[\d,.]*',text)) and set(n.replace(',','') for n in re.findall(r'[-+]?\d[\d,.]*',text))<=input_numbers,
+                           'numeric_changed':(path not in old or hidden_path(path,old)
+                             or re.findall(r'[-+]?\d[\d,.]*(?:%|％)?',n['text']) != re.findall(r'[-+]?\d[\d,.]*(?:%|％)?',old[path]['text']))})
+    # Explicit output with both label/unit and number, or aligned table cells.
+    proofs=[]
+    for a in candidates:
+        if a['numeric_changed'] and not a['input_echo'] and re.search(r'\d',a['text']) and re.search(r'[%％€$£元]|[A-Za-z\u4e00-\u9fff]',a['text']):
+            if a['role'] not in ('td','th','strong'):
+                proofs.append({'quotes':[a['text']],'nodes':[a]})
+        if not re.search(r'\d',a['text']):
+            for b in candidates:
+                if (a['region']==b['region'] and a['bbox'][2]<=b['bbox'][0]+3
+                        and abs(a['bbox'][1]-b['bbox'][1])<=5 and b['numeric_changed'] and not b['input_echo'] and re.search(r'\d',b['text'])):
+                    proofs.append({'quotes':[a['text'],b['text']],'nodes':[a,b]})
+    if card_labels:
+        expected_name, expected_unit = map(norm, card_labels)
+        groups = {}
+        for node in candidates:
+            parent = node['selector'].rsplit(' > ', 1)[0]
+            groups.setdefault((node['region'], parent), []).append(node)
+        for siblings in groups.values():
+            if len(siblings) != 3:
+                continue
+            name, value, unit = sorted(siblings, key=lambda node: node['bbox'][1])
+            boxes = [node['bbox'] for node in (name, value, unit)]
+            if (expected_name in norm(name['text']) and norm(unit['text']) == expected_unit
+                    and number(value['text']) is not None and value['numeric_changed'] and not value['input_echo']
+                    and max(b[0] for b in boxes) < min(b[2] for b in boxes)
+                    and boxes[0][3] <= boxes[1][1] + 1 and boxes[1][3] <= boxes[2][1] + 1):
+                proofs.append({'quotes':[node['text'] for node in (name,value,unit)], 'nodes':[name,value,unit]})
+    return proofs
+
 
 
 def contract_for(task):
@@ -103,7 +245,6 @@ def field_value(ob, label):
 
 
 def calc_evidence(s, start, contract):
-    from .template_learning import result_evidence
     changed, retained = [], []
     for field in contract['inputs']:
         label, desired = field['label'], number(field['value'])

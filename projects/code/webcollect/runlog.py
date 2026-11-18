@@ -140,8 +140,6 @@ class SessionLog:
     def _append(self, name, record):
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
-            from .workspace_paths import bind
-            bind(self._dir/name)
             with (self._dir / name).open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True,
                                          allow_nan=False, default=str) + '\n')

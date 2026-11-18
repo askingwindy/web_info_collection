@@ -54,7 +54,7 @@ def disposition(error=None, *, failure_class=None, reason=None, phase=None):
         kind = 'page_program'
     elif unsupported_geometry or isinstance(error, NavigationRejected) or original in ('model', 'collector', 'semantic', 'unsupported', 'network', 'privacy', 'interface'):
         kind = 'business'
-    elif original == 'program' or isinstance(error, (KeyError, TypeError, NameError, AttributeError, sqlite3.Error)):
+    elif original == 'program':
         kind = 'page_program'
     elif error is not None:
         kind = 'page_program'

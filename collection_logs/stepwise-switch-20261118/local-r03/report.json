@@ -1,0 +1,783 @@
+{
+  "elapsed_seconds": 29.593438958050683,
+  "fixture_only": true,
+  "external_model_requests": 0,
+  "external_web_requests": 0,
+  "real_local_browser": true,
+  "mocked_boundaries": [
+    "external_model_transport",
+    "network_case_back_navigation_to_local_socket_failure",
+    "execution_source_identity_changed_audit_value",
+    "full_history_snapshot_must_not_run"
+  ],
+  "checks": [
+    {
+      "chain": "operation",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "operation",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "operation",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "operation",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "operation",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "operation",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "operation",
+      "name": "cli_customer_export_completed",
+      "pass": true,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "EXPORTED_FORMAT_VALID",
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "qc_configuration_required",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "operation",
+      "name": "cli_customer_export_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "cli_export_receipt_readback",
+      "pass": true,
+      "detail": 25
+    },
+    {
+      "chain": "operation",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 6,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "operation",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "operation",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "operation",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 5,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "operation",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "operation",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "operation",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 8
+    },
+    {
+      "chain": "reading",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "reading",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "reading",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "reading",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "reading",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "reading",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "reading",
+      "name": "cli_customer_export_completed",
+      "pass": true,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "EXPORTED_FORMAT_VALID",
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "qc_configuration_required",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "reading",
+      "name": "cli_customer_export_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "cli_export_receipt_readback",
+      "pass": true,
+      "detail": 25
+    },
+    {
+      "chain": "reading",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 6,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "reading",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "reading",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "reading",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 5,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "reading",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "reading",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "reading",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 8
+    },
+    {
+      "chain": "select",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "select",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "select",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "select",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "select",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "select",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "select",
+      "name": "cli_customer_export_completed",
+      "pass": true,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "EXPORTED_FORMAT_VALID",
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "qc_configuration_required",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "select",
+      "name": "cli_customer_export_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "cli_export_receipt_readback",
+      "pass": true,
+      "detail": 27
+    },
+    {
+      "chain": "select",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 7,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "select",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "select",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "select",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 6,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "select",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "select",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "select",
+      "name": "select_rejection_not_dispatched",
+      "pass": true,
+      "detail": [
+        {
+          "option": null
+        },
+        {
+          "option": null
+        },
+        {
+          "option": null
+        },
+        {
+          "option": null
+        },
+        {
+          "option": "元"
+        },
+        {
+          "option": null
+        }
+      ]
+    },
+    {
+      "chain": "select",
+      "name": "select_corrected_then_saved",
+      "pass": true,
+      "detail": 6
+    },
+    {
+      "chain": "select",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 10
+    },
+    {
+      "chain": "rotated",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "rotated",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "rotated",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "rotated",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "rotated",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "rotated",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "rotated",
+      "name": "cli_customer_export_completed",
+      "pass": true,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "EXPORTED_FORMAT_VALID",
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "qc_configuration_required",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "rotated",
+      "name": "cli_customer_export_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "cli_export_receipt_readback",
+      "pass": true,
+      "detail": 25
+    },
+    {
+      "chain": "rotated",
+      "name": "export_layout_valid",
+      "pass": true,
+      "detail": {
+        "structural_pass": true,
+        "samples": 1,
+        "steps": 6,
+        "customer_acceptance": "UNKNOWN"
+      }
+    },
+    {
+      "chain": "rotated",
+      "name": "export_data_type_stepwise",
+      "pass": true,
+      "detail": {
+        "source_type": "agent",
+        "data_type": "stepwise",
+        "action_space": "unified_gui_v4"
+      }
+    },
+    {
+      "chain": "rotated",
+      "name": "export_verified_dispatch",
+      "pass": true,
+      "detail": [
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "VERIFIED_DISPATCH",
+        "HOST_TERMINAL"
+      ]
+    },
+    {
+      "chain": "rotated",
+      "name": "export_stepwise_chapter",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "export_delivery_eligible",
+      "pass": true,
+      "detail": {
+        "delivery_policy": "completed-goal-delivery",
+        "effective_steps": 5,
+        "completion_status": "success",
+        "original_goal_completed": true,
+        "ordinary_target_eligible": true,
+        "delivery_eligible": true,
+        "QC_approval": false
+      }
+    },
+    {
+      "chain": "rotated",
+      "name": "export_sample_count",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "rotated",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "rotated_subtree_recorded",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 8
+    },
+    {
+      "chain": "rotated",
+      "name": "source_unchanged_during_run",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "rotated",
+      "name": "driver_unchanged_during_run",
+      "pass": true,
+      "detail": "b9771f8770449744e58650ca6b3b1e3ea4594984ae428111f70bc5441e447ef5"
+    }
+  ],
+  "timings": {
+    "operation": {
+      "seconds": 6.7399621669901535,
+      "model_requests": 8,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-operation-1794984207794763000/scope.json",
+      "saved": true,
+      "claim_id": "1f48f06a-f77e-405b-aeb3-fee50ae2fb7e"
+    },
+    "reading": {
+      "seconds": 8.461416790960357,
+      "model_requests": 8,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-reading-1794984214596120000/scope.json",
+      "saved": true,
+      "claim_id": "6b3ca336-ce6a-4a10-8f34-60c2edf80d85"
+    },
+    "select": {
+      "seconds": 7.274817124940455,
+      "model_requests": 10,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-select-1794984223089726000/scope.json",
+      "saved": true,
+      "claim_id": "7b3cd343-1bea-41b2-b6c0-29491b2c5935"
+    },
+    "rotated": {
+      "seconds": 6.498159082955681,
+      "model_requests": 8,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-rotated-1794984230398019000/scope.json",
+      "saved": true,
+      "claim_id": "1fa7d39f-d2d3-4a30-94c2-b9ad0f6849a9"
+    }
+  },
+  "model_transport_calls": 34,
+  "customer_exports_beyond_fixture": 0,
+  "production_samples_added": 0,
+  "passed": true
+}

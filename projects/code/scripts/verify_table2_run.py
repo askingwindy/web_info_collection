@@ -110,14 +110,11 @@ class Table2RunChecks(unittest.TestCase):
         self.assertEqual(detail['code'],'DNS_RESOLVER_EXIT')
 
     def test_legacy_serialization_does_not_copy_evidence(self):
-        from webcollect.workspace_paths import _root, HistoricalAbsolute, encode
         from webcollect import workspace_json
-        value={'path':HistoricalAbsolute('/legacy/a'), 'nested':[{'path':'/legacy/b'}]}
-        token=_root.set(None)
-        try:
-            self.assertIs(encode(value),value)
-            self.assertEqual(workspace_json.dumps(value,sort_keys=True),json.dumps(value,sort_keys=True))
-        finally:_root.reset(token)
+        value={'path':'/legacy/a', 'nested':[{'path':'workspace:/legacy/b'}]}
+        self.assertIs(workspace_json.dumps,json.dumps)
+        self.assertEqual(workspace_json.dumps(value,sort_keys=True),json.dumps(value,sort_keys=True))
+        self.assertEqual(workspace_json.loads(workspace_json.dumps(value)),value)
 
     def test_begin_wait_uses_its_budget_and_preserves_single_write(self):
         import sqlite3, threading
@@ -152,22 +149,6 @@ class Table2RunChecks(unittest.TestCase):
              patch('webcollect.registry_db.history_rows',return_value=(list(tasks),list(plans[:1]))):
             with self.assertRaises(current_chain.CurrentChainError):
                 current_chain._registry_snapshot(scope,'/unused')
-
-    def test_history_slot_excludes_concurrent_reads_and_obeys_stop(self):
-        import os,threading
-        from webcollect.registry_db import history_read_slot
-        with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{'WEBCOLLECT_SERIAL_HISTORY':'1'}):
-            path=Path(folder)/'registry.sqlite3';entered=threading.Event()
-            def read():
-                with history_read_slot(path):entered.set()
-            with history_read_slot(path):
-                thread=threading.Thread(target=read);thread.start()
-                self.assertFalse(entered.wait(.15))
-            thread.join(2);self.assertTrue(entered.is_set())
-            stop=Path(folder)/'stop';stop.touch()
-            with patch.dict(os.environ,{'WEBCOLLECT_STOP_FILE':str(stop)}):
-                with self.assertRaises(InterruptedError):
-                    with history_read_slot(path):self.fail('stopped read entered')
 
     def test_new_claim_preserves_unrelated_expired_claim(self):
         from site_planner.site_pool import SitePool

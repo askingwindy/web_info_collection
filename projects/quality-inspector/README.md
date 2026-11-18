@@ -1,5 +1,7 @@
 # WebCollect 独立质检器
 
+2026-11-18 工程减负：已删除历史 `tests/` 目录及无运行引用的订阅适配、资料认证恢复、差异对照、审核包、历史批次决策和回执恢复模块。`document_text_qc` 的独立 CLI 保留。下文涉及已删除模块的段落只记录历史结果，不再提供可执行入口。当前核心验证统一由仓库 `projects/code/tests/` 收集；抽样与交付流水线的实现摘要只作审计，指纹缓存按数据字节复用；数据包和原件的完整性仍按原收据核对。
+
 2026-11-10 实施更新：新完成交付策略已接到客户包筛选、显式有效集合和实际 V12 的 QC handoff wrapper；内部完成证据通过包外 `collection_completion` 绑定，旧片段审核记录保留，终态规则相应版本已更新。但本轮集成未走完保存→QC 全链，十条真实尝试未形成任何样本，独立 AI QC 未运行。不能依据新代码能力宣布已审核合格；[本轮记录](../../docs/消费者完成口径改造与十条固定验证-20261110.md)明确失败和未验证范围。以下“代码待统一”保留前一讨论阶段含义。
 
 ### 最新客户准入澄清（2026-11-10，代码待统一）
@@ -24,7 +26,7 @@ V2 消费者通过启动范围中的 `qc_policy` 冻结本次 `execution/qc-inpu
 
 Git仅提交有效源码、纯测试及当前工程/需求说明。样本、原图、过程报告、原始模型请求、账本、凭据和ZIP留在本地；历史原件及失败/费用证据保留，清理记录不改变其结论。下文旧批次实测和命令属于对应范围的兼容说明，执行本轮时以当前入口为准。
 
-2026-10-28认证恢复：新增独立`python -m quality_inspector.document_auth_recovery`，只为已持久记录的资料HTTP401/provider1000提供一次明确有界的恢复增量，不改原请求、UNKNOWN费用、原预算和冻结源码。`prepare`需要绑定原资料receipt/原request ID的单次授权JSON及独立同模型/同一请求预算配置；只生成control receipt，不生成可直接派发的资料receipt。`run`还必须接收`--auth-proof`：`webcollect-model-authentication-evidence-1`的`ledger`、`config:{path,sha256}`、`request_id`，程序从原SQLite重核同服务、同模型的一次真实成功认证诊断及其原响应/usage，不能用手写PASS或凭据重发声明替代。凭据是否改变不作推定，仍401时不能重发完整资料。
+2026-10-28认证恢复：原独立入口 `quality_inspector.document_auth_recovery`（2026-11-18 已删除），只为已持久记录的资料HTTP401/provider1000提供一次明确有界的恢复增量，不改原请求、UNKNOWN费用、原预算和冻结源码。`prepare`需要绑定原资料receipt/原request ID的单次授权JSON及独立同模型/同一请求预算配置；只生成control receipt，不生成可直接派发的资料receipt。`run`还必须接收`--auth-proof`：`webcollect-model-authentication-evidence-1`的`ledger`、`config:{path,sha256}`、`request_id`，程序从原SQLite重核同服务、同模型的一次真实成功认证诊断及其原响应/usage，不能用手写PASS或凭据重发声明替代。凭据是否改变不作推定，仍401时不能重发完整资料。
 
 该入口的`prepare --original-receipt ... --authorization ... --config ... --ledger ... --initialize-ledger --output ...`、`run --receipt ... --auth-proof ... --output ...`、`status --receipt ... --output ...`和`finalize --receipt ... --status ... --output ... [--archive ...]`复用原资料run/status/finalizer。相同失败request只有一个恢复scope；复制原receipt、换输出/ledger/授权文本不能增加请求。prepare中断可在原scope完成；已激活但尚未派发时可追加新的成功诊断证据，保留旧证据，仍只允许一次资料请求。请求已持久成功而job写入中断时，过期租约后的`run/status`可严格重验原响应/usage/资料引用并恢复结果，不发新请求、不重置尝试数；活租约不抢占。新输出的`recovery-accounting.json`分别列原pipeline、原401资料请求、恢复请求及认证诊断账本，UNKNOWN预留始终保留，实际扣费仍为UNKNOWN。资料人工始终0，原样本人审和正式分布门禁继续核验；底层原件改变会阻止后续状态/封包。
 
@@ -49,7 +51,7 @@ PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/pyth
 
 已完成旧visual/difference及真人审核的批次直接从`prepare`接续；旧documents已完成的结果与费用保留为历史，不覆盖。`status`只重算报告不派发模型。`text_consistency`与`formal_blockers`分别报告：如实说明单站类目100%可以文本一致，但原类目≤20%门禁仍FAIL，正式放行仍为false。新`finalize --receipt ... --status ... --output ... [--archive ...]`先验证新lane发行记录，再交由未改动的原finalizer重新检查全部资料、样本、分布、当前真人历史、文件哈希和最终包；离线正例可封包，类目超限反例不能封包。受控/模拟协议测试不证明真实模型审核或生产交付。
 
-2026-10-26新增独立订阅适配入口`python -m quality_inspector.codex_subscription preflight/run`，使用现有ChatGPT登录、完整原帧和既有审核schema，独立持久请求账限制1次exec及最长120秒，未知结果不自动重试，禁止API回退。它尚未接通现有批量worker：25项离线定向测试通过，但首次真实冒烟因CLI内置provider配置覆盖被拒，修复后未补发，真实传输与usage仍未验证。单包视觉结果强制保留实质差异待定；受控传输输出不能导入为正式审核。结果见`verify_results/three-program-acceleration-20261026/subscription-r01/result-summary.json`，不要直接对生产批量调用。
+2026-10-26原订阅适配入口 `quality_inspector.codex_subscription`（2026-11-18 已删除），使用现有ChatGPT登录、完整原帧和既有审核schema，独立持久请求账限制1次exec及最长120秒，未知结果不自动重试，禁止API回退。它尚未接通现有批量worker：25项离线定向测试通过，但首次真实冒烟因CLI内置provider配置覆盖被拒，修复后未补发，真实传输与usage仍未验证。单包视觉结果强制保留实质差异待定；受控传输输出不能导入为正式审核。结果见`verify_results/three-program-acceleration-20261026/subscription-r01/result-summary.json`，不要直接对生产批量调用。
 
 依据需求书、附件A/B及已确认的澄清，直接读取程序已经导出的完整客户文件，检查目录、字段、动作与图树、分布和四路重复。实际像素与任务语义接受绑定当前交付文件的AI或真人审核，来源类型保持原样；未检查不推定通过。
 
@@ -263,7 +265,7 @@ projects/code/.venv/bin/python projects/quality-inspector/qc.py check-set \
 
 ## QC 回执恢复与只读对账（2026-11-08）
 
-`python -m quality_inspector.qc_recovery` 提供两个显式入口，不改变普通采集、四路判重、人工审核、发布与客户验收口径：
+历史模块 `quality_inspector.qc_recovery`（2026-11-18 已删除）曾提供两个显式入口，不改变普通采集、四路判重、人工审核、发布与客户验收口径：
 
 - `visual-recover --config <冻结配置> --ledger <原账> --job <ai-visual作业> --output <包外回执> [--allow-correction] [--controlled-correction <合成夹具>]`：处理"模型回执是完整逐帧审核、四项结论合法、仅每项缺 `evidence_steps`"被网关判 `invalid_response` 的作业。恢复前先用原始 bound Schema 对**完整回复**做整体校验：可恢复的 Schema 错误只允许位于 `checks.<name>.evidence_steps` 或该检查对象仅缺 `evidence_steps` 的 required 错误；额外根字段、`failure_assessment` 任何缺陷、`step_observations` 损坏、status/note 错误一律不可恢复（不删字段、不忽略 additionalProperties、不放宽 Schema）。可确定引用按 `qc-evidence-reference-normalization-1` 归一化：只接受 `帧a至帧b`、`帧n`、`第n步` 和与供应帧数完全相等的"N帧"全称引用；越界、计数不符或无引用一律不可确定——不默认填空、不自动把全部步骤写成证据、不改签旧 invalid。不可确定项仅凭显式 `--allow-correction` 发一次有界纠正请求（purpose `visual-part-N-evidence-recovery`）：重建的原 prompt 与原回执、同帧同 SHA 原图重新供应，模型只重述指定检查并引用真实帧；纠正请求失败/UNKNOWN 不重发（再次执行会直接复用已结算行或拒绝）。
 - **未授权 0 派发保证（所有路径）**：claim 之前先由 recovery plan 判定本次是否需要任何模型派发。存在从未派发分段的作业（无论是否 `--allow-correction`）与多段需要 whole-continuity 合并请求的作业（现有恢复授权不覆盖该请求）都如实停止并说明，回 normal worker/现有授权处理，0 派发、不改作业状态；`--allow-correction` 只授权 evidence-only 缺陷的一次有界纠正。完全可确定性恢复的单段路径仍可无授权完成且 `model_requests_dispatched=0`。
@@ -298,7 +300,7 @@ PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/pyth
 
 ### 三近邻完整原帧合并实验（2026-10-27）
 
-独立`quality_inspector.difference_batch`用于成本对照，未改正式`ai_worker.do_difference`。相同本条11帧与三个邻居8/6/11帧共36张原PNG全部发送，本条不再在三个请求里重复；原图、图树和标注逐文件SHA绑定，每对有独立身份、完整step覆盖及必要证据。超限停止，不缩图、不删帧或少比较对象。输入文字复用原worker的精简动作/结果/目标树上下文，不声称传输了全部UI树JSON。
+历史模块 `quality_inspector.difference_batch`（2026-11-18 已删除）用于当时的成本对照，未改正式`ai_worker.do_difference`。相同本条11帧与三个邻居8/6/11帧共36张原PNG全部发送，本条不再在三个请求里重复；原图、图树和标注逐文件SHA绑定，每对有独立身份、完整step覆盖及必要证据。超限停止，不缩图、不删帧或少比较对象。输入文字复用原worker的精简动作/结果/目标树上下文，不声称传输了全部UI树JSON。
 
 实验v1未明确定义状态极性，真实回执理由均说有实质差异却返回三个FAIL；原回执及0.051042元费用保留。v2明确PASS=实质不同、FAIL=同业务/仅参数变体、REVIEW_REQUIRED=不确定，并用独立关系枚举与状态的Schema配对拒绝矛盾，不解析理由替模型改签。42项定向及独立13项/极性矩阵通过，随后另作唯一一次v2真实请求，三个结论与原逐对基线一致。
 
@@ -326,7 +328,7 @@ PYTHONPATH=projects/code:projects/quality-inspector projects/code/.venv/bin/pyth
 
 未抽中保留`ai_status=NOT_REVIEWED`；自动检查不能证明的必要项保持`REVIEW_REQUIRED`，不会因抽检通过补成AI PASS。清单内`coverage_map`逐条列出需求§7的17项、中文/导航、任务终态/差异/四路、附件/澄清及资料检查的证据和边界。当前语言、相邻帧动作解释、隐私和自然完成仍依赖实际审核证据，故没有这些证据的未抽中样本不能放行；20%不意味着其余80%已合格。`report`单列抽中/风险/实际AI/未审核/缺失证据、审核来源和停止状态，且只产生payload阶段结果。正式放行仍由原最终密封交付QC决定，客户验收保持`UNKNOWN`。受控fixture和手写协议正反例不构成真实AI质量证据。
 
-无模型会话审核包用 `python -m quality_inspector.sampling_packet --config <无模型配置> --ledger <同运行账> --plan <冻结plan> --output <包外新目录>`。它复用E3队列及`compact_trajectory`，导出全部选中原帧的路径/摘要、实际动作和近邻全帧比较，以及空白`review-template.json`；不预填观察、身份或通过结论。复制模板另存实际审核记录，如实填写会话来源，再交原`sampling report --reviews`/`expand`验证。新实际审核数及模型请求数均为0；该命令已在2条受控浏览器样本上运行并复跑，12个焦点原帧全部保留。程序化模型和会话审核仍须分别记账。
+历史无模型会话审核包入口 `quality_inspector.sampling_packet` 已于 2026-11-18 删除。它复用E3队列及`compact_trajectory`，导出全部选中原帧的路径/摘要、实际动作和近邻全帧比较，以及空白`review-template.json`；不预填观察、身份或通过结论。复制模板另存实际审核记录，如实填写会话来源，再交原`sampling report --reviews`/`expand`验证。新实际审核数及模型请求数均为0；该命令已在2条受控浏览器样本上运行并复跑，12个焦点原帧全部保留。程序化模型和会话审核仍须分别记账。
 
 
 ## 显式交付抽检、人工转审及替换复检（2026-10-27）

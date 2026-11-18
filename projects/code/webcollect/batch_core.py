@@ -63,8 +63,6 @@ class VisitRateWait(ValueError):
 
 
 def load_json(path):
-    from .workspace_paths import bind
-    bind(path)
     return json.loads(Path(path).read_text(encoding='utf-8'),
                       parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Nonfinite JSON')))
 
@@ -76,8 +74,6 @@ def file_sha(path):
 def save_json(path, value):
     """Atomic, recoverable output. Existing different bytes are never replaced."""
     path = Path(path)
-    from .workspace_paths import bind
-    bind(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
     if path.exists():
@@ -807,12 +803,14 @@ class BatchLedger:
         conservative 60s local fallback. 1305 is scoped to this configured model.
         """
         unavailable = set()
-        for row in con.execute("SELECT request_json,response,finished FROM model_requests WHERE state='unknown'"):
+        for row in con.execute("SELECT request_json,response,finished FROM model_requests WHERE state IN ('unknown','failed')"):
             material = json.loads(row['request_json'] or '{}')
             if not material or not material.get('account_id'):
                 continue
             detail = (json.loads(row['response'] or '{}') or {}).get('provider_error', {})
             code = detail.get('provider_code')
+            if detail.get('http_status') == 429 and code not in ('1113', '1305'):
+                code = '1302'
             if code == '1113' or (code in ('1302', '1305') and
                     (row['finished'] or 0) + detail.get('retry_after_seconds', 60) > time.time()):
                 if code != '1305' or material.get('model') == self.config['model']['model']:
@@ -995,6 +993,11 @@ class BatchLedger:
             cached = usage.get('cached_input_tokens', 0)
             cost = ((usage['input_tokens'] - cached) * rates['input'] +
                     cached * rates['cached_input'] + usage['output_tokens'] * rates['output'] + 999999) // 1_000_000
+        status = ((response or {}).get('provider_error') or {}).get('http_status')
+        if state == 'failed' and type(status) is int and 400 <= status < 500:
+            # User-approved policy: a received 4xx has zero cost. Missing token
+            # usage remains unknown; do not manufacture provider token counts.
+            cost = 0
         with self.transaction(timeout=timeout) as con:
             row = con.execute('SELECT * FROM model_requests WHERE id=?', (request_id,)).fetchone()
             if not row or row['state'] != 'reserved':

@@ -86,7 +86,7 @@ def progress(session,initial_observation_id):
                     'after_observation_id':action['after_observation_id'],'evidence':observations[action['after_observation_id']]['evidence']})
         # Reject echoes of both original and newly entered parameters.
         union={**base,'values':list(base.get('values',[]))+[{'value':c['after_value']} for c in changes]}
-        from .template_learning import result_evidence
+        from .goal_evidence import result_evidence
         proofs=result_evidence(now,union,html(current),html(initial)) if current.get('capture_verified') else []
         covered={decimal(c['after_value']) for c in changes}
         ok=bool(len({c['node'] for c in changes})>=2 and wanted<=covered and proofs)

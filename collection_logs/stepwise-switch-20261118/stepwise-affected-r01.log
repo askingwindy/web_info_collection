@@ -1,0 +1,208 @@
+....F                                                                    [100%]
+=================================== FAILURES ===================================
+_ Strategy2VisualCore.test_visual_overview_crop_preserves_original_and_bound_sources _
+
+self = <test_strategy2_visual_core.Strategy2VisualCore testMethod=test_visual_overview_crop_preserves_original_and_bound_sources>
+
+    def test_visual_overview_crop_preserves_original_and_bound_sources(self):
+        # A rotated decoration or unrelated control is raw-only evidence;
+        # a requested target or transformed target ancestor still rejects.
+        async def local_geometry():
+            from playwright.async_api import async_playwright, Error as BrowserError
+            from webcollect import browser
+            from webcollect.action_stability import post_action_document_scope
+            async with async_playwright() as runtime:
+                chrome = await runtime.chromium.launch(channel='chrome', headless=True)
+                try:
+                    page = await chrome.new_page(viewport={'width': 900, 'height': 600})
+                    await page.route('**/*', lambda route: route.abort())
+                    await page.set_content("""<!doctype html><html><head><style>
+                        body { font:20px sans-serif; margin:30px; }
+                        #decoration { position:absolute; left:500px; top:80px; transform:rotate(25deg); }
+                        #turned { position:absolute; left:500px; top:220px; transform:rotate(15deg); }
+                        #parent { position:absolute; left:500px; top:350px; transform:skewX(12deg); }
+                        </style></head><body><button id="safe">正常操作</button>
+                        <p>这里是正常正文。</p><div id="decoration">旋转装饰文字</div>
+                        <button id="turned">旋转控件</button><div id="parent"><button id="nested">子控件</button></div>
+                        <select id="unit"><option>厘米</option><optgroup disabled label="不可选"><option>米</option></optgroup></select>
+                        </body></html>""")
+                    captured = await browser.capture(page, retries=0,
+                        action_scope=post_action_document_scope({'url': page.url}))
+                    state = captured['state']
+                    self.assertTrue(captured['png'])
+                    self.assertIn('正常正文', state['visible_text'])
+                    self.assertNotIn('旋转装饰文字', state['visible_text'])
+                    self.assertTrue({'decoration', 'turned', 'parent'} <=
+                                    {item['id'] for item in state['geometry_exclusions']})
+                    self.assertTrue(all(not item['pixel_exclusion_allowed']
+                                        for item in state['geometry_exclusions']))
+                    self.assertFalse(any(item.get('text') in ('旋转控件', '子控件', '旋转装饰文字')
+                                         for item in state['elements']))
+                    self.assertTrue((await browser.observe(page, '#safe'))['target']['hit_valid'])
+                    for selector in ('#turned', '#nested'):
+                        with self.assertRaisesRegex(BrowserError, 'UNSUPPORTED_GEOMETRY'):
+                            await browser.observe(page, selector)
+                    choice = next(item for item in state['capture_controls'] if item['tag'] == 'select')
+                    self.assertTrue(next(item for item in choice['options'] if item['label'] == '米')['disabled'])
+                finally:
+                    await chrome.close()
+>       asyncio.run(local_geometry())
+
+projects/code/tests/test_strategy2_visual_core.py:428: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:204: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+projects/code/tests/test_strategy2_visual_core.py:408: in local_geometry
+    captured = await browser.capture(page, retries=0,
+projects/code/webcollect/browser.py:706: in capture
+    return await asyncio.wait_for(pending, total_timeout) if total_timeout is not None else await pending
+                                                                                            ^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+page = <Page url='about:blank'>, selector = None, index = 0, retries = 0
+assertions = None, protected_selectors = None, timeout = 15
+action_scope = {'schema_version': 'action-scoped-evidence', 'action': 'observe', 'purpose': 'post_action_document', 'source_url': 'about:blank', ...}
+attempt_log = []
+
+    async def _capture(page, selector=None, index=0, retries=8, assertions=None, protected_selectors=None,
+                       timeout=15, action_scope=None, attempt_log=None):
+        """Capture full original evidence with shared bounded dynamic-region comparison.
+    
+        retries remains the total number of attempts, including when explicitly
+        supplied. The backoff requests at most eight seconds of sleep in total;
+        screenshot/observation timeouts remain independent and unchanged.
+        """
+        attempts=attempt_log if attempt_log is not None else []
+        delay_before=0.0
+        requested_wait=0.0
+        observed_wait=0.0
+        recent_capture_ms=0.0
+        for attempt_index in range(retries):
+            if delay_before:
+                wait_started=time.monotonic()
+                await asyncio.sleep(delay_before)
+                observed_wait+=time.monotonic()-wait_started
+                requested_wait+=delay_before
+            # Classification-based comparison replaces waiting for a global still window.
+            native_window={'status':'dynamic_region_comparison','requested_wait_ms':0,'observed_wait_ms':0,'observations':[]}
+            pulse=False
+            png_waits=[]
+            async def timed_png():
+                nonlocal requested_wait, observed_wait
+                if pulse:
+                    wait=await _wait_for_native_window(page,max(0,(_CAPTURE_WAIT_BUDGET-requested_wait)*1000),150,png_phase=True)
+                    png_waits.append(wait)
+                    requested_wait+=wait['requested_wait_ms']/1000
+                    observed_wait+=wait['observed_wait_ms']/1000
+                return await asyncio.wait_for(viewport_png(page),timeout=25)
+            started=time.time_ns()
+            options={**({'assertions':assertions} if assertions else {}),
+                     **({'protected_selectors':protected_selectors} if protected_selectors else {}),
+                     'timeout': timeout}
+            timings={'before_dom_ms':None,'png_1_ms':None,'after_dom_ms':None,'png_2_ms':None,'final_dom_ms':None}
+            try:
+                mark=time.monotonic()
+                before=await observe(page,selector,index,**options)
+                timings['before_dom_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
+                try:png,screenshot_evidence=await timed_png()
+                except asyncio.TimeoutError as error:raise TimeoutError('视口截图超过25秒，停止该任务并保留检查点') from error
+                timings['png_1_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
+                after=await observe(page,selector,index,**options)
+                timings['after_dom_ms']=round((time.monotonic()-mark)*1000,1)
+                extra={};v2='capture_readiness' in before
+                if v2:
+                    mark=time.monotonic()
+                    comparison,comparison_method=await timed_png()
+                    timings['png_2_ms']=round((time.monotonic()-mark)*1000,1);mark=time.monotonic()
+                    final=await observe(page,selector,index,**options)
+                    timings['final_dom_ms']=round((time.monotonic()-mark)*1000,1)
+                    stability=stability_pair(before,after,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
+                    final_stability=stability_pair(before,final,png,comparison,allow_border=attempt_index>0,action_scope=action_scope)
+                    extra={'snapshot_before':before,'snapshot_after':after,'snapshot_final':final,
+                           'original_png_base64':base64.b64encode(png).decode('ascii'),
+                           'comparison_png_base64':base64.b64encode(comparison).decode('ascii'),
+                           'comparison_screenshot':comparison_method,'stability':stability,'final_stability':final_stability}
+            except Exception as error:
+                transient = (isinstance(error, (TimeoutError, asyncio.TimeoutError))
+                    or any(reason in str(error) for reason in (
+                        'Execution context was destroyed', 'DOCUMENT_NOT_READY',
+                        'Cannot find context with specified id')))
+                if not transient:
+                    raise
+                attempts.append({'attempt':attempt_index+1, 'started_ns':started,
+                    'ended_ns':time.time_ns(), 'dom_stable':False,
+                    'rejected_reason':'transient_capture_error', 'error_type':type(error).__name__,
+                    'error_message':str(error), 'action_replayed':False})
+                if attempt_index+1 >= retries:
+                    error.capture={'accepted_as_formal_frame':False, 'attempts':attempts}
+                    raise
+                delay_before=min(_CAPTURE_RETRY_DELAYS[min(attempt_index,len(_CAPTURE_RETRY_DELAYS)-1)],
+                    max(0, _CAPTURE_WAIT_BUDGET-requested_wait))
+                continue
+            ended=time.time_ns()
+            recent_capture_ms=(ended-started)/1e6
+            before_fingerprint=fingerprint(before)
+            after_fingerprint=fingerprint(after)
+            same=before_fingerprint==after_fingerprint
+            if v2:same=same and before_fingerprint==fingerprint(final)
+            accepted=(stability['accepted'] and final_stability['accepted']) if v2 else same
+            next_delay=0.0
+            if not accepted and attempt_index+1<retries:
+                next_delay=min(_CAPTURE_RETRY_DELAYS[min(attempt_index,len(_CAPTURE_RETRY_DELAYS)-1)],
+                               max(0.0,_CAPTURE_WAIT_BUDGET-requested_wait))
+            # One compact reason per rejected attempt: which proof failed first,
+            # without duplicating the full stability receipts kept alongside.
+            rejected_reason=None
+            if not accepted:
+                if v2:
+                    rejected_reason=(stability.get('scope_error') or final_stability.get('scope_error') or
+                                     ('dom_unstable' if not same else
+                                     'related_dom_changed' if not stability['related_dom_stable'] else
+                                     'loading_incomplete' if not stability['loading_complete'] else
+                                     'pixel_change_outside_allowed'))
+                else:
+                    rejected_reason='dom_unstable'
+            attempts.append({'attempt':attempt_index+1,'started_ns':started,'ended_ns':ended,'dom_stable':same,
+                             'phase_timings_ms':timings,'rejected_reason':rejected_reason,
+                             'delay_before_ms':round(delay_before*1000),'next_retry_delay_ms':round(next_delay*1000),
+                             'native_window_wait_ms':round(native_window['requested_wait_ms'],3),
+                             'native_window_evidence':native_window,
+                             **({'png_phase_waits':png_waits} if png_waits else {}),
+                             'mismatch_fields':[key for key in sorted(before.keys()|after.keys())
+                                                if key not in before or key not in after or before[key]!=after[key]
+                                                or v2 and before.get(key)!=final.get(key)],
+                             'before_fingerprint':before_fingerprint,'after_fingerprint':fingerprint(final) if v2 else after_fingerprint,
+                             **extra})
+            if accepted:
+                with Image.open(BytesIO(png)) as im:
+                    if list(im.size)!=before['screen_resolution']:
+                        raise ValueError('截图像素分辨率与 DOM 坐标系不一致')
+                if v2:_CAPTURE_FRAMES[page]={'state':before,'png':png,'border_enabled':attempt_index>0,'png_phase':pulse,'action_scope':action_scope}
+                return {'state':before,'png':png,'capture':{**({'schema_version':CAPTURE_VERSION} if v2 else {}),
+                        'attempts':attempts,'screenshot_sha256':hashlib.sha256(png).hexdigest(),
+                        'natural_wait_requested_ms':round(requested_wait*1000),
+                        'natural_wait_observed_ms':round(observed_wait*1000),'natural_wait_budget_ms':8000,
+                        'coordinate_space':'screenshot_css_pixels','snapshot_source':'browser_dom',
+                        'screenshot':screenshot_evidence,
+                        'observer_sha256':hashlib.sha256(SNAPSHOT_JS.encode()).hexdigest()}}
+            delay_before=next_delay
+        error=EvidenceStale('单帧取证期间未能确认截图与界面树同步，拒绝保存该帧')
+        # Rejected evidence remains rejected. Callers may preserve this diagnostic
+        # alongside their failure checkpoint without treating any PNG as accepted.
+        error.capture={'comparison_scope':'single_frame','accepted_as_formal_frame':False,
+                       'attempts':attempts,'natural_wait_requested_ms':round(requested_wait*1000),
+                       'natural_wait_observed_ms':round(observed_wait*1000),'natural_wait_budget_ms':8000}
+>       raise error
+E       webcollect.browser.EvidenceStale: 单帧取证期间未能确认截图与界面树同步，拒绝保存该帧
+
+projects/code/webcollect/browser.py:693: EvidenceStale
+=========================== short test summary info ============================
+FAILED projects/code/tests/test_strategy2_visual_core.py::Strategy2VisualCore::test_visual_overview_crop_preserves_original_and_bound_sources
+1 failed, 4 passed in 3.60s

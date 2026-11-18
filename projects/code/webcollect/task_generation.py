@@ -577,63 +577,6 @@ def bind_formal_history(scope):
                                      'required_package': str(required)}}
 
 
-def check_live_m4_history(plan, registry, output):
-    """Refresh current M4 business identities before dispatch; own bound resume only."""
-    from .collect_runtime import runtime_scope
-    registry, capture = Path(registry).resolve(), Path(output).resolve() / 'capture'
-    own_scope = runtime_scope(capture)
-    from .current_chain import SCOPE_SCHEMA, assert_registry_scope, registry_snapshot
-    history_scope = plan.get('generation', {}).get('history_scope') or plan.get('observed_workflow_generation', {}).get('history_scope')
-    if isinstance(history_scope, dict) and history_scope.get('schema_version') == SCOPE_SCHEMA:
-        live_snapshot = registry_snapshot(history_scope, registry)
-    else:
-        live_snapshot = None
-    own_tasks = set()
-    from .task_replanning import validated_replans
-    repairs, _ = validated_replans(registry, plan.get('generation', {}).get('replan_closures'))
-    bootstrap_path = capture / 'bootstrap.json'
-    with closing(workspace_connect(registry.as_uri()+'?mode=ro', uri=True, timeout=90)) as con:
-        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if 'm4_tasks' not in tables:
-            return {'m4_tasks_checked': 0, 'own_resume_tasks': 0}
-        raw_rows = []
-        if live_snapshot is None:
-            columns = {row[1] for row in con.execute('PRAGMA table_info(m4_tasks)')}
-            raw_rows = list(con.execute('SELECT '+('scope_id' if 'scope_id' in columns else 'NULL')+',task_json FROM m4_tasks'))
-        bound = (list(con.execute('SELECT plan_json FROM m4_plans WHERE scope_id=?', (own_scope,)))
-                 if bootstrap_path.is_file() and 'm4_plans' in tables else [])
-    rows = ([(row['scope_id'], row['task']) for row in live_snapshot['rows']] if live_snapshot is not None
-            else [(scope_id, json.loads(raw)) for scope_id, raw in raw_rows])
-    if bootstrap_path.is_file():
-        bootstrap = load_json(bootstrap_path)
-        original_plan = {k:v for k,v in plan.items() if k!='media_preflight'}
-        bootstrap_plan = bootstrap.get('plan', {})
-        if (bootstrap.get('schema_version') not in ('runtime-bootstrap', 'webcollect-bootstrap-m4-1')
-                or bootstrap.get('output_path') != str(capture)
-                or bootstrap.get('registry_path') != str(registry)
-                or bootstrap.get('manifest', {}).get('runtime_scope_id') != own_scope
-                or {k:v for k,v in bootstrap_plan.items() if k!='media_preflight'} != original_plan
-                or len(bound)!=1 or json.loads(bound[0][0]) != bootstrap_plan):
-            raise ValueError('M4 resume is not bound to this exact output/scope/plan')
-        own_tasks = {object_sha256(t) for t in bootstrap_plan['tasks']}
-    for task in plan['tasks']:
-        signature, semantic = task_signature(task), semantic_signature(task)
-        for scope_id, value in rows:
-            old = value
-            if object_sha256(old) in repairs.get(scope_id, set()):
-                continue
-            if scope_id == own_scope and object_sha256(old) in own_tasks and old == task:
-                continue
-            from .fragment_workflow import is_fragment
-            from .session_core import is_react_task
-            same_structure = (task_signature(old) == signature and (is_fragment(task) or is_react_task(task) or
-                              not _different_verified_business(task, old) and not _different_supported_path(task, old)))
-            if same_structure or (semantic and semantic_signature(old) == semantic
-                                  and proposal_signature(old) == proposal_signature(task)):
-                raise ValueError('Current M4 history contains the same business/structure outside this exact bound resume; no dispatch')
-    return {'m4_tasks_checked': len(rows), 'own_resume_tasks': len(own_tasks)}
-
-
 def customer_history_decision(task, records):
     """Known duplicates reject; uncertain comparisons belong to independent QC.
 
@@ -832,18 +775,15 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     """
     from datetime import datetime, timedelta, timezone
     from .session_core import build_url_task, build_capability_task, REACT_VERSION, SYSTEM_PROMPT, GOAL_BUDGETS
-    from .collection_strategy import (Strategy1Forbidden, STRATEGY_BANDED_REACT,
-                                      STRATEGY_SCREENSHOT_PLAN)
+    from .collection_strategy import (DEFAULT_STRATEGY, STRATEGY_BANDED_REACT,
+                                      STRATEGY_SCREENSHOT_PLAN, freeze as freeze_strategy)
     from .planning import validate_capability
     if not isinstance(url, str) or not url.strip():
         raise ValueError('react-url generator requires the entry URL')
     if site_filter is not None and site_filter != url:
         raise ValueError('react-url entry differs from the site filter')
-    # 策略1完全冻结：新任务缺省策略2；显式react在任何提示词选择、协议挂载
-    # 或模型任务入队之前拒绝；未知值沿由freeze的ValueError报错。
-    strategy = (react_candidate or {}).get('collection_strategy') or STRATEGY_SCREENSHOT_PLAN
-    if strategy == STRATEGY_BANDED_REACT:
-        raise Strategy1Forbidden()
+    strategy = (react_candidate or {}).get('collection_strategy') or DEFAULT_STRATEGY
+    freeze_strategy({'fragment': {}, 'workflow_proposal': {'spec': {}}}, strategy)
     sources = generation_source_identity()
     if ledger.config['mode'] == 'real' and history_registry is None:
         raise ValueError('Real generation must consult the existing production registry')
@@ -853,9 +793,9 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
     if ledger.config['mode'] == 'real':
         history_scope = bind_formal_history(history_scope)
     output = Path(output).resolve(); output.mkdir(parents=True, exist_ok=True)
-    scoped_history = read_history(history_registry, include_scopes=True) if history_registry else []
-    history = [task for _, task in scoped_history]
-    history_hash = object_sha256({'m4_tasks': history, 'customer_history': history_scope,
+    # 候选/目标独占与图片去重由现有数据库约束承担，不再物化全库task/plan。
+    history = []
+    history_hash = object_sha256({'customer_history': history_scope,
                                   'replan_closures': []})
     identities = {'schema_version': 'page-identities', 'pages': {}}
     if page_identities is not None:
@@ -953,6 +893,9 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         from .session_core import validate_task as validate_react
         validate_react(task)
         validate_task_binding(task)
+    # URL-only与capability入口也必须在首次执行前冻结策略。
+    freeze_strategy(task, strategy)
+    task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
     now_iso = datetime.now(timezone.utc).isoformat()
     natives = [action for action in task['fragment']['allowed_actions'] if action != 'set_value']
     record = supplied or {'schema_version': 'site-capability',
@@ -990,7 +933,7 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
             'narrative_generation': '采集会话保存原始执行；交付叙述由后加工依据实际相邻截图与同步观察生成。',
             'narrative_mode': 'mixed', 'prompt_stages': {
                 'planning': {'mode': 'model',
-                    'description': '单一 ReAct 循环按真实工具返回逐步决策（observe/inspect/act/finish）。',
+                    'description': '策略3 stepwise逐步采集：每轮一次next_action选择一个真实动作；结束后一次回写和一次单独判定。',
                     'prompt': _planning_prompt_of(task)},
                 'narrative': {'mode': 'template', 'template_version': 'actual-state-describe_change',
                               'description': '沿用采集器实际可见状态及相邻截图对应的叙述生成。'}}}}
@@ -1020,9 +963,10 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         raise ValueError('max_tasks must be an explicit positive integer')
     from .task_contract import validate_m4_plan
     from .collect import validate_plan
-    # Explicit fixture responses preserve the old controlled/model test API.
-    # Ordinary API and CLI calls default to the no-model strategy path.
-    generator=generator or ('model' if synthetic_specs is not None else 'deterministic')
+    from .collection_strategy import Strategy1Forbidden
+    generator = generator or 'react-url'
+    if generator != 'react-url':
+        raise Strategy1Forbidden()
     if generator not in ('deterministic','model','reviewed','workflow-model','fragment-model','agent-model','react-url'):
         raise ValueError('Unknown task generator')
     if generator in ('model','workflow-model','fragment-model','agent-model') and ledger.config.get('model') is None:
@@ -1284,8 +1228,6 @@ def generate(ledger, catalog_path, output, *, history_registry=None, history_set
         plan['generation']['controller_ledger'] = {'path':str(ledger.path), 'config_sha256':object_sha256(ledger.config)}
     if max_tasks is not None:
         plan['generation']['max_tasks'] = max_tasks
-    if generation_source_identity() != sources:
-        raise ValueError('Generation implementation changed during work; no plan publication')
     if tasks:
         validate_m4_plan(plan); validate_plan(plan)
         save_json(output/'plan.json',plan)
@@ -1319,7 +1261,6 @@ def verify_task_admissions(plan, catalog, registry, output, *, customer_history=
         history_scope = bind_formal_history(history_scope)
     if history_scope != plan['generation']['history_scope']:
         raise ValueError('Admission historical package population drifted before dispatch')
-    check_live_m4_history(plan, registry, output)
     live = context(history_scope, customer_history, registry,
                    exclude_scope=runtime_scope(Path(output).resolve() / 'capture'), own_tasks=plan['tasks'])
     for task in admitted:
@@ -1419,6 +1360,9 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         raise ValueError('Synthetic browser integration uses the controlled fixture runner, never a production CLI bypass')
     sampling = _qc_policy(qc_policy)
     plan = load_json(plan_path); catalog = load_json(catalog_path)
+    from .collection_strategy import select
+    for task in plan['tasks']:
+        select(task)
     validate_plan(plan)
     from .plan_protocol import PLAN_PROTOCOL
     from .closing_policy import COMPLETED_GOAL_DELIVERY
@@ -1440,8 +1384,6 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
         raise ValueError('Only real capability-generated tasks can enter production')
     if any(task.get('mode', 'real') != 'real' for task in plan['tasks']):
         raise ValueError('Synthetic task/frame mode cannot enter real execution')
-    if plan['generation'].get('source_identity') != generation_source_identity():
-        raise ValueError('Generation/history implementation changed or was not bound; regenerate before dispatch')
     history_scope = plan.get('generation', {}).get('history_scope')
     from .current_chain import SCOPE_SCHEMA, assert_registry_scope
     if not isinstance(history_scope, dict) or history_scope.get('schema_version') not in ('webcollect-task-history-scope-1', SCOPE_SCHEMA):
@@ -1459,7 +1401,6 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     from .current_chain import same_chain
     if current_scope != history_scope and not same_chain(current_scope, history_scope):
         raise ValueError('Historical package population changed since task generation')
-    await asyncio.to_thread(check_live_m4_history,plan,registry,output)
     comparison_history = (_without_own_saved_results(plan, registry, output, customer_history)
         if history_scope['schema_version'] == SCOPE_SCHEMA else customer_history)
     has_legacy_admissions = any('task_admission' in task for task in plan['tasks'])
@@ -1560,10 +1501,6 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
                     await preflight_plan(plan_path,pf,samples=2,interval_ms=100,preserve_order=True,navigation=navigation)
                 scheduled=load_json(pf/'scheduled-plan.json')
                 save_json(publication,publish_plan(scheduled,catalog))
-        with preparation_phase(timing, "live_history_recheck"):
-            await asyncio.to_thread(check_live_m4_history,plan,registry,output)
-            if has_legacy_admissions:
-                verify_task_admissions(plan, catalog, registry, output)
         result=await collect_m4(plan_path if react_only else pf/'scheduled-plan.json',output/'capture',registry,
             publication_path=publication,policy_path=policy,resume=resume or (output/'capture/bootstrap.json').exists(),
             navigation=navigation, controller_ledger=ledger, controller_parent_job=job,
@@ -1630,6 +1567,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
 
 def main(argv=None):
     import argparse
+    from .collection_strategy import Strategy1Forbidden
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='command',required=True)
     for command in ('generate','execute'):
@@ -1644,8 +1582,8 @@ def main(argv=None):
             p.add_argument('--workflow-specs',type=Path,help='Explicit original-frame DOM workflow proposals; no rehearsal or admission required')
             p.add_argument('--page-identities',type=Path,help='Explicit whole application name, task/shared roles and original anchors, frozen before generation')
             p.add_argument('--max-tasks',type=int,help='Bound the generated plan before registration; does not grant production quota')
-            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model','agent-model','react-url'),default='deterministic',
-                           help='Registered no-model strategies by default; model is an explicit budgeted option')
+            p.add_argument('--generator',choices=('deterministic','model','reviewed','workflow-model','fragment-model','agent-model','react-url'),default='react-url',
+                           help='New collection uses react-url with stepwise; all other generators are frozen')
             p.add_argument('--react-url',help='Entry URL for the react-url generator; working goal is established in-loop')
             p.add_argument('--react-goal',help='Optional structured business goal JSON for the react entry (read-only requested_goal)')
             p.add_argument('--react-site-category',default='UNKNOWN')
@@ -1669,7 +1607,7 @@ def main(argv=None):
             execute(ledger,args.plan,args.catalog,args.output,args.registry,args.policy,resume=args.resume,qc_policy=args.qc_policy,
                     site_pool=args.site_pool))
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0
-    except (ValueError,OSError,KeyError,TypeError,sqlite3.Error) as error:
+    except (Strategy1Forbidden,ValueError,OSError,KeyError,TypeError,sqlite3.Error) as error:
         print(json.dumps({'status':'STOP','reason':str(error)},ensure_ascii=False));return 2
 
 

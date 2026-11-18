@@ -8,7 +8,7 @@ import re
 import unicodedata
 
 from webcollect.batch_core import BatchLedger, BudgetStop, OutcomeUnknown, load_json, save_json
-from webcollect.model_gateway import ModelGateway
+from webcollect.model_gateway import ModelGateway, ProviderRejected
 from webcollect.planning import object_sha256, verify_evidence
 from .discovery_tools import DiscoveryBrowser, glm_search, reference
 from .candidate_pool import entry_identity
@@ -42,6 +42,7 @@ def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), outp
         with ledger.transaction() as con:ledger.event(con,'model_cache_hit',{'kind':purpose,'job_id':jid})
         return old['result']
     if old['state'] != 'queued' or old['attempts']:
+        _raise_provider_rejected(ledger, jid)
         raise OutcomeUnknown('Original model job unresolved; no automatic replacement: ' + jid)
     from .producer_authority import claim_producer_job
     job = claim_producer_job(ledger, purpose, job_id=jid)
@@ -52,9 +53,22 @@ def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), outp
                               images=images, attempts=1, **({'output_limit':output_limit} if output_limit else {}))
         ledger.finish(job, result=result)
         return result
+    except ProviderRejected as error:
+        ledger.finish(job, 'failed', error=type(error).__name__)
+        raise
     except BaseException as error:
         ledger.finish(job, 'review_required', error=type(error).__name__)
         raise
+
+
+def _raise_provider_rejected(ledger, jid):
+    with ledger.connect() as con:
+        rows = con.execute("SELECT id,response FROM model_requests WHERE job_id=? AND state='failed' ORDER BY started,id", (jid,))
+        for row in rows:
+            detail = json.loads(row['response'] or '{}').get('provider_error', {})
+            status = detail.get('http_status')
+            if type(status) is int and 400 <= status < 500:
+                raise ProviderRejected(status, row['id'], detail)
 
 
 
@@ -99,6 +113,7 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
     if old['state'] == 'done':
         return jid, old['result']
     if old['state'] != 'queued' or old['attempts']:
+        _raise_provider_rejected(ledger, jid)
         if old['state']=='review_required':
             _raise_settled_selection(ledger,jid)
         raise OutcomeUnknown('Original tool selection unresolved; no replacement: ' + jid)
@@ -108,8 +123,9 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
         registry=(ledger.config.get('site_failure_guard') or {}).get('application_registry')
         current_urls=list(source_uris) or ([payload['homepage_uri']] if payload.get('homepage_uri') else [])
         current_hosts={isolation_host(uri,registry) for uri in current_urls}
-        for unresolved in con.execute("SELECT r.id,r.job_id,r.state,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE r.state IN ('reserved','unknown')"):
-            if unresolved['state']=='unknown' and unresolved['id'] in isolated_requests:continue
+        for unresolved in con.execute("SELECT r.id,r.job_id,r.state,r.response,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
+                "WHERE r.state IN ('reserved','unknown') OR (r.state='failed' AND json_extract(r.response,'$.provider_error.http_status') BETWEEN 400 AND 499)"):
+            if unresolved['state'] in ('unknown','failed') and unresolved['id'] in isolated_requests:continue
             if parallel and unresolved['job_id']!=jid:
                 # A live independent job owns its own claim/reservation. It is
                 # not an UNKNOWN outcome and must not lock the whole ledger.
@@ -128,6 +144,9 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
                                else [original['homepage_uri']] if unresolved['kind']=='ai-application-site-classification-1' and original.get('homepage_uri') else [])
                 original_hosts={isolation_host(uri,registry) for uri in original_urls}
                 if current_hosts and original_hosts and current_hosts.isdisjoint(original_hosts):continue
+            if unresolved['state'] == 'failed':
+                detail = json.loads(unresolved['response'])['provider_error']
+                raise ProviderRejected(detail['http_status'], unresolved['id'], detail)
             raise OutcomeUnknown('Original model request unresolved for this source scope: '+unresolved['id'])
     from .producer_authority import claim_producer_job
     job = claim_producer_job(ledger, purpose, job_id=jid)
@@ -139,6 +158,9 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
             attempt_id=jid, max_requests=1)
         ledger.finish(job, result=result)
         return jid, result
+    except ProviderRejected as error:
+        ledger.finish(job, 'failed', error=type(error).__name__)
+        raise
     except BaseException as error:
         ledger.finish(job, 'review_required', error=type(error).__name__)
         if isinstance(error,ValueError):

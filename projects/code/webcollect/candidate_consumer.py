@@ -393,17 +393,14 @@ def preflight_candidate_sources(registry, sources):
 def preflight_cohort_sources(pool, rows, registry):
     """Read only the frozen cohort's inputs; do not claim, probe or navigate."""
     from .current_chain import CurrentChainError
-    from .planning import object_sha256
     # 与生产者共用同一池库：只读连接同样带锁等待，避免短写者瞬时BUSY。
     with closing(workspace_connect(pool.path.as_uri() + '?mode=ro', uri=True, timeout=90)) as con:
         for row in rows:
             sources = [json.loads(source[0]) for source in con.execute(
                 'SELECT source FROM candidate_sources WHERE candidate_id=? ORDER BY created,source_key',
                 (row['candidate_id'],))]
-            if row.get('sources_sha256') and object_sha256(sources) != row['sources_sha256']:
-                raise CurrentChainError('frozen candidate sources changed: ' + row['candidate_id'])
             try:
-                if row.get('sources_sha256'):
+                if row.get('entry_http') or any(source.get('entry_http') for source in sources):
                     # This is the exact reference consumed by claim_next, not
                     # a new visit. Validate it before any worker account/browser IO.
                     reference = row['entry_http']
@@ -522,12 +519,6 @@ async def _entry_session(ledger, pool, claim, root, *, session_soft_seconds=None
                         entry_http = await capture_http_chain(entry_response,uri,captured['state']['url'],
                             source_url=uri,operation_id='candidate-entry:'+claim['claim_id'],page=page)
                         entry_http_reference = exclusive(root/'first-entry-http.json',entry_http)
-                    from .consumer_page_policy import full_image
-                    image_failure=full_image(captured['state'])
-                    if image_failure:
-                        # No action/plan will use this frame. Retain the trusted
-                        # capture and reject immediately, without live re-probes.
-                        exclusive(root/'first-frame-image-policy.json',image_failure)
     
                 visits = [v['id'] for v in ledger.visits() if v['job_id']==jid]
                 ledger.finish(job, result=anchor)
@@ -742,6 +733,9 @@ async def consume(pool, claim, ledger, **kwargs):
 async def _consume(pool, claim, ledger, *, output, registry, policy, history_set, qc_policy=None, skip_wechat_articles=False, session_objective=None, effort_profile=None,
                   session_soft_seconds=None, session_hard_seconds=None, collection_strategy=None, runlog=None):
     """Exactly one original claim, one goal and at most one saved result."""
+    from .collection_strategy import DEFAULT_STRATEGY, freeze
+    collection_strategy = collection_strategy or DEFAULT_STRATEGY
+    freeze({'fragment': {}, 'workflow_proposal': {'spec': {}}}, collection_strategy)
     # 会话软时限/收尾宽限经host_limits贯通到session与网关；软时限后停止
     # 新增业务动作与模型请求，未决请求保留UNKNOWN。
     if claim.get('state')!='consuming': return {'state':claim.get('state'),'dispatched':False}
@@ -1031,13 +1025,16 @@ def _cohort_rows(path, pool, registry, batch):
 
 async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories=None, application_id=None,
               poll_seconds=None, stop_when_empty=False, producer_batch=None, campaign=None, target=None, target_basis='saved', recovery_version=None, cohort=None, skip_wechat_articles=False, session_objective=None, effort_profile=None, collection_strategy=None, log_level='INFO', log_dir=None, **kwargs):
-    # 策略1完全冻结：绕过argparse的程序直传也在任何startup_check/claim之前拒绝。
-    if collection_strategy == 'react':
+    # 程序直传与CLI同一规则：先确定默认策略，再执行自检或领取。
+    from .collection_strategy import DEFAULT_STRATEGY, Strategy1Forbidden, freeze
+    collection_strategy = collection_strategy or DEFAULT_STRATEGY
+    try:
+        freeze({'fragment': {}, 'workflow_proposal': {'spec': {}}}, collection_strategy)
+    except Strategy1Forbidden as error:
         import sys
-        from .collection_strategy import Strategy1Forbidden
-        print('strategy_rejected strategy=react entry=candidate_consumer.run reason=STRATEGY1_FORBIDDEN',
+        print(f'strategy_rejected strategy={collection_strategy} entry=candidate_consumer.run reason={error}',
               file=sys.stderr)
-        raise Strategy1Forbidden()
+        raise
     if effort_profile is not None:
         from .session_core import validate_effort_profile
         effort_profile = validate_effort_profile(effort_profile)
@@ -1073,7 +1070,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     # Worker-level display log (one per run(), independent of per-claim logs).
     from .runlog import SessionLog
     worker_log = SessionLog(kwargs['output'], worker_id, 'worker-' + request_prefix,
-                            collection_strategy or 'screenshot_plan', log_dir=log_dir)
+                            collection_strategy, log_dir=log_dir)
 
     def record(event, **value):
         with events.open('a', encoding='utf-8') as stream:
@@ -1206,7 +1203,7 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
             runlog.info('claim', claimId=claim['claim_id'], candidateId=claim['candidate_id'])
             # 领取即记录实际执行的采集策略：策略1已被入口拒绝，此处只可能是
             # 策略2（显式或缺省）；被拒绝的策略绝不会被记为已选择。
-            runlog.info('strategy_selected', strategy=collection_strategy or 'screenshot_plan',
+            runlog.info('strategy_selected', strategy=collection_strategy,
                 siteId=claim.get('site_id'),
                 entryUrl=(claim.get('snapshot') or {}).get('entry_url'))
             try:
@@ -1472,9 +1469,9 @@ def main(argv=None):
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
     runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default waits continuously (2 seconds between empty claims)')
     runp.add_argument('--stop-when-empty',action='store_true',help='Stop with candidates_exhausted instead of polling when the selected inventory is empty')
-    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE
-    runp.add_argument('--collection-strategy',choices=(STRATEGY_SCREENSHOT_PLAN,STRATEGY_STEPWISE),default=STRATEGY_SCREENSHOT_PLAN,
-        help='采集策略：默认策略2 screenshot_plan；显式 stepwise 进入策略3；策略1已冻结（react 直接拒绝）')
+    from .collection_strategy import STRATEGY_STEPWISE
+    runp.add_argument('--collection-strategy',choices=(STRATEGY_STEPWISE,),default=STRATEGY_STEPWISE,
+        help='采集策略：仅允许策略3 stepwise（默认）；策略1、2已冻结')
     runp.add_argument('--producer-batch',help='Consume only newly published rows from this producer batch; wait when inventory is empty')
     runp.add_argument('--log-level',choices=('INFO','DEBUG'),default='INFO',
         help='Display log level; DEBUG additionally records model input/output to model-debug.jsonl')

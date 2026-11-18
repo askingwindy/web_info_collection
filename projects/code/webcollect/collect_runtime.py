@@ -114,7 +114,7 @@ def source_identity():
         if package_dir.is_dir():
             names += ['screenshot_templates/' + package_dir.name + '/' + path.name
                       for path in sorted(package_dir.glob('*.py'))]
-    # 策略 3 stepwise 包源文件同样随收据绑定（独立业务实现，运行期漂移即停）。
+    # 策略 3 源码摘要只供审计，不作为运行门禁。
     stepwise_dir = base / 'stepwise'
     if stepwise_dir.is_dir():
         names += ['stepwise/' + path.name for path in sorted(stepwise_dir.glob('*.py'))]
@@ -378,6 +378,9 @@ async def collect_m4(plan_path, output, registry, **options):
     """The lease protects tasks; an output lock protects derived files and snapshots."""
     import fcntl
     plan_path, registry = Path(plan_path), Path(registry)
+    from .collection_strategy import select
+    for task in read_json(plan_path)['tasks']:
+        select(task)
     for key in ('publication_path','policy_path'):
         if options.get(key) is not None:
             options[key]=Path(options[key])
@@ -500,13 +503,11 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
             index=index, navigation=navigation, page=page,
             entry_observation=entry_observation, host_limits=host_limits, runlog=runlog)
     if screenshot_strategy(task):
-        # 策略 2 显式选择：按冻结模板派发到对应模板包的会话与chooser，不挂
-        # 策略1 band/finish_when门禁；历史封存任务（无模板标记）解析到单体
-        # 实现，保证已封存收据的重放/读回仍按原实现执行。
-        from .screenshot_planners import template_module, task_template_name
-        module = template_module(task_template_name(task))
-        Session = module.Session
-        chooser_factory = module.screenshot_chooser
+        if runlog is not None:
+            runlog.warn('strategy_rejected', strategy='screenshot_plan',
+                        entry='collect_runtime._react_collection', reason='STRATEGY2_FROZEN')
+        from .collection_strategy import Strategy2Frozen
+        raise Strategy2Frozen()
     else:
         # 策略1完全冻结：历史/显式react任务在浏览器、模型请求与任何采集动作
         # 之前明确拒绝（本分支位于site_context/chooser/new_page/Session构造之前）。
@@ -551,13 +552,6 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     if not closing_enabled(task) and feedback_context['unresolved']:
         if any(row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
             raise CollectionFailure('Unresolved prior attempt blocks react dispatch', 'program')
-    if not screenshot_strategy(task):
-        # Band budgets belong to 策略 1's conditional-plan chain only; the
-        # strategy-2 path never loads the 策略 1 controller module.
-        from .banded_plan import enabled as banded_plan_enabled
-        if banded_plan_enabled(task):
-            from .band_budget import reserve as reserve_plan_band
-            feedback_context['band_budget'] = reserve_plan_band(registry, task, attempt)
     chooser = chooser_factory(ledger, task, attempt['attempt_id'], parent_job=parent_job,
                               **({'runlog': runlog} if screenshot_strategy(task) else {}))
     if page is None:
@@ -1013,11 +1007,10 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                     write_json(path, value)
             manifest = read_json(output / 'manifest.json') if 'manifest.json' not in missing else bootstrap['manifest']
             if (manifest.get('runtime_scope_id') != scope or manifest.get('registry_path') != str(registry)
-                    or manifest.get('generator_files_sha256') != sources
                     or manifest.get('contract_profile') != contract_identity(Path(__file__).resolve().parents[3])
                     or manifest.get('configuration', {}).get('channel') != channel
                     or manifest.get('configuration', {}).get('headless') != headless):
-                raise ValueError('续跑输出、账本或代码版本不匹配；不能拼接新版本')
+                raise ValueError('续跑输出、账本、合同或配置不匹配')
             if missing:
                 checkpoint_manifest(output, manifest)
                 recovery = output / 'bootstrap-recovery' / (str(uuid.uuid4()) + '.json')

@@ -9,6 +9,7 @@ from .metadata import export_metadata
 from .scaffold import scaffold
 from .storage import write_json
 from .validate import read_json, validate_sample
+from .collection_strategy import Strategy1Forbidden
 
 
 def main(argv=None):
@@ -185,7 +186,7 @@ def main(argv=None):
             return 0 if result['structural_pass'] else 1
         print(json.dumps(result,ensure_ascii=False,indent=2))
         return 1 if (args.command=='collect' and result['rejected']) or (args.command=='preflight' and result['probe_errors']) else 0
-    except (OSError,ValueError,TypeError,KeyError,sqlite3.Error) as e:
+    except (OSError,ValueError,TypeError,KeyError,sqlite3.Error,Strategy1Forbidden) as e:
         print(json.dumps({'error':str(e),'kind':'command_or_configuration'},ensure_ascii=False),file=sys.stderr)
         return 2
 

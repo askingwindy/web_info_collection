@@ -6,7 +6,7 @@ import time
 from jsonschema import Draft202012Validator
 
 from webcollect.batch_core import OutcomeUnknown
-from webcollect.model_gateway import ModelGateway
+from webcollect.model_gateway import ModelGateway, ProviderRejected
 from webcollect.planning import canonical, object_sha256, verify_evidence
 from . import page_purpose_v6 as previous
 from . import producer_observation
@@ -208,12 +208,12 @@ def _purpose_holds(ledger):
     held = {}
     with ledger.connect() as con:
         originals = con.execute(
-            "SELECT r.id,r.job_id,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
-            "WHERE r.state IN ('unknown','reserved') AND j.kind='ai-target-page-purpose-1'")
+            "SELECT r.id,r.job_id,r.state,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
+            "WHERE (r.state IN ('unknown','reserved') OR (r.state='failed' AND json_extract(r.response,'$.provider_error.http_status') BETWEEN 400 AND 499)) AND j.kind='ai-target-page-purpose-1'")
         for original in originals:
             for uri in json.loads(original['payload']).get('input', {}).get('source_uris', []):
                 held.setdefault(entry_identity(uri), []).append(
-                    {'request_id': original['id'], 'job_id': original['job_id']})
+                    {'request_id': original['id'], 'job_id': original['job_id'], 'state': original['state']})
     return held
 
 
@@ -236,8 +236,9 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
                   'selection_reason': 'missing_original_business_evidence'}
         records.append(record)
         if entry_identity(link['uri']) in held:
-            record.update(status='HELD', selection_reason='original_purpose_request_unsettled',
-                          reason='原页面用途请求未决；保留原账，不重新派发',
+            rejected = all(item['state'] == 'failed' for item in held[entry_identity(link['uri'])])
+            record.update(status='HELD', selection_reason='original_purpose_request_rejected' if rejected else 'original_purpose_request_unsettled',
+                          reason='原页面用途请求已拒绝；保留原账，不重新派发' if rejected else '原页面用途请求未决；保留原账，不重新派发',
                           original_requests=held[entry_identity(link['uri'])])
             continue
         try:
@@ -292,7 +293,7 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
             jid, env = model_tool_decision(ledger, ModelGateway(ledger), 'ai-target-page-purpose-1',
                 payload, tools, system=system, source_uris=payload['source_uris'])
             args, rid, tid = env['arguments'], env['request_id'], env.get('tool_call_id')
-        except OutcomeUnknown:
+        except (OutcomeUnknown, ProviderRejected):
             fresh_holds = _purpose_holds(ledger)
             blocked = {key: fresh_holds[entry_identity(link['uri'])]
                        for key, (_, link, _, _) in pending.items()
@@ -300,19 +301,20 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
             if not blocked:
                 raise
             # Only actual requests created by this invocation enter calls.
-            # Their unknown usage/cost and provider reply stay on the ledger.
+            # Their original state, usage/cost and provider reply stay on the ledger.
             with ledger.connect() as con:
                 unknowns = con.execute(
-                    "SELECT id FROM model_requests WHERE job_id=? AND state='unknown'", (jid,)).fetchall()
+                    "SELECT id,state FROM model_requests WHERE job_id=? AND state IN ('unknown','failed')", (jid,)).fetchall()
             new_calls = [{'job_id': jid, 'request_id': r['id'], 'tool_call_id': None,
-                          'input_sha256': object_sha256(payload), 'response_mode': 'original_unknown',
-                          'state': 'unknown', 'reused': False}
+                          'input_sha256': object_sha256(payload), 'response_mode': 'original_' + r['state'],
+                          'state': r['state'], 'reused': False}
                          for r in unknowns if r['id'] not in before_requests]
             calls.extend(new_calls)
             for key, originals in blocked.items():
                 _, _, record, _ = pending.pop(key)
-                record.update(status='HELD', selection_reason='original_purpose_request_unsettled',
-                              reason='原页面用途请求未决；保留原账，不重新派发',
+                rejected = all(item['state'] == 'failed' for item in originals)
+                record.update(status='HELD', selection_reason='original_purpose_request_rejected' if rejected else 'original_purpose_request_unsettled',
+                              reason='原页面用途请求已拒绝；保留原账，不重新派发' if rejected else '原页面用途请求未决；保留原账，不重新派发',
                               original_requests=originals, model_calls=new_calls)
             continue  # At least one pending page was removed; never retry its URI.
         except ValueError:

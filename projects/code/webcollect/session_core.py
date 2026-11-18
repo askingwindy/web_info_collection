@@ -272,35 +272,16 @@ def build_candidate_task(capability, task_version, budgets=None, collection_stra
     actions = sorted(set(capability.get('supported_actions') or []) & set(ALLOWED_TOOL_ACTIONS))
     if not actions:
         raise ValueError('Candidate capability supports none of the react actions')
-    from .plan_protocol import ENDING_POLICY as CLOSE_POLICY, PLAN_PROTOCOL, ACTION_STABILITY_PROTOCOL as FOCUS_PROTOCOL
-    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, STRATEGY_BANDED_REACT
-    # 新任务缺省策略2；显式react在freeze处构造期即被拒绝（早于浏览器/模型）。
-    strategy = collection_strategy or STRATEGY_SCREENSHOT_PLAN
-    if strategy == STRATEGY_SCREENSHOT_PLAN:
-        # 策略 2 explicitly selected: no conditional-plan protocol, so no band /
-        # finish_when / predicate-enum gates apply; the screenshot session owns
-        # its own loop while the complete-goal save rules stay identical.
-        task = build_url_task(url=capability['site_uri'], task_version=task_version,
-            ending_policy=CLOSE_POLICY, site_category=capability['site_category'],
-            app_name=candidate_name,
-            task_family=(capability.get('task_families') or ['navigation-reading'])[0],
-            allowed_actions=actions, instruction=natural, budgets=budgets, pilot_identity=None)
-    else:
-        task = build_url_task(url=capability['site_uri'], task_version=task_version, ending_policy=CLOSE_POLICY,
-            plan_protocol=PLAN_PROTOCOL, action_stability_protocol=FOCUS_PROTOCOL,
-            site_category=capability['site_category'],
-            app_name=candidate_name,
-            task_family=(capability.get('task_families') or ['navigation-reading'])[0],
-            allowed_actions=actions, instruction=natural, budgets=budgets, pilot_identity=None)
-    from .collection_strategy import freeze as freeze_strategy
-    if strategy == STRATEGY_SCREENSHOT_PLAN:
-        freeze_strategy(task, strategy)
-    else:
-        for part in (task['fragment'],task['workflow_proposal']['spec']):
-            part['result_execution_policy']=RESULT_EXECUTION_POLICY
-            part['result_completion_protocol']=RESULT_COMPLETION_PROTOCOL
-        configure_candidate_protocols(task)
-        freeze_strategy(task, STRATEGY_BANDED_REACT)
+    from .plan_protocol import ENDING_POLICY as CLOSE_POLICY
+    from .collection_strategy import DEFAULT_STRATEGY, freeze as freeze_strategy
+    strategy = collection_strategy or DEFAULT_STRATEGY
+    freeze_strategy({'fragment': {}, 'workflow_proposal': {'spec': {}}}, strategy)
+    task = build_url_task(url=capability['site_uri'], task_version=task_version,
+        ending_policy=CLOSE_POLICY, site_category=capability['site_category'],
+        app_name=candidate_name,
+        task_family=(capability.get('task_families') or ['navigation-reading'])[0],
+        allowed_actions=actions, instruction=natural, budgets=budgets, pilot_identity=None)
+    freeze_strategy(task, strategy)
     task['task_id']='react-'+object_sha256({'url':task['initial_url'],'spec':task['workflow_proposal']['spec']})[:24]
     task['capability_id'] = capability['capability_id']
     task['capability_version'] = capability['version']
@@ -345,10 +326,9 @@ def build_capability_task(capability, pilot_identity, task_version, budgets=None
     task['capability_version'] = capability['version']
     task['fragment']['entry_mode'] = 'capability'
     task['workflow_proposal']['evidence'] = [deepcopy(ref) for ref in (capability.get('evidence') or [])]
-    # 新任务一律冻结策略2（与build_candidate_task同一freeze路径）；策略1在
-    # freeze处拒绝。策略标记先入spec，再按惯例重算task_id。
-    from .collection_strategy import freeze as freeze_strategy, STRATEGY_SCREENSHOT_PLAN
-    freeze_strategy(task, STRATEGY_SCREENSHOT_PLAN)
+    # 策略标记先入spec，再按惯例重算task_id。
+    from .collection_strategy import freeze as freeze_strategy
+    freeze_strategy(task)
     task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
     if pilot_identity:
         from .production_identity import validate_identity

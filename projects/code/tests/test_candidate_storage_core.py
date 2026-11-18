@@ -137,12 +137,13 @@ class CandidateStorageCore(unittest.TestCase):
                 {'sample_id': 'sample-1', 'template_name': 'long_reading'})
             self.assertEqual((re_registered['pages'], re_registered['registered']), (3, True))
             self.assertEqual(template_sites.confirmed_templates(pool, application_id), ['long_reading'])
-            from webcollect.workspace_paths import bind
             from webcollect import workspace_json
-            bind(scope_path)
             portable=__import__('json').loads(workspace_json.dumps({'path':str(source),'input_text':str(source),1:{'path':str(source)}}))
-            self.assertTrue(portable['path'].startswith('workspace:/'))
+            self.assertEqual(portable['path'],str(source))
             self.assertEqual(portable['input_text'],str(source))
+            self.assertFalse((root / '.workspace-root.json').exists())
+            self.assertFalse((output / '.workspace-root.json').exists())
+            self._check_literal_storage_across_roots(temporary)
             original_source = source.read_bytes()
             (output / 'temporary-run-log.txt').write_text('Disposable collection output')
             shutil.rmtree(output)
@@ -210,6 +211,36 @@ class CandidateStorageCore(unittest.TestCase):
                 context = site_context(registry, 'https://example.org/', candidate_id='new')
                 self.assertEqual(context['executions'][0]['evidence_error']['classification'], 'DIGEST_MISMATCH')
 
+
+    def _check_literal_storage_across_roots(self, temporary):
+        from contextlib import closing
+        from webcollect import workspace_json
+        from webcollect.sqlite_connection import raw_connect
+        from webcollect.workspace_paths import logical
+        self.assertIs(workspace_json.dumps, json.dumps)
+        self.assertIs(workspace_json.loads, json.loads)
+        paths = [temporary / name for name in ('first-root', 'second-root')]
+        for path in paths:
+            path.mkdir()
+            (path / '.workspace-root.json').write_text('{"workspace_root":"."}')
+        delayed = []
+        with closing(raw_connect(paths[0] / 'state.sqlite3')) as first, \
+                closing(raw_connect(paths[1] / 'state.sqlite3')) as second:
+            for connection, path in ((first, paths[0]), (second, paths[1]), (first, paths[0])):
+                connection.execute('CREATE TABLE IF NOT EXISTS entries(path TEXT, body TEXT, data TEXT)')
+                value = {'path': str(path / 'file'), 'legacy': 'workspace:/original/file'}
+                connection.execute('INSERT INTO entries(path,body,data) VALUES(?,?,?)',
+                                   (value['path'], value['path'], workspace_json.dumps(value)))
+                row = connection.execute('SELECT path,body,data FROM entries ORDER BY rowid DESC LIMIT 1').fetchone()
+                self.assertEqual(row[:2], (value['path'], value['path']))
+                delayed.append((row[2], value))
+                self.assertEqual(logical(path / 'file'), value['path'])
+            first.executemany('INSERT INTO entries(path,body,data) VALUES(:path,:body,:data)',
+                              [{'path':'workspace:/old/path', 'body':str(paths[0] / 'business-text'), 'data':'{}'}])
+            self.assertEqual(first.execute('SELECT path,body FROM entries ORDER BY rowid DESC LIMIT 1').fetchone(),
+                             ('workspace:/old/path', str(paths[0] / 'business-text')))
+        for encoded, value in reversed(delayed):
+            self.assertEqual(workspace_json.loads(encoded), value)
 
     def _check_pool_readers_do_not_take_writer_slots(self, temporary):
         import sqlite3

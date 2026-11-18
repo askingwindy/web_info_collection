@@ -215,8 +215,6 @@ def _load_cohort(con, scope_id, plan, registry, *, capture_output=None):
              and file_sha(path) == proof['sha256'], 'frozen schedule proof missing or changed')
     frozen = load_json(path)
     _require(object_sha256(frozen) == binding['schedule_binding_sha256'], 'schedule body changed')
-    from .collect_runtime import source_identity
-    _require(frozen['source_files_sha256'] == source_identity(), 'cohort implementation changed')
     actual_members = sorted([{'scope_id': scope, 'plan_sha256': digest}
                              for scope, digest in con.execute('SELECT scope_id,plan_sha256 FROM m4_admission_members WHERE cohort_id=?', (cohort_id,))],
                             key=lambda member: member['scope_id'])

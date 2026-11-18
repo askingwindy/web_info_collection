@@ -31,6 +31,20 @@ class ProviderFinishIncomplete(ValueError):
         super().__init__(kind + (': ' + detail if detail else ''))
         self.kind = kind
         self.detail = detail
+
+
+class ProviderRejected(ValueError):
+    """A received HTTP 4xx is a settled failure, never an uncertain dispatch."""
+
+    failure_class = 'model'
+    responsibility = 'model'
+    code = 'provider_rejected'
+
+    def __init__(self, status, request_id, detail=None):
+        self.status = status
+        self.request_id = request_id
+        self.detail = dict(detail or {})
+        super().__init__(f'Provider HTTP status {status}; request failed; request retained: {request_id}')
 from .planning import object_sha256
 from .plan_protocol import WIKI_READING_COMPLETION
 from .runlog import now_iso
@@ -782,7 +796,7 @@ class ModelGateway:
     def call_tool(self, job, purpose, text, tools, *, system, history=(), images=(),
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
                   max_requests=None, synthetic_response=None, inference=False, content_plan_protocol=None,
-                  timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None,
+                  timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None, request_deadline=None,
                   plan_normalizer=None, tool_choice=None):
         """Native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
@@ -879,6 +893,7 @@ class ModelGateway:
                    'attempt_id': attempt_id, 'max_requests': max_requests, 'declared': declared,
                    'inference_images': inference,'content_plan_protocol':content_plan_protocol,
                    'timeout_seconds':timeout_seconds, 'dispatch_deadline':dispatch_deadline,
+                   'request_deadline':request_deadline,
                    'dispatch_policy':'patient-first-plan' if patient_first_plan else None,
                    'plan_normalizer':plan_normalizer}
         return self._call(job, purpose + ':native-tools', text, {'type': 'object'},
@@ -891,7 +906,8 @@ class ModelGateway:
 
     def call_message(self, job, purpose, text, schema, *, system, images=(), attempts=1,
                      output_limit=None, reasoning_effort=None, attempt_id=None, max_requests=None,
-                         synthetic_response=None, content_envelope=None, grounded_choice=False, dispatch_deadline=None):
+                         synthetic_response=None, content_envelope=None, grounded_choice=False, dispatch_deadline=None,
+                         request_deadline=None):
         """Inference-only text JSON. No tools or native history on wire.
 
         The same native dispatch context binds account, attempt, UNKNOWN and cap.
@@ -919,7 +935,8 @@ class ModelGateway:
         context = {'content_envelope':content_envelope,'version':adapter_version,'system':system,'history':[],
                    'reasoning_effort':reasoning_effort,'seen_ids':set(),'attempt_id':attempt_id,
                    'max_requests':max_requests,'declared':{},'plain_json':True,'inference_images':True,
-                   'dispatch_policy':'branch-choice' if grounded_choice else None, 'dispatch_deadline':dispatch_deadline}
+                   'dispatch_policy':'branch-choice' if grounded_choice else None, 'dispatch_deadline':dispatch_deadline,
+                   'request_deadline':request_deadline}
         return self._call(job,purpose+':'+adapter_version,text,schema,images=images,
                           attempts=attempts,output_limit=output_limit,native_context=context,
                           synthetic_response=synthetic_response)
@@ -1014,6 +1031,11 @@ class ModelGateway:
             return normalize_structured_fields(json.loads(settled[-1]['response'])['result'])
         if qc_transport and any(row['state']=='invalid_response' for row in original_requests):
             raise ValueError('Original QC protocol failure retained; no automatic replacement request')
+        for row in original_requests:
+            detail = json.loads(row['response'] or '{}').get('provider_error', {})
+            status = detail.get('http_status')
+            if row['state'] == 'failed' and type(status) is int and 400 <= status < 500:
+                raise ProviderRejected(status, row['id'], detail)
         with self.ledger.connect() as con:
             if any(row['state'] == 'reserved' or (row['state'] == 'unknown'
                     and not self.ledger.timeout_retry_answered(con, row['id'])) for row in original_requests):
@@ -1079,7 +1101,8 @@ class ModelGateway:
                     endpoint=urlsplit(model['endpoint'])
                     try:
                         from .failure_policy import safe_retry
-                        dns_deadline = min((native_context or {}).get('dispatch_deadline') or float('inf'), time.monotonic() + 15)
+                        dns_deadline = min((native_context or {}).get('dispatch_deadline') or float('inf'),
+                            (native_context or {}).get('request_deadline') or float('inf'), time.monotonic() + 15)
                         import os
                         stopped = lambda: any(os.environ.get(k) and Path(os.environ[k]).exists() for k in ('WEBCOLLECT_STOP_FILE', 'WEBCOLLECT_PRODUCER_STOP_FILE'))
                         def resolve():
@@ -1103,6 +1126,9 @@ class ModelGateway:
                     deadline = (native_context or {}).get('dispatch_deadline')
                     if deadline is not None and time.monotonic() >= deadline:
                         raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
+                    hard_deadline = (native_context or {}).get('request_deadline')
+                    if hard_deadline is not None and time.monotonic() >= hard_deadline:
+                        raise BudgetStop('consumer_session_hard_deadline: no new HTTP request')
                     if qc_transport:
                         self.ledger.heartbeat(job)
                     elif dispatch_policy == 'patient-first-plan':
@@ -1250,6 +1276,16 @@ class ModelGateway:
                             response={'http_dispatched':False,'reason':'consumer_session_soft_deadline'},
                             error='consumer_session_soft_deadline_before_http')
                         raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')
+                    if hard_deadline is not None:
+                        remaining = hard_deadline - time.monotonic()
+                        if remaining <= 0:
+                            settling_locally = True
+                            self._settle_failure(job, rid, state='failed',
+                                response={'http_dispatched': False, 'reason': 'consumer_session_hard_deadline'},
+                                error='consumer_session_hard_deadline_before_http')
+                            raise BudgetStop('consumer_session_hard_deadline: no new HTTP request')
+                        timeout = min(timeout, remaining)
+                        transport_receipt['request_timeout_seconds'] = timeout
                     if qc_transport:
                         timeout = self.ledger.request_window(job, timeout)
                         timing = {'client_request_id':rid}
@@ -1390,18 +1426,25 @@ class ModelGateway:
                         'tool_names': [row.get('function', {}).get('name') for row in payload.get('tools') or []]}
                     if isinstance(code, (int, str)) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', str(code)):
                         detail['provider_code'] = str(code)
-                    if native_context and str(code) in ('1302', '1305'):
-                        retry_after = error.headers.get('Retry-After') if error.headers else None
-                        detail['retry_after_seconds'] = (int(retry_after) if isinstance(retry_after, str)
-                            and retry_after.isdigit() and len(retry_after) <= 8 else 60)
                 except (ValueError, OSError, AttributeError, TypeError):
                     pass
+                if error.code == 429 or detail.get('provider_code') in ('1302', '1305'):
+                    retry_after = error.headers.get('Retry-After') if error.headers else None
+                    detail['retry_after_seconds'] = (int(retry_after) if isinstance(retry_after, str)
+                        and retry_after.isdigit() and len(retry_after) <= 8 else 60)
                 if consumer and self.ledger.real_glm:
                     from .key_health import record_result
-                    record_result(self.ledger, self._account_id(), code=detail.get('provider_code'),
+                    health_code = detail.get('provider_code')
+                    if error.code == 429 and health_code not in ('1113', '1305'):
+                        health_code = '1302'
+                    record_result(self.ledger, self._account_id(),
+                                  code=health_code,
                                   retry_after=detail.get('retry_after_seconds', 60))
-                self._settle_failure(job,rid, state='unknown', error='HTTPError:' + str(error.code),
+                rejected = 400 <= error.code < 500
+                self._settle_failure(job,rid, state='failed' if rejected else 'unknown', error='HTTPError:' + str(error.code),
                                            response={'provider_error': detail, 'failure_diagnostic': {'source': 'provider_http_error', **detail}, **transport_receipt})
+                if rejected:
+                    raise ProviderRejected(error.code, rid, detail) from None
                 raise OutcomeUnknown('Provider HTTP status ' + str(error.code) + '; outcome/charge UNKNOWN; request retained: ' + rid) from None
             except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
                 # A timeout does not prove that the provider stopped or did not
@@ -1444,6 +1487,8 @@ class ModelGateway:
                     raise OutcomeUnknown('Missing provider usage; reservation retained; source='
                         + ('no_provider_response' if raw is None else 'provider_usage_invalid')
                         + '; error=' + type(error).__name__) from None
+                if finish_incomplete is not None and finish_incomplete.kind == 'refused':
+                    raise finish_incomplete
                 invalid_attempts += 1
                 if field_repair:
                     raise ValueError('bounded_field_repair_failed: patch retained; no further correction dispatch') from None
@@ -1460,11 +1505,11 @@ class ModelGateway:
                 protocol_failures.add(failure_key)
                 if qc_transport or (not consumer and invalid_attempts >= attempts):
                     break
-                if finish_incomplete is not None and finish_incomplete.kind == 'refused':
-                    # 拒答不是可修复的协议缺陷：有界结束，不重发。
-                    break
                 if finish_incomplete is not None:
-                    system, parts, tools = compact_retry_context(system, parts, tools)
+                    try:
+                        system, parts, tools = compact_retry_context(system, parts, tools)
+                    except ValueError:
+                        raise finish_incomplete from None
                     user_message = {'role': 'user', 'content': parts}
                     correction = json.dumps({'protocol_error': 'output_exhausted',
                         'instruction': 'Return a concise complete response. Preserve all goals, specified inputs, dependencies and evidence references.'},

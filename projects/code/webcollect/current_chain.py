@@ -234,9 +234,7 @@ def is_current_registry(registry):
 
 
 def registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):
-    from .registry_db import history_read_slot
-    with history_read_slot(registry):
-        return _registry_snapshot(scope,registry,exclude_scope=exclude_scope,own_tasks=own_tasks)
+    return _registry_snapshot(scope,registry,exclude_scope=exclude_scope,own_tasks=own_tasks)
 
 
 def _registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):

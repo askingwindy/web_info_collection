@@ -17,7 +17,7 @@ from site_planner.candidate_pool import CandidatePool
 from webcollect.candidate_contract import VERSION as CONSUMPTION_VERSION
 from webcollect.collection_strategy import (DEFAULT_STRATEGY, RESULT_CONTRACT,
                                             STRATEGIES, STRATEGY_BANDED_REACT,
-                                            STRATEGY_SCREENSHOT_PLAN,
+                                            STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE,
                                             finalize_strategy_result, freeze,
                                             strategy_id)
 from webcollect.closing_policy import MINIMUM, attempt_limit, completion_delivery_decision
@@ -35,23 +35,23 @@ class PlanProtocolContract(unittest.TestCase):
         self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan', 'stepwise'))
         # 策略1完全冻结：新任务缺省策略2；策略3（stepwise）显式选择。身份表
         # 保留react供历史只读解析。
-        self.assertEqual(DEFAULT_STRATEGY, STRATEGY_SCREENSHOT_PLAN)
+        self.assertEqual(DEFAULT_STRATEGY, STRATEGY_STEPWISE)
         import webcollect.screenshot_plan as screenshot_plan_module
         import webcollect.stepwise as stepwise_module
-        from webcollect.collection_strategy import (STRATEGY_STEPWISE, Strategy1Forbidden,
+        from webcollect.collection_strategy import (Strategy1Forbidden,
                                                     is_stepwise, select)
         frozen = {'task_id': 't', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
         with self.assertRaises(Strategy1Forbidden):
             freeze(frozen, STRATEGY_BANDED_REACT)
-        freeze(frozen)  # freeze default stamps 策略2 for new tasks
-        self.assertEqual(strategy_id(frozen), STRATEGY_SCREENSHOT_PLAN)
-        self.assertIs(select(frozen), screenshot_plan_module)
+        freeze(frozen)
+        self.assertEqual(strategy_id(frozen), STRATEGY_STEPWISE)
+        self.assertIs(select(frozen), stepwise_module)
         # 策略 3 显式冻结与解析：独立包路由，不挂策略2 action_stability 协议。
         third = {'task_id': 't3', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
         freeze(third, STRATEGY_STEPWISE)
         self.assertEqual(strategy_id(third), STRATEGY_STEPWISE)
         self.assertTrue(is_stepwise(third))
-        self.assertFalse(is_stepwise(frozen))
+        self.assertTrue(is_stepwise(frozen))
         self.assertIs(select(third), stepwise_module)
         # 策略 3 帧取证同为 action-scoped 观察（共享宿主稳定域实现），冻结同
         # 一观察策略标记；但不冻结任何策略 2 模板。
@@ -300,128 +300,235 @@ class ClosingPolicyContract(unittest.TestCase):
 
 class StrategyResultContract(unittest.TestCase):
     def test_freeze_records_strategy_and_dispatch_follows(self):
-        task = {'task_id': 't', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
-        freeze(task, STRATEGY_SCREENSHOT_PLAN)
-        self.assertEqual(strategy_id(task), STRATEGY_SCREENSHOT_PLAN)
+        import asyncio
+        from unittest.mock import patch, Mock
+        from webcollect.collection_strategy import (Strategy1Forbidden, Strategy2Frozen,
+            select, enabled, save_eligibility)
         from webcollect.action_stability import ACTION_STABILITY_PROTOCOL
+        from webcollect import candidate_consumer, collect_runtime, task_generation, stepwise
+        task = {'task_id': 't', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
+        freeze(task)
+        self.assertEqual(strategy_id(task), STRATEGY_STEPWISE)
+        self.assertIs(select(task), stepwise)
         self.assertEqual(task['fragment']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
-        self.assertEqual(task['workflow_proposal']['spec']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
-        self.assertNotIn('plan_protocol', task['fragment'])
-        # Assembling a StrategyResult for an absent-marker task keeps the
-        # historical 'react' label; sealed records are never relabeled as
-        # screenshot_plan by the new-task default.
+        self.assertNotIn('screenshot_template', task['fragment'])
+        for value, error_type in ((STRATEGY_SCREENSHOT_PLAN, Strategy2Frozen),
+                                  (STRATEGY_BANDED_REACT, Strategy1Forbidden)):
+            legacy = {'fragment': {'collection_strategy': {'id': value}},
+                      'workflow_proposal': {'spec': {}}}
+            with self.assertRaises(error_type):
+                freeze({'fragment': {}, 'workflow_proposal': {'spec': {}}}, value)
+            with self.assertRaises(error_type):
+                select(legacy)
+            self.assertEqual(strategy_id(legacy), value)
+            with patch.object(candidate_consumer, 'startup_check', side_effect=AssertionError('startup before refusal')):
+                with self.assertRaises(error_type):
+                    asyncio.run(candidate_consumer.run(None, None, worker_id='offline',
+                        request_prefix='offline', collection_strategy=value))
+                with self.assertRaises(error_type):
+                    asyncio.run(candidate_consumer._consume(None, {}, None, output=None,
+                        registry=None, policy=None, history_set=None, collection_strategy=value))
+            with patch.object(collect_runtime, 'read_json', return_value={'tasks': [legacy]}), \
+                 patch.object(collect_runtime, '_collect_m4_locked', side_effect=AssertionError('runtime started')):
+                with self.assertRaises(error_type):
+                    asyncio.run(collect_runtime.collect_m4('unused', 'unused', 'unused'))
+            with self.assertRaises(error_type):
+                asyncio.run(collect_runtime._react_collection(None, legacy, None,
+                    None, None, None, None, ledger=None, parent_job=None, registry=None, manifest=None, index=None))
+            with self.assertRaises(error_type):
+                task_generation._generate_react_url(None, 'unused', url='https://example.org',
+                    react_candidate={'collection_strategy': value})
+            from webcollect.failure_policy import disposition
+            self.assertEqual(disposition(error_type())['disposition'], 'global')
+            self.assertEqual(collect_runtime.classify_failure(error_type()), 'program')
+        # Historical strategy2 interpretation and the shared save decision remain read-only.
+        historical = {'fragment': {'collection_strategy': {'id': STRATEGY_SCREENSHOT_PLAN}}}
+        self.assertTrue(enabled(historical))
+        from webcollect.screenshot_planners import template_module, task_template_name
+        import webcollect.screenshot_plan as screenshot_plan
+        self.assertIs(template_module(task_template_name(historical)), screenshot_plan)
+        annotation = {'completion_status': 'success', 'steps': [{'action': {'action_type': 'click'}}] * 5}
+        raw = ClosingPolicyContract._raw(effective=5)
+        self.assertEqual(save_eligibility(annotation, raw), completion_delivery_decision(annotation, raw))
+        self.assertEqual(strategy_id({'fragment': {}}), STRATEGY_BANDED_REACT)
+
+        # Direct collect/preflight CLI paths must reject old non-M4 plans before
+        # validation, output creation, browser launch or any page allocation.
+        from webcollect import collect, preflight, site_scheduler, admission_cohort, __main__ as cli
+        from io import StringIO
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for value, error_type in ((None, Strategy1Forbidden),
+                                      (STRATEGY_BANDED_REACT, Strategy1Forbidden),
+                                      (STRATEGY_SCREENSHOT_PLAN, Strategy2Frozen)):
+                legacy = {} if value is None else {'fragment': {'collection_strategy': {'id': value}}}
+                plan = root / 'plan.json'
+                plan.write_text(json.dumps({'tasks': [legacy]}))
+                output = root / 'output'
+                with patch('playwright.async_api.async_playwright',
+                           side_effect=AssertionError('browser before refusal')) as browser, \
+                     patch.object(collect, 'collect_one',
+                                  side_effect=AssertionError('page before refusal')) as collect_one, \
+                     patch.object(collect, 'validate_plan') as validate, \
+                     patch('sys.stderr', new_callable=StringIO) as stderr:
+                    with self.assertRaises(error_type):
+                        asyncio.run(collect.collect_plan(plan, output, root / 'registry.sqlite3'))
+                    with self.assertRaises(error_type):
+                        asyncio.run(preflight.preflight_plan(plan, output))
+                    for command in ('collect', 'preflight'):
+                        args = [command, '--plan', str(plan), '--output', str(output)]
+                        if command == 'collect':
+                            args += ['--registry', str(root / 'registry.sqlite3')]
+                        self.assertEqual(cli.main(args), 2)
+                    self.assertIn(error_type.MESSAGE, stderr.getvalue())
+                    browser.assert_not_called()
+                    collect_one.assert_not_called()
+                    validate.assert_not_called()
+                    self.assertFalse(output.exists())
+                # Scheduler validation must reject before cohort reservation,
+                # registry access, output creation or its collector is entered.
+                registry = root / 'registry.sqlite3'; registry.touch()
+                publication = root / 'publication.json'; publication.write_text('{}')
+                policy = root / 'policy.json'; policy.write_text('{}')
+                config = {'registry': str(registry), 'max_parallel_sites': 1,
+                          'sites': [{'site_key': 'offline', 'batches': [{
+                              'plan': str(plan), 'publication': str(publication),
+                              'policy': str(policy), 'output': str(root / 'capture')}]}]}
+                config_path = root / 'schedule-config.json'; config_path.write_text(json.dumps(config))
+                with patch.object(site_scheduler, 'validate_policy', return_value={'max_workers': 1}), \
+                     patch.object(site_scheduler, 'workspace_connect', side_effect=AssertionError('registry before refusal')) as connect, \
+                     patch.object(admission_cohort, 'reserve_schedule', side_effect=AssertionError('reservation before refusal')) as reserve, \
+                     patch.object(site_scheduler, 'collect_m4', side_effect=AssertionError('collection before refusal')) as collector, \
+                     patch('sys.stderr', new_callable=StringIO) as stderr:
+                    with self.assertRaises(error_type):
+                        asyncio.run(site_scheduler.run_schedule(config, output))
+                    self.assertEqual(site_scheduler.main(['--config', str(config_path), '--output', str(output)]), 2)
+                    self.assertIn(error_type.MESSAGE, stderr.getvalue())
+                    connect.assert_not_called()
+                    reserve.assert_not_called()
+                    collector.assert_not_called()
+                    self.assertFalse(output.exists())
+
+    def test_execute_allows_source_changes_without_registry_snapshot(self):
+        import asyncio
+        import sqlite3
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock, patch
+        from webcollect import task_generation as generation
         from webcollect.batch_core import file_sha
-        from webcollect.collection_strategy import strategy_result
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            terminal = root / 'terminal.json'
-            terminal.write_text(json.dumps({'collection_ending': {}, 'goal_evidence': {}}))
-            receipt = root / 'receipt.json'
-            receipt.write_text(json.dumps({'terminal': {'path': str(terminal),
-                                                        'sha256': file_sha(terminal)}}))
-            result = strategy_result({'fragment': {}, 'workflow_proposal': {'spec': {}}},
-                                     summary={'effective_steps': 0},
-                                     raw_receipt={'path': str(receipt), 'sha256': file_sha(receipt)})
-            self.assertEqual(result['strategy'], {'id': STRATEGY_BANDED_REACT})
-        # 模板冻结与派发解析：生成期在策略冻结旁盖章模板名；执行侧
-        # （collect_runtime._react_collection 同一解析函数）按标记取对应模板
-        # 包的Session/chooser；历史S2任务（有策略标记、无模板标记）仍解析到
-        # 单体实现，封存收据重放不受拆分影响。
-        from unittest.mock import patch
-        import webcollect.screenshot_plan as screenshot_plan_module
-        from webcollect.plan_protocol import ENDING_POLICY as S2_ENDING_POLICY
-        from webcollect.screenshot_planners import (freeze_template, select_template,
-                                                    task_template_name, template_module)
-        from webcollect.screenshot_templates import generic as generic_template
         from webcollect.session_core import build_url_task
-        freeze_template(task, 'generic')
-        self.assertEqual(task_template_name(task), 'generic')
-        freeze_template(task, 'generic')  # idempotent when unchanged
-        with self.assertRaisesRegex(ValueError, 'already frozen differently'):
-            freeze_template(task, 'operation')
-        with self.assertRaisesRegex(ValueError, 'Unknown screenshot template'):
-            freeze_template({'fragment': {}}, 'no-such-template')
-        s2 = build_url_task(url='https://example.org/tool', task_version='tpl-dispatch',
-                            ending_policy=S2_ENDING_POLICY)
-        freeze(s2, STRATEGY_SCREENSHOT_PLAN)
-        freeze_template(s2, 'generic')
-        module = template_module(task_template_name(s2))
-        self.assertIs(module, generic_template)
-        self.assertEqual(module.Session.__module__, 'webcollect.screenshot_templates.generic.session')
-        self.assertEqual(module.screenshot_chooser.__module__, 'webcollect.screenshot_templates.generic.plan')
-        historical_s2 = {'fragment': {'collection_strategy': {'id': STRATEGY_SCREENSHOT_PLAN}}}
-        self.assertIsNone(task_template_name(historical_s2))
-        self.assertIs(template_module(task_template_name(historical_s2)), screenshot_plan_module)
-        # 确定性模板选择：显式站点规则 + 目标方向 + 页面结构；无模型调用。
-        calculator_state = {'elements': [
-            {'element_id': 'a', 'native_role': 'input', 'visible': True, 'text': '单价'},
-            {'element_id': 'b', 'native_role': 'input', 'visible': True, 'text': '数量'}],
-            'capture_controls': [{'element_id': 'a', 'selector': '#price'},
-                                 {'element_id': 'b', 'selector': '#qty'}],
-            'text_blocks': [], 'visible_text': '计算器'}
-        article_state = {'elements': [
-            {'element_id': 's', 'native_role': 'input', 'visible': True, 'text': ''},
-            *[{'element_id': 'h%d' % index, 'native_role': 'h2', 'visible': True}
-              for index in range(3)]],
-            'capture_controls': [{'element_id': 's', 'selector': '#search-input'}],
-            'text_blocks': [{'visible_text': '章节' + str(index) + '：' + '正文内容' * 40}
-                            for index in range(3)],
-            'visible_text': '词条正文' * 400}
-        name, info = select_template(goal='输入单价与数量后核对计算结果', state=calculator_state)
-        self.assertEqual((name, info['source']), ('operation', 'page_match'))
-        self.assertEqual(info['signals']['inputs'], 2)
-        name, info = select_template(goal='搜索后阅读《月食》全文正文', state=article_state)
-        self.assertEqual((name, info['source']), ('long_reading', 'page_match'))
-        self.assertEqual(info['signals']['search_inputs'], 1)
-        # 仅站点搜索框不把阅读任务判成operation；标题/编号本身不把页面判成operation。
-        name, info = select_template(goal='搜索并阅读词条正文', state=article_state)
-        self.assertEqual(name, 'long_reading')
-        name, info = select_template(goal='查看第3章第5节的标题与编号', state=article_state)
-        self.assertEqual(name, 'long_reading')
-        name, info = select_template(goal='查看第3章第5节的标题与编号', state={'elements': []})
-        self.assertEqual((name, info['source']), ('generic', 'generic_fallback'))
-        # 空目标按页面结构定向。
-        name, info = select_template(goal=None, state=calculator_state)
-        self.assertEqual(name, 'operation')
-        name, info = select_template(goal=None, state=article_state)
-        self.assertEqual(name, 'long_reading')
-        # 已确认站点模板优先；confirmed generic 不覆盖明确的结构匹配。
-        with patch('webcollect.screenshot_planners.confirmed_templates', return_value=['operation']):
-            name, info = select_template(pool=object(), application_id='app-1',
-                                         goal='输入数量后核对计算结果', state=calculator_state)
-            self.assertEqual((name, info['source']), ('operation', 'confirmed_site'))
-            name, info = select_template(pool=object(), application_id='app-1',
-                                         goal='搜索后阅读《月食》全文正文', state=article_state)
-            self.assertEqual((name, info['source']), ('long_reading', 'confirmed_site_mismatch'))
-            self.assertEqual(info['confirmed'], ['operation'])
-            name, info = select_template(pool=object(), application_id='app-1',
-                                         goal='随便看看', state={'elements': []})
-            self.assertEqual((name, info['source']), ('generic', 'confirmed_site_mismatch'))
-        with patch('webcollect.screenshot_planners.confirmed_templates', return_value=['generic']):
-            name, info = select_template(goal='输入数量后核对计算结果', state=calculator_state)
-            self.assertEqual((name, info['source']), ('operation', 'page_match'))
-            name, info = select_template(pool=object(), application_id='app-2',
-                                         goal='随便看看', state={'elements': []})
-            self.assertEqual((name, info['source']), ('generic', 'confirmed_site'))
-        # 显式 Muxtly 全站规则优先于目标、页面结构和已确认模板；中英文、
-        # 分类或阅读状页面都固定 operation，其它站点仍走原有路由。
-        for url in ('https://muxtly.com/zh-CN/calculators/baby-percentile',
-                    'https://www.muxtly.com/en/tools/area-converter',
-                    'https://muxtly.com/zh-CN/category/health'):
-            with self.subTest(url=url):
-                name, info = select_template(goal='搜索后阅读正文', state={**article_state, 'url': url})
-                self.assertEqual((name, info['source']), ('operation', 'site_rule'))
-                self.assertIn('Muxtly全站', info['reason'])
-        name, info = select_template(goal='搜索后阅读正文',
-                                     state={**article_state, 'url': 'https://example.org/article'})
-        self.assertEqual((name, info['source']), ('long_reading', 'page_match'))
-        name, _ = select_template(goal='搜索后阅读正文',
-                                  state={**article_state, 'url': 'https://muxtly.com.evil.example/article'})
-        self.assertEqual(name, 'long_reading')
-        with patch('webcollect.screenshot_planners.confirmed_templates', return_value=['long_reading']):
-            name, info = select_template(pool=object(), application_id='app-mux', goal='阅读正文',
-                                         state={**article_state, 'url': 'https://muxtly.com/zh-CN/article'})
-            self.assertEqual((name, info['source']), ('operation', 'site_rule'))
+        task = build_url_task(url='https://example.org/tool', task_version='offline')
+        freeze(task)
+        from webcollect.planning import object_sha256
+        task['task_id'] = 'react-' + object_sha256({'url': task['initial_url'], 'spec': task['workflow_proposal']['spec']})[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / 'history.json'; manifest.write_text('{}')
+            history = {'schema_version': 'webcollect-task-history-scope-1',
+                       'manifest': {'path': str(manifest), 'sha256': file_sha(manifest)}}
+            plan = {'schema_version': 'plan-m4', 'tasks': [task], 'generation': {
+                'mode': 'real', 'history_scope': history, 'source_identity': {'old.py': 'old'}}}
+            from webcollect.stepwise.prompt import SYSTEM_PROMPT
+            plan['production_facts'] = {'accounts_and_privacy': '离线隔离夹具',
+                'narrative_generation': '原始帧生成', 'narrative_mode': 'mixed',
+                'prompt_stages': {'planning': {'mode': 'model', 'description': '逐步决策',
+                    'prompt': SYSTEM_PROMPT}, 'narrative': {'mode': 'template',
+                    'description': '原始帧生成', 'template_version': 'actual-state-describe_change'}}}
+            for name, value in (('plan.json', plan), ('catalog.json', {'mode': 'real', 'records': []}),
+                                ('policy.json', {'campaign_id': 'offline'})):
+                (root / name).write_text(json.dumps(value))
+            registry = root / 'registry.sqlite3'
+            with sqlite3.connect(registry) as con:
+                con.execute('CREATE TABLE m4_campaigns(campaign_id,policy_json)')
+                con.execute('INSERT INTO m4_campaigns VALUES(?,?)', ('offline', '{}'))
+            ledger = SimpleNamespace(config={'mode': 'real'}, enqueue=Mock(return_value='job'),
+                get=Mock(return_value={'state': 'queued'}), finish=Mock(), heartbeat=Mock())
+            collected = AsyncMock(return_value={'collection_status': 'complete', 'collected': 0})
+            with patch.object(generation, 'generation_source_identity', return_value={'new.py': 'new'}), \
+                 patch.object(generation, 'read_customer_history', return_value=([], history)), \
+                 patch.object(generation, 'bind_formal_history', side_effect=lambda value: value), \
+                 patch('webcollect.current_chain.require_plan', return_value=False), \
+                 patch('webcollect.current_chain.registry_snapshot', side_effect=AssertionError('full history read')), \
+                 patch('webcollect.planning.publish_plan', return_value={'tasks': []}), \
+                 patch('webcollect.consumer_lifecycle.claim_job', new=AsyncMock(return_value={'id': 'job'})), \
+                 patch('webcollect.collect_runtime.collect_m4', collected):
+                result = asyncio.run(generation.execute(ledger, root/'plan.json', root/'catalog.json',
+                    root/'output', registry, root/'policy.json'))
+            collected.assert_awaited_once()
+            self.assertEqual(result['collection']['collected'], 0)
+            self.assertEqual(ledger.finish.call_args.args[1], 'done')
+
+            # Resume an actual scheduler run with a different current source
+            # digest. Its original schedule/cohort audit binding stays intact.
+            from webcollect import admission_cohort, site_scheduler
+            publication = root / 'publication.json'; publication.write_text('{}')
+            batch = {'plan': str(root / 'plan.json'), 'publication': str(publication),
+                     'policy': str(root / 'policy.json'), 'output': str(root / 'scheduled-capture')}
+            config = {'registry': str(registry), 'max_parallel_sites': 1,
+                      'max_schedule_seconds': 5,
+                      'sites': [{'site_key': 'offline', 'batches': [batch]}]}
+            policy = {'campaign_id': 'offline', 'max_workers': 1, 'max_domain_workers': 1}
+            bindings = {batch[key]: file_sha(batch[key]) for key in ('plan', 'publication', 'policy')}
+            frozen = {'schema_version': site_scheduler.VERSION + '-binding', 'config': config,
+                      'input_files_sha256': bindings, 'shared_policy': policy,
+                      'source_files_sha256': {'old.py': 'old'}}
+            schedule = root / 'schedule'; schedule.mkdir()
+            original = json.dumps(frozen)
+            (schedule / 'schedule.json').write_text(original)
+            scheduled = AsyncMock(return_value={'collection_status': 'finished_pending_review', 'collected': 1})
+            with patch.object(site_scheduler, 'validate_schedule', return_value=(config, policy, bindings)) as validate, \
+                 patch.object(site_scheduler, 'source_identity', return_value={'new.py': 'new'}), \
+                 patch.object(admission_cohort, 'reserve_schedule', wraps=admission_cohort.reserve_schedule) as reserve:
+                resumed = asyncio.run(site_scheduler.run_schedule(config, schedule, resume=True, collector=scheduled))
+                self.assertEqual(resumed['status'], 'COLLECTED_PENDING_REVIEW')
+                self.assertEqual(reserve.call_args.args[0], frozen)
+                self.assertEqual((schedule / 'schedule.json').read_text(), original)
+                scheduled.assert_awaited_once()
+                self.assertTrue(scheduled.call_args.kwargs['resume'])
+                changed = {**config, 'max_schedule_seconds': 6}
+                validate.return_value = changed, policy, bindings
+                with self.assertRaisesRegex(ValueError, 'Schedule/config/input binding changed'):
+                    asyncio.run(site_scheduler.run_schedule(changed, schedule, resume=True, collector=scheduled))
+                self.assertEqual(scheduled.await_count, 1)
+
+            # Source changes during preflight remain audit data and do not block
+            # scheduling. Browser and observation are entirely offline doubles;
+            # report writing, scheduling and evidence binding run normally.
+            from webcollect import preflight
+            page = SimpleNamespace(goto=AsyncMock())
+            context = SimpleNamespace(new_page=AsyncMock(return_value=page), close=AsyncMock())
+            browser = SimpleNamespace(version='offline', new_context=AsyncMock(return_value=context), close=AsyncMock())
+            driver = SimpleNamespace(chromium=SimpleNamespace(launch=AsyncMock(return_value=browser)))
+            manager = AsyncMock(); manager.__aenter__.return_value = driver
+            real_digest = preflight.digest
+            source_reads = []
+            def changing_source_digest(path):
+                if Path(path) == Path(preflight.__file__):
+                    source_reads.append(str(path))
+                    return ('0' if len(source_reads) == 1 else '1') * 64
+                return real_digest(path)
+            async def inspect_offline(page, task, folder, samples, interval_ms, check_url):
+                folder.mkdir()
+                frames = [{'path': f'frame-{i}.png', 'raw_path': f'frame-{i}.json'} for i in range(samples)]
+                for name in ['initial.png', 'initial.json', *[name for frame in frames for name in frame.values()]]:
+                    (folder / name).write_bytes(b'offline fixture')
+                record = {'task_id': task['task_id'], 'task_sha256': preflight.object_digest(task),
+                          'summary': {'routing': 'NORMAL_M1'}, 'requested_probe_count': samples, 'frames': frames}
+                (folder / 'result.json').write_text(json.dumps(record))
+                return record
+            with patch('playwright.async_api.async_playwright', return_value=manager), \
+                 patch.object(preflight, 'digest', side_effect=changing_source_digest), \
+                 patch.object(preflight, 'inspect_page', side_effect=inspect_offline), \
+                 patch.object(preflight.asyncio, 'sleep', new=AsyncMock()):
+                checked = asyncio.run(preflight.preflight_plan(root / 'plan.json', root / 'preflight'))
+            report = json.loads((root / 'preflight/report.json').read_text())
+            self.assertEqual(report['source_changed_during_run'], ['preflight.py'])
+            self.assertEqual(report['source_files_sha256']['preflight.py'], '0' * 64)
+            self.assertEqual(json.loads((root / 'preflight/source-after.json').read_text())['preflight.py'], '1' * 64)
+            self.assertEqual(checked['probe_errors'], 0)
+            self.assertTrue(Path(checked['scheduled_plan']).is_file())
+            self.assertEqual(json.loads(Path(checked['scheduled_plan']).read_text())['tasks'], plan['tasks'])
+            preflight.validate_preflight_binding(json.loads(Path(checked['scheduled_plan']).read_text()))
 
     def test_finalize_replaces_transient_end_with_actual_outcome(self):
         result = {'result_contract': RESULT_CONTRACT,
@@ -554,6 +661,12 @@ class CandidatePoolContract(unittest.TestCase):
             rejected = _publish_entry(fake_pool, None, 'batch', None, header,
                 {'entry_url': 'https://zh.wikipedia.org/wiki/物理学'}, excluded_source, {})
         self.assertEqual(rejected['reason'], 'operator_landing_exclusion')
+        with patch('site_planner.producer_observation.from_pool', return_value=None), \
+             patch('site_planner.candidate_discovery.check_entry', side_effect=AssertionError('HTTP-only publication')):
+            held = _publish_entry(fake_pool, None, 'batch', None, header,
+                {'entry_url': 'https://zh.wikipedia.org/wiki/物理学'}, excluded_source, {})
+        self.assertEqual(held['reason'], 'rendered_observation_missing')
+        fake_pool.publish_row.assert_not_called()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             proof = root / 'seed.txt'
@@ -651,11 +764,15 @@ class CliEntriesSmoke(unittest.TestCase):
                 self.assertIsNone(run.call_args.kwargs['session_objective'])
                 # 策略1冻结：CLI缺省策略2；显式react在argparse层exit 2，
                 # 未触达CandidatePool构造或任何浏览器/模型路径。
-                self.assertEqual(run.call_args.kwargs['collection_strategy'], STRATEGY_SCREENSHOT_PLAN)
+                self.assertEqual(run.call_args.kwargs['collection_strategy'], STRATEGY_STEPWISE)
                 pool.reset_mock(); run.reset_mock()
                 from contextlib import redirect_stderr
                 with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as exited:
                     cli.main(args + ['--collection-strategy', 'react'])
+                self.assertEqual(exited.exception.code, 2)
+                pool.assert_not_called(); run.assert_not_called()
+                with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as exited:
+                    cli.main(args + ['--collection-strategy', 'screenshot_plan'])
                 self.assertEqual(exited.exception.code, 2)
                 pool.assert_not_called(); run.assert_not_called()
                 execute.return_value = {'processed': 0, 'stop_reason': 'engineering_failure'}
@@ -665,6 +782,62 @@ class CliEntriesSmoke(unittest.TestCase):
                 with self.assertRaises(json.JSONDecodeError):
                     cli.main(args + ['--session-objective', str(objective)])
                 pool.assert_not_called(); run.assert_not_called()
+
+
+class QCSourceAuditContract(unittest.TestCase):
+    def test_source_changes_preserve_jobs_and_fingerprint_cache(self):
+        from unittest.mock import Mock, patch
+        from PIL import Image
+        from quality_inspector import duplicates, sampling
+        from webcollect.batch_core import file_sha
+        from webcollect.planning import object_sha256
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); dataset = root / 'samples'; dataset.mkdir()
+            image = dataset / 'frame.png'; Image.new('RGB', (16, 16), 'white').save(image)
+            annotation = dataset / 'annotation.json'
+            body = {'sample_id':'sample', 'task_instruction':'核对结果', 'final_result':'结果',
+                    'steps':[{'step_id':1, 'page_name':'页面', 'image_path':'frame.png',
+                              'ui_tree_path':'tree.json',
+                              'action':{'action_type':'click', 'target_text':'查看'}}]}
+            annotation.write_text(json.dumps(body)); cache = root / 'fingerprints.json'
+            original_sha = duplicates.sha
+            def source_sha(marker):
+                return lambda path: marker if Path(path) == Path(duplicates.__file__) else original_sha(path)
+            with patch.object(duplicates, 'sha', side_effect=source_sha('old-source')):
+                initial = duplicates.analyze_inputs([annotation], cache=cache)
+            with patch.object(duplicates, 'sha', side_effect=source_sha('new-source')), \
+                    patch.object(duplicates, 'dhash', side_effect=AssertionError('cache must be reused')):
+                reused = duplicates.analyze_inputs([annotation], cache=cache)
+            self.assertEqual(reused['search']['cache_hits'], 1)
+            self.assertEqual(initial['rows'], reused['rows'])
+            body['task_instruction'] = '核对另一项结果'; annotation.write_text(json.dumps(body))
+            changed = duplicates.analyze_inputs([annotation], cache=cache)
+            self.assertEqual(changed['search']['cache_hits'], 0)
+
+            profile = root / 'profile.json'; profile.write_text('{}')
+            plan = {'schema_version':'webcollect-sampling-plan-1', 'state_directory':str(root / 'state'),
+                    'contract_sha256':sampling.fingerprint()[1],
+                    'profile':{'path':str(profile), 'sha256':file_sha(profile)},
+                    'dataset':str(dataset), 'candidate_package_sha256':sampling.package_files(dataset),
+                    'policy':dict(sampling.DEFAULT_POLICY),
+                    'implementation_sha256':{'source':'before'}, 'producer_implementation_sha256':{'source':'before'}}
+            plan['plan_sha256'] = object_sha256(plan)
+            plan_path = root / 'plan.json'; plan_path.write_text(json.dumps(plan))
+            ledger = Mock(path=root / 'ledger.sqlite3')
+            identities = []
+            ledger.enqueue.side_effect = lambda kind, payload: identities.append(payload) or object_sha256([kind,payload])
+            ledger.get.return_value = {'state':'done', 'result':{'plan_file':str(plan_path)}}
+            for source in ('before', 'after'):
+                with patch.object(sampling, 'implementation', return_value={'source':source}), \
+                        patch.object(sampling, 'producer_implementation', return_value={'source':source}):
+                    self.assertEqual(sampling.prepare(ledger, dataset, root / 'out', profile=profile),
+                                     {'plan_file':str(plan_path)})
+            self.assertEqual(identities[0], identities[1]); ledger.claim.assert_not_called()
+            self.assertNotIn('implementation', identities[0]); self.assertNotIn('producer', identities[0])
+            annotation.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'Candidate set changed'):
+                sampling.verify_plan(plan)
+
 
 
 if __name__ == '__main__':

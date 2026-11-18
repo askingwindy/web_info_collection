@@ -561,13 +561,13 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         from webcollect.candidate_feedback import summarize_scope
         feedback=previous.get('feedback') if previous else summarize_scope(feedback_input)
     else:feedback=previous.get('feedback')
-    if True and not previous:
+    if (not previous):
         from .producer_evidence import consumer_feedback
         feedback=consumer_feedback(pool,feedback)
     goals_ref=reference(goals_path) if goals_path else None
     frozen={'version':VERSION,'model_protocol':PROTOCOL,'table_policy':POLICY,'goal':GOAL,'system':SYSTEM,'tools':TOOLS,
         'site_protocol':'producer-site-classification-2',
-        **({'id_system':ID_SYSTEM,'directory_limit_per_site':4} if True else {}),
+        **({'id_system':ID_SYSTEM,'directory_limit_per_site':4}),
         'config_sha256':object_sha256(config),'sources':list(sources),'directions':list(directions),'queries':list(queries),
         'target':target,'max_searches':max_searches,'max_batches':max_batches,'batch_size':batch_size,'search_engine':search_engine,
         'stall_threshold':stall_threshold,'per_direction_cap':per_direction_cap,'entry_selection':entry_selection,
@@ -594,33 +594,28 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         plan_version = 'producer-category-query-4' if producer_optimization else 'producer-category-query-3' if public_business else 'producer-category-query-2' if independent else 'producer-category-query-1'
         frozen['category_query_plan']={'version':plan_version,
                                        'categories':list(categories)}
-    if True:
-        from .producer_evidence import SELECTION_SYSTEM
-        frozen['site_protocol']='producer-site-classification-5' if True else 'producer-site-classification-4'
-        frozen['id_system']=SELECTION_SYSTEM
-        frozen['ranking_policy']='business-diversity-unknown-fifth-1'
-        if True:
-            from . import producer_business_content as purpose
-            PURPOSE_SYSTEM,PURPOSE_VERSION=purpose.SYSTEM_V3,purpose.VERSION_V3
-            frozen.update(purpose_version=PURPOSE_VERSION,purpose_system=PURPOSE_SYSTEM,purpose_path='rule_then_model')
-            if True:
-                frozen.update(purpose_path='business_value_once',purpose_is_advisory=True,
-                              classification_reinspection=False)
-            if previous and previous.get('purpose_version')!=PURPOSE_VERSION:
-                raise ValueError('Restore original frozen purpose protocol; no replacement of prior batch')
-    if True:
-        from .page_consumption import VERSION as consumption_policy
-        # Sealed batches resume with their frozen consumption policy verbatim;
-        # a new batch freezes the current stable name.
-        frozen['page_consumption_policy']=previous.get('page_consumption_policy') or consumption_policy
-        frozen['page_consumption_scope']='entry_and_target'
-        if True:frozen['page_observation_policy']='producer-shared-observation-1'
+    from .producer_evidence import SELECTION_SYSTEM
+    frozen['site_protocol']='producer-site-classification-5'
+    frozen['id_system']=SELECTION_SYSTEM
+    frozen['ranking_policy']='business-diversity-unknown-fifth-1'
+    from . import producer_business_content as purpose
+    PURPOSE_SYSTEM,PURPOSE_VERSION=purpose.SYSTEM_V3,purpose.VERSION_V3
+    frozen.update(purpose_version=PURPOSE_VERSION,purpose_system=PURPOSE_SYSTEM,purpose_path='rule_then_model')
+    frozen.update(purpose_path='business_value_once',purpose_is_advisory=True,
+                  classification_reinspection=False)
+    if previous and previous.get('purpose_version')!=PURPOSE_VERSION:
+        raise ValueError('Restore original frozen purpose protocol; no replacement of prior batch')
+    from .page_consumption import VERSION as consumption_policy
+    # Sealed batches resume with their frozen consumption policy verbatim;
+    # a new batch freezes the current stable name.
+    frozen['page_consumption_policy']=previous.get('page_consumption_policy') or consumption_policy
+    frozen['page_consumption_scope']='entry_and_target'
+    frozen['page_observation_policy']='producer-shared-observation-1'
     if independent:
-        frozen['site_protocol']='producer-site-classification-5' if True else 'producer-site-classification-4' if True else 'producer-site-classification-3'
+        frozen['site_protocol']='producer-site-classification-5'
         frozen['probe_search_hold'] = probe_search_hold
         frozen['dispatch_holds'] = reference(dispatch_holds) if dispatch_holds else None
-    if True:
-        frozen.update(site_protocol='producer-site-classification-6', page_eligibility_policy='producer-page-eligibility-2',frame_capture_policy='producer-frame-sync-1',redirect_policy='producer-redirect-boundary-2')
+    frozen.update(site_protocol='producer-site-classification-6', page_eligibility_policy='producer-page-eligibility-2',frame_capture_policy='producer-frame-sync-1',redirect_policy='producer-redirect-boundary-2')
     rechecks = {}
     for source in sources:
         verify_evidence([source['reference']])
@@ -639,7 +634,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         if chain:assert_current_evidence(chain,[goals_ref])
     with pool.pool.connect() as con:
         session_row=con.execute('SELECT config FROM runs WHERE id=?',(session,)).fetchone()
-    if session_row and True:
+    if (session_row):
         original_session=json.loads(session_row[0])
         if original_session.get('config_sha256')!=object_sha256(config) or original_session.get('ledger')!=str(Path(ledger_path).resolve()):
             raise ValueError('Original producer session config/ledger binding differs')
@@ -667,14 +662,13 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
     isolated=(ledger.producer_policy or {}).get('deferred',{}) if per_task else {}
     excluded={isolation_host(u,aliases) for u in excluded_applications}
     excluded.update(isolation_host(u,aliases) for item in isolated.values() for u in item['source_urls'])
-    historical={u for h in sources for u in h.get('excluded_entry_identities',[])} if True else set()
+    historical={u for h in sources for u in h.get('excluded_entry_identities',[])}
     held_entries=set()
-    if True:
-        with ledger.connect() as con:
-            # Read original jobs, including pre-visit failures absent from the
-            # visit table. Their states/counters are never reset.
-            for original in con.execute("SELECT payload FROM jobs WHERE kind IN ('application-evidence-get','candidate-entry-http') AND state!='done' AND attempts>0"):
-                held_entries.add(entry_identity(json.loads(original['payload'])['uri']))
+    with ledger.connect() as con:
+        # Read original jobs, including pre-visit failures absent from the
+        # visit table. Their states/counters are never reset.
+        for original in con.execute("SELECT payload FROM jobs WHERE kind IN ('application-evidence-get','candidate-entry-http') AND state!='done' AND attempts>0"):
+            held_entries.add(entry_identity(json.loads(original['payload'])['uri']))
     for h in [*sources, *([{'dispatch_holds':{'reference':frozen['dispatch_holds']}}] if independent and frozen['dispatch_holds'] else [])]:
         holds=h.get('dispatch_holds')
         if holds:
@@ -704,9 +698,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             else:
                 refs=[hit['reference'],selection_ref]+([hit['raw_html']] if hit.get('raw_html') else [])
                 site=sites.get(aid)
-                source={'origin':'glm_agent' if True or entry_selection=='model' or independent else 'codex_session','run_id':session,
+                source={'origin':'glm_agent','run_id':session,
                     'protocol':'candidate-producer-3','model_protocol':PROTOCOL,'source_pipeline':VERSION,'table_policy':POLICY,
-                    'expected_site_decision_id':hit.get('site_decision_id') if True else (site or {}).get('decision_id'),
+                    'expected_site_decision_id':hit.get('site_decision_id'),
                     'page_type':row['page_type'],'page_evidence':{**row,'reference':hit['reference'],
                         'raw_html':hit.get('raw_html'),'href':hit.get('href'),'anchor':hit.get('anchor'),'heading':hit.get('heading'),
                         'observed_on':hit.get('observed_on'),'base_uri':hit.get('base_uri'),'language_hint':hit.get('language_hint','UNKNOWN')},
@@ -717,25 +711,18 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     source['excluded_entry_patterns'] = [pattern.pattern for pattern in entry_exclusions]
                 if simplified_chinese_only:
                     source['simplified_chinese_only'] = True
-                if True:
-                    source['business_diagnostic']={k:hit.get(k) for k in ('business_role_hint','template_identity')}
-                    source['business_diagnostic']['acceptance']='UNKNOWN: operation differences require consumer evidence'
+                source['business_diagnostic']={k:hit.get(k) for k in ('business_role_hint','template_identity')}
+                source['business_diagnostic']['acceptance']='UNKNOWN: operation differences require consumer evidence'
                 if independent:
                     source['required_supply_kind']='project_first_discovery_output'
-                if True:
-                    decision_receipt=load_json(selection_ref['path'])
-                    record=next(r for r in decision_receipt['records'] if r['link_id']==hit['link_id'])
-                    source['purpose_evidence']=record
-                    if True:
-                        source['purpose_is_advisory']=True
-                        source['business_qualification']=record['business_qualification']
-                    source['selection_method']=record['method']
-                    target_ev=record['target_evidence']
-                    refs.extend(target_ev[k] for k in ('document','raw_html','observation','rendered_dom','screenshot') if k in target_ev)
-                elif entry_selection=='model':
-                    decision_receipt=load_json(selection_ref['path'])
-                    source.update(model_job_id=job_id,model_request_id=decision_receipt['model_request_id'],
-                                  tool_call_id=decision_receipt['tool_call_id'])
+                decision_receipt=load_json(selection_ref['path'])
+                record=next(r for r in decision_receipt['records'] if r['link_id']==hit['link_id'])
+                source['purpose_evidence']=record
+                source['purpose_is_advisory']=True
+                source['business_qualification']=record['business_qualification']
+                source['selection_method']=record['method']
+                target_ev=record['target_evidence']
+                refs.extend(target_ev[k] for k in ('document','raw_html','observation','rendered_dom','screenshot') if k in target_ev)
                 if chain:assert_current_evidence(chain,refs)
                 if entry_identity(candidate['entry_url']) in held_entries or isolation_host(candidate['entry_url'],aliases) in excluded:
                     outcome=pool.record_row_conclusion(header,result='HELD',reason='original unresolved archived source; no GET dispatch',original_row=row)
@@ -749,10 +736,10 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     if historical:
                         from .entry_access import check_entry
                         shared=None
-                        if True and not recheck:
+                        if (not recheck):
                             from .producer_observation import entry_receipt
                             shared=entry_receipt(pool,ledger,candidate['entry_url'],root)
-                            if True and shared is None:
+                            if (shared is None):
                                 raise OutcomeUnknown('Original supply observation missing; no replacement GET')
                         access,access_ref=shared if shared else check_entry(ledger,run,candidate['entry_url'],root,recheck=recheck)
                     if historical and access.get('result')=='PASS' and entry_identity(access['landed_uri']) in historical:
@@ -799,12 +786,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
         """Observation prep only; call-time imports keep the original patch points.
         Each call owns its asyncio.Runner/browser, so it is safe from the
         single prefetch worker; no Page/browser/connection is shared."""
-        if True:
-            if True:
-                from .producer_observation import screen
-            else:
-                from .page_consumption import screen
-            return screen(pool,ledger,links,root,**({'eligibility_policy':'producer-page-eligibility-2'} if True else {}),**({'read_policy':READ_POLICY} if producer_optimization else {}))
+        from .producer_observation import screen
+        return screen(pool,ledger,links,root,**({'eligibility_policy':'producer-page-eligibility-2'}),**({'read_policy':READ_POLICY} if producer_optimization else {}))
         return links,None
 
     def timed_screen_stage(links):
@@ -860,7 +843,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
             originals=con.execute(
                 "SELECT r.id,r.job_id,r.state,r.error,r.response,r.usage,r.reserved_tokens,r.reserved_cost,j.payload "
                 "FROM model_requests r JOIN jobs j ON j.id=r.job_id "
-                "WHERE r.state='unknown' AND r.error='HTTPError:400' AND j.kind='ai-target-page-purpose-1' "
+                "WHERE r.state IN ('unknown','failed') AND r.error='HTTPError:400' AND j.kind='ai-target-page-purpose-1' "
                 "AND json_extract(j.payload,'$.input.scope')=?",(scope,)).fetchall()
         for row in originals:
             response=json.loads(row['response'] or '{}');original=json.loads(row['payload'])['input']
@@ -870,7 +853,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 raise OutcomeUnknown('Original content refusal source binding differs: '+row['id'])
             receipt={'schema_version':'producer-content-refusal-hold-1','scope':scope,
                      'request_id':row['id'],'job_id':row['job_id'],'state':'HELD',
-                     'original_request_state':'unknown','reason':'provider_content_refusal_1301',
+                     'original_request_state':row['state'],'reason':'provider_content_refusal_1301',
                      'source_uris':urls,'original_input_sha256':object_sha256(original),
                      'original_response':response,'original_usage':row['usage'],
                      'reserved_tokens':row['reserved_tokens'],'reserved_cost':row['reserved_cost'],
@@ -937,7 +920,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                 seeds=[next(h for h in expansion['queue'] if (application_pending_remaining(pool,run,(pool.pool.application(h['uri']) or {}).get('id')) or {'remaining':1})['remaining'] > 0)];search_request_id=query=direction=None
                 pool.pool.checkpoint(run,key+'/input',{'seeds':seeds})
             else:
-                if True and not queries and not directions and not target_categories:
+                if (not queries and (not directions) and (not target_categories)):
                     exhausted=True;break
                 hold=search_channel_hold(pool.pool,session)
                 if hold and not independent:
@@ -959,7 +942,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         decision=next_query(pool.pool,ledger,run,key,target_categories,state,failures,root,
                                             **({'page_feedback':True} if producer_optimization else {}),
                                             **({'independent':True,'public_business':public_business} if independent else {}),
-                                            **({'purpose_grounded':True,**({'purpose_protocol':PROTOCOL} if True else {})} if True else {}))
+                                            **({'purpose_grounded':True,**({'purpose_protocol':PROTOCOL})}))
                     else:decision=policy.next_query(state)
                     if decision is None:exhausted=True;break
                     engine=search_engine;probe=None
@@ -1036,7 +1019,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         eligible.append(h)
                     return eligible
                 eligible=eligible_seeds(seeds)
-                context,errors=site_context(pool,ledger,run,eligible,root,**({'redirect_policy':'producer-redirect-boundary-2'} if True else {}),**({'isolate_homepages':True} if independent or site_expansion else {}), **({'use_seed_uri':bool(unit==0 and seed_sources),'allowed_hosts':allowed_hosts} if site_expansion else {}))
+                context,errors=site_context(pool,ledger,run,eligible,root,**({'redirect_policy':'producer-redirect-boundary-2'}),**({'isolate_homepages':True} if independent or site_expansion else {}), **({'use_seed_uri':bool(unit==0 and seed_sources),'allowed_hosts':allowed_hosts} if site_expansion else {}))
                 failures.extend(errors)
                 if independent and '企业后台与开源演示站' in target_categories:
                     lead_docs=list(context)
@@ -1091,9 +1074,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         failures.append({'application_id':aid,'reason':'homepage_outside_allowed_hosts'});continue
                     documents[aid]={**verify_document(homepage),'reference':homepage['reference']}
                     categories[urlsplit(h['uri']).hostname]=site['category']
-                if True:
-                    documents, directory_errors=(documents,[]) if site_expansion else bounded_directories(pool,ledger,run,documents,eligible,root,aliases,excluded,held_entries)
-                    failures.extend(directory_errors)
+                documents, directory_errors=(documents,[]) if site_expansion else bounded_directories(pool,ledger,run,documents,eligible,root,aliases,excluded,held_entries)
+                failures.extend(directory_errors)
                 if site_expansion:
                     from .application_discovery import homepage_document
                     visited=set(expansion['visited']);offered=set(expansion['offered'])
@@ -1104,7 +1086,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         visited.add(identity)
                         if any(entry_identity(d['uri'])==identity for d in documents.values()):continue
                         try:
-                            doc,ref=homepage_document(ledger,run,h['uri'],root,allowed_hosts=allowed_hosts,**({'redirect_policy':'producer-redirect-boundary-2'} if True else {}))
+                            doc,ref=homepage_document(ledger,run,h['uri'],root,allowed_hosts=allowed_hosts,**({'redirect_policy':'producer-redirect-boundary-2'}))
                             if not host_allowed(doc['uri']):
                                 raise ValueError('Expansion redirect outside allowed_hosts')
                             aid=pool.pool.application(h['uri'])['id']
@@ -1140,7 +1122,7 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                             failures.append({'uri':h['uri'],'stage':'producer_page_policy','reason':'NO_CONSUME'});continue
                         if entry_identity(h['uri']) in historical:continue
                         if site_expansion and entry_identity(h['uri']) in offered:continue
-                        if True and entry_identity(h['uri']) in held_entries:
+                        if (entry_identity(h['uri']) in held_entries):
                             failures.append({'uri':h['uri'],'stage':'target_preflight','reason':'original_unsettled_page_job_no_dispatch'})
                             continue
                         if entry_identity(h['uri']) in link_seen:continue
@@ -1164,9 +1146,8 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         else:filtered.append(h)
                     links=filtered
                 links=rank_links(links,categories,counts,feedback)
-                if True:
-                    from .producer_evidence import diverse_order
-                    links=diverse_order(links,version='2') if True else diverse_order(links)
+                from .producer_evidence import diverse_order
+                links=diverse_order(links,version='2')
                 links=[h for h in links if not language_or_login(h)]
                 # Caller seeds are also legitimate first-party entries. Their page
                 # role remains UNKNOWN unless original HTML provides evidence.
@@ -1210,10 +1191,9 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                     failures.append({'stage':'content_refusal','chunk':chunk_key,**refusal});continue
                 chunk=[h for h in chunk if not pool.consumption(h['uri'],kind='target' if goals else 'entry')]
                 if not chunk:continue
-                if True:chunk=chunk[:max(0,target-new_count())]
-                if True:
-                    chunk=[{**h,'site_category':sites.get(h['application_id'])['category'],
-                            'site_decision_id':sites.get(h['application_id'])['decision_id']} for h in chunk]
+                chunk=chunk[:max(0,target-new_count())]
+                chunk=[{**h,'site_category':sites.get(h['application_id'])['category'],
+                        'site_decision_id':sites.get(h['application_id'])['decision_id']} for h in chunk]
                 saved_selection=pool.pool.checkpoint(run,chunk_key+'/selection')
                 fresh_metrics=None
                 if saved_selection is None:
@@ -1227,88 +1207,60 @@ def produce(config, *, pool_path, ledger_path, output, history_set, queries, sou
                         fresh_metrics={'schema_version':'webcollect-producer-pipeline-metrics-1','pipeline':producer_pipeline,
                                        'unit':unit,'chunk_key':chunk_key,'input_links':len(chunk)}
                     preflight_skips=[];preflight_reference=None
-                    if True:
-                        from .producer_business_content import classify
-                        classify_links=chunk;screen_records=None
-                        if True:
-                            screen_input=chunk
-                            if prefetched is not None:
-                                # Consume the dispatch-time preflight decisions and
-                                # the settled probes; the follow-up screen reuses
-                                # settled requests without re-dispatching them.
-                                preflight_skips=prefetched['skip_records']
-                                preflight_reference=prefetched['skip_reference']
-                                skipped_ids={l['link_id'] for r in preflight_skips for l in r['skipped_links']}
-                                if prefetched['future'] is not None:
-                                    t0=time.monotonic()
-                                    try:
-                                        _,_,worker_seconds,worker_started=prefetched['future'].result()
-                                    finally:
-                                        if fresh_metrics is not None:fresh_metrics['wait_prefetch_seconds']=round(time.monotonic()-t0,3)
-                                    if fresh_metrics is not None:
-                                        fresh_metrics['screen_started_at']=worker_started
-                                        fresh_metrics['screen_seconds']=round(worker_seconds,3)
-                                screen_input=[h for h in chunk if h['link_id'] not in skipped_ids]
-                            elif overlap:
-                                admitted,skips,snapshots=preflight_partition(chunk,{})
-                                preflight_skips=skips;preflight_reference=save_preflight_skips(chunk_key,skips,key)
-                                screen_input=admitted
-                                if fresh_metrics is not None:fresh_metrics['pending_snapshot']=snapshots
-                            if fresh_metrics is not None:fresh_metrics.setdefault('screen_started_at',time.time())
+                    from .producer_business_content import classify
+                    classify_links=chunk;screen_records=None
+                    screen_input=chunk
+                    if prefetched is not None:
+                        # Consume the dispatch-time preflight decisions and
+                        # the settled probes; the follow-up screen reuses
+                        # settled requests without re-dispatching them.
+                        preflight_skips=prefetched['skip_records']
+                        preflight_reference=prefetched['skip_reference']
+                        skipped_ids={l['link_id'] for r in preflight_skips for l in r['skipped_links']}
+                        if prefetched['future'] is not None:
                             t0=time.monotonic()
-                            if screen_input:
-                                classify_links,screen_records=screen_stage(screen_input)
-                            else:
-                                classify_links,screen_records=[],[]
+                            try:
+                                _,_,worker_seconds,worker_started=prefetched['future'].result()
+                            finally:
+                                if fresh_metrics is not None:fresh_metrics['wait_prefetch_seconds']=round(time.monotonic()-t0,3)
                             if fresh_metrics is not None:
-                                fresh_metrics['screen_seconds']=round(fresh_metrics.get('screen_seconds',0.0)+time.monotonic()-t0,3)
-                                fresh_metrics['preflight_skipped']=sum(len(r['skipped_links']) for r in preflight_skips)
-                        # One-batch lookahead: the next chunk screen starts now,
-                        # behind this chunk's classify/publish, in the same unit.
-                        dispatch_prefetch(chunk,start,key)
-                        classify_t0=time.monotonic() if overlap else None
-                        try:
-                            rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'policy':'producer-business-value-3'} if True else {}),**({'pool':pool} if True else {})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
-                        except OutcomeUnknown:
-                            refusal=content_refusal_hold(chunk_key,prepared['links'][start:start+batch_size])
-                            if not refusal:raise
-                            failures.append({'stage':'content_refusal','chunk':chunk_key,**refusal})
-                            continue
-                        if fresh_metrics is not None and classify_t0 is not None:
-                            fresh_metrics['classify_seconds']=round(time.monotonic()-classify_t0,3)
-                        if True:
-                            selection_body['page_consumption']=screen_records
-                        job_id=selection_body['calls'][0]['job_id'] if selection_body['calls'] else 'purpose-entries/'+object_sha256([run,chunk_key])
-                    elif entry_selection=='model' and True:
-                        original_jobs={h.get('settled_selection_job_id') for h in seeds if h.get('settled_selection_job_id')}
-                        if len(original_jobs)>1:raise ValueError('One settled recovery job per unit required')
-                        from .discovery_agent import SettledSelectionRejected
-                        try:rows,selection_body=select_entries(ledger,chunk,run+'/'+chunk_key,next(iter(original_jobs),None),
-                                                                **({'categories':target_categories} if independent else {}),
-                                                                **({'protocol':PROTOCOL} if True else {}))
-                        except SettledSelectionRejected as error:
-                            rows=[];selection_body={'job_id':error.receipt['job_id'],'arguments':{'entries':[]},'settled_rejection':error.receipt}
-                        job_id=selection_body['job_id']
-                    elif entry_selection=='model':
-                        payload={'version':PROTOCOL,'scope':run+'/'+chunk_key,'goal':GOAL,'limit':min(batch_size,target-new_count()),
-                            'links':[{k:h.get(k) for k in ('link_id','evidence_id','anchor','heading','language_hint','ranking_reason')} for h in chunk]}
-                        jid,envelope=model_tool_decision(ledger,ModelGateway(ledger),'ai-grounded-entry-links-1',payload,TOOLS,system=SYSTEM)
-                        rows=envelope['arguments']['entries'];job_id=jid
-                        selection_body={'payload':payload,'job_id':jid,'model_request_id':envelope['request_id'],
-                                        'tool_call_id':envelope['tool_call_id'],'arguments':envelope['arguments']}
+                                fresh_metrics['screen_started_at']=worker_started
+                                fresh_metrics['screen_seconds']=round(worker_seconds,3)
+                        screen_input=[h for h in chunk if h['link_id'] not in skipped_ids]
+                    elif overlap:
+                        admitted,skips,snapshots=preflight_partition(chunk,{})
+                        preflight_skips=skips;preflight_reference=save_preflight_skips(chunk_key,skips,key)
+                        screen_input=admitted
+                        if fresh_metrics is not None:fresh_metrics['pending_snapshot']=snapshots
+                    if fresh_metrics is not None:fresh_metrics.setdefault('screen_started_at',time.time())
+                    t0=time.monotonic()
+                    if screen_input:
+                        classify_links,screen_records=screen_stage(screen_input)
                     else:
-                        rows=[rule_decision(h) for h in chunk if h['anchor'] or h['heading']]
-                        job_id='caller-entries/'+object_sha256([run,chunk_key,rows])
-                        selection_body={'version':VERSION,'method':'rule','arguments':{'entries':rows}}
-                    if True:
-                        if True:
-                            # Source binding and target purpose are separate evidence layers.
-                            verified,rejected=isolate_decisions([{**r,'page_type':'UNKNOWN'} for r in rows],chunk)
-                            lookup={r['link_id']:r for r in rows}
-                            bound=[(h,lookup[r['link_id']]) for h,r in verified]
-                        else:bound,rejected=isolate_decisions(rows,chunk)
-                        selection_body['rejected_rows']=rejected
-                    else:bound=bind_decisions(rows,chunk)
+                        classify_links,screen_records=[],[]
+                    if fresh_metrics is not None:
+                        fresh_metrics['screen_seconds']=round(fresh_metrics.get('screen_seconds',0.0)+time.monotonic()-t0,3)
+                        fresh_metrics['preflight_skipped']=sum(len(r['skipped_links']) for r in preflight_skips)
+                    # One-batch lookahead: the next chunk screen starts now,
+                    # behind this chunk's classify/publish, in the same unit.
+                    dispatch_prefetch(chunk,start,key)
+                    classify_t0=time.monotonic() if overlap else None
+                    try:
+                        rows,selection_body=classify(ledger,classify_links,run+'/'+chunk_key,root,**({'policy':'producer-business-value-3'}),**({'pool':pool})) if classify_links else ([],{'records':[],'calls':[],'version':PURPOSE_VERSION})
+                    except OutcomeUnknown:
+                        refusal=content_refusal_hold(chunk_key,prepared['links'][start:start+batch_size])
+                        if not refusal:raise
+                        failures.append({'stage':'content_refusal','chunk':chunk_key,**refusal})
+                        continue
+                    if fresh_metrics is not None and classify_t0 is not None:
+                        fresh_metrics['classify_seconds']=round(time.monotonic()-classify_t0,3)
+                    selection_body['page_consumption']=screen_records
+                    job_id=selection_body['calls'][0]['job_id'] if selection_body['calls'] else 'purpose-entries/'+object_sha256([run,chunk_key])
+                    # Source binding and target purpose are separate evidence layers.
+                    verified,rejected=isolate_decisions([{**r,'page_type':'UNKNOWN'} for r in rows],chunk)
+                    lookup={r['link_id']:r for r in rows}
+                    bound=[(h,lookup[r['link_id']]) for h,r in verified]
+                    selection_body['rejected_rows']=rejected
                     items=[{'candidate':{'schema_version':VERSION2,'candidate_kind':'target' if g else 'entry','entry_url':h['uri'],
                                         'requested_goal':g['requested_goal'] if g else None},
                             'application_id':h['application_id'],'hit':h,'decision':r,'site_origin':prepared['site_origins'][h['application_id']]}
