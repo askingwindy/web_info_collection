@@ -234,25 +234,39 @@ def is_current_registry(registry):
 
 
 def registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):
+    from .registry_db import history_read_slot
+    with history_read_slot(registry):
+        return _registry_snapshot(scope,registry,exclude_scope=exclude_scope,own_tasks=own_tasks)
+
+
+def _registry_snapshot(scope, registry, *, exclude_scope=None, own_tasks=()):
     assert_registry_scope(scope, registry)
     from .registry_db import history_rows
     from .task_admission import snapshot_rows
     raw_rows, raw_plans = history_rows(registry, include_plans=True)
     rows = snapshot_rows(raw_rows, exclude_scope=exclude_scope, own_tasks=own_tasks)
+    raw_rows.clear()
     # Validate each plan once, retaining the original task equality semantics.
     # This remains a fresh read on every call, including newly registered tasks.
     expected_identity = _chain_identity(scope)
-    allowed = {}
-    for scope_id, raw in raw_plans:
+    pending = {}
+    for row in rows:
+        pending.setdefault(row['scope_id'], []).append(row['task'])
+    plan = raw = None
+    while raw_plans:
+        scope_id, raw = raw_plans.pop()
         plan = json.loads(raw)
         if any(isinstance(bound := plan.get(key, {}).get('history_scope'), dict)
                and bound.get('schema_version') == SCOPE_SCHEMA
                and _chain_identity(bound) == expected_identity
                for key in ('generation', 'observed_workflow_generation')):
-            allowed.setdefault(scope_id, []).extend(plan.get('tasks', []))
-    for row in rows:
-        _require(row['task'] in allowed.get(row['scope_id'], []),
-                 'task was not registered by a plan bound to this current chain')
+            pending[scope_id] = [task for task in pending.get(scope_id, [])
+                                 if task not in plan.get('tasks', [])]
+    _require(not any(pending.values()),
+             'task was not registered by a plan bound to this current chain')
+    # The original equality check is unchanged; decoded historical plans need
+    # not stay resident beside the full task snapshot.
+    del raw_plans, pending, plan, raw
     rows.sort(key=object_sha256)
     return {'registry': str(Path(registry).resolve()), 'rows': rows, 'sha256': object_sha256(rows)}
 

@@ -1451,7 +1451,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     from .current_chain import same_chain
     if current_scope != history_scope and not same_chain(current_scope, history_scope):
         raise ValueError('Historical package population changed since task generation')
-    check_live_m4_history(plan, registry, output)
+    await asyncio.to_thread(check_live_m4_history,plan,registry,output)
     comparison_history = (_without_own_saved_results(plan, registry, output, customer_history)
         if history_scope['schema_version'] == SCOPE_SCHEMA else customer_history)
     has_legacy_admissions = any('task_admission' in task for task in plan['tasks'])
@@ -1553,7 +1553,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
                 scheduled=load_json(pf/'scheduled-plan.json')
                 save_json(publication,publish_plan(scheduled,catalog))
         with preparation_phase(timing, "live_history_recheck"):
-            check_live_m4_history(plan, registry, output)
+            await asyncio.to_thread(check_live_m4_history,plan,registry,output)
             if has_legacy_admissions:
                 verify_task_admissions(plan, catalog, registry, output)
         result=await collect_m4(plan_path if react_only else pf/'scheduled-plan.json',output/'capture',registry,

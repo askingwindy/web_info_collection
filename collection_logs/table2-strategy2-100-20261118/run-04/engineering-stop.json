@@ -1,0 +1,5 @@
+{
+  "at": 1794964879.441448,
+  "reason": "Repeated local DNS subprocess pipe EOFError before HTTP dispatch; drain before repair",
+  "original_rows_preserved": true
+}

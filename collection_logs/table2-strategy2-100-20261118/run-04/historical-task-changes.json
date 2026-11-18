@@ -1,0 +1,150 @@
+{
+  "kind": "changed_fields_projection",
+  "source": "run-04/historical-task-transitions.json",
+  "rows": [
+    {
+      "task_key": "117fe428a19c670a0b1792e5d5f02bdf31c9dde035fa0a258da512807165f1cf",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.020538
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "e0fd9017541ba2c579a32837d7a98d8a8f6d844cc841f465dea0f8cbf3d9c876",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.136665
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "093a3203c92153596feedfe9529bef82e612103fd1497cc18a2cc4ab17b31e30",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.0115561
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "aeb3c3eb6caa10f698fea648f8b6c8dcb72323dede7c947f2ffedb8e813f7d91",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.145652
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "23ecfd932f76021464c87b5412dd76012f30507d5c7bd97d127bbb484877cf2c",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.188915
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "dc2a85e647e892f5bbdb4f895084c3d82304844deb2e62606a45bfd78dbd821f",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805794.998162
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "4bcb85a6d245673979f7749cca7d178fb59a4d96bb015bc2243f2690778da7c2",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.1305711
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    },
+    {
+      "task_key": "dc13fc44354d4ecc40efaa8a0e5d3f66e65672eeeeb9678987ef61da5320c539",
+      "changed_fields": [
+        "status",
+        "quota_reserved",
+        "next_eligible_at"
+      ],
+      "before": {
+        "status": "reserved",
+        "quota_reserved": 1,
+        "next_eligible_at": 1794805795.156172
+      },
+      "after": {
+        "status": "needs_replan",
+        "quota_reserved": 0,
+        "next_eligible_at": 1794964599.451045
+      }
+    }
+  ]
+}

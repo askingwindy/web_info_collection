@@ -1,0 +1,70 @@
+{
+  "at": 1794966713.8950112,
+  "selected": 100,
+  "unique_claims": 100,
+  "claim_states": {
+    "failed": 43,
+    "reconcile": 57
+  },
+  "formal_attempts": 29,
+  "attempt_states": {
+    "rejected": 29
+  },
+  "model_requests": 103,
+  "model_states": {
+    "invalid_response": 20,
+    "succeeded": 83
+  },
+  "model_requests_not_bound_to_current_claims_or_attempts": [],
+  "input_tokens": 2062007,
+  "output_tokens": 76226,
+  "missing_usage": 0,
+  "all_collectors_exited": true,
+  "source_commit": "6fa9c93c820771461e6486d38452152f841e6696",
+  "funnel": {
+    "claimed": {
+      "independent": 100,
+      "prefix": 100
+    },
+    "first_frame": {
+      "independent": 70,
+      "prefix": 70
+    },
+    "template_selected": {
+      "independent": 69,
+      "prefix": 69
+    },
+    "model_http": {
+      "independent": 28,
+      "prefix": 28
+    },
+    "initial_plan_accepted": {
+      "independent": 13,
+      "prefix": 13
+    },
+    "effective_steps_ge5": {
+      "independent": 4,
+      "prefix": 4
+    },
+    "goal_verified": {
+      "independent": 0,
+      "prefix": 0
+    },
+    "formally_saved": {
+      "independent": 0,
+      "prefix": 0
+    }
+  },
+  "integrity": "FAILED",
+  "issues": [
+    "unsettled_claims"
+  ],
+  "saved": 0,
+  "cost": "UNKNOWN",
+  "source_report": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/run-05/funnel.json",
+  "reconciliation_receipt": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/final-reconciliation/receipt.json",
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "published": false,
+  "acceptance": "UNKNOWN"
+}

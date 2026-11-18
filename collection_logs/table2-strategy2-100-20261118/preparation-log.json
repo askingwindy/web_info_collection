@@ -1,0 +1,18 @@
+{
+  "authorization": "100 fixed Table2 candidates, strategy2, 20 processes; engineering fixes/restarts allowed; accuracy unchanged",
+  "selection_initial_full_scan": {
+    "interrupted_by_operator": true,
+    "production_writes": 0,
+    "reason": "full inventory and unrelated history audit was slow; replaced with bounded candidate reads",
+    "rss_bytes_approx": 4700000000
+  },
+  "code_commit": "6476d61",
+  "unrelated_user_edits": "initial strategy3 design edit left untouched",
+  "protected_expected": {
+    "producer_unknown": 19,
+    "producer_reserved": 2,
+    "consumer_unknown": 43,
+    "historical_claims": 807
+  },
+  "updated": 1794961725.893443
+}

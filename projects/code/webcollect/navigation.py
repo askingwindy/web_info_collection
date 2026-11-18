@@ -133,6 +133,7 @@ from .runtime import domain_key
 
 class NavigationTimeoutError(TimeoutError):
     """A timeout while dispatching an explicitly accounted initial navigation."""
+    failure_class = 'network'
     def __init__(self, uri, purpose, timeout_seconds):
         self.uri, self.purpose, self.timeout_seconds = uri, purpose, timeout_seconds
         super().__init__(f'Initial navigation timed out after {timeout_seconds:g}s '
@@ -140,6 +141,7 @@ class NavigationTimeoutError(TimeoutError):
 
 
 class NavigationHTTPError(ValueError):
+    failure_class = 'network'
     def __init__(self, uri, status):
         self.uri, self.status = uri, status
         super().__init__('Initial navigation HTTP status ' + str(status))
@@ -250,6 +252,11 @@ class BatchNavigation:
             if response is not None and response.status >= 400:
                 raise NavigationHTTPError(uri, response.status)
         except BaseException as error:
+            # Chromium reports transport errors with a native net::ERR code.
+            # Preserve the exception and its diagnostics, but classify this
+            # initial page failure as a site/network outcome.
+            if 'net::ERR_' in str(error):
+                error.failure_class = 'network'
             self.ledger.settle_visit(visit,
                 state='unknown' if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)) else 'failed',
                 # A response event may precede a DCL timeout. Preserve that

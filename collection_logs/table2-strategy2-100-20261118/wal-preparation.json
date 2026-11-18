@@ -1,0 +1,36 @@
+{
+  "started": 1794961804.693269,
+  "finished": 1794961875.840779,
+  "stores": [
+    {
+      "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/candidate-pool.sqlite3",
+      "backup": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/store-backup/candidate-pool.sqlite3",
+      "previous": "wal",
+      "journal_mode": "wal"
+    },
+    {
+      "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/producer-jobs.sqlite3",
+      "backup": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/store-backup/producer-jobs.sqlite3",
+      "previous": "delete",
+      "journal_mode": "wal"
+    },
+    {
+      "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/consumer-jobs.sqlite3",
+      "backup": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/store-backup/consumer-jobs.sqlite3",
+      "previous": "delete",
+      "journal_mode": "wal"
+    },
+    {
+      "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/production-registry.sqlite3",
+      "backup": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/store-backup/production-registry.sqlite3",
+      "previous": "delete",
+      "journal_mode": "wal"
+    },
+    {
+      "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/site-facts.sqlite3",
+      "backup": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/store-backup/site-facts.sqlite3",
+      "previous": "delete",
+      "journal_mode": "wal"
+    }
+  ]
+}

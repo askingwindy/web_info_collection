@@ -1,5 +1,7 @@
 # WebCollect
 
+2026-11-18 Table2 策略2固定100次、20进程采集已结束：工程修复与实际结果见[运行记录](docs/Table2策略2百次采集运行记录-20261118.md)，采集过程和结果日志见 [Git 日志归档](collection_logs/table2-strategy2-100-20261118/README.md)。本轮未调整规划准确度；数据库、截图和原始模型请求保留本地。下述 S1–S6 审核结论保持其原范围。
+
 2026-11-18 当前稳定性修复状态：**首轮代码修复与独立全代码审核均已结束，整体 REQUIRES_FIXES；6项P1、3项P2必修未关闭，另有1项P3提醒，S1–S6尚未完成验收。** 逐项进度、验证边界及关闭清单见[实施说明](docs/采集链路稳定性修复实施说明-20261117.md)，依据见[独立审核](verify_results/collection-stability-repair-20261117-r01/independent-full-code-review.md)。20本地子进程约183秒零锁错误及核心50项通过仅为隔离证据；真实Muxtly/Wiki各50页与固定100页基线仍NOT_RUN。QC/人审NOT_RUN、发布false、验收UNKNOWN；不据旧运行记录或离线PASS恢复采集。下文较早日期内容保留历史含义。
 
 2026-11-15 候选池并发锁修复：新池默认 WAL；已有本地池在全部使用者退出后备份并调用 `SitePool.enable_wal()`，不要在 worker 中重复切换。已存在的 checkpoint 和成功工具收据只读复用，新增写入仍在短事务内复核，UNKNOWN/reserved 不重发。本轮 Muxtly 已按用户要求结束并保留 903 页；Wiki 独占 20 个后台生产者槽，累计目标 5000 个有效业务页。实际进程与产量读原运行目录的 `latest-active.json` / `status.py`，修复验证见 `verify_results/wiki-lock-repair-20261115-230850/`。

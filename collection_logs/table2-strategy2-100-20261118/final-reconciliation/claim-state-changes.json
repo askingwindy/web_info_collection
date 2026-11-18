@@ -1,0 +1,35 @@
+{
+  "kind": "claim_state_projection",
+  "sources": [
+    "final-reconciliation/claim-before.json",
+    "final-reconciliation/claim-after.json"
+  ],
+  "omitted_fields": "full source payload, binding and expired lease token",
+  "changed_fields": [
+    "reason",
+    "state",
+    "updated"
+  ],
+  "before": {
+    "claim_id": "fbb44604-1e02-466c-8736-d110bc1e6154",
+    "candidate_id": "candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0",
+    "worker_id": "fixed-20261118084955-79a8ade5-15",
+    "version": 1,
+    "state": "consuming",
+    "stage": "observation",
+    "reason": null,
+    "created": 1794963143.393122,
+    "updated": 1794963552.286996
+  },
+  "after": {
+    "claim_id": "fbb44604-1e02-466c-8736-d110bc1e6154",
+    "candidate_id": "candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0",
+    "worker_id": "fixed-20261118084955-79a8ade5-15",
+    "version": 1,
+    "state": "reconcile",
+    "stage": "observation",
+    "reason": "lease_expired",
+    "created": 1794963143.393122,
+    "updated": 1794966538.8824499
+  }
+}

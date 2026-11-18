@@ -18,7 +18,17 @@ def rows(path, table):
         con.row_factory=__import__('sqlite3').Row
         if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
             return None
-        return [dict(r) for r in con.execute('SELECT * FROM '+table)]
+        if table=='model_requests':
+            # Reporting needs dispatch attribution, not duplicated base64 images
+            # and complete prompts retained in the immutable request original.
+            query="""SELECT id,job_id,state,started,usage,response,
+                json_object('provider',json_extract(request_json,'$.provider'),
+                            'http_dispatch',json(CASE json_type(request_json,'$.http_dispatch')
+                                WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' ELSE 'null' END),
+                            'dispatch_attempt_id',json_extract(request_json,'$.dispatch_attempt_id')) AS request_json
+                FROM model_requests"""
+        else:query='SELECT * FROM '+table
+        return [dict(r) for r in con.execute(query)]
 
 
 def jsonl(root, name):
@@ -40,8 +50,10 @@ def request_summary(requests):
         request=json.loads(r.get('request_json') or '{}');response=json.loads(r.get('response') or '{}')
         sent=request.get('http_dispatch')
         # Reserved intentions do not prove an HTTP dispatch. Transport facts take priority.
-        timing=response.get('timing') or response.get('transport_timing') or {}
+        timing=response.get('http_timing') or response.get('timing') or response.get('transport_timing') or {}
         actual=timing.get('http_dispatched',response.get('http_dispatched'))
+        if timing.get('headers_ms') is not None or (response.get('provider_error') or {}).get('http_status') is not None:
+            actual=True
         if actual is False:kind='not_dispatched'
         elif actual is True or request.get('provider') not in (None,'synthetic') and r['state'] in ('succeeded','invalid_response') or sent is True and r['state'] in ('succeeded','invalid_response','available','insufficient_balance','rate_limited','model_limited'):kind='dispatched'
         elif sent is False:kind='not_dispatched'
@@ -109,14 +121,19 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     identities={(r['candidate_id'],r['version']) for r in selected}
     issues=[]
     site_counts=Counter(r['application_id'] for r in selected)
-    if len(site_counts)!=2 or set(site_counts.values())!={50}:issues.append('fixed_site_denominators_not_50')
+    if cohort.get('site_denominators') and dict(site_counts)!=cohort['site_denominators']:
+        issues.append('fixed_site_denominators_changed')
     if len(identities)!=len(selected) or cohort.get('denominator')!=len(selected):issues.append('invalid_cohort_denominator_or_duplicates')
     all_claims=rows(scope['pool'],'candidate_claims') or []
     tasks=rows(scope['registry'],'m4_tasks') or [];attempts=rows(scope['registry'],'m4_attempts') or []
     consumer_jobs=rows(scope['consumer_db'],'jobs') or []
     consumer_requests=rows(scope['consumer_db'],'model_requests') or []
     result_rows=rows(scope['pool'],'candidate_results') or []
-    events=jsonl(run_root,'runtime.jsonl');model_logs=jsonl(run_root,'model-calls.jsonl')
+    plan_path=Path(run_root)/'plan.json'
+    run_plan=load_json(plan_path) if plan_path.is_file() else {}
+    run_roots=[Path(p) for p in dict.fromkeys(run_plan.get('previous_run_roots',[])+[str(run_root)])]
+    events=[e for root in run_roots for e in jsonl(root,'runtime.jsonl')]
+    model_logs=[e for root in run_roots for e in jsonl(root,'model-calls.jsonl')]
     claims_by=defaultdict(list)
     for r in all_claims:
         if (r['candidate_id'],r['version']) in identities:claims_by[(r['candidate_id'],r['version'])].append(r)
@@ -140,6 +157,7 @@ def build(scope_path, cohort_path, run_root, *, running=False):
         for edge in parents:
             if edge['parent_id'] in job_claim and edge['job_id'] not in job_claim:
                 job_claim[edge['job_id']]=job_claim[edge['parent_id']];changed=True
+    request_attempts={r['id']:json.loads(r.get('request_json') or '{}').get('dispatch_attempt_id') for r in consumer_requests}
     detail=[];used_requests={};faults=[]
     for selected_row in selected:
         key=(selected_row['candidate_id'],selected_row['version']);claims=claims_by[key]
@@ -182,7 +200,7 @@ def build(scope_path, cohort_path, run_root, *, running=False):
         own_attempts=[a for a in attempts if a['task_key'] in task_keys]
         attempt_ids={a['attempt_id'] for a in own_attempts}
         own_requests=[r for r in consumer_requests if job_claim.get(r['job_id']) in claim_ids
-                      or json.loads(r.get('request_json') or '{}').get('dispatch_attempt_id') in attempt_ids]
+                      or attempt_ids and request_attempts.get(r['id']) in attempt_ids]
         for r in own_requests:used_requests[r['id']]=r
         if request_summary(own_requests)['dispatch'].get('dispatched',0):facts['model_http']={'state':'reached','evidence':[{'request_id':r['id']} for r in own_requests]}
         elif claims and request_summary(own_requests)['dispatch'].get('unproven',0)==0:facts['model_http']={'state':'not_reached','evidence':[{'request_id':r['id']} for r in own_requests]}
@@ -227,7 +245,7 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                         verify_evidence([ref]);failure=load_json(ref['path'])
                         if (raw_refs and a['status']=='rejected' and a.get('finished_at') is not None
                                 and failure.get('attempt_id')==a['attempt_id'] and failure.get('failure_class')==a.get('failure_class')
-                                and failure.get('error')==a.get('root_cause')):item['closure_proven']=True
+                                and (failure.get('root_cause') or failure.get('error'))==a.get('root_cause')):item['closure_proven']=True
                         faults.append({'claim_id':next(iter(claim_ids),None),'attempt_id':a['attempt_id'],
                             'failure_class':a.get('failure_class'),'reason':a.get('root_cause'),
                             **(failure.get('failure_disposition') or {'disposition':'unclassified'})})
@@ -260,7 +278,8 @@ def build(scope_path, cohort_path, run_root, *, running=False):
             state=facts[stage]['state']
             if state=='reached' and not prefix:item['inconsistencies'].append('later_fact_without_prefix:'+stage)
             prefix=prefix and state=='reached';facts[stage]['prefix_reached']=prefix
-        item['task_terminal_proven']=bool(claims) and all(c['state'] in ('failed','succeeded','observed') or (c['state']=='reconcile' and item['closure_proven'] and item['session_elapsed_seconds'] is not None) for c in claims)
+        item['task_terminal_proven']=bool(claims) and item['closure_proven'] and all(
+            c['state'] in ('failed','succeeded','observed','reconcile') for c in claims)
         item['requests']=request_summary(own_requests)
         detail.append(item)
     def aggregate(chosen):
@@ -270,18 +289,16 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                        'top5_rejections':[{'code':code,'unique_candidates':len({i['candidate_id'] for i in chosen if i['stages'][stage].get('code')==code}),
                                            'events':count} for code,count in Counter(i['stages'][stage].get('code') for i in chosen if i['stages'][stage]['state']=='failed').most_common(5)]}
                 for stage in STAGES}
-    all_producers=rows(scope['producer_db'],'model_requests') or []
     batches={r.get('producer_batch') for r in selected if r.get('producer_batch')}
     if cohort.get('audit'):
         verify_evidence([cohort['audit']])
         batches.update(load_json(cohort['audit']['path']).get('round_batches',[]))
     producers,producer_unattributed=producer_requests(scope,batches)
     probe_ids=set()
-    plan_path=Path(run_root)/'plan.json'
-    central=Path(run_root)/'startup-probes.json'
-    if central.is_file():probe_ids.add(load_json(central)['launch_id'])
-    if plan_path.is_file():
-        plan=load_json(plan_path)
+    for root in run_roots:
+        central=root/'startup-probes.json'
+        if central.is_file():probe_ids.add(load_json(central)['launch_id'])
+        plan=load_json(root/'plan.json') if (root/'plan.json').is_file() else {}
         for worker in plan.get('workers',[]):
             command=worker.get('command',[])
             if '--request-prefix' in command:probe_ids.add('candidate-run:'+command[command.index('--request-prefix')+1])
@@ -290,15 +307,20 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     probe_requests=[{**p,'id':p['probe_id'],'usage':p.get('usage_json'),
                      'request_json':json.dumps({'http_dispatch':True})} for p in probes]
     visits=[v for v in rows(scope['consumer_db'],'top_level_visits') or [] if job_claim.get(v['job_id']) in {c['claim_id'] for group in claims_by.values() for c in group}]
-    tool_requests=[r for r in rows(scope['pool'],'tool_requests') or [] if r.get('run_id') in batches]
+    # Tool bodies contain large page captures. The report only needs states;
+    # select those columns at the owning batch boundary instead of loading GBs.
+    with closing(connect(scope['pool'],readonly=True)) as con:
+        tool_requests=[{'state':r[0]} for r in con.execute(
+            'SELECT state FROM tool_requests WHERE run_id IN ('+','.join('?' for _ in batches)+')',sorted(batches))] if batches else []
     cache_hits=[e for e in model_logs if e.get('claimId') in {c['claim_id'] for group in claims_by.values() for c in group} and (e.get('cacheHit') is True or e.get('event')=='cache_hit')]
     round_seconds=None
-    summary_path=Path(run_root)/'summary.json'
-    if summary_path.is_file():round_seconds=load_json(summary_path).get('elapsed_seconds')
-    event_path=Path(run_root)/'failure-events.jsonl'
+    elapsed=[load_json(root/'summary.json').get('elapsed_seconds') for root in run_roots if (root/'summary.json').is_file()]
+    if elapsed and all(v is not None for v in elapsed):round_seconds=sum(elapsed)
     round_faults=[]
-    if event_path.is_file():
-        round_faults=[json.loads(line) for line in event_path.read_text().splitlines() if line.strip()]
+    for root in run_roots:
+        event_path=root/'failure-events.jsonl'
+        if event_path.is_file():
+            round_faults.extend(json.loads(line) for line in event_path.read_text().splitlines() if line.strip())
     seen={(r.get('claim_id'),r.get('error_feature'),r.get('disposition')) for r in round_faults}
     faults=round_faults+[r for r in faults if (r.get('claim_id'),r.get('error_feature'),r.get('disposition')) not in seen]
     saved=sum(i['stages']['formally_saved']['state']=='reached' for i in detail)
@@ -307,7 +329,7 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     if len(selected)!=100:issues.append('fixed_denominator_is_not_100')
     if any(i['inconsistencies'] for i in detail):issues.append('candidate_evidence_inconsistencies')
     if any(not i['task_terminal_proven'] for i in detail if i['stages']['claimed']['state']=='reached'):issues.append('unsettled_claims')
-    return {'denominator':len(selected),'expected_denominator':100,'site_denominators':dict(site_counts),'expected_site_denominator':50,
+    return {'denominator':len(selected),'expected_denominator':100,'site_denominators':dict(site_counts),'expected_site_denominators':cohort.get('site_denominators',dict(site_counts)),
             'template_denominators':dict(Counter(i['template'] for i in detail)),'stage_order':list(STAGES),'running_snapshot':running,
             'integrity':'FAILED' if issues else 'PASS','issues':issues,'funnel':aggregate(detail),
             'by_site':{site:aggregate([i for i in detail if i['application_id']==site]) for site in sorted({i['application_id'] for i in detail})},

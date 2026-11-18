@@ -694,11 +694,8 @@ class CandidatePool:
                 if con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=?', (candidate_id,)).fetchone():
                     return {'state':'ALREADY_CLAIMED'}
             now = time.time()
-            for old in con.execute("SELECT * FROM candidate_claims WHERE state='consuming' AND expires<=?", (now,)).fetchall():
-                con.execute("UPDATE candidate_claims SET state='reconcile',reason='lease_expired',updated=? WHERE claim_id=?", (now,old['claim_id']))
-                if not self.research_claim(old):
-                    con.execute("UPDATE data_candidates SET state='reconcile' WHERE candidate_id=?", (old['candidate_id'],))
-                self.event(con,old['candidate_id'],old['claim_id'],'lease_expired',{})
+            # New work never recovers unrelated historical claims. Expired
+            # consuming rows remain fenced until an explicit reconciliation.
             empty=con.execute('SELECT worker_id FROM candidate_empty_requests WHERE request_id=?',(request_id,)).fetchone()
             if empty:
                 if empty[0]!=worker_id: raise ValueError('Claim request owner conflict')
@@ -779,7 +776,8 @@ class CandidatePool:
             return True
 
     def _fence(self, con, claim):
-        row = con.execute('SELECT * FROM candidate_claims WHERE claim_id=?', (claim['claim_id'],)).fetchone()
+        row = con.execute('SELECT claim_id,candidate_id,token,worker_id,state,expires,snapshot,version,binding,stage '
+                          'FROM candidate_claims WHERE claim_id=?', (claim['claim_id'],)).fetchone()
         if not row or row['token'] != claim['token'] or row['worker_id'] != claim['worker_id'] or row['state'] != 'consuming' or row['expires'] <= time.time():
             raise ValueError('Expired or invalid candidate credential; reconcile original')
         if json.loads(row['snapshot']) != claim['snapshot'] or row['version'] != claim['version']:
@@ -788,7 +786,9 @@ class CandidatePool:
 
     def heartbeat(self, claim, seconds=300, *, deadline=None, stopped=None):
         if not 1 <= seconds <= 86400: raise ValueError('Bounded lease required')
-        current=self.get_claim(claim['claim_id'])
+        with self.pool.connect() as con:
+            current=con.execute('SELECT expires FROM candidate_claims WHERE claim_id=?',(claim['claim_id'],)).fetchone()
+        if current is None:raise ValueError('Unknown claim')
         limit=min(deadline or float('inf'),time.monotonic()+max(0,current['expires']-time.time()))
         with self.transaction(timeout=min(90,max(0,limit-time.monotonic()))) as con:
             self._fence(con,claim)

@@ -13,6 +13,8 @@
 /verify_results/
 *.zip
 *.log
+# User-authorized process/result logs for this completed collection run.
+!/collection_logs/table2-strategy2-100-20261118/**/*.log
 **/browser-state/
 **/credentials/
 **/*.egg-info/

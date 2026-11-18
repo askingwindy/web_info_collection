@@ -1,0 +1,170 @@
+[
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "476271ce-15fe-4746-9488-27102911f38d",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "8da67a19-3d99-423c-b72d-b8e6fc50ead4",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "9347d0b6-28c8-43ee-87fb-7fd574d740f9",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "31affddd-f707-4bbb-abb0-c9f22bc8426f",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "6a080233-fafd-46d2-b8de-e3ff0476dd74",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "6ac0ab62-9550-4429-9ba3-49f75cd7f806",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "1ec53f26-5537-4b8d-b19b-0c014a3693d8",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_recovered",
+    "scope_id": "output-f79fbd25ac38ada9e079a436c3f3eb0d2145f5a26ff52b7bea831a08941070fe",
+    "attempt_id": "42321d40-f99c-4b7d-bb1d-b0c08f36d9ad",
+    "at": 1794964599.451045,
+    "payload_json": "{\"next_status\":\"needs_replan\",\"real_attempt\":false,\"reason\":\"lease expired; prior process must not resume its trajectory\",\"status\":\"abandoned\"}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-5a77651dcefa13a85ef632f0cbebe27aee32fc5d1879210a810d0d66fd4dd584",
+    "attempt_id": "42321d40-f99c-4b7d-bb1d-b0c08f36d9ad",
+    "at": 1794805798.5745332,
+    "payload_json": "{\"lease_expires_at\":1794806698.5745332}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-32f46e30b0d46bc7ec323adb1f337e4bd1464385eee167372cc72bce81c0a8b4",
+    "attempt_id": "1ec53f26-5537-4b8d-b19b-0c014a3693d8",
+    "at": 1794805798.505607,
+    "payload_json": "{\"lease_expires_at\":1794806698.505607}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-5a77651dcefa13a85ef632f0cbebe27aee32fc5d1879210a810d0d66fd4dd584",
+    "attempt_id": "42321d40-f99c-4b7d-bb1d-b0c08f36d9ad",
+    "at": 1794805798.3778298,
+    "payload_json": "{\"batch_id\":\"B20261116_027\",\"request_id\":\"d5e30d68-b7ca-43d3-8681-61e837b7a37a\",\"sample_id\":\"S000001_sample_000196\",\"site_id\":\"S000001\",\"worker_id\":\"serial-062b466a-657f-49ee-8b7e-f20f11de05c7\"}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-bdc8dc999127fe31926a8cb260e075ab74ccfa68a3b15d2050b007002af8fa3b",
+    "attempt_id": "6ac0ab62-9550-4429-9ba3-49f75cd7f806",
+    "at": 1794805798.2696111,
+    "payload_json": "{\"lease_expires_at\":1794806698.2696111}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-32f46e30b0d46bc7ec323adb1f337e4bd1464385eee167372cc72bce81c0a8b4",
+    "attempt_id": "1ec53f26-5537-4b8d-b19b-0c014a3693d8",
+    "at": 1794805798.188101,
+    "payload_json": "{\"batch_id\":\"B20261116_026\",\"request_id\":\"79eda20b-930c-49c1-837f-41d38bf15a80\",\"sample_id\":\"S000001_sample_000195\",\"site_id\":\"S000001\",\"worker_id\":\"serial-f1f7fcc5-2638-4248-8f76-e62545e7d99b\"}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-10f311818f05290ae706469993de9d291ec817cb43678a6bb4eb3be1c903080a",
+    "attempt_id": "6a080233-fafd-46d2-b8de-e3ff0476dd74",
+    "at": 1794805798.134157,
+    "payload_json": "{\"lease_expires_at\":1794806698.134157}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-bdc8dc999127fe31926a8cb260e075ab74ccfa68a3b15d2050b007002af8fa3b",
+    "attempt_id": "6ac0ab62-9550-4429-9ba3-49f75cd7f806",
+    "at": 1794805798.017814,
+    "payload_json": "{\"batch_id\":\"B20261116_025\",\"request_id\":\"98982fa1-d38b-4d32-b326-ea40fb879232\",\"sample_id\":\"S000001_sample_000194\",\"site_id\":\"S000001\",\"worker_id\":\"serial-a3b706aa-733b-44d0-804e-bdd8421d8f18\"}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-10f311818f05290ae706469993de9d291ec817cb43678a6bb4eb3be1c903080a",
+    "attempt_id": "6a080233-fafd-46d2-b8de-e3ff0476dd74",
+    "at": 1794805797.857495,
+    "payload_json": "{\"batch_id\":\"B20261116_024\",\"request_id\":\"911a485a-8e9b-40c4-815a-3dc02ca59712\",\"sample_id\":\"S000001_sample_000193\",\"site_id\":\"S000001\",\"worker_id\":\"serial-1a32ebef-bb7d-428c-9f77-61a5d2d8ce48\"}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-c741924d14de526b07b6e9cd151c36aef3f13e1a43cce6da196da25000e5e255",
+    "attempt_id": "31affddd-f707-4bbb-abb0-c9f22bc8426f",
+    "at": 1794805797.828203,
+    "payload_json": "{\"lease_expires_at\":1794806697.828203}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-74af03f6fa252187ce3f56706d104b454ce2affeb948c1183cb1ae05edd1f490",
+    "attempt_id": "9347d0b6-28c8-43ee-87fb-7fd574d740f9",
+    "at": 1794805797.8212202,
+    "payload_json": "{\"lease_expires_at\":1794806697.8212202}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-c741924d14de526b07b6e9cd151c36aef3f13e1a43cce6da196da25000e5e255",
+    "attempt_id": "31affddd-f707-4bbb-abb0-c9f22bc8426f",
+    "at": 1794805797.590114,
+    "payload_json": "{\"batch_id\":\"B20261116_023\",\"request_id\":\"b8b11d27-63b3-481f-9d1f-b3c7157114af\",\"sample_id\":\"S000001_sample_000192\",\"site_id\":\"S000001\",\"worker_id\":\"serial-5402bca3-64d0-43d8-b325-3875ed78b6e4\"}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-74af03f6fa252187ce3f56706d104b454ce2affeb948c1183cb1ae05edd1f490",
+    "attempt_id": "9347d0b6-28c8-43ee-87fb-7fd574d740f9",
+    "at": 1794805797.332969,
+    "payload_json": "{\"batch_id\":\"B20261116_022\",\"request_id\":\"77e176bf-ac64-495b-a221-b20285b6bf7f\",\"sample_id\":\"S000001_sample_000191\",\"site_id\":\"S000001\",\"worker_id\":\"serial-77cfb4d6-67ca-496b-926a-56ee3933faa5\"}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-1090ccdbd609515c16c51f18312f3541ca0869f94a6bc015a5dd2940c77ef12a",
+    "attempt_id": "476271ce-15fe-4746-9488-27102911f38d",
+    "at": 1794805796.9788318,
+    "payload_json": "{\"lease_expires_at\":1794806696.9788318}"
+  },
+  {
+    "event_type": "lease_extended",
+    "scope_id": "output-fc117c8b9403b7a7b2a2b82584fe4d20cdb80181f19d3e5da9692caccb6dd60c",
+    "attempt_id": "8da67a19-3d99-423c-b72d-b8e6fc50ead4",
+    "at": 1794805796.961279,
+    "payload_json": "{\"lease_expires_at\":1794806696.961279}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-fc117c8b9403b7a7b2a2b82584fe4d20cdb80181f19d3e5da9692caccb6dd60c",
+    "attempt_id": "8da67a19-3d99-423c-b72d-b8e6fc50ead4",
+    "at": 1794805796.730864,
+    "payload_json": "{\"batch_id\":\"B20261116_021\",\"request_id\":\"d9c10ff4-4d1a-4d65-9468-6beb566291db\",\"sample_id\":\"S000001_sample_000190\",\"site_id\":\"S000001\",\"worker_id\":\"serial-ad6c4c43-9e05-44fb-9101-e67ac0bf2b4e\"}"
+  },
+  {
+    "event_type": "attempt_reserved",
+    "scope_id": "output-1090ccdbd609515c16c51f18312f3541ca0869f94a6bc015a5dd2940c77ef12a",
+    "attempt_id": "476271ce-15fe-4746-9488-27102911f38d",
+    "at": 1794805796.589879,
+    "payload_json": "{\"batch_id\":\"B20261116_020\",\"request_id\":\"99a826c6-d871-4831-9a5b-b144c119f3be\",\"sample_id\":\"S000001_sample_000189\",\"site_id\":\"S000001\",\"worker_id\":\"serial-ddd8bc2d-a855-449b-83f9-2c7195cc29e2\"}"
+  }
+]

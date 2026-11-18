@@ -1,0 +1,6 @@
+{
+  "at": 1794962632.8606179,
+  "pid": 58039,
+  "reason": "All owned workers exited; interrupt read-only report loading whole 19GB tool_requests table. Rebuild derived report after targeted SQL fix.",
+  "business_records_changed": false
+}

@@ -33,6 +33,8 @@ def disposition(error=None, *, failure_class=None, reason=None, phase=None):
     from .current_chain import CurrentChainError
     from .batch_core import OutcomeUnknown
     from .registry_db import is_locked
+    from playwright.async_api import Error as BrowserError
+    unsupported_geometry = isinstance(error, BrowserError) and 'UNSUPPORTED_GEOMETRY:' in str(error)
     original = failure_class or getattr(error, 'failure_class', None)
     if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, InterruptedError)) or original == 'interrupted':
         kind = 'interrupted'
@@ -50,7 +52,7 @@ def disposition(error=None, *, failure_class=None, reason=None, phase=None):
         kind = 'global' if phase in ('startup_preflight', 'before_claim_preflight') else 'page_program'
     elif isinstance(error,(KeyError,TypeError,NameError,AttributeError,sqlite3.Error)):
         kind = 'page_program'
-    elif isinstance(error, NavigationRejected) or original in ('model', 'collector', 'semantic', 'unsupported', 'network', 'privacy', 'interface'):
+    elif unsupported_geometry or isinstance(error, NavigationRejected) or original in ('model', 'collector', 'semantic', 'unsupported', 'network', 'privacy', 'interface'):
         kind = 'business'
     elif original == 'program' or isinstance(error, (KeyError, TypeError, NameError, AttributeError, sqlite3.Error)):
         kind = 'page_program'
@@ -60,11 +62,11 @@ def disposition(error=None, *, failure_class=None, reason=None, phase=None):
         kind = 'unclassified'
     owner=('program' if kind in ('global','page_program') else
            'model' if original=='model' or isinstance(error,OutcomeUnknown) else
-           'site' if original in ('network','unsupported') else
+           'site' if unsupported_geometry or original in ('network','unsupported') else
            'business' if kind in ('business','duplicate') else 'unknown')
     if isinstance(error,PreDispatchDNSFailure):owner='model'
     return {'disposition': kind, 'reason_owner':owner, 'failure_class': original,
-            'code':getattr(error,'code',None), 'retry_count':getattr(error,'retry_count',0),
+            'code':'UNSUPPORTED_GEOMETRY' if unsupported_geometry else getattr(error,'code',None), 'retry_count':getattr(error,'retry_count',0),
             'reason': str(error) if error is not None else reason,
             'error_feature': feature(error) if error is not None else None,
             'transient': bool(is_locked(error)) if error is not None else original == 'transient',
@@ -120,7 +122,14 @@ def safe_retry(operation, *, safe, deadline, stopped=lambda: False, retryable=No
             from .batch_core import BudgetStop
             raise BudgetStop('pre_dispatch_deadline: no external request')
         try:
-            return operation()
+            result = operation()
+            if stopped():
+                from .batch_core import UserStopped
+                raise UserStopped('用户停止：预检完成后不派发外部请求')
+            if time.monotonic() >= deadline:
+                from .batch_core import BudgetStop
+                raise BudgetStop('pre_dispatch_deadline: no external request')
+            return result
         except Exception as error:
             error.retry_count=attempt
             if attempt == 3 or not retryable(error):

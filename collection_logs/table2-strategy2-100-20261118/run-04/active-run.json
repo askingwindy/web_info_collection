@@ -1,0 +1,9 @@
+{
+  "pid": 61710,
+  "started": 1794964313.464633,
+  "plan_id": "20261118091153-ad5d732d",
+  "run_root": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118/run-04",
+  "source_root": "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect",
+  "code_commit": "dcadceb8387e2ac8a65a67c94efbe17c5864732a",
+  "state": "LAUNCHING"
+}

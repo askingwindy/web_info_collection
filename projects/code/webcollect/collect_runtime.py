@@ -1051,12 +1051,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
             store.enqueue_plan(plan, publication)
     del startup_frames
     with preparation_phase(timing, "runtime_recovery_snapshot"):
-        # Reap this scope's expired leases plus any other dead-scope attempt of
-        # the same campaign: an expired lease can never be resumed by its owner
-        # (lease fencing), and without a campaign-wide reap a crashed close-out in
-        # an abandoned scope would block its whole site as an unresolved attempt
-        # with no remaining reaper (real-run v13/v14 fact).
-        store.recover_expired(campaign_wide=True)
+        # A fresh collection scope never owns recovery of historical attempts.
+        store.recover_expired()
         attempts = store.attempt_ledger()['attempts']
         verify_committed_samples(output, attempts)
         quarantine_interrupted(output, attempts)
@@ -1236,10 +1232,14 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             raise
                         evidence.mkdir(parents=True, exist_ok=True)
                         failure = evidence / 'failure.json'
+                        from .failure_policy import disposition
+                        handling = disposition(error, failure_class=classify_failure(error))
                         if not failure.exists():
                             write_json(failure, {'error': str(error), 'timestamp': now(),
                                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
                                 'failure_class': classify_failure(error),
+                                'failure_disposition': handling,
+                                'error_type': type(error).__name__, 'root_cause': _root_cause(error),
                                 **({'error_type': type(error).__name__, 'root_cause': _root_cause(error)}
                                    if isinstance(error, sqlite3.OperationalError) else {})})
                         from .agent_feedback import save_attempt_feedback
@@ -1251,7 +1251,9 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         # separately and never mask the primary failure.
                         await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                             'rejected', failure_class=classify_failure(error), root_cause=_root_cause(error),
-                            evidence=_evidence(failure) + [feedback_ref])
+                            evidence=_evidence(failure) + [feedback_ref] + (
+                                _evidence(evidence / 'raw' / 'raw-receipt.json')
+                                if (evidence / 'raw' / 'raw-receipt.json').is_file() else []))
                         try:
                             quarantine_interrupted(output, [{**attempt, 'status': 'rejected'}])
                         except Exception as cleanup_error:
@@ -1261,8 +1263,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                  'cleanup_error_type': type(cleanup_error).__name__,
                                  'cleanup_error': str(cleanup_error), 'ledger_settled': True,
                                  'not_business_success_evidence': True})
-                        from .failure_policy import disposition
-                        if disposition(error, failure_class=classify_failure(error))['disposition'] == 'global':
+                        if handling['disposition'] == 'global':
                             store.set_scope_paused(True, 'Program validation failure; preserve rejected attempt and stop before another allocation')
                 try:
                     with phase(phase_ledger, 'attempt_runner', scope=meter_identity):

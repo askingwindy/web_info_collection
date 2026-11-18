@@ -1,0 +1,68 @@
+{
+  "at": 1794966474.467287,
+  "workers_alive": 0,
+  "claimed": 100,
+  "remaining": 0,
+  "states": {
+    "failed": 43,
+    "reconcile": 56,
+    "consuming": 1
+  },
+  "stages": {
+    "execution": 41,
+    "planning": 28,
+    "observation": 31
+  },
+  "finished": false,
+  "segment": "run-05",
+  "models_since_run02": {
+    "invalid_response": 20,
+    "succeeded": 83
+  },
+  "known_usage": [
+    2062007,
+    76226
+  ],
+  "events": {
+    "claim": 22,
+    "strategy_selected": 22,
+    "processing": 228,
+    "session_started": 22,
+    "first_frame_completed": 19,
+    "template_selected": 19,
+    "session_start": 19,
+    "attempt_started": 19,
+    "plan_rejected": 17,
+    "first_plan_result": 28,
+    "plan_accepted": 11,
+    "tool_rejected": 65,
+    "checkpoint": 40,
+    "plan_revised": 24,
+    "action_started": 53,
+    "action_failed": 5,
+    "range_close": 19,
+    "session_end": 19,
+    "completion_result": 19,
+    "failed": 22,
+    "session_finished": 22,
+    "claim_task_finished": 22,
+    "candidate_finished": 22,
+    "worker_finished": 20,
+    "action_finished": 43,
+    "step_expectation": 9,
+    "completion_gaps": 7,
+    "session_close_error": 3
+  },
+  "failures": {
+    "('page_program', None, False)": 1,
+    "('business', None, False)": 15,
+    "('business', 'UNSUPPORTED_GEOMETRY', False)": 2,
+    "('interrupted', None, False)": 4
+  },
+  "last_failures": [
+    "react_screenshot_raw_only:NO_PROGRESS_END:已访问的目标事实、有效证据和缺项状态反复回访，无进展结束",
+    "react_screenshot_raw_only:NO_PROGRESS_END:相同业务事实、实际证据和缺项已询问且无新依据，保留原件并结束"
+  ],
+  "worker_rss_mb": 0.0,
+  "stop": false
+}

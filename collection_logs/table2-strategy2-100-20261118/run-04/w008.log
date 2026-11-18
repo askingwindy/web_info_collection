@@ -1,0 +1,117 @@
+2026-11-18T09:13:39.084+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=null candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=claim claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a
+2026-11-18T09:13:39.085+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=null candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://news.cctv.com/
+2026-11-18T09:13:48.493+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T09:13:48.923+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=session_started claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 startedMonotonic=561152.351434875
+2026-11-18T09:14:21.528+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=first_frame_completed claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 anchor={"image": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-08/eabf65b3-952d-45ea-bf47-c6481e0a3ac1/first.png", "sha256": "ca948ebefc5b281d9f7797b32bd84f6e5bcda2e5c73cf6f9cac4190f1d59fe59"}, "state": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-08/eabf65b3-952d-45ea-bf47-c6481e0a3ac1/first-state.json", "sha256": "1751828d8655083626136797dbf4a03b562a0740ebd3ac2b2c9e3cb0c1007260"}, "capture": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-08/eabf65b3-952d-45ea-bf47-c6481e0a3ac1/first-capture.json", "sha256": "c70ede85e2fbc6f6bc34ff3b687c1f6f543b3d09a10d0ededfc144a92c4f8a3d"}} jobId=ddd916fd49ce6eebb74ead2cb26dc737c9aef3d9be35a8914dd615a47fdc3bcc
+2026-11-18T09:14:22.650+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=processing stage=planning
+2026-11-18T09:14:22.660+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=template_selected template_name=generic source=generic_fallback reason=目标与页面结构无专用模板信号，回退generic module=webcollect.screenshot_templates.generic match.inputs=0 match.search_inputs=0 match.buttons=0 match.headings=1 match.links=57 match.prose_blocks=1 match.visible_text_len=251 match.goal_direction=null
+2026-11-18T09:14:37.988+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=null sampleId=null event=processing stage=execution
+2026-11-18T09:18:31.551+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=session_start site=https://news.cctv.com/
+2026-11-18T09:18:31.551+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=attempt_started attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110
+2026-11-18T09:18:39.450+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=processing stage=observation observationId=9713078fed06594efbd3a1b7c3ece02b53c3c437dfd4f5a8246a03bfa953bffa effectiveSteps=0
+2026-11-18T09:19:09.685+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=plan_rejected observationId=9713078fed06594efbd3a1b7c3ece02b53c3c437dfd4f5a8246a03bfa953bffa reason=ACCEPTANCE_SOURCE_INVALID retriable=true
+2026-11-18T09:19:09.686+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=first_plan_result requestId=f9b0ab0e3ed9433ba95cd9cc8572e4ff goalMode=autonomous goal=进入央视新闻“时政”频道，打开一条头条新闻并完整阅读其正文，最终停留在新闻详情页展示标题与正文要点 steps=5 accepted=false retriable=true reason=ACCEPTANCE_SOURCE_INVALID
+2026-11-18T09:19:12.402+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=range_close kind=RAW_PENDING reason="EOFError: " unknown=false
+2026-11-18T09:19:12.425+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=session_end stopReason=blocked effectiveSteps=0 actualActions=0 unknown=false failureClass=model
+2026-11-18T09:19:12.428+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=completion_result goalCompleted=false effectiveSteps=0 endReason=protocol_error missingRequirements=0 completionGaps=0
+2026-11-18T09:19:15.991+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=failed failureClass=model rootCause="react_raw_ending_pending:EOFError: " saveStatus=not_saved stopReason=blocked unknown=false effectiveSteps=0
+2026-11-18T09:19:28.103+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=session_finished claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 outcome=finished elapsedSeconds=339.18109924998134
+2026-11-18T09:19:28.114+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=claim_task_finished claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 taskName=candidate:eabf65b3-952d-45ea-bf47-c6481e0a3ac1 reason=lease_monitor_stopped
+2026-11-18T09:19:31.453+08:00 INFO sessionId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 strategy=screenshot_plan template_name=generic workerId=fixed-20261118091153-ad5d732d-08 siteId=S000246 candidateId=candidate-1e0661d8-89dd-4819-9bcd-be2ceb510c4a claimId=eabf65b3-952d-45ea-bf47-c6481e0a3ac1 attemptId=aad149db-e105-4f29-8e3a-ab5afcf53110 sampleId=S000246_sample_000001 event=candidate_finished state=failed saved=false stage=null failureClass=null failureDisposition={"reason_owner": "model", "retry_count": 0, "disposition": "business", "failure_class": "model", "code": null, "reason": "EOFError: ", "error_feature": "builtins.EOFError:connection.py:_recv:417", "transient": false, "shared_dependency_exhausted": false, "claim_id": "eabf65b3-952d-45ea-bf47-c6481e0a3ac1", "at": 1794964771.4411771, "occurrence": null, "stop_dispatch": false} reason=null
+2026-11-18T09:19:32.366+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=null candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=claim claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f
+2026-11-18T09:19:32.367+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=null candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://www.thepaper.cn/list_25432
+2026-11-18T09:19:34.514+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T09:19:34.522+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=session_started claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d startedMonotonic=561497.951972125
+2026-11-18T09:19:44.661+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=first_frame_completed claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d anchor={"image": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-08/6bea97e0-14f3-40f2-b782-3f90d9e3529d/first.png", "sha256": "85a1564974d8a8796ca355490e3d33dde4e05efd6dee34d8d9cf7ad6c59413bb"}, "state": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-08/6bea97e0-14f3-40f2-b782-3f90d9e3529d/first-state.json", "sha256": "6f38b3b3fc726c299c57bcacdbd0f40d0e7da0f88eaa0adb1f7318420db3ccb8"}, "capture": {"path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261118091153-ad5d732d/fixed-20261118091153-ad5d732d-08/6bea97e0-14f3-40f2-b782-3f90d9e3529d/first-capture.json", "sha256": "7357f719e199adcc2b5136acd3eef6d1ae3e15955d0a5a1f27ef8307123ec37f"}} jobId=2cf39682862f652ce812c2d7c5ad7480efd637a09125be2fb8dfe25baa3b97da
+2026-11-18T09:19:45.474+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=null workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=processing stage=planning
+2026-11-18T09:19:45.477+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=template_selected template_name=operation source=page_match reason=未指定目标且页面有业务输入控件 module=webcollect.screenshot_templates.operation match.inputs=1 match.search_inputs=0 match.buttons=0 match.headings=5 match.links=20 match.prose_blocks=1 match.visible_text_len=493 match.goal_direction=null
+2026-11-18T09:20:47.400+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=processing stage=execution
+2026-11-18T09:21:31.831+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=session_finished claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d outcome=cancelled elapsedSeconds=117.30919595796149
+2026-11-18T09:21:36.058+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=claim_task_finished claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d taskName=candidate:6bea97e0-14f3-40f2-b782-3f90d9e3529d reason=lease_monitor_stopped
+2026-11-18T09:21:36.059+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=claim_cancelled claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d taskName=candidate:6bea97e0-14f3-40f2-b782-3f90d9e3529d reason=worker_or_external_cancel
+2026-11-18T09:21:36.063+08:00 INFO sessionId=6bea97e0-14f3-40f2-b782-3f90d9e3529d strategy=screenshot_plan template_name=operation workerId=fixed-20261118091153-ad5d732d-08 siteId=S000250 candidateId=candidate-f6e47429-ed83-4dc5-9f96-f75bbb0efb9f claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d attemptId=null sampleId=null event=cancelled claimId=6bea97e0-14f3-40f2-b782-3f90d9e3529d reason=worker_cancelled
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1199, in run
+    result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 716, in consume
+    return await owner
+           ^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 705, in claim_work
+    return await _consume(pool, claim, ledger, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 951, in _consume
+    return await working
+           ^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 939, in work
+    async with AsyncExitStack() as stack:
+               ~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 768, in __aexit__
+    raise exc
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 751, in __aexit__
+    cb_suppress = await cb(*exc_details)
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 425, in entry_session
+    async with _entry_session(ledger, pool, claim, root, runlog=runlog, **kwargs) as session:
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 540, in _entry_session
+    await context.close()
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/async_api/_generated.py", line 2196, in close
+    await self._impl_obj.close(reason=reason)
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_browser_context.py", line 574, in close
+    await self._channel.send("close", None, {"reason": reason})
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 78, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 634, in wrap_api_call
+    return await cb()
+           ^^^^^^^^^^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 149, in _inner_send
+    done, _ = await asyncio.wait(
+              ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1535, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1525, in main
+    result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+        session_objective=session_objective,
+        effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
+        categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 132, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt
