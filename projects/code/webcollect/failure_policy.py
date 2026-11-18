@@ -120,7 +120,14 @@ def safe_retry(operation, *, safe, deadline, stopped=lambda: False, retryable=No
             from .batch_core import BudgetStop
             raise BudgetStop('pre_dispatch_deadline: no external request')
         try:
-            return operation()
+            result = operation()
+            if stopped():
+                from .batch_core import UserStopped
+                raise UserStopped('用户停止：预检完成后不派发外部请求')
+            if time.monotonic() >= deadline:
+                from .batch_core import BudgetStop
+                raise BudgetStop('pre_dispatch_deadline: no external request')
+            return result
         except Exception as error:
             error.retry_count=attempt
             if attempt == 3 or not retryable(error):

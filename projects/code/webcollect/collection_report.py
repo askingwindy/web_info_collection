@@ -40,8 +40,10 @@ def request_summary(requests):
         request=json.loads(r.get('request_json') or '{}');response=json.loads(r.get('response') or '{}')
         sent=request.get('http_dispatch')
         # Reserved intentions do not prove an HTTP dispatch. Transport facts take priority.
-        timing=response.get('timing') or response.get('transport_timing') or {}
+        timing=response.get('http_timing') or response.get('timing') or response.get('transport_timing') or {}
         actual=timing.get('http_dispatched',response.get('http_dispatched'))
+        if timing.get('headers_ms') is not None or (response.get('provider_error') or {}).get('http_status') is not None:
+            actual=True
         if actual is False:kind='not_dispatched'
         elif actual is True or request.get('provider') not in (None,'synthetic') and r['state'] in ('succeeded','invalid_response') or sent is True and r['state'] in ('succeeded','invalid_response','available','insufficient_balance','rate_limited','model_limited'):kind='dispatched'
         elif sent is False:kind='not_dispatched'
@@ -109,7 +111,8 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     identities={(r['candidate_id'],r['version']) for r in selected}
     issues=[]
     site_counts=Counter(r['application_id'] for r in selected)
-    if len(site_counts)!=2 or set(site_counts.values())!={50}:issues.append('fixed_site_denominators_not_50')
+    if cohort.get('site_denominators') and dict(site_counts)!=cohort['site_denominators']:
+        issues.append('fixed_site_denominators_changed')
     if len(identities)!=len(selected) or cohort.get('denominator')!=len(selected):issues.append('invalid_cohort_denominator_or_duplicates')
     all_claims=rows(scope['pool'],'candidate_claims') or []
     tasks=rows(scope['registry'],'m4_tasks') or [];attempts=rows(scope['registry'],'m4_attempts') or []
@@ -227,7 +230,7 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                         verify_evidence([ref]);failure=load_json(ref['path'])
                         if (raw_refs and a['status']=='rejected' and a.get('finished_at') is not None
                                 and failure.get('attempt_id')==a['attempt_id'] and failure.get('failure_class')==a.get('failure_class')
-                                and failure.get('error')==a.get('root_cause')):item['closure_proven']=True
+                                and (failure.get('root_cause') or failure.get('error'))==a.get('root_cause')):item['closure_proven']=True
                         faults.append({'claim_id':next(iter(claim_ids),None),'attempt_id':a['attempt_id'],
                             'failure_class':a.get('failure_class'),'reason':a.get('root_cause'),
                             **(failure.get('failure_disposition') or {'disposition':'unclassified'})})
@@ -260,7 +263,8 @@ def build(scope_path, cohort_path, run_root, *, running=False):
             state=facts[stage]['state']
             if state=='reached' and not prefix:item['inconsistencies'].append('later_fact_without_prefix:'+stage)
             prefix=prefix and state=='reached';facts[stage]['prefix_reached']=prefix
-        item['task_terminal_proven']=bool(claims) and all(c['state'] in ('failed','succeeded','observed') or (c['state']=='reconcile' and item['closure_proven'] and item['session_elapsed_seconds'] is not None) for c in claims)
+        item['task_terminal_proven']=bool(claims) and item['closure_proven'] and all(
+            c['state'] in ('failed','succeeded','observed','reconcile') for c in claims)
         item['requests']=request_summary(own_requests)
         detail.append(item)
     def aggregate(chosen):
@@ -307,7 +311,7 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     if len(selected)!=100:issues.append('fixed_denominator_is_not_100')
     if any(i['inconsistencies'] for i in detail):issues.append('candidate_evidence_inconsistencies')
     if any(not i['task_terminal_proven'] for i in detail if i['stages']['claimed']['state']=='reached'):issues.append('unsettled_claims')
-    return {'denominator':len(selected),'expected_denominator':100,'site_denominators':dict(site_counts),'expected_site_denominator':50,
+    return {'denominator':len(selected),'expected_denominator':100,'site_denominators':dict(site_counts),'expected_site_denominators':cohort.get('site_denominators',dict(site_counts)),
             'template_denominators':dict(Counter(i['template'] for i in detail)),'stage_order':list(STAGES),'running_snapshot':running,
             'integrity':'FAILED' if issues else 'PASS','issues':issues,'funnel':aggregate(detail),
             'by_site':{site:aggregate([i for i in detail if i['application_id']==site]) for site in sorted({i['application_id'] for i in detail})},

@@ -126,7 +126,7 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
             _, rows = _cohort_rows(cohort_path,pool,scope['registry'],None)
             from collections import Counter
             counts = Counter(r['application_id'] for r in rows)
-            if len(rows)!=100 or len(counts)!=2 or set(counts.values())!={50}:
+            if len(rows)!=100 or (cohort_path and load_json(cohort_path).get('site_denominators',dict(counts))!=dict(counts)):
                 fail('COHORT_DENOMINATOR','selected',dict(counts))
             if len({r['candidate_id'] for r in rows}) != len(rows):
                 fail('COHORT_DUPLICATE','selected','candidate ids must be unique')

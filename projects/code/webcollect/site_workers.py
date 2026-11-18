@@ -246,30 +246,28 @@ def fixed_consumer_plan(scope_path, cohort_path, log_root):
     cohort=load_json(cohort_path)
     rows=cohort['selected']
     sites=sorted({r['application_id'] for r in rows})
-    if len(sites)!=2 or len(rows)!=100 or len({r['candidate_id'] for r in rows})!=100:
-        raise ValueError('Fixed baseline requires two sites and 100 unique candidates')
+    if len(rows)!=100 or len({r['candidate_id'] for r in rows})!=100:
+        raise ValueError('Fixed collection requires 100 unique candidates')
     root=Path(log_root).resolve();root.mkdir(parents=True,exist_ok=False)
     from .workspace_paths import prepare_output
     prepare_output(root,scope_path)
     plan=new_plan('consumer',scope_path,scope,sites)
     plan.update(log_root=str(root),cohort=str(Path(cohort_path).resolve()), collection_strategy='screenshot_plan',
                 automatic_export=False, stop_after_saves=None, fixed=True)
-    for site in sites:
-        selected=[r for r in rows if r['application_id']==site]
-        if len(selected)!=50:raise ValueError('Each site requires 50 frozen pages')
-        for index in range(10):
-            shard=[dict(r,order=n+1) for n,r in enumerate(selected[index*5:index*5+5])]
-            number=len(plan['workers'])+1;wid=f'fixed-{plan["plan_id"]}-{number:02d}'
-            path=root/f'w{number:02d}-cohort.json'
-            save_json(path,{**cohort,'selected':shard,'denominator':5})
-            output=Path(scope['output'])/plan['plan_id']/wid
-            command=[sys.executable,'-B','-u','-m','webcollect.candidate_consumer','run',
-                '--pool',scope['pool'],'--config',scope['consumer_config'],'--ledger',scope['consumer_db'],
-                '--registry',scope['registry'],'--history-set',scope['history_set'],'--policy',scope['policy'],
-                '--output',str(output),'--worker-id',wid,'--request-prefix',wid,'--limit','5',
-                '--cohort',str(path),'--collection-strategy','screenshot_plan']
-            plan['workers'].append({'worker_id':wid,'application_id':site,'candidate_ids':[r['candidate_id'] for r in shard],
-                                    'command':command})
+    for index in range(20):
+        shard=[dict(r,order=n+1) for n,r in enumerate(rows[index*5:index*5+5])]
+        number=len(plan['workers'])+1;wid=f'fixed-{plan["plan_id"]}-{number:02d}'
+        path=root/f'w{number:02d}-cohort.json'
+        save_json(path,{**cohort,'selected':shard,'denominator':5})
+        output=Path(scope['output'])/plan['plan_id']/wid
+        command=[sys.executable,'-B','-u','-m','webcollect.candidate_consumer','run',
+            '--pool',scope['pool'],'--config',scope['consumer_config'],'--ledger',scope['consumer_db'],
+            '--registry',scope['registry'],'--history-set',scope['history_set'],'--policy',scope['policy'],
+            '--output',str(output),'--worker-id',wid,'--request-prefix',wid,'--limit','5',
+            '--cohort',str(path),'--collection-strategy','screenshot_plan',
+            '--log-dir',str(root/'runtime'/wid)]
+        plan['workers'].append({'worker_id':wid,'application_ids':sorted({r['application_id'] for r in shard}),'candidate_ids':[r['candidate_id'] for r in shard],
+                                'command':command})
     save_json(root/'prepared-plan.json',plan)
     return plan
 
@@ -316,66 +314,50 @@ def automatic_report(plan,root,summary):
 def launch(plan):
     import signal
     from .failure_policy import RoundFailures
+    from .collection_startup import check
+    from .workspace_paths import prepare_output
     root=Path(plan['log_root'])
-    if plan.get('fixed'):
-        from .collection_startup import check
-        result=check(plan['scope'],cohort_path=plan['cohort'],plan=plan)
-        if result['status']!='PASS':
-            summary={'succeeded':False,'interrupted':False,'preflight':result,'workers':[]}
-            automatic_report(plan,root,summary)
-            return summary
-        root.mkdir(parents=True,exist_ok=True)
-    else:
-        root.mkdir(parents=True,exist_ok=False)
-        from .collection_startup import check
-        result=check(plan['scope'])
-        if result['status']!='PASS':
-            summary={'succeeded':False,'interrupted':False,'preflight':result,'workers':[]}
-            automatic_report(plan,root,summary)
-            return summary
-    from .workspace_paths import prepare_output
-    prepare_output(root,plan['scope'])
-    if (root/'stop.request').exists():
-        summary={'succeeded':False,'interrupted':True,'workers':[],'stop_reason':'user_stop_before_launch'}
-        if plan.get('fixed'):automatic_report(plan,root,summary)
-        return summary
-    if plan['role']=='consumer':
-        from .batch_core import load_json
-        from .key_health import pool_available,probe_accounts
-        _,scope=load_scope(plan['scope'])
-        ledger=BatchLedger(scope['consumer_db'],load_json(scope['consumer_config']))
-        probes=[]
-        launch_id='fixed-round:'+plan['plan_id']
-        try:
-            if not pool_available(ledger):probes=probe_accounts(ledger,launch_id)
-        except Exception as error:
-            summary={'succeeded':False,'interrupted':False,'workers':[],'stop_reason':'startup_probe_failed','error':str(error)}
-            if plan.get('fixed'):automatic_report(plan,root,summary)
-            return summary
-        write_json(root/'startup-probes.json',{'launch_id':launch_id,'probes':probes})
-        if not pool_available(ledger):
-            summary={'succeeded':False,'interrupted':False,'workers':[],'stop_reason':'key_pool_unavailable','automatic_export':False}
-            write_json(root/'summary.json',summary)
-            if plan.get('fixed'):automatic_report(plan,root,summary)
-            return summary
-    from .workspace_paths import prepare_output
-    prepare_output(root,plan['scope'])
+    root.mkdir(parents=True,exist_ok=bool(plan.get('fixed')))
     stop=root/'stop.request';failures=RoundFailures(root/'failure-events.jsonl')
-    env={**child_environment(),'WEBCOLLECT_STOP_FILE':str(stop),'WEBCOLLECT_PRODUCER_STOP_FILE':str(stop),
-         'WEBCOLLECT_ROUND_EVENTS':str(failures.path),'WEBCOLLECT_CENTRAL_KEY_HEALTH':'1'}
-    if plan['role']=='producer':
-        for index,worker in enumerate(plan['workers'],1):
-            command=worker['command'];at=command.index('--sources')+1
-            sources=json.loads(command[at]);path=root/f'w{index:03d}-sources.json'
-            write_json(path,sources);command[at]=str(path);worker['sources_path']=str(path)
-    write_json(root/'plan.json',plan)
     started_at=time.time();started_monotonic=time.monotonic()
     children=[];interrupted=False;error=None;drain_deadline=None
+    stop_reason=None;preflight=None;preparing=True
     def request_stop(signum,frame):
         nonlocal interrupted,drain_deadline
         interrupted=True;stop.touch();drain_deadline=drain_deadline or time.monotonic()+120
+        if preparing:raise InterruptedError('Stopped during launch preparation')
     previous={sig:signal.signal(sig,request_stop) for sig in (signal.SIGINT,signal.SIGTERM)}
     try:
+        if stop.exists():raise InterruptedError('Stopped before launch')
+        preflight=check(plan['scope'],**({'cohort_path':plan['cohort'],'plan':plan} if plan.get('fixed') else {}))
+        if preflight['status']!='PASS':
+            stop_reason='preflight_failed'
+            raise ValueError('Launch preflight failed; see preflight errors')
+        prepare_output(root,plan['scope'])
+        write_json(root/'plan.json',plan)
+        if plan['role']=='consumer':
+            from .batch_core import load_json
+            from .key_health import pool_available,probe_accounts
+            _,scope=load_scope(plan['scope'])
+            ledger=BatchLedger(scope['consumer_db'],load_json(scope['consumer_config']))
+            if stop.exists():raise InterruptedError('Stopped before account probes')
+            launch_id='fixed-round:'+plan['plan_id']
+            probes=[]
+            if not pool_available(ledger):probes=probe_accounts(ledger,launch_id)
+            write_json(root/'startup-probes.json',{'launch_id':launch_id,'probes':probes})
+            if stop.exists():raise InterruptedError('Stopped after account probes')
+            if not pool_available(ledger):
+                stop_reason='key_pool_unavailable'
+                raise ValueError('No available model account')
+        env={**child_environment(),'WEBCOLLECT_STOP_FILE':str(stop),'WEBCOLLECT_PRODUCER_STOP_FILE':str(stop),
+             'WEBCOLLECT_ROUND_EVENTS':str(failures.path),'WEBCOLLECT_CENTRAL_KEY_HEALTH':'1'}
+        if plan['role']=='producer':
+            for index,worker in enumerate(plan['workers'],1):
+                command=worker['command'];at=command.index('--sources')+1
+                sources=json.loads(command[at]);path=root/f'w{index:03d}-sources.json'
+                write_json(path,sources);command[at]=str(path);worker['sources_path']=str(path)
+            write_json(root/'plan.json',plan)
+        preparing=False
         with ExitStack() as stack:
             for index,worker in enumerate(plan['workers'],1):
                 if stop.exists() or failures.stopped():break
@@ -395,6 +377,8 @@ def launch(plan):
                         break
                 time.sleep(.2)
     except BaseException as caught:
+        interrupted=interrupted or isinstance(caught,(KeyboardInterrupt,InterruptedError))
+        stop_reason=stop_reason or ('user_stop' if interrupted else 'launch_error')
         error={'type':type(caught).__name__,'reason':str(caught)};stop.touch()
     finally:
         try:
@@ -415,8 +399,9 @@ def launch(plan):
             summary={'plan_id':plan['plan_id'],'interrupted':interrupted,'error':error,'started_at':started_at,
                      'finished_at':time.time(),'elapsed_seconds':time.monotonic()-started_monotonic,
                      'workers':[{**{k:v for k,v in c.items() if k!='process'},'returncode':c['process'].poll()} for c in children],
-                     'unlaunched':len(plan['workers'])-len(children),'automatic_export':False}
-            summary['succeeded']=bool(children) and len(children)==len(plan['workers']) and all(c['process'].poll()==0 for c in children) and not interrupted and not error and not failures.stopped()
+                     'unlaunched':len(plan.get('workers',[]))-len(children),'automatic_export':False,
+                     'stop_reason':stop_reason,'preflight':preflight}
+            summary['succeeded']=bool(children) and len(children)==len(plan.get('workers',[])) and all(c['process'].poll()==0 for c in children) and not interrupted and not error and not stop.exists() and not failures.stopped()
             try:
                 write_json(root/'summary.json',summary)
             except Exception as diagnostic_error:

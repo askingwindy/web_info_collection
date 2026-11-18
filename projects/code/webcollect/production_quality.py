@@ -183,10 +183,14 @@ def contract_identity(repo):
             'authority_source': 'installed-four-document-authority' if legacy else 'installed-document-authority', 'authority_files_sha256': files,
             'producer_constants_not_customer_exclusive_enums': True, 'customer_actual_program': 'NOT_EXECUTED'}
 
+class LoginRequiredError(ValueError):
+    failure_class = 'unsupported'
+
+
 def require_public_task_state(state):
     """Stop at explicit auth endpoints; never retry with credentials or evade gates."""
     import re
     from urllib.parse import urlsplit
     path=urlsplit(state.get('url','')).path.lower()
     if re.fullmatch(r'/(?:user/|account/|accounts/)?(?:login|signin|sign-in)(?:\.aspx|\.html|\.php|/)?',path):
-        raise ValueError('公开任务遇到登录门槛：停止该任务，未登录或绕过访问限制')
+        raise LoginRequiredError('公开任务遇到登录门槛：停止该任务，未登录或绕过访问限制')

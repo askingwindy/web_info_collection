@@ -694,11 +694,8 @@ class CandidatePool:
                 if con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=?', (candidate_id,)).fetchone():
                     return {'state':'ALREADY_CLAIMED'}
             now = time.time()
-            for old in con.execute("SELECT * FROM candidate_claims WHERE state='consuming' AND expires<=?", (now,)).fetchall():
-                con.execute("UPDATE candidate_claims SET state='reconcile',reason='lease_expired',updated=? WHERE claim_id=?", (now,old['claim_id']))
-                if not self.research_claim(old):
-                    con.execute("UPDATE data_candidates SET state='reconcile' WHERE candidate_id=?", (old['candidate_id'],))
-                self.event(con,old['candidate_id'],old['claim_id'],'lease_expired',{})
+            # New work never recovers unrelated historical claims. Expired
+            # consuming rows remain fenced until an explicit reconciliation.
             empty=con.execute('SELECT worker_id FROM candidate_empty_requests WHERE request_id=?',(request_id,)).fetchone()
             if empty:
                 if empty[0]!=worker_id: raise ValueError('Claim request owner conflict')

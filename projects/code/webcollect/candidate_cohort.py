@@ -75,23 +75,25 @@ def inspect_rows(scope_path, *, candidate_ids=None):
     pool = CandidatePool(scope['pool'], readonly=True)
     ledger = ReadOnlyLedger(scope['consumer_db'], load_json(scope['consumer_config']))
     producer = ReadOnlyLedger(scope['producer_db'], load_json(scope['producer_config']))
+    requested = set(candidate_ids) if candidate_ids is not None else None
+    parameters = sorted(requested) if requested is not None else []
+    predicate = 'candidate_id IN ('+','.join('?' for _ in parameters)+')' if parameters else ('0' if requested is not None else '1')
     rows = []; counts = Counter({key:0 for key in ('table2','published_NEW','pending_without_disposition',
         'never_claimed','row_sources_GET_verified','dispatch_guard_pass')}); reasons = Counter()
     # Materialize quickly and close the read transaction before guard/file reads.
     with pool.pool.connect() as con:
-        inventory = [dict(r) for r in con.execute('SELECT * FROM data_candidates ORDER BY created,candidate_id')]
-        claims = {r[0] for r in con.execute('SELECT DISTINCT candidate_id FROM candidate_claims')}
+        inventory = [dict(r) for r in con.execute('SELECT * FROM data_candidates WHERE '+predicate+' ORDER BY created,candidate_id',parameters)]
+        claims = {r[0] for r in con.execute('SELECT DISTINCT candidate_id FROM candidate_claims WHERE '+predicate,parameters)}
         published = {}
-        for r in con.execute("SELECT * FROM candidate_batch_rows WHERE result='NEW' ORDER BY created,row_id"):
+        for r in con.execute("SELECT * FROM candidate_batch_rows WHERE result='NEW' AND "+predicate+" ORDER BY created,row_id",parameters):
             published.setdefault(r['candidate_id'], dict(r))
-        versions = {(r['candidate_id'],r['version']):r['body'] for r in con.execute('SELECT * FROM candidate_versions')}
+        versions = {(r['candidate_id'],r['version']):r['body'] for r in con.execute('SELECT * FROM candidate_versions WHERE '+predicate,parameters)}
         sources = {}
-        for r in con.execute('SELECT * FROM candidate_sources ORDER BY created,source_key'):
+        for r in con.execute('SELECT * FROM candidate_sources WHERE '+predicate+' ORDER BY created,source_key',parameters):
             sources.setdefault(r['candidate_id'], []).append(json.loads(r['source']))
         dispositions = {}
-        for r in con.execute("SELECT candidate_id,record FROM candidate_events WHERE kind='disposition' ORDER BY id"):
+        for r in con.execute("SELECT candidate_id,record FROM candidate_events WHERE kind='disposition' AND "+predicate+" ORDER BY id",parameters):
             dispositions[r['candidate_id']] = json.loads(r['record'])
-    requested = set(candidate_ids) if candidate_ids is not None else None
     for row in inventory:
         cid = row['candidate_id']
         if requested is not None and cid not in requested:
@@ -242,7 +244,7 @@ def freeze_round(scope_path, producer_plan, output):
     cohort={'schema_version':'consumer-multibatch-cohort','selection_protocol':VERSION,
             'selection_order':'published_at,candidate_id','scope':reference(scope_path),'manifest':reference(scope['history_set']),
             'pool':scope['pool'],'registry':scope['registry'],'consumer_ledger':scope['consumer_db'],
-            'denominator':100,'selected':[{**r,'order':n} for n,r in enumerate(selected,1)],
+            'denominator':100,'site_denominators':dict(counts),'selected':[{**r,'order':n} for n,r in enumerate(selected,1)],
             'audit':reference(output/'audit.json'),'replacement_allowed':False}
     save_json(output/'cohort.json',cohort)
     return {'ready':True,'counts':dict(counts),'cohort':str(output/'cohort.json')}

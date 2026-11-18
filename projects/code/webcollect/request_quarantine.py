@@ -21,7 +21,7 @@ def endpoint(uri, aliases=None):
     return host, page.path.rstrip('/') or '/', urlencode(query)
 
 
-def attempt_owner(guard, registry, attempt_id, *, job_ledger=None, research_request_id=None):
+def attempt_owner(guard, registry, attempt_id, *, job_ledger=None, research_request_id=None, include_closure=True):
     """The original attempt fixes the candidate across workers, claims and restarts."""
     if not registry or not attempt_id:
         return None
@@ -46,7 +46,7 @@ def attempt_owner(guard, registry, attempt_id, *, job_ledger=None, research_requ
                           (attempt_id, scope['chain_id'])).fetchone()
     if row and row[4]:
         return {**dict(zip(('status','failure_class','task_id','candidate_id','uri','site_uri'), row)),
-                'focus_effect_accounted':accounted_closed_execution(path,attempt_id,research_request_id=research_request_id)}
+                'focus_effect_accounted':include_closure and accounted_closed_execution(path,attempt_id,research_request_id=research_request_id)}
     return None
 
 
@@ -95,10 +95,13 @@ def job_conflicts(ledger, uri, candidate_id, payload, *, running, registry=None,
     attempt_id = payload.get('attempt_id')
     if attempt_id and dispatched_attempt in (None, attempt_id):
         registry = registry or ledger.path.with_name('production-registry.sqlite3')
-        owner = attempt_owner(guard, registry, attempt_id, job_ledger=ledger.path,research_request_id=research_request_id)
+        owner = attempt_owner(guard, registry, attempt_id, job_ledger=ledger.path,research_request_id=research_request_id,
+                              include_closure=False)
         if owner and payload.get('task_id') == owner['task_id'] and (
                 not site or endpoint(site, aliases)[0] == endpoint(owner['site_uri'] or owner['uri'], aliases)[0]):
-            if owner.get('focus_effect_accounted'):
+            if candidate_id and owner['candidate_id'] and candidate_id != owner['candidate_id']:
+                return False
+            if accounted_closed_execution(registry, attempt_id, research_request_id=research_request_id):
                 return False  # Old execution closed; original job/request reservation remains fenced.
             if candidate_id and owner['candidate_id']:
                 return candidate_id == owner['candidate_id']

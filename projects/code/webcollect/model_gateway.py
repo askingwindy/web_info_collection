@@ -100,17 +100,26 @@ def _qc_resolve_child(channel, host, port):
     finally: channel.close()
 
 
-def _qc_addresses(host, port, deadline):
+def _qc_addresses(host, port, deadline, stopped=lambda: False):
     context = multiprocessing.get_context('fork' if 'fork' in multiprocessing.get_all_start_methods() else 'spawn')
     receiver, sender = context.Pipe(duplex=False)
     resolver = context.Process(target=_qc_resolve_child,args=(sender,host,port),daemon=True)
     try:
         resolver.start()
         sender.close()
-        if not receiver.poll(max(0,deadline-time.monotonic())):
-            raise TimeoutError('QC wall deadline during DNS')
+        while True:
+            if stopped():
+                raise InterruptedError('Stopped before HTTP dispatch during DNS')
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Wall deadline during DNS')
+            if receiver.poll(min(.05, remaining)):
+                break
         ok, value = receiver.recv()
         if not ok: raise OSError('QC DNS resolution failed: '+value)
+        if stopped():raise InterruptedError('Stopped before HTTP dispatch during DNS')
+        if time.monotonic() >= deadline:raise TimeoutError('Wall deadline during DNS')
+        if not value:raise OSError('DNS returned no addresses')
         return value
     finally:
         receiver.close();sender.close()
@@ -1047,15 +1056,13 @@ class ModelGateway:
                     try:
                         from .failure_policy import safe_retry
                         dns_deadline = min((native_context or {}).get('dispatch_deadline') or float('inf'), time.monotonic() + 15)
-                        def resolve():
-                            rows = socket.getaddrinfo(endpoint.hostname, endpoint.port or 443, type=socket.SOCK_STREAM)
-                            if not rows:
-                                raise OSError('No addresses')
-                            return rows
                         import os
+                        stopped = lambda: any(os.environ.get(k) and Path(os.environ[k]).exists() for k in ('WEBCOLLECT_STOP_FILE', 'WEBCOLLECT_PRODUCER_STOP_FILE'))
+                        def resolve():
+                            return _qc_addresses(endpoint.hostname, endpoint.port or 443, dns_deadline, stopped)
                         safe_retry(resolve, safe=True, deadline=dns_deadline,
-                            stopped=lambda: any(os.environ.get(k) and Path(os.environ[k]).exists() for k in ('WEBCOLLECT_STOP_FILE', 'WEBCOLLECT_PRODUCER_STOP_FILE')),
-                            retryable=lambda e: isinstance(e, OSError))
+                            stopped=stopped,
+                            retryable=lambda e: isinstance(e, OSError) and not isinstance(e, InterruptedError))
                     except OSError as error:
                         with self.ledger.transaction() as con:
                             self.ledger.event(con,'model_local_network_preflight_failed',
