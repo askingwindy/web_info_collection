@@ -1,0 +1,3 @@
+# Collection report failed
+
+KeyboardInterrupt: 

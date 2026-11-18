@@ -1,0 +1,121 @@
+2026-11-18T08:52:19.654+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=null candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=claim claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be
+2026-11-18T08:52:19.655+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=null candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://cn.pigame.cc/tag/2-player
+2026-11-18T08:52:36.918+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T08:52:37.045+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=session_started claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 startedMonotonic=559880.5665425
+2026-11-18T08:56:29.327+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=session_close_error severity=warn errorType=TimeoutError reason=页面同步观察超过15秒，停止该任务并保留检查点
+2026-11-18T08:56:29.329+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=session_finished claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 outcome=failed elapsedSeconds=232.2881142909173
+2026-11-18T08:57:28.663+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=claim_task_finished claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 taskName=candidate:e5df7ea9-5342-42d7-9098-d46bef0002a3 reason=lease_monitor_stopped
+2026-11-18T08:57:28.741+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=failed claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 errorType=TimeoutError reason=页面同步观察超过15秒，停止该任务并保留检查点
+2026-11-18T08:57:29.189+08:00 INFO sessionId=e5df7ea9-5342-42d7-9098-d46bef0002a3 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000199 candidateId=candidate-79dfd883-f765-484f-9975-9c48f386f4be claimId=e5df7ea9-5342-42d7-9098-d46bef0002a3 attemptId=null sampleId=null event=candidate_finished state=reconcile saved=false stage=observation failureClass=null failureDisposition={"reason_owner": "program", "retry_count": 0, "disposition": "page_program", "failure_class": null, "code": null, "reason": "页面同步观察超过15秒，停止该任务并保留检查点", "error_feature": "asyncio.exceptions.CancelledError:tasks.py:_wait:521", "transient": false, "shared_dependency_exhausted": false, "claim_id": "e5df7ea9-5342-42d7-9098-d46bef0002a3", "at": 1794963448.741078, "occurrence": 1, "stop_dispatch": false} reason="TimeoutError: 页面同步观察超过15秒，停止该任务并保留检查点"
+2026-11-18T08:57:52.016+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=null candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=claim claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d
+2026-11-18T08:57:52.026+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=null candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://www.moshuyuan.com/
+2026-11-18T08:58:15.562+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T08:58:15.610+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=session_started claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 startedMonotonic=560219.137733625
+2026-11-18T08:59:27.444+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=lease_cancel_requested claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 taskName=candidate:36176b7e-48e3-4e57-8d0a-e040efab37c2 errorType=OperationalError reason="database is locked"
+2026-11-18T08:59:27.509+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=lease_cancel_applied claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 taskName=candidate:36176b7e-48e3-4e57-8d0a-e040efab37c2 cancelled=true
+2026-11-18T08:59:38.016+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=session_finished claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 outcome=cancelled elapsedSeconds=82.40674754104111
+2026-11-18T08:59:38.021+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=claim_task_finished claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 taskName=candidate:36176b7e-48e3-4e57-8d0a-e040efab37c2 reason=lease_monitor_stopped
+2026-11-18T08:59:38.025+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=claim_cancelled claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 taskName=candidate:36176b7e-48e3-4e57-8d0a-e040efab37c2 reason=worker_or_external_cancel
+2026-11-18T09:00:04.704+08:00 INFO sessionId=36176b7e-48e3-4e57-8d0a-e040efab37c2 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-07 siteId=S000168 candidateId=candidate-8925f228-1c19-4059-9e8b-dd65cc52379d claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 attemptId=null sampleId=null event=cancelled claimId=36176b7e-48e3-4e57-8d0a-e040efab37c2 reason=worker_cancelled
+Traceback (most recent call last):
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 947, in _consume
+    done,_=await asyncio.wait((keeper,working),return_when=asyncio.FIRST_COMPLETED)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError: candidate_lease_lost
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1199, in run
+    result=await consume(pool,claim,ledger,**kwargs,session_objective=session_objective,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        **({'skip_wechat_articles':True} if skip_wechat_articles else {}))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 716, in consume
+    return await owner
+           ^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 705, in claim_work
+    return await _consume(pool, claim, ledger, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 955, in _consume
+    await asyncio.gather(working, return_exceptions=True)
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 941, in work
+    return await work_in(stack)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 831, in work_in
+    session = await stack.enter_async_context(entry_session(ledger, pool, claim, root, runlog=runlog,
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        session_soft_seconds=session_soft_seconds, session_hard_seconds=session_hard_seconds))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 668, in enter_async_context
+    result = await _enter(cm)
+             ^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 425, in entry_session
+    async with _entry_session(ledger, pool, claim, root, runlog=runlog, **kwargs) as session:
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 543, in _entry_session
+    await browser.close()
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/async_api/_generated.py", line 1330, in close
+    await self._impl_obj.close(reason=reason)
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_browser.py", line 244, in close
+    await self._channel.send("close", None, {"reason": reason})
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 78, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 634, in wrap_api_call
+    return await cb()
+           ^^^^^^^^^^
+  File "/Users/hemiao/projects/2610/WebCollect/projects/code/.venv/lib/python3.14/site-packages/playwright/_impl/_connection.py", line 149, in _inner_send
+    done, _ = await asyncio.wait(
+              ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 432, in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py", line 521, in _wait
+    await waiter
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1535, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1525, in main
+    result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+        session_objective=session_objective,
+        effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
+        categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 132, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt

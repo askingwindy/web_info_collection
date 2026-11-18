@@ -1,0 +1,1686 @@
+{
+  "archived_at": "2026-11-18T02:00:36.213927+00:00",
+  "source_root": "/Users/hemiao/projects/2610/WebCollect/results/table2-strategy2-100-20261118",
+  "execution_commit": "6fa9c93c820771461e6486d38452152f841e6696",
+  "archive_location": "collection_logs/table2-strategy2-100-20261118",
+  "copied_files": 270,
+  "projected_files": 3,
+  "log_bytes": 7415447,
+  "entries": [
+    {
+      "path": "active-run.json",
+      "source": "active-run.json",
+      "bytes": 276,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "candidate-ids.json",
+      "source": "candidate-ids.json",
+      "bytes": 5202,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "controller-exit.json",
+      "source": "controller-exit.json",
+      "bytes": 1619,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "controller.log",
+      "source": "controller.log",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "final-accounting.json",
+      "source": "final-accounting.json",
+      "bytes": 1613,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "final-no-further-drift.json",
+      "source": "final-no-further-drift.json",
+      "bytes": 1080,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "final-process-exit.json",
+      "source": "final-process-exit.json",
+      "bytes": 111,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "final-reconciliation/receipt.json",
+      "source": "final-reconciliation/receipt.json",
+      "bytes": 441,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "latest-active.json",
+      "source": "latest-active.json",
+      "bytes": 705,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "launcher-pid.json",
+      "source": "launcher-pid.json",
+      "bytes": 51,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "preparation-log.json",
+      "source": "preparation-log.json",
+      "bytes": 659,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "progress-history.jsonl",
+      "source": "progress-history.jsonl",
+      "bytes": 34046,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "progress-latest.json",
+      "source": "progress-latest.json",
+      "bytes": 1693,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "protected-after-run02.json",
+      "source": "protected-after-run02.json",
+      "bytes": 571,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "protected-after-run03.json",
+      "source": "protected-after-run03.json",
+      "bytes": 572,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "protected-after-run04-workers.json",
+      "source": "protected-after-run04-workers.json",
+      "bytes": 2354,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "protected-before-launch.json",
+      "source": "protected-before-launch.json",
+      "bytes": 571,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "protected-final.json",
+      "source": "protected-final.json",
+      "bytes": 2354,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-01/funnel.json",
+      "source": "run-01/funnel.json",
+      "bytes": 253486,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-01/funnel.md",
+      "source": "run-01/funnel.md",
+      "bytes": 254212,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-01/prepared-plan.json",
+      "source": "run-01/prepared-plan.json",
+      "bytes": 46608,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-01/stop.request",
+      "source": "run-01/stop.request",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-01/summary.json",
+      "source": "run-01/summary.json",
+      "bytes": 1494,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/active-run.json",
+      "source": "run-02/active-run.json",
+      "bytes": 359,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/controller-exit.json",
+      "source": "run-02/controller-exit.json",
+      "bytes": 3776,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/controller.log",
+      "source": "run-02/controller.log",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/failure-events.jsonl",
+      "source": "run-02/failure-events.jsonl",
+      "bytes": 5079,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/funnel-rebuilt.json",
+      "source": "run-02/funnel-rebuilt.json",
+      "bytes": 286232,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/funnel-rebuilt.md",
+      "source": "run-02/funnel-rebuilt.md",
+      "bytes": 287096,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/funnel.md",
+      "source": "run-02/funnel.md",
+      "bytes": 48,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/launcher-pid.json",
+      "source": "run-02/launcher-pid.json",
+      "bytes": 50,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/plan.json",
+      "source": "run-02/plan.json",
+      "bytes": 46608,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/prepared-plan.json",
+      "source": "run-02/prepared-plan.json",
+      "bytes": 46608,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/report-error.json",
+      "source": "run-02/report-error.json",
+      "bytes": 50,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/report-interrupt.json",
+      "source": "run-02/report-interrupt.json",
+      "bytes": 238,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-01/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-01/runtime.jsonl",
+      "bytes": 6374,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-02/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-02/runtime.jsonl",
+      "bytes": 6489,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-03/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-03/runtime.jsonl",
+      "bytes": 6356,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-04/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-04/runtime.jsonl",
+      "bytes": 6358,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-05/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-05/runtime.jsonl",
+      "bytes": 3681,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-06/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-06/runtime.jsonl",
+      "bytes": 6372,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-07/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-07/runtime.jsonl",
+      "bytes": 3693,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-08/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-08/runtime.jsonl",
+      "bytes": 6379,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-09/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-09/runtime.jsonl",
+      "bytes": 4763,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-10/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-10/runtime.jsonl",
+      "bytes": 6346,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-11/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-11/runtime.jsonl",
+      "bytes": 6711,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-12/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-12/runtime.jsonl",
+      "bytes": 6369,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-13/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-13/runtime.jsonl",
+      "bytes": 7265,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-14/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-14/runtime.jsonl",
+      "bytes": 6384,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-15/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-15/runtime.jsonl",
+      "bytes": 6358,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-16/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-16/runtime.jsonl",
+      "bytes": 6265,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-17/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-17/runtime.jsonl",
+      "bytes": 6368,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-18/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-18/runtime.jsonl",
+      "bytes": 6384,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-19/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-19/runtime.jsonl",
+      "bytes": 6717,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/runtime/fixed-20261118083453-89960362-20/runtime.jsonl",
+      "source": "run-02/runtime/fixed-20261118083453-89960362-20/runtime.jsonl",
+      "bytes": 6478,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/startup-probes.json",
+      "source": "run-02/startup-probes.json",
+      "bytes": 73,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/stop.request",
+      "source": "run-02/stop.request",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/summary.json",
+      "source": "run-02/summary.json",
+      "bytes": 3408,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w001.log",
+      "source": "run-02/w001.log",
+      "bytes": 9748,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w002.log",
+      "source": "run-02/w002.log",
+      "bytes": 9867,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w003.log",
+      "source": "run-02/w003.log",
+      "bytes": 9730,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w004.log",
+      "source": "run-02/w004.log",
+      "bytes": 9734,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w005.log",
+      "source": "run-02/w005.log",
+      "bytes": 7292,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w006.log",
+      "source": "run-02/w006.log",
+      "bytes": 9746,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w007.log",
+      "source": "run-02/w007.log",
+      "bytes": 7304,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w008.log",
+      "source": "run-02/w008.log",
+      "bytes": 9758,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w009.log",
+      "source": "run-02/w009.log",
+      "bytes": 8284,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w010.log",
+      "source": "run-02/w010.log",
+      "bytes": 9722,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w011.log",
+      "source": "run-02/w011.log",
+      "bytes": 9025,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w012.log",
+      "source": "run-02/w012.log",
+      "bytes": 9745,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w013.log",
+      "source": "run-02/w013.log",
+      "bytes": 8966,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w014.log",
+      "source": "run-02/w014.log",
+      "bytes": 9758,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w015.log",
+      "source": "run-02/w015.log",
+      "bytes": 9734,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w016.log",
+      "source": "run-02/w016.log",
+      "bytes": 14529,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w017.log",
+      "source": "run-02/w017.log",
+      "bytes": 9747,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w018.log",
+      "source": "run-02/w018.log",
+      "bytes": 9762,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w019.log",
+      "source": "run-02/w019.log",
+      "bytes": 9031,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-02/w020.log",
+      "source": "run-02/w020.log",
+      "bytes": 14938,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/active-run.json",
+      "source": "run-03/active-run.json",
+      "bytes": 360,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/controller-exit.json",
+      "source": "run-03/controller-exit.json",
+      "bytes": 3695,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/controller.log",
+      "source": "run-03/controller.log",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/failure-events.jsonl",
+      "source": "run-03/failure-events.jsonl",
+      "bytes": 60101,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/funnel.json",
+      "source": "run-03/funnel.json",
+      "bytes": 387493,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/funnel.md",
+      "source": "run-03/funnel.md",
+      "bytes": 388371,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/launcher-pid.json",
+      "source": "run-03/launcher-pid.json",
+      "bytes": 51,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/plan.json",
+      "source": "run-03/plan.json",
+      "bytes": 47680,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/prepared-plan.json",
+      "source": "run-03/prepared-plan.json",
+      "bytes": 47680,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-01/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-01/runtime.jsonl",
+      "bytes": 10607,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-02/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-02/runtime.jsonl",
+      "bytes": 17492,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-03/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-03/runtime.jsonl",
+      "bytes": 7443,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-04/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-04/runtime.jsonl",
+      "bytes": 7428,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-05/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-05/runtime.jsonl",
+      "bytes": 6368,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-06/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-06/runtime.jsonl",
+      "bytes": 7445,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-07/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-07/runtime.jsonl",
+      "bytes": 9577,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-08/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-08/runtime.jsonl",
+      "bytes": 7409,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-09/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-09/runtime.jsonl",
+      "bytes": 7408,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-10/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-10/runtime.jsonl",
+      "bytes": 7473,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-11/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-11/runtime.jsonl",
+      "bytes": 9604,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-12/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-12/runtime.jsonl",
+      "bytes": 13465,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-13/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-13/runtime.jsonl",
+      "bytes": 7454,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-14/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-14/runtime.jsonl",
+      "bytes": 7405,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-15/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-15/runtime.jsonl",
+      "bytes": 5319,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-16/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-16/runtime.jsonl",
+      "bytes": 6375,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-17/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-17/runtime.jsonl",
+      "bytes": 7405,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-18/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-18/runtime.jsonl",
+      "bytes": 7474,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-19/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-19/runtime.jsonl",
+      "bytes": 11103,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/runtime/fixed-20261118084955-79a8ade5-20/runtime.jsonl",
+      "source": "run-03/runtime/fixed-20261118084955-79a8ade5-20/runtime.jsonl",
+      "bytes": 6359,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/startup-probes.json",
+      "source": "run-03/startup-probes.json",
+      "bytes": 73,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/stop.request",
+      "source": "run-03/stop.request",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/summary.json",
+      "source": "run-03/summary.json",
+      "bytes": 3335,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w001.log",
+      "source": "run-03/w001.log",
+      "bytes": 13679,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w002.log",
+      "source": "run-03/w002.log",
+      "bytes": 23910,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w003.log",
+      "source": "run-03/w003.log",
+      "bytes": 14101,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w004.log",
+      "source": "run-03/w004.log",
+      "bytes": 11603,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w005.log",
+      "source": "run-03/w005.log",
+      "bytes": 9742,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w006.log",
+      "source": "run-03/w006.log",
+      "bytes": 14305,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w007.log",
+      "source": "run-03/w007.log",
+      "bytes": 16440,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w008.log",
+      "source": "run-03/w008.log",
+      "bytes": 14067,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w009.log",
+      "source": "run-03/w009.log",
+      "bytes": 14066,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w010.log",
+      "source": "run-03/w010.log",
+      "bytes": 14131,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w011.log",
+      "source": "run-03/w011.log",
+      "bytes": 16467,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w012.log",
+      "source": "run-03/w012.log",
+      "bytes": 16298,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w013.log",
+      "source": "run-03/w013.log",
+      "bytes": 14314,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w014.log",
+      "source": "run-03/w014.log",
+      "bytes": 14063,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w015.log",
+      "source": "run-03/w015.log",
+      "bytes": 7030,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w016.log",
+      "source": "run-03/w016.log",
+      "bytes": 9751,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w017.log",
+      "source": "run-03/w017.log",
+      "bytes": 14063,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w018.log",
+      "source": "run-03/w018.log",
+      "bytes": 14132,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w019.log",
+      "source": "run-03/w019.log",
+      "bytes": 17504,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-03/w020.log",
+      "source": "run-03/w020.log",
+      "bytes": 9735,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/active-run.json",
+      "source": "run-04/active-run.json",
+      "bytes": 359,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/controller-exit.json",
+      "source": "run-04/controller-exit.json",
+      "bytes": 3639,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/controller.log",
+      "source": "run-04/controller.log",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/engineering-stop.json",
+      "source": "run-04/engineering-stop.json",
+      "bytes": 165,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/failure-events.jsonl",
+      "source": "run-04/failure-events.jsonl",
+      "bytes": 7024,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/funnel.json",
+      "source": "run-04/funnel.json",
+      "bytes": 434229,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/funnel.md",
+      "source": "run-04/funnel.md",
+      "bytes": 435161,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/historical-attempt-transitions.json",
+      "source": "run-04/historical-attempt-transitions.json",
+      "bytes": 16468,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/historical-recovery-events.json",
+      "source": "run-04/historical-recovery-events.json",
+      "bytes": 9227,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/launcher-pid.json",
+      "source": "run-04/launcher-pid.json",
+      "bytes": 58,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/plan.json",
+      "source": "run-04/plan.json",
+      "bytes": 48571,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/prepared-plan.json",
+      "source": "run-04/prepared-plan.json",
+      "bytes": 48571,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/process-samples.jsonl",
+      "source": "run-04/process-samples.jsonl",
+      "bytes": 97528,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-01/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-01/runtime.jsonl",
+      "bytes": 6852,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-02/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-02/runtime.jsonl",
+      "bytes": 6792,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-03/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-03/model-calls.jsonl",
+      "bytes": 1929,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-03/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-03/runtime.jsonl",
+      "bytes": 21352,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-04/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-04/model-calls.jsonl",
+      "bytes": 2193,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-04/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-04/runtime.jsonl",
+      "bytes": 17639,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-05/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-05/runtime.jsonl",
+      "bytes": 6812,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-06/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-06/model-calls.jsonl",
+      "bytes": 2132,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-06/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-06/runtime.jsonl",
+      "bytes": 17606,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-07/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-07/model-calls.jsonl",
+      "bytes": 2160,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-07/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-07/runtime.jsonl",
+      "bytes": 17122,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-08/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-08/model-calls.jsonl",
+      "bytes": 1925,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-08/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-08/runtime.jsonl",
+      "bytes": 19009,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-09/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-09/runtime.jsonl",
+      "bytes": 10973,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-10/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-10/model-calls.jsonl",
+      "bytes": 1929,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-10/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-10/runtime.jsonl",
+      "bytes": 12388,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-11/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-11/runtime.jsonl",
+      "bytes": 7898,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-12/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-12/runtime.jsonl",
+      "bytes": 6364,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-13/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-13/runtime.jsonl",
+      "bytes": 7911,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-14/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-14/runtime.jsonl",
+      "bytes": 6823,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-15/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-15/model-calls.jsonl",
+      "bytes": 2325,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-15/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-15/runtime.jsonl",
+      "bytes": 22117,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-16/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-16/runtime.jsonl",
+      "bytes": 13108,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-17/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-17/model-calls.jsonl",
+      "bytes": 1927,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-17/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-17/runtime.jsonl",
+      "bytes": 29862,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-18/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-18/runtime.jsonl",
+      "bytes": 6853,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-19/model-calls.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-19/model-calls.jsonl",
+      "bytes": 1928,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-19/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-19/runtime.jsonl",
+      "bytes": 13675,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/runtime/fixed-20261118091153-ad5d732d-20/runtime.jsonl",
+      "source": "run-04/runtime/fixed-20261118091153-ad5d732d-20/runtime.jsonl",
+      "bytes": 6808,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/source-after-workers.json",
+      "source": "run-04/source-after-workers.json",
+      "bytes": 100,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/source-before.json",
+      "source": "run-04/source-before.json",
+      "bytes": 184,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/startup-probes.json",
+      "source": "run-04/startup-probes.json",
+      "bytes": 73,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/stop.request",
+      "source": "run-04/stop.request",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/summary.json",
+      "source": "run-04/summary.json",
+      "bytes": 3284,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w001.log",
+      "source": "run-04/w001.log",
+      "bytes": 12631,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w002.log",
+      "source": "run-04/w002.log",
+      "bytes": 10082,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w003.log",
+      "source": "run-04/w003.log",
+      "bytes": 19107,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w004.log",
+      "source": "run-04/w004.log",
+      "bytes": 22132,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w005.log",
+      "source": "run-04/w005.log",
+      "bytes": 12589,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w006.log",
+      "source": "run-04/w006.log",
+      "bytes": 22097,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w007.log",
+      "source": "run-04/w007.log",
+      "bytes": 22564,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w008.log",
+      "source": "run-04/w008.log",
+      "bytes": 23286,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w009.log",
+      "source": "run-04/w009.log",
+      "bytes": 13734,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w010.log",
+      "source": "run-04/w010.log",
+      "bytes": 13651,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w011.log",
+      "source": "run-04/w011.log",
+      "bytes": 13583,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w012.log",
+      "source": "run-04/w012.log",
+      "bytes": 12225,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w013.log",
+      "source": "run-04/w013.log",
+      "bytes": 13596,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w014.log",
+      "source": "run-04/w014.log",
+      "bytes": 12592,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w015.log",
+      "source": "run-04/w015.log",
+      "bytes": 26237,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w016.log",
+      "source": "run-04/w016.log",
+      "bytes": 18434,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w017.log",
+      "source": "run-04/w017.log",
+      "bytes": 37735,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w018.log",
+      "source": "run-04/w018.log",
+      "bytes": 12632,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w019.log",
+      "source": "run-04/w019.log",
+      "bytes": 15926,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/w020.log",
+      "source": "run-04/w020.log",
+      "bytes": 12585,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/active-run.json",
+      "source": "run-05/active-run.json",
+      "bytes": 359,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/controller-exit.json",
+      "source": "run-05/controller-exit.json",
+      "bytes": 3137,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/controller.log",
+      "source": "run-05/controller.log",
+      "bytes": 0,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/failure-events.jsonl",
+      "source": "run-05/failure-events.jsonl",
+      "bytes": 12021,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/funnel.json",
+      "source": "run-05/funnel.json",
+      "bytes": 493245,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/funnel.md",
+      "source": "run-05/funnel.md",
+      "bytes": 494132,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/launcher-pid.json",
+      "source": "run-05/launcher-pid.json",
+      "bytes": 58,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/plan.json",
+      "source": "run-05/plan.json",
+      "bytes": 49462,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/prepared-plan.json",
+      "source": "run-05/prepared-plan.json",
+      "bytes": 49462,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/process-samples.jsonl",
+      "source": "run-05/process-samples.jsonl",
+      "bytes": 103919,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-01/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-01/model-calls.jsonl",
+      "bytes": 34977,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-01/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-01/runtime.jsonl",
+      "bytes": 48578,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-02/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-02/runtime.jsonl",
+      "bytes": 440,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-03/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-03/runtime.jsonl",
+      "bytes": 440,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-04/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-04/model-calls.jsonl",
+      "bytes": 17346,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-04/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-04/runtime.jsonl",
+      "bytes": 47182,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-05/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-05/model-calls.jsonl",
+      "bytes": 9636,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-05/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-05/runtime.jsonl",
+      "bytes": 43199,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-06/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-06/model-calls.jsonl",
+      "bytes": 17355,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-06/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-06/runtime.jsonl",
+      "bytes": 55523,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-07/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-07/runtime.jsonl",
+      "bytes": 440,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-08/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-08/model-calls.jsonl",
+      "bytes": 8095,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-08/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-08/runtime.jsonl",
+      "bytes": 27745,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-09/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-09/model-calls.jsonl",
+      "bytes": 4533,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-09/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-09/runtime.jsonl",
+      "bytes": 17554,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-10/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-10/model-calls.jsonl",
+      "bytes": 3855,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-10/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-10/runtime.jsonl",
+      "bytes": 20231,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-11/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-11/model-calls.jsonl",
+      "bytes": 6126,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-11/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-11/runtime.jsonl",
+      "bytes": 15261,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-12/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-12/model-calls.jsonl",
+      "bytes": 1928,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-12/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-12/runtime.jsonl",
+      "bytes": 24592,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-13/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-13/model-calls.jsonl",
+      "bytes": 14528,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-13/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-13/runtime.jsonl",
+      "bytes": 34437,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-14/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-14/model-calls.jsonl",
+      "bytes": 12204,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-14/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-14/runtime.jsonl",
+      "bytes": 29379,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-15/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-15/runtime.jsonl",
+      "bytes": 440,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-16/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-16/model-calls.jsonl",
+      "bytes": 6571,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-16/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-16/runtime.jsonl",
+      "bytes": 13067,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-17/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-17/runtime.jsonl",
+      "bytes": 440,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-18/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-18/model-calls.jsonl",
+      "bytes": 37384,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-18/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-18/runtime.jsonl",
+      "bytes": 92634,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-19/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-19/model-calls.jsonl",
+      "bytes": 3855,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-19/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-19/runtime.jsonl",
+      "bytes": 27513,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-20/model-calls.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-20/model-calls.jsonl",
+      "bytes": 10405,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/runtime/fixed-20261118092858-d2c055c7-20/runtime.jsonl",
+      "source": "run-05/runtime/fixed-20261118092858-d2c055c7-20/runtime.jsonl",
+      "bytes": 38682,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/source-after-workers.json",
+      "source": "run-05/source-after-workers.json",
+      "bytes": 102,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/source-before.json",
+      "source": "run-05/source-before.json",
+      "bytes": 184,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/startup-probes.json",
+      "source": "run-05/startup-probes.json",
+      "bytes": 73,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/summary.json",
+      "source": "run-05/summary.json",
+      "bytes": 2817,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w001.log",
+      "source": "run-05/w001.log",
+      "bytes": 44693,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w002.log",
+      "source": "run-05/w002.log",
+      "bytes": 966,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w003.log",
+      "source": "run-05/w003.log",
+      "bytes": 966,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w004.log",
+      "source": "run-05/w004.log",
+      "bytes": 42875,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w005.log",
+      "source": "run-05/w005.log",
+      "bytes": 42709,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w006.log",
+      "source": "run-05/w006.log",
+      "bytes": 49944,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w007.log",
+      "source": "run-05/w007.log",
+      "bytes": 966,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w008.log",
+      "source": "run-05/w008.log",
+      "bytes": 26562,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w009.log",
+      "source": "run-05/w009.log",
+      "bytes": 23089,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w010.log",
+      "source": "run-05/w010.log",
+      "bytes": 25313,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w011.log",
+      "source": "run-05/w011.log",
+      "bytes": 16585,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w012.log",
+      "source": "run-05/w012.log",
+      "bytes": 23964,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w013.log",
+      "source": "run-05/w013.log",
+      "bytes": 34903,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w014.log",
+      "source": "run-05/w014.log",
+      "bytes": 31133,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w015.log",
+      "source": "run-05/w015.log",
+      "bytes": 966,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w016.log",
+      "source": "run-05/w016.log",
+      "bytes": 14221,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w017.log",
+      "source": "run-05/w017.log",
+      "bytes": 966,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w018.log",
+      "source": "run-05/w018.log",
+      "bytes": 83718,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w019.log",
+      "source": "run-05/w019.log",
+      "bytes": 26913,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-05/w020.log",
+      "source": "run-05/w020.log",
+      "bytes": 38476,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "selection/audit.json",
+      "source": "selection/audit.json",
+      "bytes": 1183,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "status-history.jsonl",
+      "source": "status-history.jsonl",
+      "bytes": 23940,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "status-latest.json",
+      "source": "status-latest.json",
+      "bytes": 998,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "wal-preparation.json",
+      "source": "wal-preparation.json",
+      "bytes": 1590,
+      "kind": "unchanged_log_copy"
+    },
+    {
+      "path": "run-04/historical-task-changes.json",
+      "sources": [
+        "run-04/historical-task-transitions.json"
+      ],
+      "bytes": 3883,
+      "kind": "changed_fields_projection"
+    },
+    {
+      "path": "final-reconciliation/claim-state-changes.json",
+      "sources": [
+        "final-reconciliation/claim-before.json",
+        "final-reconciliation/claim-after.json"
+      ],
+      "bytes": 1018,
+      "kind": "claim_state_projection"
+    },
+    {
+      "path": "candidate-results.jsonl",
+      "sources": [
+        "selection/cohort.json",
+        "run-05/funnel.json",
+        "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/candidate-pool.sqlite3#candidate_claims (read-only; exact 80 run workers)"
+      ],
+      "bytes": 192164,
+      "kind": "candidate_result_projection"
+    }
+  ],
+  "omitted_groups": {
+    "desktop_metadata": {
+      "files": 1,
+      "bytes": 8196
+    },
+    "local_operator_scripts": {
+      "files": 8,
+      "bytes": 9402
+    },
+    "full_rows_replaced_by_explicit_field_projections": {
+      "files": 3,
+      "bytes": 1631160
+    },
+    "full_source_payloads_and_duplicate_cohorts": {
+      "files": 103,
+      "bytes": 336972168
+    },
+    "database_backups": {
+      "files": 8,
+      "bytes": 22953543247
+    }
+  },
+  "notes": [
+    "Unchanged log copies preserve original absolute evidence paths and original failed integrity conclusions.",
+    "Original source payloads, databases, screenshots, credentials, raw model requests and browser state remain local.",
+    "Candidate final states are a read-only projection captured after final reconciliation; funnel is the earlier unchanged automatic snapshot.",
+    "No new collection, model request, database mutation or replay was performed for this archive."
+  ]
+}

@@ -1,0 +1,40 @@
+2026-11-18T08:52:23.452+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=null candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=claim claimId=fbb44604-1e02-466c-8736-d110bc1e6154 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0
+2026-11-18T08:52:23.452+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=null candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=strategy_selected strategy=screenshot_plan siteId=null entryUrl=https://yuppiy.com/cn/g/mila-farm
+2026-11-18T08:52:34.823+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=processing stage=observation
+2026-11-18T08:52:35.108+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=session_started claimId=fbb44604-1e02-466c-8736-d110bc1e6154 startedMonotonic=559878.629319625
+2026-11-18T08:58:21.722+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=session_close_error severity=warn errorType=EvidenceStale reason=单帧取证期间未能确认截图与界面树同步，拒绝保存该帧
+2026-11-18T08:58:21.729+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=session_finished claimId=fbb44604-1e02-466c-8736-d110bc1e6154 outcome=failed elapsedSeconds=346.62695562501904
+2026-11-18T08:59:34.329+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=claim_task_finished claimId=fbb44604-1e02-466c-8736-d110bc1e6154 taskName=candidate:fbb44604-1e02-466c-8736-d110bc1e6154 reason=lease_monitor_stopped
+2026-11-18T08:59:34.368+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=lease_cancel_requested claimId=fbb44604-1e02-466c-8736-d110bc1e6154 taskName=candidate:fbb44604-1e02-466c-8736-d110bc1e6154 errorType=OperationalError reason="database is locked"
+2026-11-18T08:59:34.371+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=lease_cancel_ignored claimId=fbb44604-1e02-466c-8736-d110bc1e6154 taskName=candidate:fbb44604-1e02-466c-8736-d110bc1e6154 reason=claim_task_finished
+2026-11-18T08:59:34.477+08:00 INFO sessionId=fbb44604-1e02-466c-8736-d110bc1e6154 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=S000173 candidateId=candidate-b9fb3c1f-47b2-4e26-aac9-a17c2b26fab0 claimId=fbb44604-1e02-466c-8736-d110bc1e6154 attemptId=null sampleId=null event=failed claimId=fbb44604-1e02-466c-8736-d110bc1e6154 errorType=EvidenceStale reason=单帧取证期间未能确认截图与界面树同步，拒绝保存该帧
+2026-11-18T08:59:35.673+08:00 INFO sessionId=worker-fixed-20261118084955-79a8ade5-15 strategy=screenshot_plan template_name=null workerId=fixed-20261118084955-79a8ade5-15 siteId=null candidateId=null claimId=null attemptId=null sampleId=null event=worker_finished stopReason=engineering_failure processed=1 saved=0 failed=0 unknown=1 unexecuted=3
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1535, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/hemiao/.codex/worktrees/table2-strategy2-100/WebCollect/projects/code/webcollect/candidate_consumer.py", line 1525, in main
+    result=asyncio.run(run(pool,ledger,worker_id=a.worker_id,request_prefix=a.request_prefix,limit=a.limit,cohort=a.cohort,skip_wechat_articles=a.skip_wechat_articles,
+        session_objective=session_objective,
+        effort_profile={'first_plan':a.first_plan_effort,'branch':a.branch_effort} if a.first_plan_effort else None,
+        categories=a.category,application_id=a.application_id,poll_seconds=a.poll_seconds,stop_when_empty=a.stop_when_empty,producer_batch=a.producer_batch,campaign=a.campaign,target=a.target,target_basis=a.target_basis,recovery_version=a.recovery_version,output=a.output,registry=a.registry,policy=a.policy,history_set=a.history_set,qc_policy=a.qc_policy,
+        collection_strategy=a.collection_strategy,log_level=a.log_level,log_dir=a.log_dir))
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 132, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt

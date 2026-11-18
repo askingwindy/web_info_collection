@@ -1,0 +1,35 @@
+{
+  "pid": 57700,
+  "finished": 1794962095.879444,
+  "summary": {
+    "plan_id": "20261118083025-7631f6f2",
+    "interrupted": true,
+    "error": {
+      "type": "ValueError",
+      "reason": "Launch preflight failed; see preflight errors"
+    },
+    "started_at": 1794961914.577365,
+    "finished_at": 1794962007.195115,
+    "elapsed_seconds": 92.61988637491595,
+    "workers": [],
+    "unlaunched": 20,
+    "automatic_export": false,
+    "stop_reason": "preflight_failed",
+    "preflight": {
+      "status": "FAILED",
+      "errors": [
+        {
+          "code": "STARTUP_INVALID",
+          "field": "scope",
+          "reason": "CurrentChainError: CURRENT_CHAIN: invalid current evidence: Stopped during launch preparation; context={\"error_type\": \"InterruptedError\", \"json_location\": \"$.page_consumption[40].probe.observation\", \"path\": \"/Users/hemiao/projects/2610/WebCollect/database/sqllite/producer-muxtly-wiki-200-20261111-r01/producer-evidence/825965fc147e20be3e58e2f7d7db1ec4a0adec8ce3a431e16ba8a886d18a4448/page-a64fd97c52a76000873219dcf6055829b9cb0d439ecef3c8231dbdd821623c39/observation.json\", \"reference_chain\": [{\"json_location\": \"$[0].references[1]\", \"path\": \"/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/producer-evidence/825965fc147e20be3e58e2f7d7db1ec4a0adec8ce3a431e16ba8a886d18a4448/entry-links-4651f373d860822842cf157a55adcbca5a9e368f93a6a0291a28c0243795f3af.json\"}]}"
+        }
+      ],
+      "dispatches": 0,
+      "browser_calls": 0,
+      "account_probes": 0,
+      "ledger_writes": 0
+    },
+    "succeeded": false,
+    "report_integrity": "FAILED"
+  }
+}

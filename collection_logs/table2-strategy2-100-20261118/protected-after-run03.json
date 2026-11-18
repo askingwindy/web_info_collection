@@ -1,0 +1,30 @@
+{
+  "at": 1794963880.7085388,
+  "pass": true,
+  "checks": [
+    {
+      "store": "producer-jobs",
+      "table": "model_requests",
+      "protected": 21,
+      "differences": []
+    },
+    {
+      "store": "consumer-jobs",
+      "table": "model_requests",
+      "protected": 43,
+      "differences": []
+    },
+    {
+      "store": "candidate-pool",
+      "table": "candidate_claims",
+      "protected": 807,
+      "differences": []
+    },
+    {
+      "store": "production-registry",
+      "table": "m4_attempts",
+      "protected": 614,
+      "differences": []
+    }
+  ]
+}
