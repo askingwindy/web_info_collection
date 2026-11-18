@@ -131,7 +131,9 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
             _, rows = _cohort_rows(cohort_path,pool,scope['registry'],None)
             from collections import Counter
             counts = Counter(r['application_id'] for r in rows)
-            if len(rows)!=100 or (cohort_path and load_json(cohort_path).get('site_denominators',dict(counts))!=dict(counts)):
+            cohort=load_json(cohort_path)
+            if ((plan and len(rows)!=plan.get('expected_pages',100))
+                    or cohort.get('site_denominators',dict(counts))!=dict(counts)):
                 fail('COHORT_DENOMINATOR','selected',dict(counts))
             if len({r['candidate_id'] for r in rows}) != len(rows):
                 fail('COHORT_DUPLICATE','selected','candidate ids must be unique')
@@ -179,8 +181,11 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
                 fail('PLAN_POLICY','plan','stepwise, no export, no save early stop required')
             shards = [w.get('candidate_ids',[]) for w in workers]
             flat = [cid for shard in shards for cid in shard]
-            if len(workers)!=20 or any(len(s)!=5 for s in shards) or len(set(flat))!=100:
-                fail('PLAN_SHARDS','workers','20 disjoint shards of 5 required')
+            from .site_workers import split_even
+            expected_pages=plan.get('expected_pages',100)
+            if (expected_pages<20 or [len(shard) for shard in shards]!=split_even(expected_pages,20)
+                    or len(set(flat))!=expected_pages):
+                fail('PLAN_SHARDS','workers',f'20 balanced disjoint shards covering {expected_pages} pages required')
             if cohort_path and set(flat)!={r['candidate_id'] for r in rows}:
                 fail('PLAN_COHORT_MISMATCH','workers','shards differ from frozen cohort')
         return {'status':'FAILED' if errors else 'PASS','errors':errors,'effective_limits':effective,

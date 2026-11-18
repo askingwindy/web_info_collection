@@ -128,7 +128,9 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     consumer_requests=rows(scope['consumer_db'],'model_requests') or []
     result_rows=rows(scope['pool'],'candidate_results') or []
     plan_path=Path(run_root)/'plan.json'
+    if not plan_path.is_file():plan_path=Path(run_root)/'prepared-plan.json'
     run_plan=load_json(plan_path) if plan_path.is_file() else {}
+    expected_pages=run_plan.get('expected_pages',100)
     run_roots=[Path(p) for p in dict.fromkeys(run_plan.get('previous_run_roots',[])+[str(run_root)])]
     events=[e for root in run_roots for e in jsonl(root,'runtime.jsonl')]
     model_logs=[e for root in run_roots for e in jsonl(root,'model-calls.jsonl')]
@@ -353,11 +355,11 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     faults=round_faults+[r for r in faults if (r.get('claim_id'),r.get('error_feature'),r.get('disposition')) not in seen]
     saved=sum(i['stages']['formally_saved']['state']=='reached' for i in detail)
     totals=request_summary(list(used_requests.values())+producers+probe_requests)
-    if len([i for i in detail if i['stages']['claimed']['state']=='reached'])!=100:issues.append('fixed_100_claims_incomplete')
-    if len(selected)!=100:issues.append('fixed_denominator_is_not_100')
+    if sum(item['stages']['claimed']['state']=='reached' for item in detail)!=expected_pages:issues.append(f'fixed_{expected_pages}_claims_incomplete')
+    if len(selected)!=expected_pages:issues.append(f'fixed_denominator_is_not_{expected_pages}')
     if any(i['inconsistencies'] for i in detail):issues.append('candidate_evidence_inconsistencies')
     if any(not i['task_terminal_proven'] for i in detail if i['stages']['claimed']['state']=='reached'):issues.append('unsettled_claims')
-    return {'denominator':len(selected),'expected_denominator':100,'site_denominators':dict(site_counts),'expected_site_denominators':cohort.get('site_denominators',dict(site_counts)),
+    return {'denominator':len(selected),'expected_denominator':expected_pages,'site_denominators':dict(site_counts),'expected_site_denominators':cohort.get('site_denominators',dict(site_counts)),
             'template_denominators':dict(Counter(i['template'] for i in detail)),'stage_order':list(STAGES),'running_snapshot':running,
             'integrity':'FAILED' if issues else 'PASS','issues':issues,'funnel':aggregate(detail),
             'by_site':{site:aggregate([i for i in detail if i['application_id']==site]) for site in sorted({i['application_id'] for i in detail})},

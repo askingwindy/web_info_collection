@@ -15,6 +15,30 @@ from jsonschema import validate, ValidationError
 
 
 class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
+    def test_fixed_pages_match_the_authorized_total_and_worker_limits(self):
+        import json
+        from collections import Counter
+        from webcollect import site_workers
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            rows = [{'candidate_id': str(index), 'application_id': str(index % 3), 'order': index + 1} for index in range(150)]
+            cohort = root / 'cohort.json'
+            cohort.write_text(json.dumps({'selected': rows, 'denominator': 150, 'site_denominators': {'0': 50, '1': 50, '2': 50}}))
+            scope = {key: str(root / key) for key in ('pool', 'consumer_config', 'consumer_db', 'registry', 'history_set', 'policy', 'output')}
+            with patch.object(site_workers, 'load_scope', return_value=(root / 'scope.json', scope)):
+                with self.assertRaisesRegex(ValueError, '100 unique'):
+                    site_workers.fixed_consumer_plan('scope.json', cohort, root / 'wrong')
+                plan = site_workers.fixed_consumer_plan('scope.json', cohort, root / 'run', expected_pages=150)
+            self.assertEqual(plan['expected_pages'], 150)
+            self.assertEqual([ident for worker in plan['workers'] for ident in worker['candidate_ids']], [row['candidate_id'] for row in rows])
+            self.assertEqual([len(worker['candidate_ids']) for worker in plan['workers']], [8] * 10 + [7] * 10)
+            for worker in plan['workers']:
+                command = worker['command']
+                shard = json.loads(Path(command[command.index('--cohort') + 1]).read_text())
+                self.assertEqual(shard['denominator'], int(command[command.index('--limit') + 1]))
+                self.assertEqual(shard['site_denominators'], dict(Counter(row['application_id'] for row in shard['selected'])))
+                self.assertEqual(command[command.index('--collection-strategy') + 1], 'stepwise')
+
     def test_empty_requirement_metadata_is_losslessly_normalized(self):
         raw = {'goal': '计算', 'requirements': [{'id': 'r1', 'kind': 'input', 'description': '设置数量', 'id2': '',
                                                  'evidence_scope': 'current',

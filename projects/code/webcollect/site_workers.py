@@ -1,5 +1,6 @@
 """Plan or launch foreground producer/consumer workers for selected Table1 sites."""
 import argparse
+from collections import Counter
 from contextlib import ExitStack
 from webcollect import workspace_json as json
 import os
@@ -241,43 +242,47 @@ def consumer_plan(scope_path, selectors, *, workers):
     return plan
 
 
-def fixed_consumer_plan(scope_path, cohort_path, log_root, *, resume_from=None):
-    """Prepare 20 static worker shards, five pages each, no exports or save target."""
+def fixed_consumer_plan(scope_path, cohort_path, log_root, *, resume_from=None, expected_pages=100):
+    """Split the explicitly sized frozen cohort across 20 workers without replacement."""
     from .batch_core import load_json, save_json, file_sha
     scope_path, scope=load_scope(scope_path)
     cohort=load_json(cohort_path)
     rows=cohort['selected']
     sites=sorted({r['application_id'] for r in rows})
-    if len(rows)!=100 or len({r['candidate_id'] for r in rows})!=100:
-        raise ValueError('Fixed collection requires 100 unique candidates')
     if resume_from:
         previous=load_json(resume_from)
         freeze({'fragment':{},'workflow_proposal':{'spec':{}}},
                previous.get('collection_strategy','screenshot_plan'))
         if (Path(previous['scope']).resolve()!=scope_path or Path(previous['cohort']).resolve()!=Path(cohort_path).resolve()
-                or previous.get('collection_strategy')!='stepwise'):
+                or previous.get('collection_strategy')!='stepwise' or previous.get('expected_pages',100)!=expected_pages):
             raise ValueError('Resume must retain the same scope, cohort and strategy')
         summary=load_json(Path(previous['log_root'])/'summary.json')
         if any(w.get('returncode') is None for w in summary['workers']):
             raise ValueError('Previous workers must exit before resume')
+    if (type(expected_pages) is not int or expected_pages<20 or cohort.get('denominator')!=expected_pages
+            or len(rows)!=expected_pages or len({row['candidate_id'] for row in rows})!=expected_pages):
+        raise ValueError(f'Fixed collection requires {expected_pages} unique candidates and 20 nonempty shards')
     root=Path(log_root).resolve();root.mkdir(parents=True,exist_ok=False)
     plan=new_plan('consumer',scope_path,scope,sites)
     plan.update(log_root=str(root),cohort=str(Path(cohort_path).resolve()), collection_strategy='stepwise',
-                automatic_export=False, stop_after_saves=None, fixed=True)
+                automatic_export=False, stop_after_saves=None, fixed=True, expected_pages=expected_pages)
     if resume_from:
         plan.update(resume_from=str(Path(resume_from).resolve()),
             prior_worker_ids=list(dict.fromkeys(previous.get('prior_worker_ids',[])+[w['worker_id'] for w in previous['workers']])),
             previous_run_roots=list(dict.fromkeys(previous.get('previous_run_roots',[])+[previous['log_root']])))
-    for index in range(20):
-        shard=[dict(r,order=n+1) for n,r in enumerate(rows[index*5:index*5+5])]
+    offset=0
+    for size in split_even(expected_pages,20):
+        shard=[dict(row,order=index) for index,row in enumerate(rows[offset:offset+size],1)]
+        offset+=size
         number=len(plan['workers'])+1;wid=f'fixed-{plan["plan_id"]}-{number:02d}'
         path=root/f'w{number:02d}-cohort.json'
-        save_json(path,{**cohort,'selected':shard,'denominator':5})
+        save_json(path,{**cohort,'selected':shard,'denominator':size,
+                        'site_denominators':dict(Counter(row['application_id'] for row in shard))})
         output=Path(scope['output'])/plan['plan_id']/wid
         command=[sys.executable,'-B','-u','-m','webcollect.candidate_consumer','run',
             '--pool',scope['pool'],'--config',scope['consumer_config'],'--ledger',scope['consumer_db'],
             '--registry',scope['registry'],'--history-set',scope['history_set'],'--policy',scope['policy'],
-            '--output',str(output),'--worker-id',wid,'--request-prefix',wid,'--limit','5',
+            '--output',str(output),'--worker-id',wid,'--request-prefix',wid,'--limit',str(size),
             '--cohort',str(path),'--collection-strategy','stepwise',
             '--log-dir',str(root/'runtime'/wid)]
         plan['workers'].append({'worker_id':wid,'application_ids':sorted({r['application_id'] for r in shard}),'candidate_ids':[r['candidate_id'] for r in shard],
@@ -467,6 +472,7 @@ def main(argv=None):
     fixed = sub.add_parser('fixed-consumer', allow_abbrev=False)
     fixed.add_argument('--scope',type=Path,required=True)
     fixed.add_argument('--cohort',type=Path,required=True)
+    fixed.add_argument('--expected-pages',type=positive,default=100,help='Exact authorized frozen page count across all 20 workers')
     fixed.add_argument('--log-root',type=Path,required=True)
     fixed.add_argument('--launch',action='store_true')
     fixed.add_argument('--resume-from',type=Path,help='Previous prepared plan; retain all claims and only consume unclaimed rows')
@@ -500,7 +506,7 @@ def main(argv=None):
             result=freeze_round(args.scope,args.producer_plan,args.output)
             code=0 if result['ready'] else 2
         elif args.role == 'fixed-consumer':
-            plan=fixed_consumer_plan(args.scope,args.cohort,args.log_root,resume_from=args.resume_from)
+            plan=fixed_consumer_plan(args.scope,args.cohort,args.log_root,resume_from=args.resume_from,expected_pages=args.expected_pages)
             result={'launched':False,**plan}
             code=0
             if args.launch:
