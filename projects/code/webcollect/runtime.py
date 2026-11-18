@@ -869,8 +869,19 @@ class RuntimeStore:
                 saved, annotation, receipt = completion_facts
                 if saved.get('sample_id') != row['sample_id'] or receipt.parent.name != row['sample_id']:
                     raise ValueError('Pending sample receipt identity differs')
-                from .closing_policy import completion_delivery_decision
-                if not completion_delivery_decision(annotation, saved.get('raw_execution') or {})['ordinary_target_eligible']:
+                # 统一保存资格入口：按封存记录的冻结策略静态分流（策略 1/2 走
+                # closing_policy.completion_delivery_decision，策略 3 stepwise 走
+                # 本策略判定）。数据库任务的冻结策略必须与原始记录一致。
+                from . import collection_strategy as _cs
+                raw_execution = saved.get('raw_execution') or {}
+                task_now = json.loads(row['task_json'])
+                frozen = _cs.strategy_id(task_now)
+                raw_strategy = (raw_execution.get('collection_strategy') or {}).get('id')
+                if frozen == _cs.STRATEGY_STEPWISE and raw_strategy != _cs.STRATEGY_STEPWISE:
+                    raise ValueError('Stepwise save requires its frozen strategy marker in raw execution')
+                if frozen != _cs.STRATEGY_STEPWISE and raw_strategy == _cs.STRATEGY_STEPWISE:
+                    raise ValueError('Non-stepwise task cannot carry a stepwise raw execution')
+                if not _cs.save_eligibility(annotation, raw_execution)['ordinary_target_eligible']:
                     raise ValueError('Formal save requires original-goal success and at least five effective actions')
             if outcome == 'collected_pending_review':
                 from .admission_cohort import guard_scope

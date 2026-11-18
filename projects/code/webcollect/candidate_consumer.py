@@ -167,6 +167,12 @@ def unverified_original_actions(attempt):
         verify_evidence([ref])
         raw_root=Path(ref['path']).parent
         receipt=load_json(ref['path'])
+        if receipt.get('schema_version') == 'stepwise-raw-receipt-1':
+            # 策略 3 原始记录走本策略的守卫读取；不进入旧 react session_record。
+            from .stepwise.records import unverified_actions as stepwise_unverified
+            for item in stepwise_unverified(ref):
+                yield item
+            continue
         verify_evidence([receipt['terminal']])
         if load_json(receipt['terminal']['path']).get('unknown'):
             from .postprocess import cancelled_dispatch_audit
@@ -227,10 +233,13 @@ def verified_saved(claim):
         prefix = saved.get('raw_execution', {}).get('trusted_prefix')
         # 结果归属：本任务的冻结模板名随保存结果进入 candidate_results.record
         # （历史封存任务无标记 → None），站点模板登记与进度统计都读这一个字段。
+        # 冻结策略ID（策略3 stepwise 保存结果的策略归属）一并写入 record。
+        from .collection_strategy import strategy_id as _frozen_strategy_id
         found.append({'registry':claim['binding']['registry'],'attempt_id':row['attempt_id'],'task_key':row['task_key'],
             **({'stop_details':stop_details} if stop_details else {}),
             **({'trusted_prefix':prefix,'original_goal_completed':False} if prefix else {}),
             'template_name':(task.get('fragment') or {}).get('screenshot_template'),
+            'strategy':_frozen_strategy_id(task),
             'sample_id':row['sample_id'],'save_receipt':receipt,'result_location':str(sample), 'scope_id':row['scope_id']})
     if len(found)>1: raise ValueError('More than one saved result for candidate claim; reconciliation required')
     return found[0] if found else None
@@ -858,20 +867,24 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
             runlog.info('processing', stage='planning')
         # 策略2模板选择：登录/首帧处置之后、任何模型调用之前，确定性决定
         # 本次采集使用的模板包（无模型调用；显式站点规则先于页面结构匹配）。
-        from .screenshot_planners import select_template
-        with pool.pool.connect() as con:
-            template_row = con.execute(
-                'SELECT application_id FROM data_candidates WHERE candidate_id=?',
-                (claim['candidate_id'],)).fetchone()
-        template_name, template_match = select_template(pool=pool,
-            application_id=template_row[0] if template_row else None,
-            goal=snapshot.get('requested_goal'), state=entry_state)
-        if runlog is not None:
-            runlog.attach(template_name=template_name)
-            runlog.info('template_selected', template_name=template_name,
-                source=template_match['source'], reason=template_match['reason'],
-                module='webcollect.screenshot_templates.'+template_name,
-                **{'match.'+key: value for key, value in template_match.get('signals', {}).items()})
+        # 策略 3（stepwise）完全跳过模板匹配与冻结，无 template_sites 登记。
+        from .collection_strategy import STRATEGY_STEPWISE
+        template_name = None
+        if collection_strategy != STRATEGY_STEPWISE:
+            from .screenshot_planners import select_template
+            with pool.pool.connect() as con:
+                template_row = con.execute(
+                    'SELECT application_id FROM data_candidates WHERE candidate_id=?',
+                    (claim['candidate_id'],)).fetchone()
+            template_name, template_match = select_template(pool=pool,
+                application_id=template_row[0] if template_row else None,
+                goal=snapshot.get('requested_goal'), state=entry_state)
+            if runlog is not None:
+                runlog.attach(template_name=template_name)
+                runlog.info('template_selected', template_name=template_name,
+                    source=template_match['source'], reason=template_match['reason'],
+                    module='webcollect.screenshot_templates.'+template_name,
+                    **{'match.'+key: value for key, value in template_match.get('signals', {}).items()})
         generated = await asyncio.to_thread(generate, ledger, catalog, root/'planning',
             generator='react-url', history_registry=registry, history_set=history_set,
             react_url=record['site_uri'], react_goal=snapshot['requested_goal'], page_identities=identities,
@@ -919,13 +932,14 @@ async def _consume(pool, claim, ledger, *, output, registry, policy, history_set
             result={'state':current['state'],'execution':execution,'unresolved':uncertain}
         else:
             # 正式保存后的站点模板登记与进度日志：任何失败只记录展示日志，
-            # 绝不改变已提交的保存结果或候选状态。
+            # 绝不改变已提交的保存结果或候选状态。策略 3 保存不进入模板登记。
             try:
                 from . import template_sites as template_sites_registry
                 progress = template_sites_registry.record_save(pool, claim, result['result'])
                 if runlog is not None:
                     runlog.info('sample_saved', sampleId=result['result']['sample_id'],
-                                templateName=result['result'].get('template_name'), saved=True)
+                                templateName=result['result'].get('template_name'),
+                                strategyId=result['result'].get('strategy'), saved=True)
                     runlog.info('template_site_progress', applicationId=progress['application_id'],
                                 templateName=progress['template_name'], pages=progress['pages'],
                                 reachedThree=progress['reached_three'], registered=progress['registered'],
@@ -1458,9 +1472,9 @@ def main(argv=None):
     runp.add_argument('--recovery-version',help='Only claim the finite candidates prepared for this repair version')
     runp.add_argument('--poll-seconds',type=int,help='Wait this many seconds between empty claims; default waits continuously (2 seconds between empty claims)')
     runp.add_argument('--stop-when-empty',action='store_true',help='Stop with candidates_exhausted instead of polling when the selected inventory is empty')
-    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
-    runp.add_argument('--collection-strategy',choices=(STRATEGY_SCREENSHOT_PLAN,),default=STRATEGY_SCREENSHOT_PLAN,
-        help='采集策略：策略2 screenshot_plan，默认且唯一；策略1已冻结（react 直接拒绝）')
+    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE
+    runp.add_argument('--collection-strategy',choices=(STRATEGY_SCREENSHOT_PLAN,STRATEGY_STEPWISE),default=STRATEGY_SCREENSHOT_PLAN,
+        help='采集策略：默认策略2 screenshot_plan；显式 stepwise 进入策略3；策略1已冻结（react 直接拒绝）')
     runp.add_argument('--producer-batch',help='Consume only newly published rows from this producer batch; wait when inventory is empty')
     runp.add_argument('--log-level',choices=('INFO','DEBUG'),default='INFO',
         help='Display log level; DEBUG additionally records model input/output to model-debug.jsonl')

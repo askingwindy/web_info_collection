@@ -21,7 +21,10 @@ from .planning import canonical, object_sha256
 
 
 CONSUMER_KINDS = frozenset(('candidate-observation', 'collection', 'react-native-decision',
-                            'react-decision', 'fragment-decision', 'task-generation', 'frozen-plan'))
+                            'react-decision', 'fragment-decision', 'task-generation', 'frozen-plan',
+                            # 策略 3 stepwise：决策/回写/判定三类调用共用同一 consumer
+                            # job kind，继承同 attempt 计费、40 次上限与 UNKNOWN 处理。
+                            'stepwise-decision'))
 
 
 class BudgetStop(ValueError):
@@ -457,7 +460,7 @@ class BatchLedger:
         with self.transaction() as con:
             if parent_job is not None:
                 self._owned(con, parent_job)
-                if kind not in ('fragment-decision','react-decision','react-native-decision') or parent_job['kind'] != 'collection':
+                if kind not in ('fragment-decision','react-decision','react-native-decision','stepwise-decision') or parent_job['kind'] != 'collection':
                     raise ValueError('Only a bound collection decision may share its parent slot')
                 requested = con.execute('SELECT payload FROM jobs WHERE id=? AND kind=?', (job_id, kind)).fetchone()
                 if requested is not None and json.loads(requested['payload']).get('parent_job_id') != parent_job['id']:
@@ -503,7 +506,7 @@ class BatchLedger:
                 raise ValueError('Retained decision parent binding cannot be replaced')
             if parent_job is not None:
                 self._owned(con,parent_job)
-                if kind not in ('fragment-decision','react-decision','react-native-decision') or parent_job['kind']!='collection' or json.loads(row['payload']).get('parent_job_id')!=parent_job['id']:
+                if kind not in ('fragment-decision','react-decision','react-native-decision','stepwise-decision') or parent_job['kind']!='collection' or json.loads(row['payload']).get('parent_job_id')!=parent_job['id']:
                     raise ValueError('Only a bound collection decision may share its parent slot')
                 if con.execute("SELECT 1 FROM job_parents p JOIN jobs j ON j.id=p.job_id WHERE p.parent_id=? AND j.state='running'",(parent_job['id'],)).fetchone():
                     raise BudgetStop('Parent already has an active decision; no parallel child')

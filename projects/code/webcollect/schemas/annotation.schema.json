@@ -115,7 +115,8 @@
           ]
         },
         "data_type": {
-          "const": "webcollect_agent_v1"
+          "type": "string",
+          "minLength": 1
         },
         "action_space": {
           "const": "unified_gui_v4"

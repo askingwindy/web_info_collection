@@ -325,6 +325,16 @@ class SessionLogUnitTests(unittest.TestCase):
         self.root = Path(temp.name)
 
     def test_stderr_runtime_line_and_jsonl_share_one_session_id(self):
+        # 同一会话身份的两个来源：claim 即 sessionId；无 claim 直接执行时生成
+        # 一次性展示 id，且每次执行互不相同。
+        from webcollect.runlog import for_claim
+        claim = {'claim_id': 'CL-9', 'candidate_id': 'C-9'}
+        self.assertEqual(for_claim(self.root, 'w1', claim).session_id, 'CL-9')
+        first = for_direct_run(self.root).session_id
+        second = for_direct_run(self.root).session_id
+        self.assertNotEqual(first, second)
+        self.assertTrue(first and second)
+
         log = SessionLog(self.root, 'w1', 'claim-1', STRATEGY_SCREENSHOT_PLAN,
                          claim_id='claim-1', candidate_id='c1')
         log.attach(attemptId='a1', sessionId='must-not-change')
@@ -388,7 +398,7 @@ class SessionLogUnitTests(unittest.TestCase):
         info.model_debug(requestId='r2', payload={'Authorization': 'x'})
         self.assertFalse((self.root / 'logs' / 'w2' / 'model-debug.jsonl').exists())
 
-    def test_sanitize_debug_is_recursive_and_case_insensitive(self):
+    def test_debug_projection_sanitizes_and_keeps_image_files_not_base64(self):
         value = {'headers': {'Cookie': 'session=1', 'api-key': 'k'},
                  'list': [{'Token': 't', 'Password': 'p'}]}
         clean = sanitize_debug(value)
@@ -396,8 +406,6 @@ class SessionLogUnitTests(unittest.TestCase):
         self.assertEqual(clean['headers']['api-key'], '<omitted>')
         self.assertEqual(clean['list'][0]['Token'], '<omitted>')
         self.assertEqual(clean['list'][0]['Password'], '<omitted>')
-
-    def test_image_references_keep_files_not_base64(self):
         image = self.root / 'shot.png'
         Image.new('RGB', (8, 6), 'white').save(image)
         reference = image_references([image])[0]
@@ -420,13 +428,6 @@ class SessionLogUnitTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue().count('日志写入失败'), 2)
         self.assertFalse((blocker / 'sub').exists())
 
-    def test_session_id_sources(self):
-        claim = {'claim_id': 'CL-9', 'candidate_id': 'C-9'}
-        self.assertEqual(for_claim(self.root, 'w1', claim).session_id, 'CL-9')
-        first = for_direct_run(self.root).session_id
-        second = for_direct_run(self.root).session_id
-        self.assertNotEqual(first, second)
-        self.assertTrue(first and second)
 
 
 class GatewayRunlogTests(unittest.TestCase):
@@ -484,18 +485,6 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertIsNotNone(finished[0]['startedAt'])
         self.assertIsNotNone(finished[0]['endedAt'])
 
-    def test_missing_usage_is_null_not_zero(self):
-        _, job, gateway, runlog = self._gateway()
-        self.fixture.response(self.fixture.message())
-        self.f.opener.raw.pop('usage')
-        with self.assertRaises(OutcomeUnknown):
-            self.fixture.call(gateway, job, attempt_id='claim-1')
-        finished = [row for row in self._calls(runlog)
-                    if row['event'] == 'request_finished']
-        self.assertEqual(finished[0]['state'], 'unknown')
-        for key in ('inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens'):
-            self.assertIsNone(finished[0][key], key)
-
     def test_exact_replay_is_one_cache_hit_without_new_request(self):
         _, job, gateway, runlog = self._gateway()
         self.fixture.response(self.fixture.message())
@@ -552,6 +541,20 @@ class GatewayRunlogTests(unittest.TestCase):
         with ledger.connect() as con:
             retained_request = dict(con.execute('SELECT * FROM model_requests WHERE id=?', (original['id'],)).fetchone())
         self.assertEqual(retained_request, original)
+
+    def test_missing_usage_is_null_and_invalid_response_keeps_actual_usage(self):
+        # 同一事实只算一次：失败请求的用量如实记录——缺 usage 记 null（不是
+        # 0），invalid_response 保留 provider 实际返回的 usage。
+        _, job, gateway, runlog = self._gateway()
+        self.fixture.response(self.fixture.message())
+        self.f.opener.raw.pop('usage')
+        with self.assertRaises(OutcomeUnknown):
+            self.fixture.call(gateway, job, attempt_id='claim-1')
+        finished = [row for row in self._calls(runlog)
+                    if row['event'] == 'request_finished']
+        self.assertEqual(finished[0]['state'], 'unknown')
+        for key in ('inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens'):
+            self.assertIsNone(finished[0][key], key)
 
     def test_invalid_response_still_records_its_usage(self):
         from webcollect.screenshot_plan import decision_tools, normalize_decision
@@ -778,7 +781,20 @@ class GatewayRunlogTests(unittest.TestCase):
             self.f.call(gateway3, job3, attempts=2, attempt_id='claim-1')
         self.assertEqual(len(self.f.opener.calls) - before_refused_calls, 1)
 
-    def test_debug_level_records_sanitized_wire_in_and_out(self):
+    def test_debug_level_sanitizes_wire_and_no_runlog_stays_quiet(self):
+        # 先验证同一开关的“关”：未接 runlog 时网关保持安静且账本行为不变。
+        cfg = self.f.config('glm', vision=True)
+        cfg['budget']['min_model_interval_seconds'] = 0
+        ledger = BatchLedger(self.f.root / 'plain.sqlite3', cfg, initialize=True)
+        job = ledger.claim('test', job_id=ledger.enqueue('test', {'offline': True}))
+        gateway = ModelGateway(ledger)
+        gateway._credential = 'CONTROLLED_UNUSED'
+        gateway._session_id = 'claim-1'
+        self.fixture.response(self.fixture.message())
+        self.fixture.call(gateway, job, attempt_id='claim-1')
+        self.assertFalse((self.f.root / 'logs').exists())
+        self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
+        # 再验证“开”：DEBUG 记录净化后的线上往返，不含凭据或内嵌图片。
         _, job, gateway, runlog = self._gateway(level='DEBUG')
         self.fixture.response(self.fixture.message())
         self.fixture.call(gateway, job, attempt_id='claim-1', images=[self.f.image])
@@ -793,19 +809,6 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertNotIn('opaque-offline-protocol-field', blob)
         self.assertNotIn('data:image/png;base64,', blob)
         self.assertTrue(any(entry['path'].endswith('.png') for entry in wire['images']))
-
-    def test_no_runlog_keeps_gateway_quiet_and_unchanged(self):
-        cfg = self.f.config('glm', vision=True)
-        cfg['budget']['min_model_interval_seconds'] = 0
-        ledger = BatchLedger(self.f.root / 'plain.sqlite3', cfg, initialize=True)
-        job = ledger.claim('test', job_id=ledger.enqueue('test', {'offline': True}))
-        gateway = ModelGateway(ledger)
-        gateway._credential = 'CONTROLLED_UNUSED'
-        gateway._session_id = 'claim-1'
-        self.fixture.response(self.fixture.message())
-        self.fixture.call(gateway, job, attempt_id='claim-1')
-        self.assertFalse((self.f.root / 'logs').exists())
-        self.assertEqual(ledger.summary()['usage_covered_requests'], 1)
 
 
 class ChooserRunlogTests(SessionHarness):

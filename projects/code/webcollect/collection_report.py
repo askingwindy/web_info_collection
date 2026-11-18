@@ -194,6 +194,32 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                 refs=json.loads(a['evidence_json']);raw_refs=[r for r in refs if Path(r.get('path','')).name=='raw-receipt.json']
                 for ref in raw_refs:
                     verify_evidence([ref]);receipt=load_json(ref['path']);verify_evidence([receipt['terminal']]);terminal=load_json(receipt['terminal']['path'])
+                    task_of_attempt = next((task for t, task in selected_tasks
+                                            if t['task_key'] == a['task_key']), None)
+                    if ((terminal.get('strategy') or {}).get('id') == 'stepwise'
+                            or ((task_of_attempt or {}).get('fragment') or {}).get(
+                                'collection_strategy', {}).get('id') == 'stepwise'):
+                        # 策略 3：按本策略终态读取（模板匹配、整份计划等策略 2
+                        # 专属阶段记不适用，不伪造达成）。
+                        item['template'] = 'stepwise'
+                        item['template_source'] = 'not_applicable'
+                        if a['status'] == 'collected_pending_review' and a.get('finished_at') is not None:
+                            item['closure_proven'] = True
+                        count = terminal.get('effective_steps'); item['effective_steps'] = count
+                        if count is not None:
+                            facts['effective_steps_ge5'] = {'state': 'reached' if count >= 5 else 'failed',
+                                'code': 'effective_steps_below_5' if count < 5 else None, 'evidence': [ref]}
+                        for stage in ('template_selected', 'initial_plan_accepted'):
+                            if facts[stage]['state'] == 'unknown':
+                                facts[stage] = {'state': 'not_applicable', 'evidence': [],
+                                                'strategy': 'stepwise'}
+                        goal = (terminal.get('goal_evidence') or {}).get('business_goal_status')
+                        if goal == 'VERIFIED':
+                            facts['goal_verified'] = {'state': 'reached', 'evidence': [receipt['terminal']]}
+                        elif goal:
+                            facts['goal_verified'] = {'state': 'failed', 'code': goal,
+                                                      'evidence': [receipt['terminal']]}
+                        continue
                     # The accepted initial plan must exist in the same hash-verified seal.
                     raw_root=Path(ref['path']).parent
                     from .postprocess import session_record
@@ -257,10 +283,14 @@ def build(scope_path, cohort_path, run_root, *, running=False):
             except (ValueError,OSError,KeyError) as error:item['inconsistencies'].append('save_evidence_unreadable:'+str(error))
         if not claims:
             for stage in STAGES[1:]:facts[stage]['state']='not_reached'
-        # Later facts cannot repair missing predecessor evidence.
+        # Later facts cannot repair missing predecessor evidence. 策略 2 专属阶段
+        # 对策略 3 记 not_applicable，按透明阶段处理（既非达成也非缺失）。
         prefix=True
         for stage in STAGES:
             state=facts[stage]['state']
+            if state=='not_applicable':
+                facts[stage]['prefix_reached']=prefix
+                continue
             if state=='reached' and not prefix:item['inconsistencies'].append('later_fact_without_prefix:'+stage)
             prefix=prefix and state=='reached';facts[stage]['prefix_reached']=prefix
         item['task_terminal_proven']=bool(claims) and item['closure_proven'] and all(

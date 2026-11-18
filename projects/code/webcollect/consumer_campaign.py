@@ -79,7 +79,10 @@ def completed_goal_completion(saved):
     annotation = Path(saved['result_location']) / 'annotation.json'
     if file_sha(annotation) != receipt['sample_files_sha256']['annotation.json']:
         raise ValueError('Campaign annotation differs from saved receipt')
-    result = completion_delivery_decision(load_json(annotation), receipt.get('raw_execution', {}))
+    # 统一保存资格入口：按封存 raw_execution 的冻结策略静态分流（策略 3
+    # stepwise 由本策略判定，不进入策略 2 合同）。
+    from .collection_strategy import save_eligibility as strategy_save_eligibility
+    result = strategy_save_eligibility(load_json(annotation), receipt.get('raw_execution', {}))
     return {**result, 'counting_policy': COMPLETED_GOAL_DELIVERY,
             'target_count_status': ('ordinary_goal_completed_pending_review'
                 if result['delivery_eligible'] else 'retained_outside_ordinary_target'),

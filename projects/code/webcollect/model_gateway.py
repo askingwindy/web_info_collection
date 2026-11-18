@@ -773,13 +773,16 @@ class ModelGateway:
                   attempts=1, output_limit=None, reasoning_effort=None, attempt_id=None,
                   max_requests=None, synthetic_response=None, inference=False, content_plan_protocol=None,
                   timeout_seconds=None, patient_first_plan=False, dispatch_deadline=None,
-                  plan_normalizer=None):
+                  plan_normalizer=None, tool_choice=None):
         """Native-tool protocol. Synthetic fixtures are assistant message
         objects (role/content/tool_calls/reasoning_content), never arguments alone.
         Provider assistant messages stay in provider_response. A bounded field repair
         returns an explicitly marked host-composed assistant tool call for history,
         alongside the unchanged provider patch and its merge provenance; ordinary
         assistant/user messages remain verbatim. Reasoning stays in controlled storage.
+
+        tool_choice（可选，经声明工具校验）：None 保持既有行为（register_evidence
+        单工具强制、其余 auto）；'auto' 或指向已声明函数的命名选择原样下发。
         """
         if self.config['model']['provider'] == 'synthetic' and synthetic_response is None:
             raise ValueError('Synthetic tool adapter needs explicit assistant response')
@@ -807,6 +810,16 @@ class ModelGateway:
             if not isinstance(schema, dict) or schema.get('type') != 'object':
                 raise ValueError('Function parameters must declare an object Schema')
             declared[name] = schema
+        if tool_choice is not None:
+            # 只允许 'auto' 或指向本次已声明函数的命名选择；其余取值在派发前拒绝。
+            if tool_choice == 'auto':
+                pass
+            elif (isinstance(tool_choice, dict) and tool_choice.get('type') == 'function'
+                    and isinstance(tool_choice.get('function'), dict)
+                    and tool_choice['function'].get('name') in declared):
+                pass
+            else:
+                raise ValueError('Declared-tool tool_choice required')
         if content_plan_protocol not in (None,'strict-plan-content'):
             raise ValueError('Unknown content plan protocol')
         if timeout_seconds is not None and (type(timeout_seconds) is not int or not 1<=timeout_seconds<=600):
@@ -861,8 +874,9 @@ class ModelGateway:
         return self._call(job, purpose + ':native-tools', text, {'type': 'object'},
                           images=images, attempts=attempts, output_limit=output_limit,
                           tools=deepcopy(list(tools)), tool_choice=(
-                              {'type': 'function', 'function': {'name': 'register_evidence'}}
-                              if set(declared) == {'register_evidence'} else 'auto'),
+                              tool_choice if tool_choice is not None else
+                              ({'type': 'function', 'function': {'name': 'register_evidence'}}
+                               if set(declared) == {'register_evidence'} else 'auto')),
                           synthetic_response=synthetic_response, native_context=context)
 
     def call_message(self, job, purpose, text, schema, *, system, images=(), attempts=1,

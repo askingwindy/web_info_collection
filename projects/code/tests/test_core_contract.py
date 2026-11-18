@@ -32,17 +32,32 @@ class PlanProtocolContract(unittest.TestCase):
         self.assertEqual(RESULT_EXECUTION_POLICY, 'result-execution')
         self.assertEqual(RESULT_COMPLETION_PROTOCOL, 'result-completion')
         self.assertEqual(REACT_PROTOCOL, 'react-native')
-        self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan'))
-        # 策略1完全冻结：新任务缺省策略2；身份表保留react供历史只读解析。
+        self.assertEqual(tuple(STRATEGIES), ('react', 'screenshot_plan', 'stepwise'))
+        # 策略1完全冻结：新任务缺省策略2；策略3（stepwise）显式选择。身份表
+        # 保留react供历史只读解析。
         self.assertEqual(DEFAULT_STRATEGY, STRATEGY_SCREENSHOT_PLAN)
         import webcollect.screenshot_plan as screenshot_plan_module
-        from webcollect.collection_strategy import Strategy1Forbidden, select
+        import webcollect.stepwise as stepwise_module
+        from webcollect.collection_strategy import (STRATEGY_STEPWISE, Strategy1Forbidden,
+                                                    is_stepwise, select)
         frozen = {'task_id': 't', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
         with self.assertRaises(Strategy1Forbidden):
             freeze(frozen, STRATEGY_BANDED_REACT)
         freeze(frozen)  # freeze default stamps 策略2 for new tasks
         self.assertEqual(strategy_id(frozen), STRATEGY_SCREENSHOT_PLAN)
         self.assertIs(select(frozen), screenshot_plan_module)
+        # 策略 3 显式冻结与解析：独立包路由，不挂策略2 action_stability 协议。
+        third = {'task_id': 't3', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
+        freeze(third, STRATEGY_STEPWISE)
+        self.assertEqual(strategy_id(third), STRATEGY_STEPWISE)
+        self.assertTrue(is_stepwise(third))
+        self.assertFalse(is_stepwise(frozen))
+        self.assertIs(select(third), stepwise_module)
+        # 策略 3 帧取证同为 action-scoped 观察（共享宿主稳定域实现），冻结同
+        # 一观察策略标记；但不冻结任何策略 2 模板。
+        from webcollect.action_stability import ACTION_STABILITY_PROTOCOL
+        self.assertEqual(third['fragment']['action_stability_protocol'], ACTION_STABILITY_PROTOCOL)
+        self.assertNotIn('screenshot_template', third['fragment'])
         # Absent-marker fragments keep their historical react identity; they are
         # never silently migrated to 策略 2, and selecting them is refused.
         unmarked = {'task_id': 'h', 'fragment': {}, 'workflow_proposal': {'spec': {}}}
@@ -89,6 +104,44 @@ class PlanProtocolContract(unittest.TestCase):
                 self.assertFalse(stripped.startswith('from webcollect.screenshot_templates'), (path.name, line))
                 self.assertNotIn('from .screenshot_plan import', stripped, (path.name, line))
                 self.assertNotIn('from .screenshot_session import', stripped, (path.name, line))
+        # 策略 3 独立边界：stepwise 包源码不得引用其它策略业务实现（策略2
+        # 模板/单体、策略1链、合同与派生、导航许可），也不得引用 RawSessionCore。
+        forbidden_stepwise = (
+            'from .screenshot_plan import', 'from .screenshot_session import',
+            'screenshot_templates', 'from .banded_plan import', 'from .react_session import',
+            'from .collection_contract import', 'from .collection_evidence import',
+            'from .closing_policy import completion_delivery_decision',
+            'from .goal_evidence import', 'from .candidate_navigation import',
+            'RawSessionCore', '_perform_primitive', 'from .postprocess import session_record',
+            'from .postprocess import effective_trajectory', 'from .postprocess import process')
+        for path in sorted((Path(__file__).parents[1] / 'webcollect/stepwise').glob('*.py')):
+            for line in path.read_text(encoding='utf-8').splitlines():
+                stripped = line.lstrip()
+                if not stripped.startswith(('from ', 'import ')):
+                    continue  # 只约束真实 import 语句；docstring 中的模块名是边界说明
+                for token in forbidden_stepwise:
+                    self.assertNotIn(token, stripped, (path.name, token, line))
+        # stepwise 仅允许经宿主基础设施复用（浏览器/网关/账本/存储/反馈/索引）；
+        # closing_policy 只允许取共享交付策略名常量，不允许调用其业务判定。
+        allowed_hosts = ('from .. import browser', 'from .. import collection_strategy',
+                         'from ..browser import', 'from ..model_gateway import',
+                         'from ..batch_core import', 'from ..storage import',
+                         'from ..agent_feedback import', 'from ..agent_controller import',
+                         'from ..production_quality import', 'from ..runtime import',
+                         'from ..planning import', 'from ..sqlite_connection import',
+                         'from ..action_stability import', 'from ..action_normalization import',
+                         'from ..task_instruction import', 'from ..collection_strategy import',
+                         'from ..collect_runtime import', 'from ..postprocess import post_seal_name',
+                         'from ..session_core import ReactStop', 'from ..failure_policy import',
+                         'from ..candidate_contract import',
+                         'from ..closing_policy import COMPLETED_GOAL_DELIVERY',
+                         'from ..production_identity import actual_proof')
+        for path in sorted((Path(__file__).parents[1] / 'webcollect/stepwise').glob('*.py')):
+            for line in path.read_text(encoding='utf-8').splitlines():
+                stripped = line.lstrip()
+                if stripped.startswith('from ..'):
+                    self.assertTrue(any(stripped.startswith(allowed) for allowed in allowed_hosts),
+                                    (path.name, line))
 
     def test_saved_research_requires_frozen_production_comparison(self):
         from contextlib import contextmanager

@@ -114,6 +114,10 @@ def source_identity():
         if package_dir.is_dir():
             names += ['screenshot_templates/' + package_dir.name + '/' + path.name
                       for path in sorted(package_dir.glob('*.py'))]
+    # 策略 3 stepwise 包源文件同样随收据绑定（独立业务实现，运行期漂移即停）。
+    stepwise_dir = base / 'stepwise'
+    if stepwise_dir.is_dir():
+        names += ['stepwise/' + path.name for path in sorted(stepwise_dir.glob('*.py'))]
     names += [path.relative_to(base).as_posix() for path in sorted((base / 'schemas').glob('*.json'))]
     names += [name for name in ('hmac_strategy.py', 'pbkdf2_strategy.py') if (base / name).is_file()]
     if (base / 'react_protocol.py').is_file():
@@ -483,8 +487,18 @@ async def _react_collection(context, task, attempt, sample, evidence, output, st
     from .production_quality import require_public_task_state
     from .scaffold import program_version
     from .telemetry import phase as telemetry_phase
-    from .collection_strategy import enabled as screenshot_strategy
+    from .collection_strategy import enabled as screenshot_strategy, is_stepwise
     from .react_protocol import VERSION as NATIVE_REACT
+    if is_stepwise(task):
+        # 策略 3 分流：在任何策略2初始化（模板/chooser/Session构造）之前进入
+        # stepwise 自有外壳；保存、收尾和失败结算由该外壳按同一 RuntimeStore
+        # 合同完成，不经过旧 contract/closing/navigation/postprocess 业务。
+        from . import stepwise
+        return await stepwise.run_collection(
+            context, task, attempt, sample, evidence, output, store,
+            ledger=ledger, parent_job=parent_job, registry=registry, manifest=manifest,
+            index=index, navigation=navigation, page=page,
+            entry_observation=entry_observation, host_limits=host_limits, runlog=runlog)
     if screenshot_strategy(task):
         # 策略 2 显式选择：按冻结模板派发到对应模板包的会话与chooser，不挂
         # 策略1 band/finish_when门禁；历史封存任务（无模板标记）解析到单体
@@ -894,10 +908,14 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
     timing = Path(output).parent / "preparation-timings.jsonl"
     startup_frames = {}
     if runlog is None:
-        # 无claim直接执行的策略2计划：会话开始时生成一次展示sessionId。
+        # 无claim直接执行的策略2/策略3计划：会话开始时生成一次展示sessionId。
         # 策略1计划不接线，保持原有行为。
-        from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
-        if any(strategy_id(task) == STRATEGY_SCREENSHOT_PLAN for task in read_json(plan_path)['tasks']):
+        from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE
+        plan_strategies = {strategy_id(task) for task in read_json(plan_path)['tasks']}
+        if STRATEGY_STEPWISE in plan_strategies:
+            from .runlog import for_direct_run
+            runlog = for_direct_run(output, strategy=STRATEGY_STEPWISE, level=log_level, log_dir=log_dir)
+        elif STRATEGY_SCREENSHOT_PLAN in plan_strategies:
             from .runlog import for_direct_run
             runlog = for_direct_run(output, strategy=STRATEGY_SCREENSHOT_PLAN, level=log_level, log_dir=log_dir)
     with frame_validation_scope(startup_frames), preparation_phase(timing, "runtime_validate"):

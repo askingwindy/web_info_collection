@@ -250,6 +250,11 @@ def _execution_record(record, supplied=None):
                 supplied.get('platform') != data['device_info'].get('os_name', '')):
             raise ValueError('Actual execution source annotation/platform binding differs')
         entries = supplied['steps']
+    elif data.get('trajectory_source', {}).get('data_type') == 'stepwise':
+        # 策略 3：读取本策略自己的真实动作映射（stepwise.records），不进入旧
+        # react/screenshot raw journal 或 effective_trajectory 重建。
+        from .stepwise.records import execution_entries as stepwise_entries
+        entries = stepwise_entries(record)
     else:
         raw_root = record['batch'] / 'evidence' / sid / 'raw'
         if (raw_root / 'raw-receipt.json').is_file():
@@ -549,8 +554,13 @@ def _documents(repo, out, records):
         spaces = sorted({r['data']['trajectory_source']['action_space'] for r in records if r['data']['trajectory_source']['data_type'] == dtype})
         version = '实际声明的action_space版本为' + '、'.join(spaces) + '。'
         known = dtype == 'webcollect_agent_v1' and set(origins) <= {'agent', 'human_agent_hybrid'}
-        chapters.append('\n## ' + dtype + '\n\n原始source_type为' + '、'.join(origins) + '。' + version + '本类型的输出动作格式采用第1节Web子集，坐标采用第2节。第3节是随附参考系统提示，不据此声称历史采集实际调用了该提示。' + ('本线为计划驱动采集；采集参数和原始记录在包外证据索引绑定。' if known else '原始操作/提示生成过程为待核验项；导出器没有改写来源或补造历史系统提示。') + '\n')
-        descriptions.append('## ' + dtype + '\n\n来源身份保留为' + '、'.join(origins) + '。' + version + '同名动作格式章节见[动作空间与系统提示](动作空间与系统提示.md)。PNG和界面树按字节复制；标注中的快捷键保留实际执行键，不作跨平台功能替换，其他标注修订见包外追溯清单；导出器未进行新采集、模型重写或真人审核。' + ('本线采集状态差异模板的声明与离线标注修订须结合包外记录核验，不能将全部历史文字笼统称为模板生成。' if known else '历史文字生成方式和原始系统提示缺少可验证记录时保持UNKNOWN。') + '\n')
+        stepwise = dtype == 'stepwise' and set(origins) <= {'agent'}
+        chapters.append('\n## ' + dtype + '\n\n原始source_type为' + '、'.join(origins) + '。' + version + '本类型的输出动作格式采用第1节Web子集，坐标采用第2节。第3节是随附参考系统提示，不据此声称历史采集实际调用了该提示。' + ('本线为计划驱动采集；采集参数和原始记录在包外证据索引绑定。' if known else '本线为策略3 stepwise逐步采集：每轮一次模型调用决定一个动作，宿主把截图编号元素换算为统一动作空间坐标后真实派发。' if stepwise else '原始操作/提示生成过程为待核验项；导出器没有改写来源或补造历史系统提示。') + '\n')
+        if stepwise:
+            from .stepwise import prompt as stepwise_prompt
+            descriptions.append('## ' + dtype + '\n\n来源身份保留为' + '、'.join(origins) + '。' + version + '本线为策略3 stepwise逐步采集：模型每轮只看到一张当前编号截图与有界文字（空对话历史），输出一个动作；宿主校验后将编号换算为目标控件中心坐标，经浏览器原子能力真实派发并同步取证。确认无效果且可安全省略的动作不进入交付，原始记录完整保留在包外证据索引。任务结束后由一次回写生成任务指令与最终结果，再由一次独立判定依据首帧、最后保留动作前帧与终态帧复核；两步均不改动逐步叙述。同名动作格式章节见[动作空间与系统提示](动作空间与系统提示.md)。PNG和界面树按字节复制，交付使用原始干净截图（编号图仅为模型输入）。本线实际使用的系统提示如下（指定目标模式将任务选择段替换为固定目标要求）：\n\n```text\n' + stepwise_prompt.SYSTEM_PROMPT + '\n```\n')
+        else:
+            descriptions.append('## ' + dtype + '\n\n来源身份保留为' + '、'.join(origins) + '。' + version + '同名动作格式章节见[动作空间与系统提示](动作空间与系统提示.md)。PNG和界面树按字节复制；标注中的快捷键保留实际执行键，不作跨平台功能替换，其他标注修订见包外追溯清单；导出器未进行新采集、模型重写或真人审核。' + ('本线采集状态差异模板的声明与离线标注修订须结合包外记录核验，不能将全部历史文字笼统称为模板生成。' if known else '历史文字生成方式和原始系统提示缺少可验证记录时保持UNKNOWN。') + '\n')
     (out / '动作空间与系统提示.md').write_text(annex + '\n' + '\n'.join(chapters))
     mapping = '\n## 动作映射与坐标\n\n输出采用附件B动作空间，坐标为原PNG像素。hotkey的keys与input_text保留实际执行键；Meta、Command与Ctrl不互换。历史delivery-windows-keys-2映射仅说明旧版本，不适用于本次输出。实际参数、平台、步骤与原派发哈希见actual-execution.json；原始日志、模型请求和网络头留在包外。附件中UNAVAILABLE表示缺原派发证据，不能当作已经核实。complete是宿主终态声明，不冒称浏览器派发。\n\n图像为动作前界面，末步complete同时为终态；结构自检不表示独立QC或客户验收通过。\n'
     (out / '合成方式说明.md').write_text('# 合成方式说明\n\n' + '\n'.join(descriptions) + mapping)
@@ -814,7 +824,10 @@ def build_client_package(repo, source, output, *, reviews=None, approved_only=Fa
             saved = read_json(real_file(saved_path, record['batch']))
             if saved.get('sample_files_sha256') != record['hashes']:
                 raise ValueError('Delivery policy needs the original saved sample binding')
-            decision = completion_delivery_decision(record['data'], saved.get('raw_execution', {}))
+            # 统一保存资格入口：按封存 raw_execution 的冻结策略静态分流
+            # （策略 3 stepwise 由本策略判定，其余走 closing_policy）。
+            from .collection_strategy import save_eligibility as strategy_save_eligibility
+            decision = strategy_save_eligibility(record['data'], saved.get('raw_execution', {}))
             delivery_decisions[record['sample_id']] = decision
             if decision['delivery_eligible']:
                 eligible.append(record)

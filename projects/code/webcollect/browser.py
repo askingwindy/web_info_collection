@@ -812,6 +812,10 @@ def validate_action_observation(state, operation):
     strategy = (operation.get('evidence') or {}).get('collection_strategy')
     if strategy == 'screenshot_plan':
         from .screenshot_native_observation import require_action
+    elif strategy == 'stepwise':
+        from .stepwise.observation import require_action as stepwise_require
+        stepwise_require(state, operation)
+        return
     elif strategy in (None, 'react'):
         from .agent_observation import require_action
     else:

@@ -805,11 +805,15 @@ def _planning_prompt_of(task):
     if task['fragment'].get('plan_protocol'):
         from .banded_plan import SYSTEM as PLAN_SYSTEM
         return PLAN_SYSTEM
-    from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN
+    from .collection_strategy import strategy_id, STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE
     if strategy_id(task) == STRATEGY_SCREENSHOT_PLAN:
         # 模板包拥有各自的SYSTEM_PROMPT；历史任务（无模板标记）仍读单体实现。
         from .screenshot_planners import template_module, task_template_name
         return template_module(task_template_name(task)).SYSTEM_PROMPT
+    if strategy_id(task) == STRATEGY_STEPWISE:
+        # 策略 3 记录自己的实际系统提示（自主基稿；指定模式在运行期替换任务段）。
+        from .stepwise import prompt as stepwise_prompt
+        return stepwise_prompt.SYSTEM_PROMPT
     from .session_core import SYSTEM_PROMPT
     return SYSTEM_PROMPT
 
@@ -932,15 +936,18 @@ def _generate_react_url(ledger, output, *, history_registry=None, history_set=No
         task['workflow_proposal']['spec']['consumer_projection'] = 'table2-entry'
         from .collection_strategy import freeze as freeze_strategy
         # 显式与缺省均为策略2：只冻结策略ID，不挂策略1条件计划协议，策略2
-        # 会话自带循环；未知值沿用freeze的ValueError报错。
+        # 会话自带循环；未知值沿用freeze的ValueError报错。策略 3（stepwise）
+        # 同样只冻结策略ID，且不冻结任何策略2模板。
         freeze_strategy(task, strategy)
         # 策略2模板在策略冻结处一并冻结：新任务必须携带消费者选定的模板名
         # （直接调用generate的一方同样必须传入）；历史封存任务无此标记。
-        from .screenshot_planners import freeze_template
-        template_name = react_candidate.get('template_name')
-        if strategy == STRATEGY_SCREENSHOT_PLAN and not template_name:
-            raise ValueError('template_name required for screenshot_plan generation')
-        freeze_template(task, template_name)
+        # 策略 3 完全跳过模板匹配与冻结（无 template_sites 登记）。
+        if strategy == STRATEGY_SCREENSHOT_PLAN:
+            from .screenshot_planners import freeze_template
+            template_name = react_candidate.get('template_name')
+            if not template_name:
+                raise ValueError('template_name required for screenshot_plan generation')
+            freeze_template(task, template_name)
         task['task_id'] = 'react-' + object_sha256({'url': url, 'spec': task['workflow_proposal']['spec']})[:24]
         from .candidate_contract import validate_task_binding
         from .session_core import validate_task as validate_react
@@ -1415,10 +1422,11 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     validate_plan(plan)
     from .plan_protocol import PLAN_PROTOCOL
     from .closing_policy import COMPLETED_GOAL_DELIVERY
-    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN
+    from .collection_strategy import STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE
     delivery_policy=(COMPLETED_GOAL_DELIVERY if any(
         task.get('fragment',{}).get('plan_protocol') == PLAN_PROTOCOL
-        or (task.get('fragment',{}).get('collection_strategy') or {}).get('id') == STRATEGY_SCREENSHOT_PLAN
+        or (task.get('fragment',{}).get('collection_strategy') or {}).get('id') in (
+            STRATEGY_SCREENSHOT_PLAN, STRATEGY_STEPWISE)
         for task in plan['tasks']) else None)
     from .site_pool_sync import pool_for_catalog, guard_plan
     bound_pool = pool_for_catalog(catalog_path)

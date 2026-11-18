@@ -159,8 +159,8 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
                 if module in ('site_planner.candidate_discovery','webcollect.candidate_consumer','webcollect.consumer_campaign') or any(v.endswith('/sequence_controller.py') for v in args):
                     fail('PREDECESSOR_ACTIVE','process',{'pid':int(parts[0]),'module':module or 'sequence_controller'})
             workers = plan.get('workers',[])
-            if plan.get('collection_strategy')!='screenshot_plan' or plan.get('automatic_export') is not False or plan.get('stop_after_saves') is not None:
-                fail('PLAN_POLICY','plan','strategy2, no export, no save early stop required')
+            if plan.get('collection_strategy') not in ('screenshot_plan','stepwise') or plan.get('automatic_export') is not False or plan.get('stop_after_saves') is not None:
+                fail('PLAN_POLICY','plan','strategy2/stepwise, no export, no save early stop required')
             shards = [w.get('candidate_ids',[]) for w in workers]
             flat = [cid for shard in shards for cid in shard]
             if len(workers)!=20 or any(len(s)!=5 for s in shards) or len(set(flat))!=100:

@@ -174,7 +174,8 @@ def prepare_qc_inputs(dataset, history_set, output, *, ai_percent, human_percent
         if delivery_policy not in (None, COMPLETED_GOAL_DELIVERY):raise ValueError('Unknown delivery policy')
         for row in rows:
             annotation = root/'samples'/row['sample_id']/'annotation.json'
-            decision = completion_delivery_decision(json.loads(annotation.read_text()), row['collection_completion']['raw_execution'])
+            from .collection_strategy import save_eligibility as strategy_save_eligibility
+            decision = strategy_save_eligibility(json.loads(annotation.read_text()), row['collection_completion']['raw_execution'])
             if not decision['delivery_eligible']:
                 raise ValueError('Explicit delivery set contains an ineligible original goal: '+row['sample_id'])
             completion_bindings.append({'sample_id':row['sample_id'], 'annotation_sha256':file_sha(annotation),
