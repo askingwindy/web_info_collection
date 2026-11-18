@@ -19,6 +19,9 @@
 !/collection_logs/stepwise-switch-20261118/**/*.log
 !/collection_logs/producer-new100-20261118/**/*.log
 !/collection_logs/stepwise-consumer-repair-20261118/**/*.log
+
+# Local RuntimeStore evidence trees inside archived log dirs stay untracked.
+/collection_logs/**/collections/
 **/browser-state/
 **/credentials/
 **/*.egg-info/
