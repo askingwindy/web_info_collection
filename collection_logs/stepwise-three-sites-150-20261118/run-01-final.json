@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-18T22:34:44+08:00",
+  "at": "2026-11-18T22:39:23+08:00",
   "segment": "run-01",
   "plan_id": "20261118221912-23fe3b7e",
   "strategy": "stepwise",
@@ -87,6 +87,8 @@
       "-2": 20
     }
   },
+  "dispatch_stop_origin": "OPERATOR_ENGINEERING_STOP",
+  "collection_outcome": "STOPPED_INCOMPLETE",
   "native_report": {
     "expected_denominator": 150,
     "denominator": 150,

@@ -51,7 +51,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:0c11f6ed-0b0b-4615-be78-55b7e8be755e",
-    "reason_code": "ValueError",
+    "reason_code": "SCOPED_ACTION_PROOF_CHANGED",
     "stop_dispatch": false
   },
   {
@@ -73,7 +73,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:797795e6-eea6-42cb-9c58-788b517d6f42",
-    "reason_code": "ValueError",
+    "reason_code": "STEPWISE_IMAGE_CAPACITY",
     "stop_dispatch": false
   },
   {
@@ -84,7 +84,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:3db33a1f-6628-4d63-9049-886a10e7cf9c",
-    "reason_code": "ValueError",
+    "reason_code": "SCOPED_ACTION_PROOF_CHANGED",
     "stop_dispatch": false
   },
   {
@@ -106,7 +106,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:364e05f6-7107-4b3b-ab4f-ada0adbfacb0",
-    "reason_code": "ValueError",
+    "reason_code": "STEPWISE_IMAGE_CAPACITY",
     "stop_dispatch": false
   },
   {
@@ -117,7 +117,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:b327afbc-0030-4d3d-8eb2-8d7f020dce69",
-    "reason_code": "ValueError",
+    "reason_code": "STEPWISE_IMAGE_CAPACITY",
     "stop_dispatch": false
   }
 ]

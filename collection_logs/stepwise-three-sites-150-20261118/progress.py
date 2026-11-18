@@ -42,6 +42,10 @@ def select(path, sql, args=()):
 
 
 def issue_type(reason):
+    if 'Image limit exceeded' in (reason or ''):
+        return 'STEPWISE_IMAGE_CAPACITY'
+    if 'Scoped action proof was lost or changed before dispatch' in (reason or ''):
+        return 'SCOPED_ACTION_PROOF_CHANGED'
     if 'database is locked' in (reason or '').lower():
         return 'SQLITE_BUSY'
     for pattern in (r'net::(ERR_[A-Z_]+)', r'\b([A-Z][A-Z_]{4,})\b', r'\b([A-Za-z]+(?:Error|Timeout))\b', r'\b(stepwise_[a-z_]+)\b'):
@@ -100,6 +104,10 @@ def snapshot(directory, scope, baseline, sites):
     if summary:
         result['controller'] = {key: summary.get(key) for key in ('succeeded', 'interrupted', 'unlaunched', 'stop_reason', 'report_integrity', 'elapsed_seconds')}
         result['controller']['worker_exit_codes'] = dict(Counter(str(worker['returncode']) for worker in summary['workers']))
+    if result['stop_requested'] and (directory / 'stop.request').read_text().startswith('ENGINEERING_STOP:'):
+        result['dispatch_stop_origin'] = 'OPERATOR_ENGINEERING_STOP'
+        if report_done and result['unclaimed']:
+            result['collection_outcome'] = 'STOPPED_INCOMPLETE'
     return result, faults
 
 

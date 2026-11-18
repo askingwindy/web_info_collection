@@ -57,7 +57,7 @@ def main():
                      'saved_pending_review': status['saved_pending_review'], 'issues': len(issues), 'model_states': status['consumer_model']['states']})
     write(paths[3], timeline)
     usage = status['consumer_model']
-    text = [f'# 三站策略3采集：{stamp} 收口', '', f"核账时间：{status['at']}；批次状态 `{status['state']}`；原生报告完整性 `{status.get('native_report',{}).get('integrity','UNKNOWN')}`。",
+    text = [f'# 三站策略3采集：{stamp} 收口', '', f"核账时间：{status['at']}；批次状态 `{status.get('collection_outcome',status['state'])}`；原生报告完整性 `{status.get('native_report',{}).get('integrity','UNKNOWN')}`。",
         '', '| 站点 | 固定页 | 已领 | 正式尝试 | 正式保存待审 |', '|---|---:|---:|---:|---:|']
     for site, counts in status['by_site'].items():
         text.append(f"| {site} | 50 | {counts['claimed']} | {sum(counts['attempt_states'].values())} | {counts['saved_pending_review']} |")

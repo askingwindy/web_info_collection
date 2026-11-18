@@ -13,6 +13,12 @@ from webcollect.site_workers import fixed_consumer_plan, launch
 from select_pages import ROOT, RUN, SCOPE
 
 
+def require_image_capacity(config):
+    model = config['model']
+    if model.get('supports_vision', True) is not True or model['max_images'] < 3:
+        raise ValueError(f"STEPWISE_FINAL_IMAGES_UNAVAILABLE: writeback needs 2 originals and judgement up to 3; max_images={model['max_images']}")
+
+
 def before(scope):
     result = {}
     for role in ('pool', 'consumer_db', 'producer_db', 'registry'):
@@ -33,10 +39,12 @@ def main():
     args = parser.parse_args()
     if args.segment < 1:
         parser.error('positive segment required')
+    scope = load_json(SCOPE)
+    require_image_capacity(load_json(scope['consumer_config']))
     directory = RUN / f'run-{args.segment:02d}'
     previous = RUN / f'run-{args.segment - 1:02d}' / 'prepared-plan.json' if args.segment > 1 else None
     if args.segment == 1:
-        save_json(RUN / 'before.json', before(load_json(SCOPE)))
+        save_json(RUN / 'before.json', before(scope))
     plan = fixed_consumer_plan(SCOPE, RUN / 'selection/cohort.json', directory, expected_pages=150, resume_from=previous)
     save_json(directory / 'controller-start.json', {'pid': os.getpid(), 'plan_id': plan['plan_id'], 'started': datetime.now().astimezone().isoformat(),
         'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'workers': len(plan['workers'])})
