@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-18T22:23:56+08:00",
+  "at": "2026-11-18T22:26:56+08:00",
   "segment": "run-01",
   "plan_id": "20261118221912-23fe3b7e",
   "strategy": "stepwise",
@@ -47,21 +47,21 @@
     }
   },
   "consumer_model": {
-    "requests": 13,
+    "requests": 103,
     "states": {
-      "invalid_response": 1,
-      "reserved": 11,
-      "succeeded": 1
+      "invalid_response": 17,
+      "succeeded": 79,
+      "reserved": 7
     },
     "dispatch": {
-      "dispatched": 2,
-      "unproven": 11
+      "dispatched": 96,
+      "unproven": 7
     },
     "input_tokens": null,
     "output_tokens": null,
-    "known_input_tokens": 5416,
-    "known_output_tokens": 302,
-    "unknown_usage_requests": 11,
+    "known_input_tokens": 275447,
+    "known_output_tokens": 15626,
+    "unknown_usage_requests": 7,
     "cost": "UNKNOWN"
   },
   "new_consumer_requests_not_yet_attributed": 0,

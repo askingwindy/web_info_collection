@@ -13,3 +13,5 @@
 `run-01` 于 22:19:12 启动，22:21:24 从系统进程表同时观察到 20 个不同的原生消费者 PID，启动账号探针为 0。[启动回执](startup.json)保留名单边界、实际 PID 和首个核账快照。22:23:56 时已领取 22/150，进入正式尝试 20，保存待审 0；这不是最终结果。前期两条 Wiki 入口连接被关闭，另有一条 SQLite 瞬时锁等待；均保留现场，不把个别入口失败当作全站不可用。
 
 按段读取[状态](run-01-status.json)和[去敏问题记录](run-01-issues.json)，状态中的 `RUNNING` 是采样时刻而非永久状态。`reserved` 并不证明模型 HTTP 已发出，费用未知不填零。
+
+本批的单次收尾程序只等这次控制器，不抓取新页面、不重启进程。原生报告结束后，在本目录生成 `run-01-final.md`（三站实绩）、`run-01-final.json`、`run-01-final-issues.json`、`run-01-ledger-check.json` 和 `run-01-timeline.json`，并将本批日志快进推送到 `origin/main`；遇远端冲突不强推。远端回执在本地 `run-01/git-publication.json`。

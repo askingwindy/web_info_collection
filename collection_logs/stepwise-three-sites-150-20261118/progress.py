@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import re
 import sqlite3
 import time
@@ -22,7 +23,7 @@ def read(path):
 
 
 def write(path, value):
-    temporary = path.with_suffix('.tmp')
+    temporary = path.with_suffix(f'.{os.getpid()}.tmp')
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
     temporary.replace(path)
 
@@ -41,6 +42,8 @@ def select(path, sql, args=()):
 
 
 def issue_type(reason):
+    if 'database is locked' in (reason or '').lower():
+        return 'SQLITE_BUSY'
     for pattern in (r'net::(ERR_[A-Z_]+)', r'\b([A-Z][A-Z_]{4,})\b', r'\b([A-Za-z]+(?:Error|Timeout))\b', r'\b(stepwise_[a-z_]+)\b'):
         match = re.search(pattern, reason or '')
         if match:
