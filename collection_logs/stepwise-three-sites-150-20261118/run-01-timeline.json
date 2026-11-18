@@ -1,0 +1,119 @@
+[
+  {
+    "at": "2026-11-18T22:23:56+08:00",
+    "state": "RUNNING",
+    "claimed": 22,
+    "formal_attempts": 20,
+    "saved_pending_review": 0,
+    "issues": 3,
+    "model_states": {
+      "invalid_response": 1,
+      "reserved": 11,
+      "succeeded": 1
+    }
+  },
+  {
+    "at": "2026-11-18T22:25:26+08:00",
+    "state": "RUNNING",
+    "claimed": 22,
+    "formal_attempts": 20,
+    "saved_pending_review": 0,
+    "issues": 3,
+    "model_states": {
+      "invalid_response": 12,
+      "succeeded": 37,
+      "reserved": 10
+    }
+  },
+  {
+    "at": "2026-11-18T22:26:56+08:00",
+    "state": "RUNNING",
+    "claimed": 22,
+    "formal_attempts": 20,
+    "saved_pending_review": 0,
+    "issues": 3,
+    "model_states": {
+      "invalid_response": 17,
+      "succeeded": 79,
+      "reserved": 7
+    }
+  },
+  {
+    "at": "2026-11-18T22:28:27+08:00",
+    "state": "RUNNING",
+    "claimed": 24,
+    "formal_attempts": 20,
+    "saved_pending_review": 0,
+    "issues": 5,
+    "model_states": {
+      "invalid_response": 22,
+      "succeeded": 111,
+      "reserved": 7
+    }
+  },
+  {
+    "at": "2026-11-18T22:29:57+08:00",
+    "state": "RUNNING",
+    "claimed": 26,
+    "formal_attempts": 23,
+    "saved_pending_review": 0,
+    "issues": 7,
+    "model_states": {
+      "invalid_response": 25,
+      "succeeded": 141,
+      "reserved": 3
+    }
+  },
+  {
+    "at": "2026-11-18T22:31:28+08:00",
+    "state": "RUNNING",
+    "claimed": 27,
+    "formal_attempts": 24,
+    "saved_pending_review": 0,
+    "issues": 8,
+    "model_states": {
+      "invalid_response": 29,
+      "succeeded": 176,
+      "reserved": 6
+    }
+  },
+  {
+    "at": "2026-11-18T22:32:59+08:00",
+    "state": "RUNNING",
+    "claimed": 29,
+    "formal_attempts": 25,
+    "saved_pending_review": 0,
+    "issues": 10,
+    "model_states": {
+      "invalid_response": 33,
+      "succeeded": 210,
+      "reserved": 5
+    }
+  },
+  {
+    "at": "2026-11-18T22:34:30+08:00",
+    "state": "REPORTING",
+    "claimed": 30,
+    "formal_attempts": 28,
+    "saved_pending_review": 0,
+    "issues": 11,
+    "model_states": {
+      "invalid_response": 40,
+      "succeeded": 226,
+      "failed": 2
+    }
+  },
+  {
+    "at": "2026-11-18T22:34:44+08:00",
+    "state": "FINISHED",
+    "claimed": 30,
+    "formal_attempts": 28,
+    "saved_pending_review": 0,
+    "issues": 11,
+    "model_states": {
+      "invalid_response": 40,
+      "succeeded": 226,
+      "failed": 2
+    }
+  }
+]
