@@ -136,10 +136,13 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
                 for row in rows:
                     original=con.execute('SELECT version,state FROM data_candidates WHERE candidate_id=?',(row['candidate_id'],)).fetchone()
                     claims=con.execute('SELECT worker_id,state,version FROM candidate_claims WHERE candidate_id=?',(row['candidate_id'],)).fetchall()
-                    if claims and len(claims)==1 and claims[0]['worker_id'] in prior_workers and claims[0]['state'] in ('failed','reconcile','succeeded','observed') and claims[0]['version']==row['version']:
+                    if claims and len(claims)==1 and claims[0]['worker_id'] in prior_workers and claims[0]['version']==row['version']:
                         if not original or original['version']!=row['version']:
                             fail('COHORT_UNAVAILABLE',row['candidate_id'],'previously claimed version differs')
-                        continue  # claim_next returns ALREADY_CLAIMED without any replay.
+                        # The drained predecessor may have lost its lease
+                        # during close-out. Preserve even that unresolved row;
+                        # claim_next returns ALREADY_CLAIMED without any replay.
+                        continue
                     if not original or original['version']!=row['version'] or original['state']!='pending':
                         fail('COHORT_UNAVAILABLE',row['candidate_id'],'version/state differs')
                     if claims:

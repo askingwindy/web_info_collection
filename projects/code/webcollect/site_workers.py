@@ -362,6 +362,8 @@ def launch(plan):
                 raise ValueError('No available model account')
         env={**child_environment(),'WEBCOLLECT_STOP_FILE':str(stop),'WEBCOLLECT_PRODUCER_STOP_FILE':str(stop),
              'WEBCOLLECT_ROUND_EVENTS':str(failures.path),'WEBCOLLECT_CENTRAL_KEY_HEALTH':'1'}
+        if plan.get('fixed') and plan.get('role')=='consumer':
+            env['WEBCOLLECT_SERIAL_HISTORY']='1'
         if plan['role']=='producer':
             for index,worker in enumerate(plan['workers'],1):
                 command=worker['command'];at=command.index('--sources')+1

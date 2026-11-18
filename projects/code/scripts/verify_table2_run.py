@@ -59,6 +59,12 @@ class Table2RunChecks(unittest.TestCase):
                 self.assertEqual(row['code'],'UNSUPPORTED_GEOMETRY')
                 self.assertFalse(row['stop_dispatch'])
             self.assertEqual(disposition(BrowserError('Page.evaluate: TypeError: broken host code'))['disposition'],'page_program')
+            from webcollect.browser import EvidenceStale
+            for index in range(3):
+                row=failures.record('unstable-'+str(index),disposition(EvidenceStale('pixels changed')))
+                self.assertEqual(row['failure_class'],'collector')
+                self.assertEqual(row['disposition'],'business')
+                self.assertFalse(row['stop_dispatch'])
             try:
                 require_public_task_state({'url': 'https://example.org/login'})
             except ValueError as error:
@@ -77,6 +83,66 @@ class Table2RunChecks(unittest.TestCase):
         self.assertEqual({p.pid for p in multiprocessing.active_children()}, before)
         with self.assertRaises(BudgetStop):
             safe_retry(lambda: time.sleep(.02), safe=True, deadline=time.monotonic()+.005)
+
+    def test_legacy_serialization_does_not_copy_evidence(self):
+        from webcollect.workspace_paths import _root, HistoricalAbsolute, encode
+        from webcollect import workspace_json
+        value={'path':HistoricalAbsolute('/legacy/a'), 'nested':[{'path':'/legacy/b'}]}
+        token=_root.set(None)
+        try:
+            self.assertIs(encode(value),value)
+            self.assertEqual(workspace_json.dumps(value,sort_keys=True),json.dumps(value,sort_keys=True))
+        finally:_root.reset(token)
+
+    def test_begin_wait_uses_its_budget_and_preserves_single_write(self):
+        import sqlite3, threading
+        from webcollect.sqlite_connection import begin_immediate
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'locks.sqlite3'
+            owner=sqlite3.connect(path,check_same_thread=False)
+            owner.execute('CREATE TABLE events(value TEXT)');owner.commit()
+            owner.execute('BEGIN IMMEDIATE')
+            def release():
+                time.sleep(.35);owner.commit()
+            thread=threading.Thread(target=release);thread.start()
+            with sqlite3.connect(path,timeout=2) as con:
+                begin_immediate(con,timeout=2)
+                con.execute("INSERT INTO events VALUES('once')")
+            thread.join();owner.close()
+            with sqlite3.connect(path) as con:
+                self.assertEqual(con.execute('SELECT count(*) FROM events').fetchone()[0],1)
+
+    def test_history_plan_validation_keeps_exact_membership(self):
+        from webcollect import current_chain
+        tasks=[{'scope_id':'a','campaign_id':'c','task_json':json.dumps({'task_id':'one'})},
+               {'scope_id':'a','campaign_id':'c','task_json':json.dumps({'task_id':'two'})}]
+        scope={'schema_version':current_chain.SCOPE_SCHEMA}
+        plans=[('a',json.dumps({'generation':{'history_scope':scope},'tasks':[{'task_id':name}]}))
+               for name in ('one','two')]
+        with patch.object(current_chain,'assert_registry_scope'),patch.object(current_chain,'_chain_identity',return_value='same'), \
+             patch('webcollect.registry_db.history_rows',return_value=(list(tasks),list(plans))):
+            result=current_chain._registry_snapshot(scope,'/unused')
+        self.assertEqual({r['task']['task_id'] for r in result['rows']},{'one','two'})
+        with patch.object(current_chain,'assert_registry_scope'),patch.object(current_chain,'_chain_identity',return_value='same'), \
+             patch('webcollect.registry_db.history_rows',return_value=(list(tasks),list(plans[:1]))):
+            with self.assertRaises(current_chain.CurrentChainError):
+                current_chain._registry_snapshot(scope,'/unused')
+
+    def test_history_slot_excludes_concurrent_reads_and_obeys_stop(self):
+        import os,threading
+        from webcollect.registry_db import history_read_slot
+        with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{'WEBCOLLECT_SERIAL_HISTORY':'1'}):
+            path=Path(folder)/'registry.sqlite3';entered=threading.Event()
+            def read():
+                with history_read_slot(path):entered.set()
+            with history_read_slot(path):
+                thread=threading.Thread(target=read);thread.start()
+                self.assertFalse(entered.wait(.15))
+            thread.join(2);self.assertTrue(entered.is_set())
+            stop=Path(folder)/'stop';stop.touch()
+            with patch.dict(os.environ,{'WEBCOLLECT_STOP_FILE':str(stop)}):
+                with self.assertRaises(InterruptedError):
+                    with history_read_slot(path):self.fail('stopped read entered')
 
     def test_new_claim_preserves_unrelated_expired_claim(self):
         from site_planner.site_pool import SitePool

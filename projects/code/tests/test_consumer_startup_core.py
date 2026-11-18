@@ -100,7 +100,8 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
         heartbeat_pool.transaction = MagicMock()
         heartbeat_pool.transaction.return_value.__enter__.return_value = MagicMock()
         heartbeat_pool._fence = MagicMock()
-        heartbeat_pool.get_claim = MagicMock(return_value={'expires':__import__('time').time()+300})
+        heartbeat_pool.pool = MagicMock()
+        heartbeat_pool.pool.connect.return_value.__enter__.return_value.execute.return_value.fetchone.return_value = {'expires':__import__('time').time()+300}
         heartbeat_pool.heartbeat({'claim_id': 'offline-claim'})
         self.assertLessEqual(heartbeat_pool.transaction.call_args.kwargs['timeout'], 90)
         heartbeat_pool._fence.assert_called_once()
