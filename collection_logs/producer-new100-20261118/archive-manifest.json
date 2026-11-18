@@ -1,0 +1,708 @@
+{
+  "archived_at": "2026-11-18T07:36:51.397903+00:00",
+  "archive_kind": "authorized-producer-run-logs",
+  "source_root": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01",
+  "archive_location": "collection_logs/producer-new100-20261118",
+  "selection": "Explicit file and field whitelist; no recursive copy",
+  "copied_files": 26,
+  "projected_files": 9,
+  "archive_payload_bytes": 510019,
+  "entries": [
+    {
+      "path": "active-run.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/active-run.json",
+        "bytes": 2196,
+        "sha256": "c645b552b410e51e592ba5aa470050debda9a4e640d2775486026f69e1b05514"
+      },
+      "bytes": 2196,
+      "sha256": "c645b552b410e51e592ba5aa470050debda9a4e640d2775486026f69e1b05514"
+    },
+    {
+      "path": "audit-smoke-r01/final-audit-summary.json",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/audit-smoke-r01/final-audit.json",
+        "bytes": 127109,
+        "sha256": "bbbd0e1ad39cc0022ade2d90fb1ce63d8ca88d1e095ba10e65eb6622137e7bd5"
+      },
+      "retained_fields": [
+        "accounting",
+        "actual_landing_unique",
+        "all_processes_exited",
+        "audit_seconds",
+        "batch_row_states",
+        "consumer_QC_started_by_this_audit",
+        "counting_pattern",
+        "duplicate_landings",
+        "exit_receipts",
+        "human_review",
+        "net_new_candidates",
+        "new_application_ids",
+        "processes",
+        "protected_counts",
+        "protected_drift",
+        "published",
+        "published_NEW_unique",
+        "read_only_database",
+        "smoke",
+        "snapshot_at",
+        "source_changes",
+        "source_file_count",
+        "source_unchanged",
+        "status",
+        "target",
+        "verified_pages",
+        "verified_reference_files",
+        "issues_count (derived)",
+        "issue_code_counts (derived)",
+        "archive_explanation (r01 only)"
+      ],
+      "omitted_fields": [
+        "individual issues",
+        "page-results.jsonl (not copied)"
+      ],
+      "bytes": 4508,
+      "sha256": "8ab14a022d854e62608777dc3db1563b84ffaf129479adcfaaedb20b7876abfc"
+    },
+    {
+      "path": "audit-smoke-r02/final-audit-summary.json",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/audit-smoke-r02/final-audit.json",
+        "bytes": 2465,
+        "sha256": "067fb7d7e060581130c147db4c6b2baa208587019f301d43b246c168bc62583d"
+      },
+      "retained_fields": [
+        "accounting",
+        "actual_landing_unique",
+        "all_processes_exited",
+        "audit_seconds",
+        "batch_row_states",
+        "consumer_QC_started_by_this_audit",
+        "counting_pattern",
+        "duplicate_landings",
+        "exit_receipts",
+        "human_review",
+        "net_new_candidates",
+        "new_application_ids",
+        "processes",
+        "protected_counts",
+        "protected_drift",
+        "published",
+        "published_NEW_unique",
+        "read_only_database",
+        "smoke",
+        "snapshot_at",
+        "source_changes",
+        "source_file_count",
+        "source_unchanged",
+        "status",
+        "target",
+        "verified_pages",
+        "verified_reference_files",
+        "issues_count (derived)",
+        "issue_code_counts (derived)",
+        "archive_explanation (r01 only)"
+      ],
+      "omitted_fields": [
+        "individual issues",
+        "page-results.jsonl (not copied)"
+      ],
+      "bytes": 3876,
+      "sha256": "fec9533065f3bce4d2fce32b25f3f541421672cc302797af1d5c9b01c04e2a85"
+    },
+    {
+      "path": "audit-smoke-r03/final-audit-summary.json",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/audit-smoke-r03/final-audit.json",
+        "bytes": 2517,
+        "sha256": "c49d1f0a97c8f7b463d917892b1df3695492f13f1e62c143b9c825141013eb4b"
+      },
+      "retained_fields": [
+        "accounting",
+        "actual_landing_unique",
+        "all_processes_exited",
+        "audit_seconds",
+        "batch_row_states",
+        "consumer_QC_started_by_this_audit",
+        "counting_pattern",
+        "duplicate_landings",
+        "exit_receipts",
+        "human_review",
+        "net_new_candidates",
+        "new_application_ids",
+        "processes",
+        "protected_counts",
+        "protected_drift",
+        "published",
+        "published_NEW_unique",
+        "read_only_database",
+        "smoke",
+        "snapshot_at",
+        "source_changes",
+        "source_file_count",
+        "source_unchanged",
+        "status",
+        "target",
+        "verified_pages",
+        "verified_reference_files",
+        "issues_count (derived)",
+        "issue_code_counts (derived)",
+        "archive_explanation (r01 only)"
+      ],
+      "omitted_fields": [
+        "individual issues",
+        "page-results.jsonl (not copied)"
+      ],
+      "bytes": 3930,
+      "sha256": "0978c03c06b244e770ce5c51e3a5dedd68c398e300b0e5e902ec8b717aa75f8e"
+    },
+    {
+      "path": "baseline-counts.json",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/baseline.json",
+        "bytes": 240950,
+        "sha256": "1c79b71265966c7a4a4a050f2590b232bf7b7e983e0b2c29e15d5896ec6386b0"
+      },
+      "retained_fields": [
+        "candidate_count",
+        "application_count"
+      ],
+      "omitted_fields": [
+        "candidate_ids (4284 prior IDs)",
+        "application_ids"
+      ],
+      "bytes": 515,
+      "sha256": "46a73a14ff559fc75b762f655cdbdaeef9938187d816702253db68d2098990bd"
+    },
+    {
+      "path": "candidate-batch-rows.jsonl",
+      "kind": "readonly_database_metadata_projection",
+      "source_database": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/candidate-pool.sqlite3",
+      "read_only": true,
+      "query": "SELECT row_id,run_id,batch,request_id,raw_index,result,reason,candidate_id,created FROM candidate_batch_rows WHERE run_id LIKE ? ORDER BY created,row_id",
+      "url_query": "SELECT c.run_id,c.key,json_extract(c.value,'$.job_id') job_id,j.key item_index,json_extract(j.value,'$.candidate.entry_url') entry_url,json_extract(j.value,'$.hit.link_id') link_id FROM checkpoints c,json_each(c.value,'$.items') j WHERE c.run_id LIKE ? AND c.key LIKE '%/selection'",
+      "parameters": [
+        "%/entry-batch/producer-new100-20261118-dpm-%"
+      ],
+      "row_count": 170,
+      "retained_fields": [
+        "row_id",
+        "run_id",
+        "batch",
+        "request_id",
+        "raw_index",
+        "result",
+        "reason",
+        "candidate_id",
+        "created",
+        "entry_url",
+        "link_id",
+        "selection_key"
+      ],
+      "omitted_fields": [
+        "record/source bodies",
+        "response contents",
+        "model request bodies"
+      ],
+      "notes": [
+        "request_id retains the candidate_batch_rows producer job identity, not a model request ID.",
+        "URL/link ID matched to frozen selection by original row_id formula, each worker original source_pipeline, and request_id.",
+        "Original null reasons, including DUPLICATE rows, remain null."
+      ],
+      "bytes": 105377,
+      "sha256": "8fcf07ab7239d8be3f25e7d1242ae5dd685ad17322a24bc3e56e992cc045b72c"
+    },
+    {
+      "path": "controller-exit.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/controller-exit.json",
+        "bytes": 170,
+        "sha256": "4d4b23066b84a28ff831f909f2ce28d8bf246e8c39b5b7701e7db00b76024149"
+      },
+      "bytes": 170,
+      "sha256": "4d4b23066b84a28ff831f909f2ce28d8bf246e8c39b5b7701e7db00b76024149"
+    },
+    {
+      "path": "controller-launch.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/controller-launch.json",
+        "bytes": 46,
+        "sha256": "a99b715a0b2fbb25092d60254b7e222f89f1da0d2c32d0f9f46a183c21d2e9b7"
+      },
+      "bytes": 46,
+      "sha256": "a99b715a0b2fbb25092d60254b7e222f89f1da0d2c32d0f9f46a183c21d2e9b7"
+    },
+    {
+      "path": "controller.log",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/controller.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "controller.py",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/controller.py",
+        "bytes": 2413,
+        "sha256": "0d4f2da4b5a8c77879d2dcc7e40107a04e3996ebcf6b57a8050910b45f7c71fd"
+      },
+      "bytes": 2413,
+      "sha256": "0d4f2da4b5a8c77879d2dcc7e40107a04e3996ebcf6b57a8050910b45f7c71fd"
+    },
+    {
+      "path": "expand-controller-launch.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/expand-controller-launch.json",
+        "bytes": 46,
+        "sha256": "c2f5ffd9a28048b8c8a31d405dd43d06907ad4c70f92cbc3a2b7daae9867bc73"
+      },
+      "bytes": 46,
+      "sha256": "c2f5ffd9a28048b8c8a31d405dd43d06907ad4c70f92cbc3a2b7daae9867bc73"
+    },
+    {
+      "path": "expand-controller.log",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/expand-controller.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "expand_controller.py",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/expand_controller.py",
+        "bytes": 4079,
+        "sha256": "b6732a9b2390ef34de1df370a575e6e37882fd5a84f8a8813e2b039c9d737807"
+      },
+      "bytes": 4079,
+      "sha256": "b6732a9b2390ef34de1df370a575e6e37882fd5a84f8a8813e2b039c9d737807"
+    },
+    {
+      "path": "expansion-active.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/expansion-active.json",
+        "bytes": 5311,
+        "sha256": "5248d28acb3c149dff1614e8e997065311026f65fe1e61655e54c3dbf309a203"
+      },
+      "bytes": 5311,
+      "sha256": "5248d28acb3c149dff1614e8e997065311026f65fe1e61655e54c3dbf309a203"
+    },
+    {
+      "path": "expansion-exit.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/expansion-exit.json",
+        "bytes": 255,
+        "sha256": "f044e2f62dcade3ae3bb2117345ef613e929cb1f41668667b5fcba8b3cd7654a"
+      },
+      "bytes": 255,
+      "sha256": "f044e2f62dcade3ae3bb2117345ef613e929cb1f41668667b5fcba8b3cd7654a"
+    },
+    {
+      "path": "expansion-plan.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/expansion-plan.json",
+        "bytes": 5224,
+        "sha256": "8170e0e43e1d3dffa03c1985682441cb3f8ea1745d2a956ad7748da57a862631"
+      },
+      "bytes": 5224,
+      "sha256": "8170e0e43e1d3dffa03c1985682441cb3f8ea1745d2a956ad7748da57a862631"
+    },
+    {
+      "path": "final-audit.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/final-audit.json",
+        "bytes": 3025,
+        "sha256": "d88de3b1a1a6ae65e509caaa29a9a6e605b77113d45afd56a93106872bb92858"
+      },
+      "bytes": 3025,
+      "sha256": "d88de3b1a1a6ae65e509caaa29a9a6e605b77113d45afd56a93106872bb92858"
+    },
+    {
+      "path": "final-process-check.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/final-process-check.json",
+        "bytes": 124,
+        "sha256": "5d74da5ff20afb88a0a5ccb0ff39b3a049c249dfbb64086fad326caf4dedb92e"
+      },
+      "bytes": 124,
+      "sha256": "5d74da5ff20afb88a0a5ccb0ff39b3a049c249dfbb64086fad326caf4dedb92e"
+    },
+    {
+      "path": "final_audit.py",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/final_audit.py",
+        "bytes": 21005,
+        "sha256": "4115cf91a91d49eb30253ea2d14995d03835b8a3ba1f54bf44a755caee320c2c"
+      },
+      "bytes": 21005,
+      "sha256": "4115cf91a91d49eb30253ea2d14995d03835b8a3ba1f54bf44a755caee320c2c"
+    },
+    {
+      "path": "issues.jsonl",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/issues.jsonl",
+        "bytes": 5226,
+        "sha256": "6a65a0724d280387e605823a9ec0b06df74ad667f490629bcb01da94fe11db6b"
+      },
+      "bytes": 5226,
+      "sha256": "6a65a0724d280387e605823a9ec0b06df74ad667f490629bcb01da94fe11db6b"
+    },
+    {
+      "path": "launch-plan.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/launch-plan.json",
+        "bytes": 934,
+        "sha256": "b9135ab0c6e559644640e59ac17de370af97dae47c89c67a1b3814d95ca59e3f"
+      },
+      "bytes": 934,
+      "sha256": "b9135ab0c6e559644640e59ac17de370af97dae47c89c67a1b3814d95ca59e3f"
+    },
+    {
+      "path": "page-results.jsonl",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/page-results.jsonl",
+        "bytes": 244016,
+        "sha256": "8e55599f61d0a23f7540fea0d298fea3022ee50cf6586e69a38c728c927e181f"
+      },
+      "bytes": 244016,
+      "sha256": "8e55599f61d0a23f7540fea0d298fea3022ee50cf6586e69a38c728c927e181f"
+    },
+    {
+      "path": "progress.jsonl",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/progress.jsonl",
+        "bytes": 5887,
+        "sha256": "bb5c82f2a9bcc3d22dba211ba2f88d65dac7f8589eedf00f53a4c4e4e92ce380"
+      },
+      "bytes": 5887,
+      "sha256": "bb5c82f2a9bcc3d22dba211ba2f88d65dac7f8589eedf00f53a4c4e4e92ce380"
+    },
+    {
+      "path": "protected-before.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/protected-before.json",
+        "bytes": 13339,
+        "sha256": "402bd58d51c2dd3427f04159ee6e5baa763ec04eef037855963bf98bf7cd0a61"
+      },
+      "bytes": 13339,
+      "sha256": "402bd58d51c2dd3427f04159ee6e5baa763ec04eef037855963bf98bf7cd0a61"
+    },
+    {
+      "path": "readonly-observer-first-progress.md",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/readonly-observer-first-progress.md",
+        "bytes": 3030,
+        "sha256": "3f119ba31383592714f83ea74e55fd1af4834167a6a3431cc20ca41c32bd31d5"
+      },
+      "bytes": 3030,
+      "sha256": "3f119ba31383592714f83ea74e55fd1af4834167a6a3431cc20ca41c32bd31d5"
+    },
+    {
+      "path": "source-after.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/source-after.json",
+        "bytes": 29215,
+        "sha256": "7169a8ef87118aeb94540d666e6b84ce0c6f921ff05ffb0059daebb19906be00"
+      },
+      "bytes": 29215,
+      "sha256": "7169a8ef87118aeb94540d666e6b84ce0c6f921ff05ffb0059daebb19906be00"
+    },
+    {
+      "path": "source-before.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/source-before.json",
+        "bytes": 29215,
+        "sha256": "7169a8ef87118aeb94540d666e6b84ce0c6f921ff05ffb0059daebb19906be00"
+      },
+      "bytes": 29215,
+      "sha256": "7169a8ef87118aeb94540d666e6b84ce0c6f921ff05ffb0059daebb19906be00"
+    },
+    {
+      "path": "status-latest.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/status-latest.json",
+        "bytes": 2966,
+        "sha256": "22d5214bceb26247aee33a3663a3c0ee6163a4f9f98a989de5e5b8d18e67e599"
+      },
+      "bytes": 2966,
+      "sha256": "22d5214bceb26247aee33a3663a3c0ee6163a4f9f98a989de5e5b8d18e67e599"
+    },
+    {
+      "path": "status.py",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/status.py",
+        "bytes": 4424,
+        "sha256": "115e601dc4e7c27ec9114466cc020b6ebe77636ae0e54d6cb51b88eb92f51e72"
+      },
+      "bytes": 4424,
+      "sha256": "115e601dc4e7c27ec9114466cc020b6ebe77636ae0e54d6cb51b88eb92f51e72"
+    },
+    {
+      "path": "stop.request",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/stop.request",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "unknown-followup-check.json",
+      "kind": "unchanged_copy",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/unknown-followup-check.json",
+        "bytes": 450,
+        "sha256": "69defce4db80ed967437561c8ebd5645e7b9e46dc1afecff30dd9c63f03e58d1"
+      },
+      "bytes": 450,
+      "sha256": "69defce4db80ed967437561c8ebd5645e7b9e46dc1afecff30dd9c63f03e58d1"
+    },
+    {
+      "path": "workers/producer-01.log",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/producer.log",
+        "bytes": 1145255,
+        "sha256": "164abc5239bd0cf4650344437634ddbf66d48cf9ecbd89466bef492fbe097b72"
+      },
+      "retained_fields": [
+        "schema_version",
+        "protocol",
+        "model_protocol",
+        "source_pipeline",
+        "batch_scope",
+        "target",
+        "listed_unique_candidates",
+        "deficit",
+        "status",
+        "row_results",
+        "batches",
+        "stopped",
+        "new_candidates_this_invocation",
+        "production_attempts",
+        "collected",
+        "pending_review",
+        "QC_accepted",
+        "published",
+        "real_throughput"
+      ],
+      "omitted_fields": [
+        "candidate_ids",
+        "current_chain_manifest",
+        "discovery_mode",
+        "evidence_output",
+        "inventory",
+        "model_metering",
+        "new_dispatches",
+        "query_decisions",
+        "search_channel",
+        "search_tokens",
+        "search_usage",
+        "site_counts",
+        "site_failures",
+        "source_counts",
+        "supply_counts",
+        "unfinished_site_scopes"
+      ],
+      "bytes": 2303,
+      "sha256": "27bc1d15831c87882fc1a78bda136b0bd82b2b4ffaf3a9a477239c41516788d9"
+    },
+    {
+      "path": "workers/producer-02.log",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/producer-02.log",
+        "bytes": 1143434,
+        "sha256": "53e8664e99b8946f0362184018601639c39db194ba2a72387808a536158c0f23"
+      },
+      "retained_fields": [
+        "schema_version",
+        "protocol",
+        "model_protocol",
+        "source_pipeline",
+        "batch_scope",
+        "target",
+        "listed_unique_candidates",
+        "deficit",
+        "status",
+        "row_results",
+        "batches",
+        "stopped",
+        "new_candidates_this_invocation",
+        "production_attempts",
+        "collected",
+        "pending_review",
+        "QC_accepted",
+        "published",
+        "real_throughput"
+      ],
+      "omitted_fields": [
+        "candidate_ids",
+        "current_chain_manifest",
+        "discovery_mode",
+        "evidence_output",
+        "inventory",
+        "model_metering",
+        "new_dispatches",
+        "query_decisions",
+        "search_channel",
+        "search_tokens",
+        "search_usage",
+        "site_counts",
+        "site_failures",
+        "source_counts",
+        "supply_counts",
+        "unfinished_site_scopes"
+      ],
+      "bytes": 2282,
+      "sha256": "c618194b44d41a9fbf25876896a4ffe0a01ed0603a34b6b30e0266da9ce8550f"
+    },
+    {
+      "path": "workers/producer-03.log",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/producer-03.log",
+        "bytes": 1144456,
+        "sha256": "cbbae65169b8a8eaad75810800d91c42fd44af33a27ca95eb47f42d18bb5e2eb"
+      },
+      "retained_fields": [
+        "schema_version",
+        "protocol",
+        "model_protocol",
+        "source_pipeline",
+        "batch_scope",
+        "target",
+        "listed_unique_candidates",
+        "deficit",
+        "status",
+        "row_results",
+        "batches",
+        "stopped",
+        "new_candidates_this_invocation",
+        "production_attempts",
+        "collected",
+        "pending_review",
+        "QC_accepted",
+        "published",
+        "real_throughput"
+      ],
+      "omitted_fields": [
+        "candidate_ids",
+        "current_chain_manifest",
+        "discovery_mode",
+        "evidence_output",
+        "inventory",
+        "model_metering",
+        "new_dispatches",
+        "query_decisions",
+        "search_channel",
+        "search_tokens",
+        "search_usage",
+        "site_counts",
+        "site_failures",
+        "source_counts",
+        "supply_counts",
+        "unfinished_site_scopes"
+      ],
+      "bytes": 2328,
+      "sha256": "5cd9faafd23704503aaf9ba70807ab96b15db61dfaed7b44888c2a1f7da36dad"
+    },
+    {
+      "path": "workers/producer-04.log",
+      "kind": "projection",
+      "source": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/producer-04.log",
+        "bytes": 1141750,
+        "sha256": "aaa62252f997e7546c01a386d2f6c109dd75fbcfbb81dfdce3abcd5d328ad3b1"
+      },
+      "retained_fields": [
+        "schema_version",
+        "protocol",
+        "model_protocol",
+        "source_pipeline",
+        "batch_scope",
+        "target",
+        "listed_unique_candidates",
+        "deficit",
+        "status",
+        "row_results",
+        "batches",
+        "stopped",
+        "new_candidates_this_invocation",
+        "production_attempts",
+        "collected",
+        "pending_review",
+        "QC_accepted",
+        "published",
+        "real_throughput"
+      ],
+      "omitted_fields": [
+        "candidate_ids",
+        "current_chain_manifest",
+        "discovery_mode",
+        "evidence_output",
+        "inventory",
+        "model_metering",
+        "new_dispatches",
+        "query_decisions",
+        "search_channel",
+        "search_tokens",
+        "search_usage",
+        "site_counts",
+        "site_failures",
+        "source_counts",
+        "supply_counts",
+        "unfinished_site_scopes"
+      ],
+      "bytes": 2304,
+      "sha256": "dbd93d617a0aca081247c4f306c8748d6568e74d8bdf01735d7c963ae3d5089d"
+    }
+  ],
+  "omitted_groups": [
+    "Full baseline of 4284 old candidate IDs and old application IDs",
+    "Original worker stdout containing global query_decisions/model_metering and unscoped history",
+    "Repeated smoke page-results and individual r01 audit issue rows",
+    "Credentials, databases, original page/source/request bodies, screenshots, browser state and desktop/cache files"
+  ],
+  "notes": [
+    "All original files and database rows preserved. SQLite opened mode=ro.",
+    "Worker/controller PARTIAL exit2 receipts remain unchanged; independent final-audit proves aggregate 100-page outcome.",
+    "All 25 model charges UNKNOWN. known_cost_micros=0 is not total cost zero.",
+    "No consumer collection, QC, human review or publication performed by this archive."
+  ]
+}

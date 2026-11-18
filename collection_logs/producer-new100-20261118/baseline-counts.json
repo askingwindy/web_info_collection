@@ -1,0 +1,20 @@
+{
+  "archive_kind": "explicit-field-projection",
+  "original": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/baseline.json",
+    "bytes": 240950,
+    "sha256": "1c79b71265966c7a4a4a050f2590b232bf7b7e983e0b2c29e15d5896ec6386b0"
+  },
+  "retained_fields": [
+    "candidate_count",
+    "application_count"
+  ],
+  "omitted_fields": [
+    "candidate_ids (4284 prior IDs)",
+    "application_ids"
+  ],
+  "data": {
+    "candidate_count": 4284,
+    "application_count": 264
+  }
+}

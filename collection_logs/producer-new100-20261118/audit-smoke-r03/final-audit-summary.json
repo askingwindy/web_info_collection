@@ -1,0 +1,160 @@
+{
+  "archive_kind": "explicit-field-projection",
+  "original": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/audit-smoke-r03/final-audit.json",
+    "bytes": 2517,
+    "sha256": "c49d1f0a97c8f7b463d917892b1df3695492f13f1e62c143b9c825141013eb4b"
+  },
+  "retained_fields": [
+    "accounting",
+    "actual_landing_unique",
+    "all_processes_exited",
+    "audit_seconds",
+    "batch_row_states",
+    "consumer_QC_started_by_this_audit",
+    "counting_pattern",
+    "duplicate_landings",
+    "exit_receipts",
+    "human_review",
+    "net_new_candidates",
+    "new_application_ids",
+    "processes",
+    "protected_counts",
+    "protected_drift",
+    "published",
+    "published_NEW_unique",
+    "read_only_database",
+    "smoke",
+    "snapshot_at",
+    "source_changes",
+    "source_file_count",
+    "source_unchanged",
+    "status",
+    "target",
+    "verified_pages",
+    "verified_reference_files",
+    "issues_count (derived)",
+    "issue_code_counts (derived)",
+    "archive_explanation (r01 only)"
+  ],
+  "omitted_fields": [
+    "individual issues",
+    "page-results.jsonl (not copied)"
+  ],
+  "data": {
+    "status": "IN_PROGRESS",
+    "snapshot_at": 1794986916.226943,
+    "audit_seconds": 0.659,
+    "read_only_database": true,
+    "smoke": true,
+    "target": 100,
+    "counting_pattern": "%/entry-batch/producer-new100-20261118-dpm-%",
+    "batch_row_states": {
+      "NEW": 100,
+      "REJECTED": 40,
+      "DUPLICATE": 29,
+      "OVER_LIMIT": 1
+    },
+    "published_NEW_unique": 100,
+    "net_new_candidates": 100,
+    "new_application_ids": [
+      "app-54680a484ea549505a7bd126"
+    ],
+    "verified_pages": 100,
+    "actual_landing_unique": 100,
+    "duplicate_landings": {},
+    "verified_reference_files": 500,
+    "accounting": {
+      "attribution": {
+        "new_job_exact_site_url": 220,
+        "explicit_round_batch": 25
+      },
+      "new_jobs_outside_round_attribution": 0,
+      "new_jobs": 245,
+      "job_states": {
+        "done": 234,
+        "review_required": 10,
+        "queued": 1
+      },
+      "model_requests": 25,
+      "model_states": {
+        "succeeded": 22,
+        "invalid_response": 3
+      },
+      "tokens": {
+        "input_tokens": 232243,
+        "output_tokens": 17214,
+        "cached_input_tokens": 0
+      },
+      "model_requests_missing_usage": 0,
+      "known_cost_micros": 0,
+      "cost_unknown_requests": 25,
+      "reserved_cost_for_unknown_charge_micros": 25000000,
+      "GET_requests": 219,
+      "GET_states": {
+        "succeeded": 212,
+        "failed": 5,
+        "unknown": 2
+      },
+      "GET_statuses": {
+        "200": 212,
+        "None": 7
+      },
+      "reused_preexisting_jobs": 0,
+      "reused_preexisting_model_requests": 0,
+      "reused_preexisting_GETs": 0
+    },
+    "protected_counts": {
+      "producer.model_requests": 21,
+      "producer.jobs": 13,
+      "consumer.model_requests": 43,
+      "consumer.jobs": 0
+    },
+    "protected_drift": [],
+    "source_file_count": 239,
+    "source_unchanged": true,
+    "source_changes": [],
+    "processes": [
+      {
+        "role": "controller",
+        "pid": 76663,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 76664,
+        "alive": true
+      },
+      {
+        "role": "expansion_controller",
+        "pid": 77733,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77734,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77735,
+        "alive": false
+      },
+      {
+        "role": "worker",
+        "pid": 77736,
+        "alive": false
+      }
+    ],
+    "all_processes_exited": false,
+    "exit_receipts": {
+      "controller-exit.json": null,
+      "expansion-exit.json": null
+    },
+    "consumer_QC_started_by_this_audit": false,
+    "human_review": "NOT_RUN",
+    "published": false,
+    "issues_count": 0,
+    "issue_code_counts": {}
+  }
+}

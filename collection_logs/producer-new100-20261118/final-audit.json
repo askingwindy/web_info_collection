@@ -1,0 +1,139 @@
+{
+  "status": "PASS",
+  "snapshot_at": 1794986988.286428,
+  "audit_seconds": 0.426,
+  "read_only_database": true,
+  "smoke": false,
+  "target": 100,
+  "counting_pattern": "%/entry-batch/producer-new100-20261118-dpm-%",
+  "batch_row_states": {
+    "NEW": 100,
+    "REJECTED": 40,
+    "DUPLICATE": 29,
+    "OVER_LIMIT": 1
+  },
+  "published_NEW_unique": 100,
+  "net_new_candidates": 100,
+  "new_application_ids": [
+    "app-54680a484ea549505a7bd126"
+  ],
+  "verified_pages": 100,
+  "actual_landing_unique": 100,
+  "duplicate_landings": {},
+  "verified_reference_files": 500,
+  "accounting": {
+    "attribution": {
+      "new_job_exact_site_url": 220,
+      "explicit_round_batch": 25
+    },
+    "new_jobs_outside_round_attribution": 0,
+    "new_jobs": 245,
+    "job_states": {
+      "done": 234,
+      "review_required": 10,
+      "queued": 1
+    },
+    "model_requests": 25,
+    "model_states": {
+      "succeeded": 22,
+      "invalid_response": 3
+    },
+    "tokens": {
+      "input_tokens": 232243,
+      "output_tokens": 17214,
+      "cached_input_tokens": 0
+    },
+    "model_requests_missing_usage": 0,
+    "known_cost_micros": 0,
+    "cost_unknown_requests": 25,
+    "reserved_cost_for_unknown_charge_micros": 25000000,
+    "GET_requests": 219,
+    "GET_states": {
+      "succeeded": 212,
+      "failed": 5,
+      "unknown": 2
+    },
+    "GET_statuses": {
+      "200": 212,
+      "None": 7
+    },
+    "reused_preexisting_jobs": 0,
+    "reused_preexisting_model_requests": 0,
+    "reused_preexisting_GETs": 0
+  },
+  "protected_counts": {
+    "producer.model_requests": 21,
+    "producer.jobs": 13,
+    "consumer.model_requests": 43,
+    "consumer.jobs": 0
+  },
+  "protected_drift": [],
+  "source_file_count": 239,
+  "source_unchanged": true,
+  "source_changes": [],
+  "processes": [
+    {
+      "role": "controller",
+      "pid": 76663,
+      "alive": false
+    },
+    {
+      "role": "worker",
+      "pid": 76664,
+      "alive": false
+    },
+    {
+      "role": "expansion_controller",
+      "pid": 77733,
+      "alive": false
+    },
+    {
+      "role": "worker",
+      "pid": 77734,
+      "alive": false
+    },
+    {
+      "role": "worker",
+      "pid": 77735,
+      "alive": false
+    },
+    {
+      "role": "worker",
+      "pid": 77736,
+      "alive": false
+    }
+  ],
+  "all_processes_exited": true,
+  "exit_receipts": {
+    "controller-exit.json": {
+      "finished_at": 1794986917.9981189,
+      "seconds": 1728.30073595047,
+      "returncode": 2,
+      "source_unchanged": true,
+      "worker_exited": true,
+      "target_reached": false
+    },
+    "expansion-exit.json": {
+      "finished_at": 1794986921.6492338,
+      "workers": [
+        {
+          "pid": 77734,
+          "returncode": 2
+        },
+        {
+          "pid": 77735,
+          "returncode": 2
+        },
+        {
+          "pid": 77736,
+          "returncode": 2
+        }
+      ],
+      "all_children_exited": true
+    }
+  },
+  "issues": [],
+  "consumer_QC_started_by_this_audit": false,
+  "human_review": "NOT_RUN",
+  "published": false
+}

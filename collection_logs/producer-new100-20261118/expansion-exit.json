@@ -1,0 +1,18 @@
+{
+  "finished_at": 1794986921.6492338,
+  "workers": [
+    {
+      "pid": 77734,
+      "returncode": 2
+    },
+    {
+      "pid": 77735,
+      "returncode": 2
+    },
+    {
+      "pid": 77736,
+      "returncode": 2
+    }
+  ],
+  "all_children_exited": true
+}

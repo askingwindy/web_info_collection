@@ -1,0 +1,16 @@
+{
+  "status": "PREPARED",
+  "authorization": "用户2026-11-18授权：测试后使用最新代码启动生产者挖掘新站点，目标100个网页；问题记log并纳入Git；随后提交远端合main。",
+  "target_net_new": 100,
+  "counting": "本轮NEW、第一方GET2xx与渲染观察、简体正文、唯一实际落地；不计旧库存/首页导航/HELD",
+  "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/scope.json",
+  "initial_site": "https://www.dpm.org.cn/",
+  "initial_site_preexisting": false,
+  "workers": 1,
+  "sources": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/producer-evidence/producer-new100-20261118-r01/sources.json",
+  "batch_key": "producer-new100-20261118-dpm-01",
+  "stop_file": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/stop.request",
+  "started_at": null,
+  "consumer_QC_started": false,
+  "code_frozen_during_run": true
+}

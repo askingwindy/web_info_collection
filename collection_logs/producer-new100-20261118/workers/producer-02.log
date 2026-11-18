@@ -1,0 +1,79 @@
+{
+  "archive_kind": "explicit-field-projection",
+  "original": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/producer-02.log",
+    "bytes": 1143434,
+    "sha256": "53e8664e99b8946f0362184018601639c39db194ba2a72387808a536158c0f23"
+  },
+  "retained_fields": [
+    "schema_version",
+    "protocol",
+    "model_protocol",
+    "source_pipeline",
+    "batch_scope",
+    "target",
+    "listed_unique_candidates",
+    "deficit",
+    "status",
+    "row_results",
+    "batches",
+    "stopped",
+    "new_candidates_this_invocation",
+    "production_attempts",
+    "collected",
+    "pending_review",
+    "QC_accepted",
+    "published",
+    "real_throughput"
+  ],
+  "omitted_fields": [
+    "candidate_ids",
+    "current_chain_manifest",
+    "discovery_mode",
+    "evidence_output",
+    "inventory",
+    "model_metering",
+    "new_dispatches",
+    "query_decisions",
+    "search_channel",
+    "search_tokens",
+    "search_usage",
+    "site_counts",
+    "site_failures",
+    "source_counts",
+    "supply_counts",
+    "unfinished_site_scopes"
+  ],
+  "data": {
+    "schema_version": "candidate-producer-report-2",
+    "protocol": "candidate-producer-3",
+    "model_protocol": "entry-tools",
+    "source_pipeline": "first-party-entries",
+    "batch_scope": "producer-muxtly-wiki-200-20261111-r01-producer/entry-batch/producer-new100-20261118-dpm-02",
+    "target": 100,
+    "listed_unique_candidates": 17,
+    "deficit": 83,
+    "status": "PARTIAL",
+    "row_results": {
+      "REJECTED": 7,
+      "NEW": 17
+    },
+    "batches": 4,
+    "stopped": {
+      "stage": "grounded_producer",
+      "type": "BudgetStop",
+      "reason": "producer_stop_requested; current work retained",
+      "diagnostic": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/producer-evidence/ee180b4fd81fca20a174c5f2243bab3032778998955b4b4129ac87e80549e179/producer-exception-50c08a517aa2cdcc528b25d9f2b65c9c461b9f4a881312b21ceba77fe51616b4.json",
+        "sha256": "6a2f14b492bbc50a944ec141a8109eae924da97bfb1ae2586aae571ece1ada3e"
+      }
+    },
+    "new_candidates_this_invocation": 17,
+    "production_attempts": 0,
+    "collected": 0,
+    "pending_review": 0,
+    "QC_accepted": 0,
+    "published": 0,
+    "real_throughput": "NOT_TESTED"
+  }
+}

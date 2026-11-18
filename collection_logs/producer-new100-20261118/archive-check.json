@@ -1,0 +1,34 @@
+{
+  "checked_at": "2026-11-18T07:36:51.398421+00:00",
+  "scope": "Archive fidelity and metadata projections, not a replacement for final production audit",
+  "unchanged_copies_verified": 26,
+  "projections": 9,
+  "batch_rows": 170,
+  "batch_row_states": {
+    "NEW": 100,
+    "REJECTED": 40,
+    "DUPLICATE": 29,
+    "OVER_LIMIT": 1
+  },
+  "worker_NEW_counts": [
+    42,
+    17,
+    21,
+    20
+  ],
+  "page_results_count": 100,
+  "json_documents_parsed": 23,
+  "jsonl_records_parsed": 297,
+  "credential_pattern_findings": [],
+  "credential_scan_scope": "Selected archive text only; no credential source files read; pattern checks are limited",
+  "originals_unchanged": true,
+  "pass": true,
+  "final_checked_at": "2026-11-18T07:39:32.433076+00:00",
+  "manifest_payloads_verified": 35,
+  "readme_links_verified": 32,
+  "script_AST_checks": 4,
+  "ignored_whitelisted_files": [],
+  "desktop_metadata_excluded": true,
+  "unknown_subsequent_same_URI_dispatches": 0,
+  "remaining_related_processes": 0
+}

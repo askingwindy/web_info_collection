@@ -1,0 +1,159 @@
+{
+  "archive_kind": "explicit-field-projection",
+  "original": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/audit-smoke-r02/final-audit.json",
+    "bytes": 2465,
+    "sha256": "067fb7d7e060581130c147db4c6b2baa208587019f301d43b246c168bc62583d"
+  },
+  "retained_fields": [
+    "accounting",
+    "actual_landing_unique",
+    "all_processes_exited",
+    "audit_seconds",
+    "batch_row_states",
+    "consumer_QC_started_by_this_audit",
+    "counting_pattern",
+    "duplicate_landings",
+    "exit_receipts",
+    "human_review",
+    "net_new_candidates",
+    "new_application_ids",
+    "processes",
+    "protected_counts",
+    "protected_drift",
+    "published",
+    "published_NEW_unique",
+    "read_only_database",
+    "smoke",
+    "snapshot_at",
+    "source_changes",
+    "source_file_count",
+    "source_unchanged",
+    "status",
+    "target",
+    "verified_pages",
+    "verified_reference_files",
+    "issues_count (derived)",
+    "issue_code_counts (derived)",
+    "archive_explanation (r01 only)"
+  ],
+  "omitted_fields": [
+    "individual issues",
+    "page-results.jsonl (not copied)"
+  ],
+  "data": {
+    "status": "IN_PROGRESS",
+    "snapshot_at": 1794986830.557469,
+    "audit_seconds": 0.494,
+    "read_only_database": true,
+    "smoke": true,
+    "target": 100,
+    "counting_pattern": "%/entry-batch/producer-new100-20261118-dpm-%",
+    "batch_row_states": {
+      "NEW": 76,
+      "REJECTED": 26,
+      "DUPLICATE": 15
+    },
+    "published_NEW_unique": 76,
+    "net_new_candidates": 76,
+    "new_application_ids": [
+      "app-54680a484ea549505a7bd126"
+    ],
+    "verified_pages": 76,
+    "actual_landing_unique": 76,
+    "duplicate_landings": {},
+    "verified_reference_files": 380,
+    "accounting": {
+      "attribution": {
+        "new_job_exact_site_url": 204,
+        "explicit_round_batch": 20
+      },
+      "new_jobs": 224,
+      "job_states": {
+        "done": 212,
+        "review_required": 9,
+        "running": 3
+      },
+      "model_requests": 21,
+      "model_states": {
+        "succeeded": 16,
+        "invalid_response": 3,
+        "reserved": 2
+      },
+      "tokens": {
+        "input_tokens": 192559,
+        "output_tokens": 14079,
+        "cached_input_tokens": 0
+      },
+      "model_requests_missing_usage": 2,
+      "known_cost_micros": 0,
+      "cost_unknown_requests": 21,
+      "reserved_cost_for_unknown_charge_micros": 21000000,
+      "GET_requests": 202,
+      "GET_states": {
+        "succeeded": 196,
+        "failed": 4,
+        "unknown": 2
+      },
+      "GET_statuses": {
+        "200": 196,
+        "None": 6
+      },
+      "reused_preexisting_jobs": 0,
+      "reused_preexisting_model_requests": 0,
+      "reused_preexisting_GETs": 0
+    },
+    "protected_counts": {
+      "producer.model_requests": 21,
+      "producer.jobs": 13,
+      "consumer.model_requests": 43,
+      "consumer.jobs": 0
+    },
+    "protected_drift": [],
+    "source_file_count": 239,
+    "source_unchanged": true,
+    "source_changes": [],
+    "processes": [
+      {
+        "role": "controller",
+        "pid": 76663,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 76664,
+        "alive": true
+      },
+      {
+        "role": "expansion_controller",
+        "pid": 77733,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77734,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77735,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77736,
+        "alive": true
+      }
+    ],
+    "all_processes_exited": false,
+    "exit_receipts": {
+      "controller-exit.json": null,
+      "expansion-exit.json": null
+    },
+    "consumer_QC_started_by_this_audit": false,
+    "human_review": "NOT_RUN",
+    "published": false,
+    "issues_count": 0,
+    "issue_code_counts": {}
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "archive_kind": "explicit-field-projection",
+  "original": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/producer-04.log",
+    "bytes": 1141750,
+    "sha256": "aaa62252f997e7546c01a386d2f6c109dd75fbcfbb81dfdce3abcd5d328ad3b1"
+  },
+  "retained_fields": [
+    "schema_version",
+    "protocol",
+    "model_protocol",
+    "source_pipeline",
+    "batch_scope",
+    "target",
+    "listed_unique_candidates",
+    "deficit",
+    "status",
+    "row_results",
+    "batches",
+    "stopped",
+    "new_candidates_this_invocation",
+    "production_attempts",
+    "collected",
+    "pending_review",
+    "QC_accepted",
+    "published",
+    "real_throughput"
+  ],
+  "omitted_fields": [
+    "candidate_ids",
+    "current_chain_manifest",
+    "discovery_mode",
+    "evidence_output",
+    "inventory",
+    "model_metering",
+    "new_dispatches",
+    "query_decisions",
+    "search_channel",
+    "search_tokens",
+    "search_usage",
+    "site_counts",
+    "site_failures",
+    "source_counts",
+    "supply_counts",
+    "unfinished_site_scopes"
+  ],
+  "data": {
+    "schema_version": "candidate-producer-report-2",
+    "protocol": "candidate-producer-3",
+    "model_protocol": "entry-tools",
+    "source_pipeline": "first-party-entries",
+    "batch_scope": "producer-muxtly-wiki-200-20261111-r01-producer/entry-batch/producer-new100-20261118-dpm-04",
+    "target": 100,
+    "listed_unique_candidates": 20,
+    "deficit": 80,
+    "status": "PARTIAL",
+    "row_results": {
+      "NEW": 20,
+      "REJECTED": 5,
+      "DUPLICATE": 1
+    },
+    "batches": 5,
+    "stopped": {
+      "stage": "grounded_producer",
+      "type": "BudgetStop",
+      "reason": "producer_stop_requested; current work retained",
+      "diagnostic": {
+        "path": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/prod/producer-evidence/e86a5096496f18cc58fe260f1d9d980bb8de664dbe0728026070f17010a579f2/producer-exception-4c1dde57a32f2a86091631ef62d1808479072ff348460496b2de7bed6176538b.json",
+        "sha256": "db5795ccd7dfb87cefc3eb6f33777ff16949c898b87d818ace00f67584528358"
+      }
+    },
+    "new_candidates_this_invocation": 20,
+    "production_attempts": 0,
+    "collected": 0,
+    "pending_review": 0,
+    "QC_accepted": 0,
+    "published": 0,
+    "real_throughput": "NOT_TESTED"
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "at": 1794986966.826698,
+  "elapsed_seconds": 1777.1,
+  "target": 100,
+  "net_new_unique": 100,
+  "candidate_rows": {
+    "NEW": 100,
+    "REJECTED": 40,
+    "DUPLICATE": 29,
+    "OVER_LIMIT": 1
+  },
+  "job_states": {
+    "done": 234,
+    "review_required": 10,
+    "queued": 1
+  },
+  "model_states": {
+    "succeeded": 22,
+    "invalid_response": 3
+  },
+  "tokens": {
+    "input_tokens": 232243,
+    "output_tokens": 17214
+  },
+  "GET_states": {
+    "succeeded": 212,
+    "failed": 5,
+    "unknown": 2
+  },
+  "protected_drift": [],
+  "worker_pid": 76664,
+  "finished": true,
+  "page_failures": [
+    {
+      "id": "65da7e2b922d43d4bf6b4e78da6ae165",
+      "state": "failed",
+      "target_uri": "https://www.dpm.org.cn/Home.html",
+      "response_status": null,
+      "error_type": "Error",
+      "error_message": "Response.body: Protocol error (Network.getResponseBody): No resource with given identifier found\nResponse body is not available for a response that was navigated away from. Read response.body() before triggering any navigation."
+    },
+    {
+      "id": "a858e920e5a44a59965b9e3269c2e5fd",
+      "state": "unknown",
+      "target_uri": "https://www.dpm.org.cn/calligraphy_paint/index.html",
+      "response_status": null,
+      "error_type": "OutcomeUnknown",
+      "error_message": "Original image-screen navigation unresolved: TimeoutError"
+    },
+    {
+      "id": "7ee863b71f5a4b61986cda707ee4f609",
+      "state": "failed",
+      "target_uri": "https://www.dpm.org.cn/vr/index.html",
+      "response_status": null,
+      "error_type": "ValueError",
+      "error_message": "Main business region changed during confirmed frame capture"
+    },
+    {
+      "id": "16052eb048c5463bb5d543fecee9d948",
+      "state": "failed",
+      "target_uri": "https://www.dpm.org.cn/subject_zeroAbandonment/index.html",
+      "response_status": null,
+      "error_type": "TimeoutError",
+      "error_message": "Page.screenshot: Timeout 10000ms exceeded.\nCall log:\n  - taking page screenshot\n  - waiting for fonts to load...\n"
+    },
+    {
+      "id": "1dfe660d83da4ab7a480fd57d641df71",
+      "state": "failed",
+      "target_uri": "https://www.dpm.org.cn/wyqgg.html",
+      "response_status": null,
+      "error_type": "ValueError",
+      "error_message": "Main business region changed during confirmed frame capture"
+    },
+    {
+      "id": "f60995af54774e3ab6c65adae25e34e5",
+      "state": "unknown",
+      "target_uri": "https://www.dpm.org.cn/expert_detail/239004.html",
+      "response_status": null,
+      "error_type": "OutcomeUnknown",
+      "error_message": "Original image-screen navigation unresolved: TimeoutError"
+    },
+    {
+      "id": "d9aa6b5144e74b12a3184a007ca297f1",
+      "state": "failed",
+      "target_uri": "https://www.dpm.org.cn/activity/education/372862.html",
+      "response_status": null,
+      "error_type": "ValueError",
+      "error_message": "Main business region changed during confirmed frame capture"
+    }
+  ]
+}

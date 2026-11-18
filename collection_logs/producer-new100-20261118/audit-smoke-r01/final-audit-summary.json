@@ -1,0 +1,169 @@
+{
+  "archive_kind": "explicit-field-projection",
+  "original": {
+    "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-new100-20261118-r01/audit-smoke-r01/final-audit.json",
+    "bytes": 127109,
+    "sha256": "bbbd0e1ad39cc0022ade2d90fb1ce63d8ca88d1e095ba10e65eb6622137e7bd5"
+  },
+  "retained_fields": [
+    "accounting",
+    "actual_landing_unique",
+    "all_processes_exited",
+    "audit_seconds",
+    "batch_row_states",
+    "consumer_QC_started_by_this_audit",
+    "counting_pattern",
+    "duplicate_landings",
+    "exit_receipts",
+    "human_review",
+    "net_new_candidates",
+    "new_application_ids",
+    "processes",
+    "protected_counts",
+    "protected_drift",
+    "published",
+    "published_NEW_unique",
+    "read_only_database",
+    "smoke",
+    "snapshot_at",
+    "source_changes",
+    "source_file_count",
+    "source_unchanged",
+    "status",
+    "target",
+    "verified_pages",
+    "verified_reference_files",
+    "issues_count (derived)",
+    "issue_code_counts (derived)",
+    "archive_explanation (r01 only)"
+  ],
+  "omitted_fields": [
+    "individual issues",
+    "page-results.jsonl (not copied)"
+  ],
+  "data": {
+    "status": "IN_PROGRESS",
+    "snapshot_at": 1794986772.3075671,
+    "audit_seconds": 0.282,
+    "read_only_database": true,
+    "smoke": true,
+    "target": 100,
+    "counting_pattern": "%/entry-batch/producer-new100-20261118-dpm-%",
+    "batch_row_states": {
+      "NEW": 72,
+      "REJECTED": 23,
+      "DUPLICATE": 15
+    },
+    "published_NEW_unique": 72,
+    "net_new_candidates": 72,
+    "new_application_ids": [
+      "app-54680a484ea549505a7bd126"
+    ],
+    "verified_pages": 0,
+    "actual_landing_unique": 0,
+    "duplicate_landings": {},
+    "verified_reference_files": 0,
+    "accounting": {
+      "attribution": {
+        "new_job_exact_site_url": 192,
+        "explicit_round_batch": 16
+      },
+      "new_jobs": 208,
+      "job_states": {
+        "done": 197,
+        "review_required": 8,
+        "running": 3
+      },
+      "model_requests": 17,
+      "model_states": {
+        "succeeded": 15,
+        "invalid_response": 2
+      },
+      "tokens": {
+        "input_tokens": 179723,
+        "output_tokens": 13113,
+        "cached_input_tokens": 0
+      },
+      "model_requests_missing_usage": 0,
+      "known_cost_micros": 0,
+      "cost_unknown_requests": 17,
+      "reserved_cost_for_unknown_charge_micros": 17000000,
+      "GET_requests": 190,
+      "GET_states": {
+        "succeeded": 183,
+        "failed": 4,
+        "unknown": 2,
+        "reserved_for_dispatch": 1
+      },
+      "GET_statuses": {
+        "200": 183,
+        "None": 7
+      },
+      "reused_preexisting_jobs": 0,
+      "reused_preexisting_model_requests": 0,
+      "reused_preexisting_GETs": 0
+    },
+    "protected_counts": {
+      "producer.model_requests": 21,
+      "producer.jobs": 13,
+      "consumer.model_requests": 43,
+      "consumer.jobs": 0
+    },
+    "protected_drift": [],
+    "source_file_count": 239,
+    "source_unchanged": true,
+    "source_changes": [],
+    "processes": [
+      {
+        "role": "controller",
+        "pid": 76663,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 76664,
+        "alive": true
+      },
+      {
+        "role": "expansion_controller",
+        "pid": 77733,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77734,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77735,
+        "alive": true
+      },
+      {
+        "role": "worker",
+        "pid": 77736,
+        "alive": true
+      }
+    ],
+    "all_processes_exited": false,
+    "exit_receipts": {
+      "controller-exit.json": null,
+      "expansion-exit.json": null
+    },
+    "consumer_QC_started_by_this_audit": false,
+    "human_review": "NOT_RUN",
+    "published": false,
+    "issues_count": 864,
+    "issue_code_counts": {
+      "round_source_not_unique": 72,
+      "simplified_language_evidence_failed": 72,
+      "reference_missing": 360,
+      "entry_http_not_verified_GET_2xx": 72,
+      "entry_http_binding_failed": 72,
+      "shared_rendered_binding_failed": 72,
+      "original_rendered_language_recheck_failed": 72,
+      "original_GET_or_job_ledger_binding_failed": 72
+    },
+    "archive_explanation": "Initial audit reader incorrectly treated candidate source.run_id as the full batch run_id. Original status stays IN_PROGRESS: 0 verified pages and 864 issues. Later audits corrected the reader without changing producer records."
+  }
+}
