@@ -15,6 +15,21 @@ from webcollect.production_quality import require_public_task_state
 
 
 class Table2RunChecks(unittest.TestCase):
+    def test_resume_retains_original_cohort_and_worker_ownership(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve();scope_path=root/'scope.json';scope_path.write_text('{}')
+            scope={k:str(root/k) for k in ('pool','consumer_config','consumer_db','registry','history_set','policy','output')}
+            cohort=root/'cohort.json'
+            cohort.write_text(json.dumps({'selected':[{'candidate_id':str(i),'application_id':'site'+str(i%3),'order':i+1} for i in range(100)],'denominator':100}))
+            with patch.object(site_workers,'load_scope',return_value=(scope_path,scope)):
+                first=site_workers.fixed_consumer_plan(scope_path,cohort,root/'first')
+                (root/'first/summary.json').write_text(json.dumps({'workers':[{'returncode':0} for _ in range(20)]}))
+                second=site_workers.fixed_consumer_plan(scope_path,cohort,root/'second',resume_from=root/'first/prepared-plan.json')
+            self.assertEqual(second['cohort'],first['cohort'])
+            self.assertEqual(second['prior_worker_ids'],[w['worker_id'] for w in first['workers']])
+            self.assertEqual([w['candidate_ids'] for w in first['workers']],[w['candidate_ids'] for w in second['workers']])
+            self.assertEqual(second['previous_run_roots'],[first['log_root']])
+
     def test_unrelated_owner_does_not_replay_closure_audit(self):
         from types import SimpleNamespace
         from webcollect.current_chain import PROJECT_RULES
@@ -37,6 +52,13 @@ class Table2RunChecks(unittest.TestCase):
                     self.assertEqual(row['disposition'], 'business')
                     self.assertFalse(row['stop_dispatch'])
             self.assertEqual(disposition(NavigationTimeoutError('https://example.org', 'entry', 30))['reason_owner'], 'site')
+            from playwright.async_api import Error as BrowserError
+            for index in range(3):
+                row=failures.record('geometry-'+str(index),disposition(BrowserError('Page.evaluate: Error: UNSUPPORTED_GEOMETRY: rotation')))
+                self.assertEqual(row['disposition'],'business')
+                self.assertEqual(row['code'],'UNSUPPORTED_GEOMETRY')
+                self.assertFalse(row['stop_dispatch'])
+            self.assertEqual(disposition(BrowserError('Page.evaluate: TypeError: broken host code'))['disposition'],'page_program')
             try:
                 require_public_task_state({'url': 'https://example.org/login'})
             except ValueError as error:
@@ -79,6 +101,17 @@ class Table2RunChecks(unittest.TestCase):
             'response':json.dumps({'provider_error':{'http_status':429},'http_timing':{'headers_ms':10}})}])
         self.assertEqual(result['dispatch'], {'dispatched':1})
         self.assertIsNone(result['input_tokens'])
+        import sqlite3
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'requests.sqlite3'
+            with sqlite3.connect(path) as con:
+                con.execute('CREATE TABLE model_requests(id TEXT,job_id TEXT,state TEXT,started REAL,usage TEXT,response TEXT,request_json TEXT)')
+                con.execute('INSERT INTO model_requests VALUES(?,?,?,?,?,?,?)',('original','job','unknown',1,None,'{}',
+                    json.dumps({'provider':'glm','http_dispatch':False,'images':['large original remains in ledger']})))
+            projected=collection_report.rows(path,'model_requests')
+            self.assertNotIn('images',json.loads(projected[0]['request_json']))
+            self.assertIs(json.loads(projected[0]['request_json'])['http_dispatch'],False)
+            self.assertEqual(collection_report.request_summary(projected)['dispatch'],{'not_dispatched':1})
 
     def test_failed_claim_without_receipt_is_not_proven(self):
         selected=[{'candidate_id':str(i),'version':1,'application_id':'site'+str(i%3)} for i in range(100)]
@@ -90,6 +123,7 @@ class Table2RunChecks(unittest.TestCase):
              patch.object(collection_report,'load_json',return_value={'selected':selected,'denominator':100}), \
              patch.object(collection_report,'rows',side_effect=lambda p,t: claims if t=='candidate_claims' else []), \
              patch.object(collection_report,'jsonl',return_value=[]), \
+             patch.object(collection_report,'connect'), \
              patch('webcollect.candidate_consumer.verified_saved',return_value=None):
             report=collection_report.build('scope','cohort',folder)
         self.assertEqual(report['integrity'],'FAILED')

@@ -130,22 +130,30 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
                 fail('COHORT_DENOMINATOR','selected',dict(counts))
             if len({r['candidate_id'] for r in rows}) != len(rows):
                 fail('COHORT_DUPLICATE','selected','candidate ids must be unique')
+            dispatch_rows=[]
+            prior_workers=set((plan or {}).get('prior_worker_ids',[])) if (plan or {}).get('resume_from') else set()
             with pool.pool.connect() as con:
                 for row in rows:
                     original=con.execute('SELECT version,state FROM data_candidates WHERE candidate_id=?',(row['candidate_id'],)).fetchone()
+                    claims=con.execute('SELECT worker_id,state,version FROM candidate_claims WHERE candidate_id=?',(row['candidate_id'],)).fetchall()
+                    if claims and len(claims)==1 and claims[0]['worker_id'] in prior_workers and claims[0]['state'] in ('failed','reconcile','succeeded','observed') and claims[0]['version']==row['version']:
+                        if not original or original['version']!=row['version']:
+                            fail('COHORT_UNAVAILABLE',row['candidate_id'],'previously claimed version differs')
+                        continue  # claim_next returns ALREADY_CLAIMED without any replay.
                     if not original or original['version']!=row['version'] or original['state']!='pending':
                         fail('COHORT_UNAVAILABLE',row['candidate_id'],'version/state differs')
-                    if con.execute('SELECT 1 FROM candidate_claims WHERE candidate_id=?',(row['candidate_id'],)).fetchone():
+                    if claims:
                         fail('COHORT_PRIOR_CLAIM',row['candidate_id'],'original claim retained')
+                    else:dispatch_rows.append(row)
             from .candidate_cohort import inspect_rows
-            _,inspected,_=inspect_rows(scope_path,candidate_ids=[r['candidate_id'] for r in rows])
+            _,inspected,_=inspect_rows(scope_path,candidate_ids=[r['candidate_id'] for r in dispatch_rows])
             audited={r['candidate_id']:r for r in inspected}
-            for frozen in rows:
+            for frozen in dispatch_rows:
                 actual=audited.get(frozen['candidate_id'],{})
                 fields=('version','application_id','producer_batch','producer_row_id','producer_row_response_sha256','body_sha256','sources_sha256','entry_http')
                 if not actual.get('eligible') or any(actual.get(k)!=frozen.get(k) for k in fields):
                     fail('COHORT_EVIDENCE_MISMATCH',frozen['candidate_id'],actual.get('rejection') or 'frozen source differs')
-            preflight_cohort_sources(pool,rows,scope['registry'])
+            preflight_cohort_sources(pool,dispatch_rows,scope['registry'])
         if plan:
             # Only the coordinator inventories predecessors; its own workers run later.
             import subprocess,shlex
