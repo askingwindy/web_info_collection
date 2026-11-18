@@ -2,6 +2,7 @@
 from webcollect.sqlite_connection import raw_connect as workspace_connect
 from webcollect import workspace_json as json
 from functools import lru_cache
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 from .batch_core import load_json, file_sha
@@ -41,18 +42,24 @@ def save_attempt_feedback(evidence, attempt, outcome, error=None):
             continue
         raw = load_json(path)
         declared = packaged_root / attempt['sample_id'] / 'images' / f"step_{raw['step_id']:03}.png"
-        if not declared.is_file():
+        want = (raw.get('capture') or {}).get('screenshot_sha256')
+        if not declared.is_file() or (want and file_sha(declared) != want):
             # React close-out orders: the receipt declares packaging paths the
             # later bind step materializes. Verify every later reader against
             # real bytes immediately: copy the preserved original whose digest
             # equals the step's own capture screenshot receipt, when present.
-            want = (raw.get('capture') or {}).get('screenshot_sha256')
             if want:
-                source = next((png for png in (evidence / 'raw').glob('*.png')
+                source = next((png for folder in ('raw', 'stepwise')
+                               for png in (evidence / folder).glob('*.png')
                                if file_sha(png) == want), None)
                 if source is not None:
-                    declared.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source, declared)
+                    if declared.exists():
+                        # 省略动作后交付编号可不同于原始派发编号。不能覆盖已经
+                        # 生成的交付图，也不能给它绑定另一个原图的摘要。
+                        declared = source
+                    else:
+                        declared.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(source, declared)
         steps.append({'step_id': raw['step_id'], 'operation': raw['operation'],
             'target': raw.get('target_element'), 'execution_error': raw.get('execution_error'),
             'ended_at': raw.get('ended_at'), 'state': raw['state'], 'raw': reference(path),
@@ -121,6 +128,83 @@ def _verify_feedback_evidence(refs):
         error.evidence_references = refs
         error.evidence_classification = 'DIGEST_MISMATCH' if str(error) == '证据SHA不匹配' else 'INVALID_EVIDENCE'
         raise
+
+
+def unresolved_candidate_executions(registry, task, *, model_ledger=None,
+                                    current_attempt_id=None, research_request_id=None):
+    """只读取当前候选的未决执行与请求；不加载其它候选的图片或全站历史。"""
+    from .current_chain import PROJECT_RULES, check_project_guard, registry_project
+    from .request_quarantine import accounted_closed_execution
+
+    candidate_id = (task.get('candidate_binding') or {}).get('candidate_id')
+    guard = (model_ledger.config.get('site_failure_guard') or {}) if model_ledger else {}
+    scoped = guard.get('dispatch_rules') == PROJECT_RULES
+    rows = []
+    if registry is not None and Path(registry).is_file():
+        with closing(workspace_connect(Path(registry).resolve().as_uri() + '?mode=ro', uri=True)) as con:
+            con.row_factory = sqlite3.Row
+            if scoped:
+                check_project_guard(registry_project(con), guard, model_ledger.path, role='consumer')
+            tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if {'m4_attempts', 'm4_tasks'} <= tables:
+                owner_clause = ("json_extract(t.task_json,'$.candidate_binding.candidate_id')=?"
+                                if candidate_id else 't.task_id=?')
+                rows = con.execute(
+                    'SELECT a.attempt_id,a.status,a.failure_class,a.root_cause,t.task_id '
+                    'FROM m4_attempts a JOIN m4_tasks t ON t.task_key=a.task_key WHERE ' + owner_clause,
+                    (candidate_id or task['task_id'],)).fetchall()
+    attempts = {row['attempt_id']: dict(row) for row in rows}
+    closed = {}
+
+    def is_closed(attempt_id):
+        if not scoped or not attempt_id or attempt_id == current_attempt_id or attempt_id not in attempts:
+            return False
+        if attempt_id not in closed:
+            closed[attempt_id] = accounted_closed_execution(
+                registry, attempt_id, research_request_id=research_request_id)
+        return closed[attempt_id]
+
+    unresolved = [row for attempt_id, row in attempts.items()
+                  if attempt_id != current_attempt_id
+                  and (row['status'] in ('reserved', 'running', 'interrupted')
+                       or row['failure_class'] in ('unknown', 'interrupted'))
+                  and not is_closed(attempt_id)]
+    if model_ledger is None:
+        return unresolved
+    attempt_ids = json.dumps(list(attempts))
+    candidate_clause = ("coalesce(json_extract(j.payload,'$.candidate_id'),"
+                        "json_extract(j.payload,'$.candidate_binding.candidate_id'),"
+                        "json_extract(j.payload,'$.fragment_context.candidate_consumption.candidate_id'))=?")
+    with model_ledger.connect() as con:
+        requests = con.execute("""SELECT m.id,m.state,
+                coalesce(json_extract(m.request_json,'$.dispatch_attempt_id'),
+                         json_extract(j.payload,'$.attempt_id')) AS owner_attempt
+            FROM model_requests m LEFT JOIN jobs j ON j.id=m.job_id
+            WHERE m.state IN ('reserved','unknown') AND (
+                json_extract(m.request_json,'$.dispatch_attempt_id') IN (SELECT value FROM json_each(?))
+                OR json_extract(j.payload,'$.attempt_id') IN (SELECT value FROM json_each(?))
+                OR """ + candidate_clause + ')',
+            (attempt_ids, attempt_ids, candidate_id)).fetchall()
+        jobs = con.execute("""SELECT j.id,j.state,json_extract(j.payload,'$.attempt_id') AS owner_attempt
+            FROM jobs j WHERE j.kind IN ('task-generation','fragment-decision','react-decision',
+                                    'react-native-decision','stepwise-decision')
+            AND j.state IN ('queued','running','review_required')
+            AND (json_extract(j.payload,'$.attempt_id') IN (SELECT value FROM json_each(?))
+                 OR """ + candidate_clause + ')',
+            (attempt_ids, candidate_id)).fetchall()
+        # 已有的有界响应原件按现行账本读取；不重发、不改 UNKNOWN 原行。
+        requests = [dict(row) for row in requests
+                    if not (row['state'] == 'unknown'
+                            and model_ledger.timeout_retry_answered(con, row['id']))]
+    for row in requests:
+        if not is_closed(row['owner_attempt']):
+            unresolved.append({'request_id': row['id'], 'state': row['state'],
+                               'owner_attempt': row['owner_attempt']})
+    for row in jobs:
+        if not is_closed(row['owner_attempt']):
+            unresolved.append({'job_id': row['id'], 'state': row['state'],
+                               'owner_attempt': row['owner_attempt']})
+    return unresolved
 
 
 def site_context(registry, site_uri, *, generation=(), quality=(), model_ledger=None, collection_report=None,

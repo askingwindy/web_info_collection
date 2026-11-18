@@ -1,6 +1,6 @@
 """策略 3 采集外壳：collect_runtime 按冻结策略分流进入；负责结束加工与结算。
 
-成功路径 = 一次回写 + 一次单独判定 + annotation 生成 + 事实引文核对 +
+成功路径 = 回写（机械检查失败最多修正一次）+ 一次单独判定 + annotation 生成 + 事实引文核对 +
 sample_check + 去重 + RuntimeStore 正式提交（collected_pending_review）+
 候选回写所需的收据。失败路径保留全部原始记录并如实结算。
 """
@@ -11,7 +11,8 @@ from pathlib import Path
 
 from webcollect import workspace_json as json
 
-from ..agent_feedback import save_attempt_feedback, site_context
+from ..agent_feedback import save_attempt_feedback, unresolved_candidate_executions
+from ..agent_controller import exclusive
 from ..batch_core import load_json
 from ..production_quality import sha
 from ..runtime import ImageCommitConflict
@@ -32,7 +33,7 @@ def _now():
 
 
 def recent_site_tasks(registry, site_uri, limit=10):
-    """本站已采任务：从已有正式保存结果取精简任务文本，仅作避免重复提示。"""
+    """同一入口页已保存的真实指令；不把 react-url 占位任务当业务目标。"""
     import sqlite3
 
     from ..sqlite_connection import raw_connect
@@ -45,21 +46,37 @@ def recent_site_tasks(registry, site_uri, limit=10):
             if not con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_attempts'").fetchone():
                 return []
             rows = con.execute(
-                'SELECT t.task_json FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key '
+                'SELECT a.sample_id,a.evidence_json,t.task_json FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key '
                 "WHERE a.status='collected_pending_review' AND a.finished_at IS NOT NULL "
-                'ORDER BY a.finished_at DESC LIMIT 200').fetchall()
+                "AND coalesce(json_extract(t.task_json,'$.candidate_binding.candidate.entry_url'),"
+                "json_extract(t.task_json,'$.initial_url'),json_extract(t.task_json,'$.site_uri'))=? "
+                'ORDER BY a.finished_at DESC LIMIT ?', (site_uri, limit)).fetchall()
     except sqlite3.Error:
         return []
     for row in rows:
         try:
-            task = json.loads(row['task_json'])
-        except (TypeError, ValueError):
+            refs = json.loads(row['evidence_json'] or '[]')
+            instruction = ''
+            for ref in refs:
+                path = Path(ref['path'])
+                if path.name not in (STEPWISE_FINALIZATION, 'saved_sample.json'):
+                    continue
+                if not path.is_file() or sha(path) != ref.get('sha256'):
+                    continue  # advisory context cannot turn missing old data into a new hold
+                saved = load_json(path)
+                if path.name == STEPWISE_FINALIZATION:
+                    instruction = saved.get('task_instruction') or (saved.get('writeback') or {}).get('model_instruction') or ''
+                else:
+                    annotation_path = path.parent.parent.parent / 'samples' / row['sample_id'] / 'annotation.json'
+                    digest = (saved.get('sample_files_sha256') or {}).get('annotation.json')
+                    if digest and annotation_path.is_file() and sha(annotation_path) == digest:
+                        instruction = load_json(annotation_path).get('task_instruction') or ''
+                if isinstance(instruction, str) and instruction.strip():
+                    break
+            if isinstance(instruction, str) and instruction.strip() and instruction.strip() not in tasks:
+                tasks.append(instruction.strip())
+        except (TypeError, ValueError, OSError, KeyError):
             continue
-        if (task.get('site_uri') or '') != (site_uri or '') and site_uri not in (task.get('site_uri') or ''):
-            continue
-        instruction = (task.get('instruction') or '').strip()
-        if instruction:
-            tasks.append(instruction[:60])
         if len(tasks) >= limit:
             break
     return tasks
@@ -81,13 +98,14 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
     spec = (task.get('workflow_proposal') or {}).get('spec') or {}
     requested_goal = (spec.get('goal') or {}).get('structured')
     # 宿主claim卫生：同一候选的未决旧attempt阻断新派发（与其它策略同规则）。
-    feedback_context = await asyncio.to_thread(site_context, registry, task['site_uri'],
-        model_ledger=ledger, candidate_id=(task.get('candidate_binding') or {}).get('candidate_id'))
-    if feedback_context['unresolved'] and any(
-            row.get('attempt_id') != attempt['attempt_id'] for row in feedback_context['unresolved']):
+    unresolved = await asyncio.to_thread(unresolved_candidate_executions, registry, task,
+        model_ledger=ledger, current_attempt_id=attempt['attempt_id'])
+    if unresolved:
         from ..collect_runtime import CollectionFailure
         raise CollectionFailure('Unresolved prior attempt blocks stepwise dispatch', 'program')
-    site_tasks = await asyncio.to_thread(recent_site_tasks, registry, task['site_uri'])
+    entry_url = ((task.get('candidate_binding') or {}).get('candidate') or {}).get('entry_url')
+    site_tasks = await asyncio.to_thread(recent_site_tasks, registry,
+                                         entry_url or task.get('initial_url') or task['site_uri'])
     call = stepwise_caller(ledger, task, attempt['attempt_id'], parent_job=parent_job, runlog=runlog)
     entry_ready = entry_observation is not None
     if page is None:
@@ -109,6 +127,7 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
     if raw_receipt is not None:
         sealed = load_json(raw_receipt['path'])
         terminal = load_json(sealed['terminal']['path'])
+    finalization_refs = []
 
     # ---------------------------------------------------------------- 结算外壳
     async def settle_failure(failure_class, root_cause, *, extra_evidence=(),
@@ -128,7 +147,7 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
         await asyncio.to_thread(store.finish_attempt, attempt['attempt_id'],
             attempt['worker_id'], attempt['lease_token'], 'rejected',
             failure_class=failure_class, root_cause=root_cause,
-            evidence=[ref for ref in (_evidence(failure) + [feedback_ref, raw_receipt,
+            evidence=[ref for ref in (_evidence(failure) + finalization_refs + [feedback_ref, raw_receipt,
                                                             *extra_evidence]) if ref])
         if handling['disposition'] == 'global':
             store.set_scope_paused(True, 'Stepwise program failure; raw execution preserved')
@@ -154,6 +173,9 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
         return await settle_failure(
             summary.get('failure_class') or 'collector',
             'stepwise_' + str(summary.get('stop_reason')) + ':' + str(summary.get('stop_summary') or '')[:200])
+    if summary.get('unsafe_omissions'):
+        return await settle_failure('collector', 'stepwise_unproven_omissions:'
+                                    + str(summary['unsafe_omissions'])[:200])
 
     # ---------------------------------------------------------------- 结束加工
     delivered, omitted = session.delivery_plan()
@@ -170,30 +192,58 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
         if remaining <= 0:
             return await settle_failure('collector', 'stepwise_soft_deadline_before_finalization')
 
-    actions_summary = ['%s %s → %s' % (row['operation']['action_type'],
-                                       (row['element'].get('text') or '')[:40] if row['element'] else '',
-                                       (row['step_result'] or '')[:80])
-                       for row in delivered]
+    actions_summary = [_action_summary(row) for row in delivered]
     first_frame = session.journal.frames[session.journal.frame_order[0]]
     final_frame = session.journal.frames[session.current['frame_id']]
     writeback = None
     judgement = None
+    complete_row = {'frame_id': session.current['frame_id'],
+                    'decision': session.complete_decision,
+                    'completed_at': session.complete_completed_at}
+    # 历史决策不可由回写修正。先检查其原帧引文，避免把轨迹缺陷当文字格式重试。
+    cited_rows = delivered + [complete_row]
+    trajectory_problems = finalize.citations_check({'steps': [
+        {'step_id': number, 'page_name': row['decision'].get('page_name'),
+         'precondition': row['decision'].get('precondition'),
+         'step_result': row.get('step_result', '')}
+        for number, row in enumerate(cited_rows, 1)]},
+        [session.journal.frames[row['frame_id']]['state'] for row in cited_rows])
+    if trajectory_problems:
+        return await settle_failure('collector', 'stepwise_citation_check_failed:'
+                                    + '; '.join(trajectory_problems)[:200])
     try:
-        response = await call(
-            phase='writeback',
-            system='你是采集回写器。只依据所给材料输出 submit_writeback，不添加新信息。',
-            tools=prompt.writeback_tools(),
-            user_text=prompt.writeback_message(mode=session.mode,
-                requested_goal_text=session._requested_text() if session.mode == 'specified' else None,
-                task_goal=session.goal, actions_summary=actions_summary, site_tasks=site_tasks),
-            images=[first_frame['png'], final_frame['png']],
-            reasoning_effort='high', dispatch_deadline=session._soft_deadline(),
-            request_deadline=session._hard_deadline(),
-            round_index=session.decision_round + 1, tool_name='submit_writeback')
-        writeback = finalize.validate_writeback(
-            response.get('arguments') or {}, mode=session.mode,
-            app_name=task.get('app_name') or task.get('site_uri'))
-        writeback['request_id'] = response.get('request_id')
+        correction_problems, previous_writeback = [], None
+        for writeback_number in (1, 2):
+            response = await call(
+                phase='writeback',
+                system='你是采集回写器。只依据所给材料输出 submit_writeback，不添加新信息。',
+                tools=prompt.writeback_tools(),
+                user_text=prompt.writeback_message(mode=session.mode,
+                    requested_goal_text=session._requested_text() if session.mode == 'specified' else None,
+                    initial_task_goal=getattr(session, 'initial_goal', None),
+                    task_goal=session.goal, actions_summary=actions_summary, site_tasks=site_tasks,
+                    correction_problems=correction_problems, previous_writeback=previous_writeback),
+                images=[first_frame['png'], final_frame['png']],
+                reasoning_effort='high', dispatch_deadline=session._soft_deadline(),
+                request_deadline=session._hard_deadline(),
+                round_index=session.decision_round + writeback_number, tool_name='submit_writeback')
+            previous_writeback = response.get('arguments') or {}
+            try:
+                writeback = finalize.validate_writeback(previous_writeback, mode=session.mode,
+                    app_name=task.get('app_name') or task.get('site_uri'))
+                writeback['request_id'] = response.get('request_id')
+                correction_problems = finalize.writeback_citations_check(writeback, final_frame['state'])
+            except finalize.FinalizationRejected as error:
+                writeback = None
+                correction_problems = [str(error)]
+            finalization_refs.append(exclusive(evidence / ('writeback-%03d.json' % writeback_number),
+                {'attempt_id': attempt['attempt_id'], 'request_id': response.get('request_id'),
+                 'arguments': previous_writeback, 'validated': writeback,
+                 'mechanical_problems': correction_problems, 'created_at': _now()}))
+            if not correction_problems:
+                break
+            if writeback_number == 2:
+                raise finalize.FinalizationRejected('WRITEBACK_CHECK_FAILED:' + '; '.join(correction_problems))
         # 判定输入：首帧、最后保留动作前帧、终态帧（重合帧去重）。
         last_kept_before = session.journal.frames[delivered[-1]['frame_id']] if delivered else final_frame
         judge_images = [first_frame['png'], last_kept_before['png'], final_frame['png']]
@@ -213,9 +263,20 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
                 completion_judgement=writeback['completion_judgement']),
             images=unique_images, reasoning_effort='high',
             dispatch_deadline=session._soft_deadline(), request_deadline=session._hard_deadline(),
-            round_index=session.decision_round + 2, tool_name='submit_judgement')
-        judgement = finalize.validate_judgement(response.get('arguments') or {})
-        judgement['request_id'] = response.get('request_id')
+            round_index=session.decision_round + writeback_number + 1, tool_name='submit_judgement')
+        judgement_problem = None
+        try:
+            judgement = finalize.validate_judgement(response.get('arguments') or {})
+            judgement['request_id'] = response.get('request_id')
+        except finalize.FinalizationRejected as error:
+            judgement_problem = error
+        finalization_refs.append(exclusive(evidence / 'judgement.json',
+            {'attempt_id': attempt['attempt_id'], 'request_id': response.get('request_id'),
+             'arguments': response.get('arguments'), 'validated': judgement,
+             'mechanical_problem': str(judgement_problem) if judgement_problem else None,
+             'created_at': _now()}))
+        if judgement_problem is not None:
+            raise judgement_problem
     except finalize.FinalizationRejected as error:
         return await settle_failure('collector', 'stepwise_' + str(error))
     except Exception as error:
@@ -233,9 +294,6 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
     # annotation 生成与引文核对
     instruction_text = (finalize.specified_instruction(requested_goal, task.get('app_name'))
                         if session.mode == 'specified' else writeback['model_instruction'])
-    complete_row = {'frame_id': session.current['frame_id'],
-                    'decision': session.complete_decision,
-                    'completed_at': session.complete_completed_at}
     annotation, frame_texts = annotation_module.build_delivery(
         sample, session.journal, task, delivered=delivered, complete_row=complete_row,
         omitted=omitted, instruction_text=instruction_text, writeback=writeback,
@@ -286,7 +344,13 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
     finalization_receipt = {'schema_version': 'stepwise-finalization-1',
                             'strategy': {'id': 'stepwise'},
                             'attempt_id': attempt['attempt_id'],
+                            'task_instruction': instruction_text,
+                            'initial_task_goal': getattr(session, 'initial_goal', None),
+                            'task_goal': session.goal,
+                            'task_modifications': getattr(session, 'task_modifications', 0),
+                            'complete_rejections': getattr(session, 'complete_rejections', []),
                             'writeback': writeback, 'judgement': judgement,
+                            'processing_records': finalization_refs,
                             'citation_problems': citation_problems,
                             'format_check': {'sample_path': checked.get('sample_path'),
                                              'confirmed_format_pass': checked.get('confirmed_format_pass'),
@@ -380,6 +444,21 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
             'short_flow': False, 'stop_reason': 'complete_success',
             'strategy_result': final_result, 'raw_receipt': raw_receipt,
             'saved_sample': str(saved.resolve())}
+
+
+def _action_summary(row):
+    """保留中间动作的业务含义与原生参数，供回写和单次独立判定共同读取。"""
+    operation, decision = row['operation'], row['decision']
+    arguments = operation.get('arguments') or {}
+    summary = {'页面': decision.get('page_name'), '本步目标': decision.get('user_goal'),
+               '动作': operation['action_type'],
+               '对象': (row.get('element') or {}).get('text') or '',
+               '结果': row.get('step_result') or ''}
+    for field, label in (('text', '输入文字'), ('direction', '滚动方向'),
+                         ('option', '下拉选项'), ('keys', '按键')):
+        if field in arguments:
+            summary[label] = arguments[field]
+    return prompt.compact_json(summary)
 
 
 def _finalized_result(task, summary, terminal, *, save_status, eligibility,

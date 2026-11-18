@@ -1,0 +1,644 @@
+{
+  "passed": false,
+  "elapsed_seconds": 69.38123845797963,
+  "checks": [
+    {
+      "chain": "tabs",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "tabs",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "tabs",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "tabs",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "tabs",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "tabs",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "tabs",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "tabs",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "tabs",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "tabs",
+      "name": "cli_customer_export_completed",
+      "pass": false,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "BLOCKED",
+          "error": {
+            "reason": "Final user_goal must identify the actual page/content, not a generic confirmation",
+            "stage": "customer_export",
+            "type": "ValueError"
+          },
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "NOT_RUN",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "tabs",
+      "name": "cli_customer_export_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "tabs",
+      "name": "chain_no_exception",
+      "pass": false,
+      "detail": "AssertionError('normal consumer CLI did not produce candidate-receipt.json')"
+    },
+    {
+      "chain": "expand",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "expand",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "expand",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "expand",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "expand",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "failed",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "expand",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "expand",
+      "name": "normal_runtime_saved_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "expand",
+      "name": "candidate_writeback_succeeded",
+      "pass": false,
+      "detail": "reconcile"
+    },
+    {
+      "chain": "expand",
+      "name": "terminal_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "expand",
+      "name": "model_requests_within_40",
+      "pass": true,
+      "detail": 5
+    },
+    {
+      "chain": "expand",
+      "name": "five_effective_actions",
+      "pass": false,
+      "detail": 4
+    },
+    {
+      "chain": "expand",
+      "name": "single_judgement",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "expand",
+      "name": "feedback_images_exist",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "popup",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "popup",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "popup",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "popup",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "popup",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "popup",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "popup",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "popup",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "popup",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "popup",
+      "name": "cli_customer_export_completed",
+      "pass": false,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "BLOCKED",
+          "error": {
+            "reason": "Final user_goal must identify the actual page/content, not a generic confirmation",
+            "stage": "customer_export",
+            "type": "ValueError"
+          },
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "NOT_RUN",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "popup",
+      "name": "cli_customer_export_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "popup",
+      "name": "chain_no_exception",
+      "pass": false,
+      "detail": "AssertionError('normal consumer CLI did not produce candidate-receipt.json')"
+    },
+    {
+      "chain": "slowlink",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "slowlink",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "slowlink",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "slowlink",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "slowlink",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "slowlink",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "slowlink",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "slowlink",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "slowlink",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "slowlink",
+      "name": "cli_customer_export_completed",
+      "pass": false,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "BLOCKED",
+          "error": {
+            "reason": "Final user_goal must identify the actual page/content, not a generic confirmation",
+            "stage": "customer_export",
+            "type": "ValueError"
+          },
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "NOT_RUN",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "slowlink",
+      "name": "cli_customer_export_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "slowlink",
+      "name": "chain_no_exception",
+      "pass": false,
+      "detail": "AssertionError('normal consumer CLI did not produce candidate-receipt.json')"
+    },
+    {
+      "chain": "extend",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "extend",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "extend",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "extend",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "extend",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "complete_rejected",
+        "task_goal_changed",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "extend",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "extend",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "extend",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "extend",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "extend",
+      "name": "cli_customer_export_completed",
+      "pass": false,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "BLOCKED",
+          "error": {
+            "reason": "Final user_goal must identify the actual page/content, not a generic confirmation",
+            "stage": "customer_export",
+            "type": "ValueError"
+          },
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "NOT_RUN",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "extend",
+      "name": "cli_customer_export_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "extend",
+      "name": "chain_no_exception",
+      "pass": false,
+      "detail": "AssertionError('normal consumer CLI did not produce candidate-receipt.json')"
+    },
+    {
+      "chain": "overwrite",
+      "name": "cli_returncode_zero",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "overwrite",
+      "name": "execute_accepts_changed_source_identity",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "chain": "overwrite",
+      "name": "no_full_history_snapshot_call",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "chain": "overwrite",
+      "name": "runlog_strategy_stepwise",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "overwrite",
+      "name": "no_template_events",
+      "pass": true,
+      "detail": [
+        "claim",
+        "strategy_selected",
+        "processing",
+        "session_started",
+        "first_frame_completed",
+        "processing",
+        "processing",
+        "session_start",
+        "attempt_started",
+        "success",
+        "sample_saved",
+        "template_site_progress",
+        "session_finished",
+        "claim_task_finished",
+        "candidate_finished",
+        "worker_finished"
+      ]
+    },
+    {
+      "chain": "overwrite",
+      "name": "normal_pipeline_no_program_disposition",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "overwrite",
+      "name": "normal_runtime_saved_receipt",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "chain": "overwrite",
+      "name": "candidate_writeback_succeeded",
+      "pass": true,
+      "detail": "succeeded"
+    },
+    {
+      "chain": "overwrite",
+      "name": "candidate_result_effective_strategy",
+      "pass": true,
+      "detail": "stepwise"
+    },
+    {
+      "chain": "overwrite",
+      "name": "cli_customer_export_completed",
+      "pass": false,
+      "detail": [
+        {
+          "customer_acceptance": "UNKNOWN",
+          "customer_export": "BLOCKED",
+          "error": {
+            "reason": "Final user_goal must identify the actual page/content, not a generic confirmation",
+            "stage": "customer_export",
+            "type": "ValueError"
+          },
+          "human_review": "NOT_RUN",
+          "independent_AI_QC": "NOT_RUN",
+          "published": "NOT_CLAIMED",
+          "qc_handoff": "NOT_RUN",
+          "saved_count": 1
+        }
+      ]
+    },
+    {
+      "chain": "overwrite",
+      "name": "cli_customer_export_receipt",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "chain": "overwrite",
+      "name": "chain_no_exception",
+      "pass": false,
+      "detail": "AssertionError('normal consumer CLI did not produce candidate-receipt.json')"
+    },
+    {
+      "chain": "overwrite",
+      "name": "source_unchanged",
+      "pass": true,
+      "detail": null
+    }
+  ],
+  "timings": {
+    "expand": {
+      "seconds": 9.910421209060587,
+      "model_requests": 5,
+      "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-expand-1795007897896449000/scope.json",
+      "saved": false,
+      "claim_id": "fe12ae39-3938-4bcc-92dd-f4320307d97a"
+    }
+  },
+  "external_model_requests": 0,
+  "external_web_requests": 0,
+  "production_samples_added": 0,
+  "model_transport_calls": 47,
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "published": false,
+  "acceptance": "UNKNOWN"
+}

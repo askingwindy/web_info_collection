@@ -1,6 +1,6 @@
 """策略 3 回写、单独判定、事实引文核对与保存资格（唯一所有者）。
 
-回写一次、判定一次；语义不通过即不保存，不请求模型改成通过。保存资格只
+回写机械校验失败最多修正一次、判定一次；语义不通过即不保存，不请求模型改成通过。保存资格只
 依据封存事实：完成状态、有效步数、判定结果、连续性与未知状态。
 """
 import re
@@ -147,16 +147,26 @@ def citations_check(annotation, frame_texts):
     for index, step in enumerate(steps):
         own = corpora[index]
         for field in ('page_name', 'precondition'):
-            for quote in quoted_segments(step.get(field)):
+            text = step.get(field)
+            if field == 'precondition' and text is None:
+                text = (step.get('action') or {}).get(field)
+            for quote in quoted_segments(text):
                 if _COMPACT.sub('', quote) not in own:
                     problems.append('step %d %s 引文「%s」不在本帧' % (step.get('step_id'), field, quote[:60]))
         target = corpora[index + 1] if index + 1 < len(steps) else corpora[-1]
         for quote in quoted_segments(step.get('step_result')):
             if _COMPACT.sub('', quote) not in target:
                 problems.append('step %d step_result 引文「%s」不在下一交付帧' % (step.get('step_id'), quote[:60]))
-    final = corpora[-1]
+    problems.extend(writeback_citations_check(annotation, frame_texts[-1]))
+    return problems
+
+
+def writeback_citations_check(writeback, final_state):
+    """仅检查可重写的回写字段；不修改历史决策或轨迹引文。"""
+    problems = []
+    final = _corpus(final_state)
     for field in ('final_result', 'completion_judgement'):
-        for quote in quoted_segments(annotation.get(field)):
+        for quote in quoted_segments(writeback.get(field)):
             if _COMPACT.sub('', quote) not in final:
                 problems.append('%s 引文「%s」不在终态帧' % (field, quote[:60]))
     return problems

@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/Users/hemiao/projects/2610/WebCollect/collection_logs/stepwise-consumer-repair-20261118/local_cli.py", line 159, in main
+    timings[name] = base.run_chain(name, '/' + name, root, opener, True)
+                    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hemiao/projects/2610/WebCollect/collection_logs/stepwise-switch-20261118/stepwise_offline.py", line 448, in run_chain
+    raise AssertionError('normal consumer CLI did not produce candidate-receipt.json')
+AssertionError: normal consumer CLI did not produce candidate-receipt.json

@@ -18,10 +18,12 @@ from . import observation, prompt, records
 # 预算常量（SDD §6.1）：正常入口内生效，结束阶段预留。
 MIN_EFFECTIVE_STEPS = 5
 MAX_EFFECTIVE_STEPS = 12
-MAX_BROWSER_DISPATCHES = 15
+MAX_BROWSER_DISPATCHES = 20
 NO_EFFECT_LIMIT = 3
 REPEAT_REJECT_LIMIT = 3
-EXPLORE_HTTP_BUDGET = 34      # 探索阶段请求上限，预留终态决策与结束加工
+EXPLORE_HTTP_BUDGET = 34      # 实际 HTTP 请求；40 次总限中为回写和判定保留 6 次
+COMPLETE_REJECTION_LIMIT = 2
+NAVIGATION_WAIT_MS = 5000
 WAIT_DURATION_MS = 1000
 SCROLL_DISTANCE = 480
 
@@ -63,6 +65,11 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
     async def call(*, phase, system, tools, user_text, images, reasoning_effort,
                    dispatch_deadline, round_index, tool_name, request_deadline=None):
         nonlocal gateway
+        attempts = 2
+        if phase == 'decision':
+            attempts = min(attempts, EXPLORE_HTTP_BUDGET - usage()['used'])
+            if attempts <= 0:
+                raise BudgetStop('Stepwise decision HTTP budget exhausted; finalization reserve retained')
         payload = {'protocol': 'stepwise', 'attempt_id': attempt_id,
                    'task_id': task['task_id'], 'site_uri': task['site_uri'],
                    'phase': phase, 'round': round_index,
@@ -91,7 +98,7 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
             output_limit = min(2048, ledger.config['model']['max_completion_tokens'])
             response = await asyncio.to_thread(
                 gateway.call_tool, job, 'stepwise:' + phase, user_text, tools,
-                system=system, images=list(images), attempts=2,
+                system=system, images=list(images), attempts=attempts,
                 output_limit=output_limit, reasoning_effort=reasoning_effort,
                 attempt_id=attempt_id, dispatch_deadline=dispatch_deadline,
                 request_deadline=request_deadline,
@@ -116,21 +123,34 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
 
 def exception_classification(error):
     """确定异常责任；只分类，不重试或改写已派发请求。"""
-    from playwright.async_api import Error as BrowserError
+    from playwright.async_api import Error as BrowserError, TimeoutError as BrowserTimeout
     from ..model_gateway import ProviderFinishIncomplete
 
+    failure_class = getattr(error, 'failure_class', None)
+    if failure_class:
+        return 'error', failure_class
+    if isinstance(error, BudgetStop):
+        return 'http_budget', 'model'
+    if isinstance(error, (TimeoutError, BrowserTimeout)):
+        return 'capture_timeout', 'collector'
     if (isinstance(error, ProviderFinishIncomplete)
             or isinstance(error, ValueError)
             and str(error).startswith(('bounded_', 'consumer_protocol_no_progress'))):
         return 'protocol_error', 'model'
-    failure_class = getattr(error, 'failure_class', None)
-    if failure_class:
-        return 'error', failure_class
     if isinstance(error, BrowserError) and 'UNSUPPORTED_GEOMETRY' in str(error):
         return 'capture_stale', 'collector'
     if isinstance(error, BrowserError) and 'net::ERR_' in str(error):
         return 'error', 'network'
     return 'error', 'program'
+
+
+def frames_pixels_equal(left, right):
+    """Compare the clean captured pixels, independent of PNG encoding metadata."""
+    from PIL import Image
+
+    with Image.open(left['png']) as first, Image.open(right['png']) as second:
+        return (first.size == second.size
+                and first.convert('RGB').tobytes() == second.convert('RGB').tobytes())
 
 
 class StepwiseSession:
@@ -150,10 +170,16 @@ class StepwiseSession:
         self.site_tasks = list(site_tasks)
         self.runlog = runlog
         self.entry_ready = bool(entry_ready)
-        self.mode = 'specified' if requested_goal is not None else 'autonomous'
+        self.mode = 'specified' if requested_goal else 'autonomous'
         self.allowed_hosts = observation.allowed_hosts(task)
 
         self.goal = None
+        self.initial_goal = None
+        self.task_modifications = 0
+        self.complete_rejections = []
+        self.infeasible_rejections = 0
+        self.unsafe_omissions = []
+        self._popup_sources = {}
         self.note = ''
         self.history = []
         self.feedback = ''
@@ -193,6 +219,16 @@ class StepwiseSession:
         deadline = self._soft_deadline()
         return deadline is not None and time.monotonic() >= deadline
 
+    def _requests_used(self):
+        counter = getattr(self.call, 'requests_used', None)
+        return int(counter()) if counter is not None else self.explore_calls
+
+    def _can_continue(self):
+        return (self.dispatches < MAX_BROWSER_DISPATCHES
+                and self.effective < MAX_EFFECTIVE_STEPS
+                and self._requests_used() < EXPLORE_HTTP_BUDGET - 2
+                and not self._soft_deadline_hit())
+
     def _stop(self, reason, summary, failure_class=None, unknown=False):
         raise StepwiseStop(reason, summary, failure_class=failure_class, unknown=unknown)
 
@@ -216,9 +252,8 @@ class StepwiseSession:
             self.stop_summary = str(error)
             self.failure_class = getattr(error, 'failure_class', None) or 'program'
         except BudgetStop as error:
-            self.stop_reason = 'http_budget'
+            self.stop_reason, self.failure_class = exception_classification(error)
             self.stop_summary = str(error)
-            self.failure_class = 'model'
         except (EvidenceStale, browser.SnapshotFault) as error:
             self.stop_reason = 'capture_stale'
             self.stop_summary = type(error).__name__ + ': ' + str(error)
@@ -254,9 +289,13 @@ class StepwiseSession:
         while True:
             if self._soft_deadline_hit():
                 self._stop('soft_deadline', '软截止到达，停止新增模型请求与业务动作', 'collector')
-            complete_only = (self.effective >= MAX_EFFECTIVE_STEPS
-                             or self.dispatches >= MAX_BROWSER_DISPATCHES
-                             or self.explore_calls >= EXPLORE_HTTP_BUDGET)
+            used = self._requests_used()
+            complete_only = not self._can_continue()
+            if complete_only and self.effective < MIN_EFFECTIVE_STEPS:
+                self._stop('short_flow', '剩余派发或探索请求预算不足以继续，当前有效动作 %d；不再请求终态'
+                           % self.effective, 'collector')
+            if used >= EXPLORE_HTTP_BUDGET:
+                self._stop('http_budget', '探索 HTTP 请求预算已用完；未获得可接受的 complete', 'model')
             frame = self.current
             rows = observation.actionable_rows(frame['state'])
             numbered = prompt.numbered_png(Path(frame['png']).read_bytes(), rows)
@@ -289,7 +328,15 @@ class StepwiseSession:
             if invalid is None and self.mode == 'autonomous':
                 goal = arguments.get('task_goal')
                 if isinstance(goal, str) and goal.strip() and goal.strip() != self.goal:
-                    self.goal = goal.strip()[:prompt.LIMIT_TASK_GOAL * 2]
+                    updated_goal = goal.strip()[:prompt.LIMIT_TASK_GOAL * 2]
+                    if self.initial_goal is None:
+                        self.initial_goal = updated_goal
+                    elif updated_goal != self.goal:
+                        self.task_modifications += 1
+                        if self.runlog is not None:
+                            self.runlog.info('task_goal_changed', round=self.decision_round,
+                                             taskModifications=self.task_modifications)
+                    self.goal = updated_goal
             note_before = self.note
             if invalid is None and isinstance(arguments.get('note'), str):
                 note = arguments['note']
@@ -300,9 +347,12 @@ class StepwiseSession:
                 goal_before=goal_before, goal_after=self.goal,
                 note_before=note_before, note_after=self.note,
                 model_ref={'request_id': response.get('request_id'),
-                           'tool_call_id': response.get('tool_call_id')},
-                **({'rejected': invalid} if invalid else {}))
+                           'tool_call_id': response.get('tool_call_id')})
             if invalid:
+                from ..agent_controller import exclusive
+                exclusive(self.root / ('decision-rejection-%03d.json' % self.decision_round),
+                          {'round': self.decision_round, 'frame_id': frame['frame_id'],
+                           'reason': invalid, 'created_at': datetime.now(timezone.utc).isoformat()})
                 self._record_reject(frame, invalid, arguments)
                 continue
             # last_step_result 绑定它实际观察的上一派发后帧（下一次合法决策）。
@@ -319,6 +369,20 @@ class StepwiseSession:
             except observation.ActionRejected as rejected:
                 self._record_reject(frame, rejected.reason, arguments)
                 continue
+            link = self._link_carrier(frame, element) if operation['action_type'] in ('click', 'double_click') else None
+            if link:
+                from urllib.parse import urljoin, urlsplit
+                destination = urljoin(frame['state'].get('url') or '', link['href'])
+                scheme = urlsplit(destination).scheme
+                if scheme not in ('http', 'https', 'javascript'):
+                    self._record_reject(frame, 'NAVIGATION_SCHEME_NOT_PERMITTED:' + scheme, arguments)
+                    continue
+                if scheme in ('http', 'https'):
+                    issue = observation.exclusion_issues(destination, {})
+                    if issue or not observation.destination_allowed(destination, self.allowed_hosts):
+                        self._record_reject(frame, 'NAVIGATION_DESTINATION_NOT_PERMITTED:'
+                                            + str(issue or destination), arguments)
+                        continue
             try:
                 await browser.verify_execution_state(
                     self.page, frame['state'], action_scope=self._frame_scope(frame['state'].get('url')))
@@ -344,6 +408,8 @@ class StepwiseSession:
                 return 'MISSING_FIELD:' + field
         if arguments.get('action') not in observation.SUPPORTED_ACTIONS:
             return 'UNKNOWN_ACTION'
+        if arguments.get('action') == 'complete' and arguments.get('status') not in ('success', 'infeasible'):
+            return 'COMPLETE_STATUS_REQUIRED: success 或 infeasible'
         if self.mode == 'autonomous':
             goal = arguments.get('task_goal')
             if not (isinstance(goal, str) and goal.strip() and goal.strip() != '同上'):
@@ -373,8 +439,35 @@ class StepwiseSession:
         self.feedback = '上一决策被拒绝：%s。请修正后重试。' % reason
 
     # ------------------------------------------------------------ complete
+    def _reject_complete(self, frame, arguments, reason):
+        from ..agent_controller import exclusive
+
+        rejection = {'round': self.decision_round, 'frame_id': frame['frame_id'],
+                     'status': arguments['status'], 'reason': reason,
+                     'effective_steps': self.effective, 'task_goal': self.goal,
+                     'rejection_index': len(self.complete_rejections) + 1,
+                     'rejected_at': datetime.now(timezone.utc).isoformat()}
+        exclusive(self.root / ('complete-rejection-%03d.json' % rejection['rejection_index']),
+                  rejection)
+        self.complete_rejections.append(rejection)
+        if self.runlog is not None:
+            self.runlog.info('complete_rejected', round=self.decision_round,
+                             reason=reason, effectiveSteps=self.effective,
+                             completeRejections=len(self.complete_rejections),
+                             taskModifications=self.task_modifications)
+        if reason == 'short_flow':
+            self.feedback = ('当前有效动作 %d 个，不足 %d 个。请把 task_goal 扩展为包含已完成操作、'
+                             '并在同一业务主题上自然延续的更大任务，继续操作；最终任务必须能解释'
+                             '第 1 步起的全部已执行动作。不要往返或重复操作凑步。'
+                             % (self.effective, MIN_EFFECTIVE_STEPS))
+        else:
+            self.feedback = ('当前任务无法完成的声明暂未接受。如果任务走不通，请改成基于已执行动作'
+                             '能够完成的任务，然后继续；新任务仍须覆盖第 1 步起的全部已执行动作。'
+                             '若确实没有合理任务，可以再次返回 infeasible。')
+        return False
+
     async def _handle_complete(self, frame, arguments):
-        """核对终态帧一致后接受 complete；过时则重新捕获并重新决策。返回是否接受。"""
+        """Accept an observed terminal, or give autonomous tasks a bounded extension."""
         try:
             await browser.verify_execution_state(
                 self.page, frame['state'], action_scope=self._frame_scope(frame['state'].get('url')))
@@ -382,19 +475,180 @@ class StepwiseSession:
             self.current = self.journal.add_frame(await self._capture())
             self.feedback = '画面已变化，complete 作废；请按当前画面重新决策。'
             return False
-        self.complete_decision = arguments
-        self.complete_completed_at = datetime.now(timezone.utc).isoformat()
-        if arguments.get('status') != 'success':
+        if arguments.get('status') not in ('success', 'infeasible'):
+            self._record_reject(frame, 'COMPLETE_STATUS_REQUIRED', arguments)
+            return False
+        can_extend = (self.mode == 'autonomous' and self._can_continue()
+                      and len(self.complete_rejections) < COMPLETE_REJECTION_LIMIT)
+        if arguments['status'] == 'infeasible':
+            if can_extend and self.infeasible_rejections == 0:
+                self.infeasible_rejections += 1
+                return self._reject_complete(frame, arguments, 'complete_infeasible')
             self._stop('complete_infeasible', '模型声明任务无法完成', 'collector')
         if self.effective < MIN_EFFECTIVE_STEPS:
-            self._stop('short_flow',
-                       '有效动作不足 %d（实际 %d），如实短流程结束，不保存不补动作'
+            if can_extend:
+                return self._reject_complete(frame, arguments, 'short_flow')
+            self._stop('short_flow', '有效动作不足 %d（实际 %d），无法继续扩展或已达 complete 驳回上限'
                        % (MIN_EFFECTIVE_STEPS, self.effective), 'collector')
+        # The next retained before-frame (or complete frame) must still show the
+        # preceding retained action. Omitted actions may not hide a duplicate.
+        delivered, _ = self.delivery_plan()
+        if any(row['operation']['action_type'] != 'wait' and not row['effective']
+               for row in delivered):
+            self._stop('unproven_effect', '保留动作中仍有未确认可见效果的非 wait 动作，不能安全省略或保存',
+                       'collector')
+        delivery_frames = [self.journal.frames[row['frame_id']] for row in delivered] + [frame]
+        if any(frames_pixels_equal(left, right)
+               for left, right in zip(delivery_frames, delivery_frames[1:])):
+            self._stop('unchanged_delivery', '相邻交付原图像素相同，不能证明保留动作的可见效果', 'collector')
+        self.complete_decision = dict(arguments)
+        self.complete_completed_at = datetime.now(timezone.utc).isoformat()
         self.stop_reason = 'complete_success'
         self.stop_summary = '模型完成声明已核对终态帧'
         return True
 
     # ------------------------------------------------------------ 派发与效果
+    @staticmethod
+    def _link_carrier(frame, element):
+        if element is None:
+            return None
+        from ..screenshot_execution import navigation_carrier
+        return navigation_carrier(frame['state'], element['element_id'])
+
+    async def _execute_observed(self, frame, operation, element, execution):
+        """Observe one dispatch's popup/navigation before taking its after-frame."""
+        from playwright.async_api import TimeoutError as BrowserTimeout
+
+        source = self.page
+        action = operation['action_type']
+        opener = self._popup_sources.get(source)
+        if action == 'back' and opener is not None and not opener.is_closed():
+            await asyncio.wait_for(opener.bring_to_front(), timeout=10)
+            self.page = opener
+            return {'method': 'switch_to_opener', 'source_url': source.url,
+                    'landing_url': self.page.url}
+        if action not in ('click', 'double_click'):
+            await browser.execute(source, action, dict(operation['arguments']), execution)
+            return None
+        opened = []
+        changed = asyncio.Event()
+
+        def on_popup(page):
+            opened.append(page)
+            changed.set()
+
+        def on_navigation(frame):
+            if frame == source.main_frame:
+                changed.set()
+
+        # The listeners are installed before dispatch. A popup is attributed to
+        # this source page, not to unrelated pages that share a browser context.
+        source.on('popup', on_popup)
+        source.on('framenavigated', on_navigation)
+        link = self._link_carrier(frame, element)
+        try:
+            await browser.execute(source, action, dict(operation['arguments']), execution)
+            from urllib.parse import urldefrag, urljoin, urlsplit
+            href = (link or {}).get('href') or ''
+            destination = urljoin(frame['state'].get('url') or '', href)
+            same_document_anchor = ('#' in href and urldefrag(destination)[0]
+                                    == urldefrag(frame['state'].get('url') or '')[0])
+            navigable = bool(href and urlsplit(destination).scheme in ('http', 'https')
+                             and not same_document_anchor)
+            if not changed.is_set():
+                try:
+                    await asyncio.wait_for(changed.wait(),
+                                           timeout=NAVIGATION_WAIT_MS / 1000 if navigable else 1)
+                except TimeoutError:
+                    pass  # Observation timeout does not resend a successful click.
+            if len(opened) > 1:
+                raise StepwiseStop('multiple_popups', '一次点击打开多个新标签，不能确定唯一后续页面',
+                                   failure_class='collector')
+            if opened:
+                self.page = opened[0]
+                self._popup_sources[self.page] = source
+                await asyncio.wait_for(self.page.bring_to_front(), timeout=10)
+            if changed.is_set():
+                try:
+                    await self.page.wait_for_load_state('domcontentloaded', timeout=NAVIGATION_WAIT_MS)
+                except BrowserTimeout:
+                    pass  # capture owns readiness; a slow load never triggers another click.
+            return {'method': 'popup' if opened else 'same_tab',
+                    'source_url': frame['state'].get('url'), 'landing_url': self.page.url,
+                    'href': href or None, 'navigation_expected': navigable,
+                    'navigation_observed': changed.is_set()}
+        finally:
+            source.remove_listener('popup', on_popup)
+            source.remove_listener('framenavigated', on_navigation)
+
+    async def _restore_landing(self, frame, rejected, source_page, rejected_seq, issue):
+        """Keep the rejected landing and the host's return as separate real actions."""
+        from ..agent_controller import exclusive
+
+        operation = {'action_type': 'back', 'arguments': {},
+                     'evidence': {'collection_strategy': 'stepwise', 'host_recovery': True,
+                                  'rejected_dispatch': rejected_seq}}
+        seq, dispatch, dispatch_ref = self.journal.begin_dispatch(
+            frame_id=rejected['frame_id'], operation=operation, element=None)
+        self.dispatches += 1
+        method = 'switch_to_source' if self.page is not source_page else 'go_back'
+        after = None
+        recovery_error = None
+        recovery_action_completed = False
+        try:
+            if method == 'switch_to_source':
+                bad_page = self.page
+                if source_page.is_closed():
+                    raise ValueError('原页面已关闭，无法恢复')
+                await asyncio.wait_for(source_page.bring_to_front(), timeout=10)
+                self.page = source_page
+                await asyncio.wait_for(bad_page.close(), timeout=10)
+                self._popup_sources.pop(bad_page, None)
+            else:
+                await browser.execute(self.page, 'back', {}, {})
+            recovery_action_completed = True
+            after = self.journal.add_frame(await self._capture())
+            state = after['state']
+            if (state.get('url') != frame['state'].get('url')
+                    or not observation.destination_allowed(state.get('url'), self.allowed_hosts)
+                    or observation.exclusion_issues(state.get('url'), state)):
+                raise ValueError('恢复后的页面不匹配原页面或仍在排除范围')
+        except Exception as error:
+            recovery_error = error
+        record = self.journal.finish_step(
+            seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=None,
+            dispatched=True, action_executed=True if recovery_action_completed else None,
+            execution_error=(type(recovery_error).__name__ + ': ' + str(recovery_error)
+                             if recovery_error else None),
+            before_frame=rejected['frame_id'], after_frame=after['frame_id'] if after else None,
+            effect='host_recovery', effective=False, omittable=False,
+            omit_reason='rejected_landing_return', postconditions_checked=after is not None,
+            after_state=after['state'] if after else None)
+        self._remember_failed_dispatch(seq, record, after['frame_id'] if after else None)
+        recovery = {'rejected_dispatch': rejected_seq, 'recovery_dispatch': seq,
+                    'method': method, 'issue': issue,
+                    'source_frame': frame['frame_id'], 'rejected_frame': rejected['frame_id'],
+                    'restored_frame': after['frame_id'] if after else None,
+                    'restored': recovery_error is None,
+                    'action_executed': recovery_action_completed,
+                    'error': record['execution_error']}
+        exclusive(self.root / ('host-recovery-%03d.json' % seq), recovery)
+        self.unsafe_omissions.append(recovery)
+        if recovery_error is not None:
+            self.current = after or rejected
+            from playwright.async_api import TimeoutError as BrowserTimeout
+            if isinstance(recovery_error, (TimeoutError, BrowserTimeout)):
+                if recovery_action_completed:
+                    self._stop('capture_timeout', '宿主返回动作已完成，恢复后截图超时：'
+                               + str(recovery_error), 'collector')
+                self._stop('unknown_dispatch', '宿主返回动作结果未知，保留原始记录不重发',
+                           'unknown', unknown=True)
+            self._stop('landing_recovery_failed', '越界后的恢复失败，保留原始落地与恢复记录：'
+                       + str(recovery_error), 'collector')
+        self.feedback = ('上一动作落地页被拒绝：%s。已返回原页面，请改用当前页内允许的操作。'
+                         '原动作和宿主恢复均已单独留证，不计有效步。' % issue[:180])
+        return 'recaptured'
+
     async def _dispatch(self, frame, operation, element, arguments):
         """执行一次浏览器动作并记录。返回 delivered / failed / recaptured。"""
         seq, dispatch, dispatch_ref = self.journal.begin_dispatch(
@@ -408,8 +662,13 @@ class StepwiseSession:
             execution['duration_ms'] = WAIT_DURATION_MS
         execution_error = None
         unknown_dispatch = False
+        navigation = None
+        source_page = self.page
         try:
-            await browser.execute(self.page, action, dict(operation['arguments']), execution)
+            navigation = await self._execute_observed(frame, operation, element, execution)
+            if navigation is not None:
+                from ..agent_controller import exclusive
+                exclusive(self.root / ('navigation-%03d.json' % seq), navigation)
         except TimeoutError as error:
             execution_error, unknown_dispatch = 'dispatch_unknown:' + str(error), True
         except Exception as error:
@@ -484,12 +743,30 @@ class StepwiseSession:
                 omit_reason=issue, postconditions_checked=postconditions_checked,
                 after_state=after_state)
             self._remember_failed_dispatch(seq, record, after_frame)
-            self._stop('landing_rejected', '落地页超出候选范围或触发排除规则：' + issue, 'collector')
+            return await self._restore_landing(frame, after, source_page, seq, issue)
         # 效果判断：wait 不计有效步；确认无效果才可省略。
         before_state = frame['state']
         document_changed = observation.document_changed(before_state, after_state)
         omittable, omit_reason = observation.action_omittable(before_state, after_state, action)
-        effective = action != 'wait' and not omittable
+        semantic_changed = not observation.view_equal(before_state, after_state)
+        pixels_changed = not frames_pixels_equal(frame, after)
+        if (navigation and navigation.get('navigation_expected')
+                and not navigation.get('navigation_observed')
+                and before_state.get('url') == after_state.get('url')
+                and not semantic_changed and not pixels_changed):
+            record = self.journal.finish_step(
+                seq=seq, dispatch_ref=dispatch_ref, operation=operation, element=element,
+                dispatched=True, action_executed=True, execution_error=None,
+                before_frame=frame['frame_id'], after_frame=after_frame,
+                effect='navigation_unconfirmed', effective=False, omittable=False,
+                omit_reason='navigation_unconfirmed', postconditions_checked=True, after_state=after_state)
+            self._remember_failed_dispatch(seq, record, after_frame)
+            self.current = after
+            self._stop('navigation_unconfirmed', '链接点击已执行，但有界等待后落地仍未证实；保留原件，不再次点击',
+                       'collector')
+        effective = action != 'wait' and semantic_changed and pixels_changed
+        # A proven semantic change without a visible pixel change is retained
+        # for provenance but cannot increase the delivery's effective count.
         if omittable:
             self.no_effect_run += 1
         else:
@@ -524,7 +801,13 @@ class StepwiseSession:
         self._history_append(row, document_changed)
         if self.no_effect_run >= NO_EFFECT_LIMIT:
             self._stop('no_effect', '连续 %d 次确认无效果' % NO_EFFECT_LIMIT, 'model')
-        self.feedback = ''
+        if omittable:
+            self.feedback = '这一步没有确认到业务变化，不计入有效步；已连续 %d/%d 次无效果。' % (
+                self.no_effect_run, NO_EFFECT_LIMIT)
+        elif not effective:
+            self.feedback = '这一步尚未确认语义与画面均有变化，不计入有效步；原始动作证据已保留。'
+        else:
+            self.feedback = ''
         return 'delivered'
 
     def _remember_failed_dispatch(self, seq, record, after_frame):
@@ -553,8 +836,10 @@ class StepwiseSession:
             detail = '在「%s」选择「%s」' % (target, str(arguments.get('option', ''))[:40])
         else:
             detail = '点击' + ('「%s」' % target if target else '')
-        result = ('页面已切换' if document_changed else
-                  '画面无实质变化' if row['omittable'] else '画面已变化')
+        result = ('这一步不计入有效步，连续无效果 %d/%d' % (self.no_effect_run, NO_EFFECT_LIMIT)
+                  if row['omittable'] else
+                  '尚未确认可见效果，这一步不计入有效步' if not row['effective'] else
+                  '页面已切换' if document_changed else '画面已变化')
         self.history.append(('%s，%s' % (detail, result))[:prompt.LIMIT_HISTORY_RECENT])
         self.history = self.history[-prompt.LIMIT_HISTORY_ITEMS:]
 
@@ -572,9 +857,9 @@ class StepwiseSession:
                                               self.task.get('app_name') or self.task.get('site_uri'))
 
     def _progress_text(self):
-        base = '已派发 %d 次，有效动作 %d（保存需 %d–%d）；连续无效果 %d。' % (
-            self.dispatches, self.effective, MIN_EFFECTIVE_STEPS, MAX_EFFECTIVE_STEPS,
-            self.no_effect_run)
+        base = '已派发 %d/%d 次，有效 %d 个，结束前至少需要 %d 个（最多 %d）；连续无效果 %d/%d；实际 HTTP 请求 %d/%d。' % (
+            self.dispatches, MAX_BROWSER_DISPATCHES, self.effective, MIN_EFFECTIVE_STEPS, MAX_EFFECTIVE_STEPS,
+            self.no_effect_run, NO_EFFECT_LIMIT, self._requests_used(), EXPLORE_HTTP_BUDGET)
         if self.mode == 'autonomous' and self.goal:
             base += '当前任务：' + self.goal
         return base
@@ -602,6 +887,11 @@ class StepwiseSession:
                     'strategy': {'id': 'stepwise'},
                     'mode': self.mode,
                     'task_goal': self.goal,
+                    'initial_goal': self.initial_goal,
+                    'task_modifications': self.task_modifications,
+                    'complete_rejection_count': len(self.complete_rejections),
+                    'complete_rejections': self.complete_rejections,
+                    'unsafe_omissions': self.unsafe_omissions,
                     'requested_goal': self.requested_goal,
                     'stop_reason': self.stop_reason,
                     'stop_summary': self.stop_summary,
@@ -611,6 +901,7 @@ class StepwiseSession:
                     'actual_dispatches': self.dispatches,
                     'decision_rounds': self.decision_round,
                     'explore_calls': self.explore_calls,
+                    'explore_http_requests': self._requests_used(),
                     'complete_decision': self.complete_decision,
                     'completed_at': self.complete_completed_at,
                     'final_frame': self.current['frame_id'] if self.current else None,
@@ -659,6 +950,12 @@ class StepwiseSession:
                 'short_flow': self.stop_reason == 'short_flow',
                 'mode': self.mode,
                 'task_goal': self.goal,
+                'initial_goal': self.initial_goal,
+                'task_modifications': self.task_modifications,
+                'complete_rejection_count': len(self.complete_rejections),
+                'complete_rejections': self.complete_rejections,
+                'unsafe_omissions': self.unsafe_omissions,
+                'explore_http_requests': self._requests_used(),
                 'raw_receipt': receipt,
                 'end': outcome_facts(goal_status=goal_status, end_reason=end_reason,
                                      eligibility='unresolved', save_status='not_saved')}

@@ -1,7 +1,7 @@
 """策略 3 附件A annotation 生成：交付字段唯一来源见 SDD §10.1。
 
 交付图片使用原始干净截图（编号图只作模型输入）；界面树与截图同一时刻。
-screen_changed 按实际相邻交付原图字节计算并保留真实值；末步 complete 省略。
+screen_changed 按实际相邻交付原图像素计算并保留真实值；末步 complete 省略。
 """
 import platform as _platform
 import shutil
@@ -11,7 +11,6 @@ from urllib.parse import urlsplit
 from webcollect import workspace_json as json
 
 from ..action_normalization import normalize_delivery_step
-from ..batch_core import file_sha
 
 POINTER_WITH_COORDINATE = ('click', 'double_click', 'right_click', 'scroll', 'select')
 UI_ELEMENT_FIELDS = ('element_id', 'parent_id', 'element_type', 'native_role', 'text',
@@ -106,10 +105,11 @@ def build_delivery(sample_dir, journal, task, *, delivered, complete_row, omitte
                 'exception_evidence': []}
         steps.append(normalize_delivery_step(step, _platform.system()))
     # 非末步 screen_changed 按实际相邻交付原图计算；末步 complete 省略。
+    from .session import frames_pixels_equal
     for position in range(len(steps) - 1):
-        steps[position]['tool_result']['return_value']['screen_changed'] = (
-            file_sha(sample / steps[position]['image_path'])
-            != file_sha(sample / steps[position + 1]['image_path']))
+        steps[position]['tool_result']['return_value']['screen_changed'] = not frames_pixels_equal(
+            {'png': sample / steps[position]['image_path']},
+            {'png': sample / steps[position + 1]['image_path']})
     final_state = journal.frames[complete_row['frame_id']]['state']
     annotation = {'sample_id': sample_id,
                   'task_instruction': instruction_text,

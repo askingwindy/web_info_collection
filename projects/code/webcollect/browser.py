@@ -931,7 +931,7 @@ async def _execute_action(page, action, args, execution=None):
         # Unified select is an atomic primitive. It emits real input/change events
         # on the observed native control without inventing an unobserved popup.
         await element.select_option(label=args['option'])
-    elif action=='back':await page.go_back(wait_until='domcontentloaded')
+    elif action=='back':await page.go_back(wait_until='commit')
     elif action=='open_url':await page.goto(args['url'],wait_until='domcontentloaded')
     elif action=='wait':await page.wait_for_timeout(execution.get('duration_ms',1000))
     elif action=='complete':return

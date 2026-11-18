@@ -1,0 +1,95 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ StepwiseExceptionClosure.test_session_exceptions_seal_raw_and_keep_failure_ownership _
+
+self = <test_stepwise_core.StepwiseExceptionClosure testMethod=test_session_exceptions_seal_raw_and_keep_failure_ownership>
+
+    def test_session_exceptions_seal_raw_and_keep_failure_ownership(self):
+        # 同一 run 边界对已知模型/网络/采集错误和未知程序错误均封存原件。
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock, patch
+        from playwright.async_api import Error as BrowserError, TimeoutError as BrowserTimeout
+        from webcollect.batch_core import BudgetStop, SessionGLMCallLimit, UserStopped
+        from webcollect.browser import EvidenceStale, SnapshotFault
+        from webcollect.failure_policy import disposition
+        from webcollect.model_gateway import ProviderFinishIncomplete, ProviderRejected
+        from webcollect.stepwise.session import StepwiseSession
+        from webcollect.stepwise import records
+        errors = [(ValueError('bounded_plan_correction_failed: invalid'), 'model', 'protocol_error'),
+                  (ValueError('consumer_protocol_no_progress'), 'model', 'protocol_error'),
+                  (ProviderFinishIncomplete('refused', 'declined'), 'model', 'protocol_error'),
+                  (ProviderRejected(400, 'request-400', {'message': 'bad request'}), 'model', 'error'),
+                  (BrowserError('page.goto: net::ERR_CONNECTION_CLOSED'), 'network', 'error'),
+                  (TimeoutError('视口截图超过25秒'), 'collector', 'capture_timeout'),
+                  (BrowserTimeout('page.screenshot timed out'), 'collector', 'capture_timeout'),
+                  (SessionGLMCallLimit('attempt-limit', 40), 'model', 'http_budget'),
+                  (UserStopped('用户停止，未派发'), 'interrupted', 'error'),
+                  (EvidenceStale('stale pixels'), 'collector', 'capture_stale'),
+                  (SnapshotFault('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
+                  (BrowserError('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
+                  (SnapshotFault('invalid capture record'), 'program', 'capture_stale'),
+                  (KeyError('missing fact'), 'program', 'error')]
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, (error, failure_class, stop_reason) in enumerate(errors):
+                evidence = Path(temporary) / str(index)
+                task = {'task_id': 'task-error', 'site_uri': 'https://example.org/tool',
+                        'initial_url': 'https://example.org/tool', 'fragment': {}}
+                caller = AsyncMock()
+                caller.requests_used = Mock(return_value=0)
+                session = StepwiseSession(task, evidence, caller,
+                    SimpleNamespace(url=task['site_uri']), attempt_id='attempt-error', entry_ready=True)
+                with patch.object(session, '_capture', new=AsyncMock(return_value=_captured(_state()))), \
+                     patch.object(session, '_loop', new=AsyncMock(side_effect=error)):
+                    result = asyncio.run(session.run())
+                self.assertEqual(result['failure_class'], failure_class)
+                self.assertEqual(result['stop_reason'], stop_reason)
+                self.assertIn(str(error) if isinstance(error, BudgetStop) else type(error).__name__,
+                              result['stop_summary'])
+                self.assertTrue(Path(result['raw_receipt']['path']).is_file())
+                terminal = records.read_terminal(evidence)
+                self.assertEqual(terminal['failure_class'], failure_class)
+                self.assertFalse(terminal['unknown'])
+                expected = ('page_program' if failure_class == 'program' else
+                            'interrupted' if failure_class == 'interrupted' else 'business')
+                self.assertEqual(disposition(failure_class=failure_class)['disposition'], expected)
+    
+    
+        # Errors after a recorded dispatch must retain its receipt and actual
+        # execution fact; post-capture faults are never silently retried.
+        from webcollect import browser
+        for phase, error, failure_class in (
+                ('dispatch', BrowserError('net::ERR_CONNECTION_CLOSED'), 'network'),
+                ('dispatch', KeyError('execution defect'), 'program'),
+                ('capture', EvidenceStale('after pixels stale'), 'collector'),
+                ('capture', TimeoutError('视口截图超过25秒'), 'collector'),
+                ('capture', SnapshotFault('capture implementation defect'), 'program'),
+                ('capture', SnapshotFault('UNSUPPORTED_GEOMETRY: target'), 'collector')):
+            with tempfile.TemporaryDirectory() as temporary:
+                task = {'task_id': 'dispatched', 'site_uri': 'https://example.org/tool',
+                        'initial_url': 'https://example.org/tool', 'fragment': {}}
+                caller = AsyncMock()
+                caller.requests_used = Mock(return_value=0)
+                session = StepwiseSession(task, temporary, caller,
+                    SimpleNamespace(url=task['site_uri']), attempt_id='dispatched', entry_ready=True)
+                async def dispatch_once():
+                    await session._dispatch(session.current,
+                        {'action_type': 'back', 'arguments': {}, 'evidence': {'collection_strategy': 'stepwise'}},
+                        None, {'action': 'back'})
+                captures = [_captured(_state())]
+                if phase == 'capture':
+                    captures.append(error)
+                with patch.object(session, '_capture', new=AsyncMock(side_effect=captures)), \
+                     patch.object(session, '_loop', new=dispatch_once), \
+                     patch.object(browser, 'execute', new=AsyncMock(side_effect=error if phase == 'dispatch' else None)):
+                    result = asyncio.run(session.run())
+                terminal = records.read_terminal(temporary)
+>               self.assertEqual(result['failure_class'], failure_class)
+E               AssertionError: 'program' != 'network'
+E               - program
+E               + network
+
+projects/code/tests/test_stepwise_core.py:186: AssertionError
+=========================== short test summary info ============================
+FAILED projects/code/tests/test_stepwise_core.py::StepwiseExceptionClosure::test_session_exceptions_seal_raw_and_keep_failure_ownership
+1 failed in 0.18s

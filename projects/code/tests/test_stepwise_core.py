@@ -106,9 +106,9 @@ class StepwiseExceptionClosure(unittest.TestCase):
     def test_session_exceptions_seal_raw_and_keep_failure_ownership(self):
         # 同一 run 边界对已知模型/网络/采集错误和未知程序错误均封存原件。
         import asyncio
-        from types import SimpleNamespace
-        from unittest.mock import AsyncMock, patch
-        from playwright.async_api import Error as BrowserError
+        from unittest.mock import AsyncMock, Mock, patch
+        from playwright.async_api import Error as BrowserError, TimeoutError as BrowserTimeout
+        from webcollect.batch_core import BudgetStop, SessionGLMCallLimit, UserStopped
         from webcollect.browser import EvidenceStale, SnapshotFault
         from webcollect.failure_policy import disposition
         from webcollect.model_gateway import ProviderFinishIncomplete, ProviderRejected
@@ -119,6 +119,10 @@ class StepwiseExceptionClosure(unittest.TestCase):
                   (ProviderFinishIncomplete('refused', 'declined'), 'model', 'protocol_error'),
                   (ProviderRejected(400, 'request-400', {'message': 'bad request'}), 'model', 'error'),
                   (BrowserError('page.goto: net::ERR_CONNECTION_CLOSED'), 'network', 'error'),
+                  (TimeoutError('视口截图超过25秒'), 'collector', 'capture_timeout'),
+                  (BrowserTimeout('page.screenshot timed out'), 'collector', 'capture_timeout'),
+                  (SessionGLMCallLimit('attempt-limit', 40), 'model', 'http_budget'),
+                  (UserStopped('用户停止，未派发'), 'interrupted', 'error'),
                   (EvidenceStale('stale pixels'), 'collector', 'capture_stale'),
                   (SnapshotFault('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
                   (BrowserError('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
@@ -129,19 +133,23 @@ class StepwiseExceptionClosure(unittest.TestCase):
                 evidence = Path(temporary) / str(index)
                 task = {'task_id': 'task-error', 'site_uri': 'https://example.org/tool',
                         'initial_url': 'https://example.org/tool', 'fragment': {}}
-                session = StepwiseSession(task, evidence, AsyncMock(),
-                    SimpleNamespace(url=task['site_uri']), attempt_id='attempt-error', entry_ready=True)
+                caller = AsyncMock()
+                caller.requests_used = Mock(return_value=0)
+                session = StepwiseSession(task, evidence, caller,
+                    Mock(spec=['url'], url=task['site_uri']), attempt_id='attempt-error', entry_ready=True)
                 with patch.object(session, '_capture', new=AsyncMock(return_value=_captured(_state()))), \
                      patch.object(session, '_loop', new=AsyncMock(side_effect=error)):
                     result = asyncio.run(session.run())
                 self.assertEqual(result['failure_class'], failure_class)
                 self.assertEqual(result['stop_reason'], stop_reason)
-                self.assertIn(type(error).__name__, result['stop_summary'])
+                self.assertIn(str(error) if isinstance(error, BudgetStop) else type(error).__name__,
+                              result['stop_summary'])
                 self.assertTrue(Path(result['raw_receipt']['path']).is_file())
                 terminal = records.read_terminal(evidence)
                 self.assertEqual(terminal['failure_class'], failure_class)
                 self.assertFalse(terminal['unknown'])
-                expected = 'page_program' if failure_class == 'program' else 'business'
+                expected = ('page_program' if failure_class == 'program' else
+                            'interrupted' if failure_class == 'interrupted' else 'business')
                 self.assertEqual(disposition(failure_class=failure_class)['disposition'], expected)
 
 
@@ -152,13 +160,16 @@ class StepwiseExceptionClosure(unittest.TestCase):
                 ('dispatch', BrowserError('net::ERR_CONNECTION_CLOSED'), 'network'),
                 ('dispatch', KeyError('execution defect'), 'program'),
                 ('capture', EvidenceStale('after pixels stale'), 'collector'),
+                ('capture', TimeoutError('视口截图超过25秒'), 'collector'),
                 ('capture', SnapshotFault('capture implementation defect'), 'program'),
                 ('capture', SnapshotFault('UNSUPPORTED_GEOMETRY: target'), 'collector')):
             with tempfile.TemporaryDirectory() as temporary:
                 task = {'task_id': 'dispatched', 'site_uri': 'https://example.org/tool',
                         'initial_url': 'https://example.org/tool', 'fragment': {}}
-                session = StepwiseSession(task, temporary, AsyncMock(),
-                    SimpleNamespace(url=task['site_uri']), attempt_id='dispatched', entry_ready=True)
+                caller = AsyncMock()
+                caller.requests_used = Mock(return_value=0)
+                session = StepwiseSession(task, temporary, caller,
+                    Mock(spec=['url'], url=task['site_uri']), attempt_id='dispatched', entry_ready=True)
                 async def dispatch_once():
                     await session._dispatch(session.current,
                         {'action_type': 'back', 'arguments': {}, 'evidence': {'collection_strategy': 'stepwise'}},
@@ -211,6 +222,9 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertIn('visible_text', blocks)
         self.assertIn('任务与进度', text)
         self.assertIn('上一条反馈', text)
+        # 尾部导航先被裁剪，前列业务控件仍在本轮列表中。
+        self.assertIn(prompt.element_row(*long_rows[0]), text)
+        self.assertNotIn(prompt.element_row(*long_rows[-1]), text)
         # 不可裁内容（任务文本）本身超预算时结束并保留原因，不循环发送同一超大请求。
         with patch.object(prompt, 'LIMIT_TOTAL_DYNAMIC', 200):
             with self.assertRaisesRegex(ValueError, 'CONTEXT_OVER_BUDGET'):
@@ -229,12 +243,38 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertEqual(operation['action_type'], 'click')
         self.assertEqual(operation['arguments'], {'x': 130, 'y': 215})
         self.assertEqual(operation['evidence']['element_id'], 'e2')
+        self.assertEqual(operation['evidence']['anchor_element_id'], 'e2')
         with self.assertRaises(observation.ActionRejected):
             observation.bind_action(state, rows, {'action': 'click', 'element': 99})
         with self.assertRaisesRegex(observation.ActionRejected, 'FOCUSED'):
             observation.bind_action(state, rows, {'action': 'type', 'element': 1, 'text': '12.5'})
         with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
             observation.bind_action(state, rows, {'action': 'hotkey', 'keys': ['ctrl', 'pwn']})
+        focused = _state(values=[{'element_id': 'e1', 'value': '100', 'value_visible': True,
+                                 'focused': True, 'readonly': False, 'input_type': 'text'}])
+        focused_rows = observation.actionable_rows(focused)
+        for modifier in ('ctrl', 'cmd'):
+            selection, _ = observation.bind_action(focused, focused_rows,
+                {'action': 'hotkey', 'keys': [modifier, 'a']})
+            self.assertEqual(selection['evidence']['focused_element_id'], 'e1')
+            self.assertTrue(observation.require_action(focused, selection))
+        for keys in (['a'], ['alt', 'a'], ['ctrl', 'shift', 'a']):
+            with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
+                observation.bind_action(focused, focused_rows, {'action': 'hotkey', 'keys': keys})
+        with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
+            observation.bind_action(state, rows, {'action': 'hotkey', 'keys': ['ctrl', 'a']})
+        type_operation, _ = observation.bind_action(focused, focused_rows,
+            {'action': 'type', 'element': 1, 'text': '50'})
+        self.assertEqual(type_operation['arguments'], {'text': '50'})
+        self.assertEqual(type_operation['evidence']['focused_element_id'], 'e1')
+        focused['values'][0]['readonly'] = True
+        with self.assertRaisesRegex(ValueError, 'READONLY'):
+            observation.require_action(focused, type_operation)
+        with self.assertRaisesRegex(ValueError, 'KEYS_NOT_ALLOWED'):
+            observation.require_action(focused, selection)
+        focused['values'][0].update(readonly=False, input_type='date')
+        with self.assertRaisesRegex(observation.ActionRejected, 'NATIVE_DATE_INPUT_UNSUPPORTED'):
+            observation.bind_action(focused, focused_rows, {'action': 'type', 'element': 1, 'text': '2026-11-18'})
         scroll_operation, _ = observation.bind_action(state, rows, {
             'action': 'scroll', 'direction': 'down'})
         self.assertEqual(scroll_operation['arguments'],
@@ -277,12 +317,78 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertFalse(omittable)
         other = _state(url='https://example.org/other')
         self.assertFalse(observation.view_equal(state, other))
+        # 页内操作不依赖URL或标题变化：文字结果、展开/标签、空框焦点、
+        # 选中区、内部滚动和图集换图都能留下可核对的语义变化。
+        from copy import deepcopy
+        baseline = _state(values=[{'element_id': 'e1', 'value': '', 'value_visible': False,
+                                  'focused': False}],
+                          scroll_containers=[{'element_id': 'panel', 'scroll': [0, 0], 'visible': True}],
+                          capture_images=[{'src': '/image-1.png', 'current_src': '/image-1.png'}])
+        text_result = deepcopy(baseline)
+        text_result['visible_text'] += ' 计算结果：50平方米'
+        expanded = deepcopy(baseline)
+        expanded['elements'][2]['state'] = 'expanded'
+        tab = deepcopy(baseline)
+        tab['elements'][2]['text'] = '第二个专题'
+        empty_focus = deepcopy(baseline)
+        empty_focus['values'][0]['focused'] = True
+        selected = deepcopy(baseline)
+        selected['values'][0].update(value='100', value_visible=True, focused=True, selection_start=0, selection_end=3)
+        container = deepcopy(baseline)
+        container['scroll_containers'][0]['scroll'] = [0, 240]
+        gallery = deepcopy(baseline)
+        gallery['capture_images'][0].update(src='/image-2.png', current_src='/image-2.png')
+        for changed in (text_result, expanded, tab, empty_focus, selected, container, gallery):
+            self.assertFalse(observation.view_equal(baseline, changed))
+            self.assertFalse(observation.action_omittable(baseline, changed, 'click')[0])
+        no_selection = deepcopy(selected)
+        no_selection['values'][0].update(selection_start=3, selection_end=3)
+        self.assertFalse(observation.view_equal(no_selection, selected))
+        self.assertFalse(observation.action_omittable(baseline, baseline, 'type')[0])
+        self.assertFalse(observation.action_omittable(baseline, baseline, 'hotkey')[0])
         # 范围与排除：同host放行、越界拒绝、登录/纯英文页拒绝。
         hosts = observation.allowed_hosts({'site_uri': 'https://example.org/tool',
                                            'initial_url': 'https://example.org/tool'})
         self.assertTrue(observation.destination_allowed('https://example.org/other', hosts))
         self.assertFalse(observation.destination_allowed('https://evil.example/page', hosts))
         self.assertIsNotNone(observation.exclusion_issues('https://example.org/login', state))
+        for path in ('/display', '/cartoon', '/repayment-guide', '/licensed-collection'):
+            self.assertIsNone(observation.exclusion_issues('https://example.org' + path, _state()))
+        for path in ('/pay', '/cart.html', '/account/login', '/download/app', '/terms/privacy', '/%70ay'):
+            self.assertIsNotNone(observation.exclusion_issues('https://example.org' + path, _state()))
+        # 别名只来自有原件收据的同一个 application 登记，不按域名后缀扩张。
+        from webcollect.batch_core import file_sha
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / 'first-party.json'
+            source.write_text('{"observed": "registered aliases"}')
+            source_ref = {'path': str(source.resolve()), 'sha256': file_sha(source)}
+            registry = directory / 'aliases.json'
+            registry.write_text(json.dumps({'schema_version': 'webcollect-application-aliases-1',
+                'applications': [
+                    {'canonical_uri': 'https://example.org/',
+                     'aliases': ['https://example.org/', 'https://museum-alias.example/'],
+                     'evidence': [source_ref]},
+                    {'canonical_uri': 'https://unrelated.example/',
+                     'aliases': ['https://unrelated.example/'], 'evidence': [source_ref]}]}))
+            registry_ref = {'path': str(registry.resolve()), 'sha256': file_sha(registry)}
+            task = {'site_uri': 'https://example.org/tool', 'initial_url': 'https://example.org/tool',
+                    'candidate_binding': {'application_registry': registry_ref}}
+            registered = observation.allowed_hosts(task)
+            self.assertTrue(observation.destination_allowed('https://museum-alias.example/detail', registered))
+            self.assertFalse(observation.destination_allowed('https://unrelated.example/detail', registered))
+            self.assertFalse(observation.destination_allowed('https://other.example.org/detail', registered))
+            source.write_text('{"observed": "changed"}')
+            with self.assertRaisesRegex(ValueError, 'SHA'):
+                observation.allowed_hosts(task)
+        link_state = _state()
+        link_state['elements'][2].update(element_type='link', native_role='a')
+        link_state['capture_controls'] = [{'element_id': 'e2', 'tag': 'a',
+                                          'href': 'https://example.org/details', 'target': '_blank'}]
+        link_operation, _ = observation.bind_action(link_state, observation.actionable_rows(link_state),
+                                                   {'action': 'click', 'element': 2})
+        from webcollect.candidate_navigation import exact_destination
+        self.assertEqual(exact_destination(link_state, link_operation), 'https://example.org/details')
         english = _state()
         english['visible_text'] = 'This page contains English content only. ' * 20
         self.assertIsNotNone(observation.exclusion_issues('https://example.org/', english))
@@ -300,10 +406,21 @@ class StepwiseRecordsAndAnnotation(unittest.TestCase):
                     'app_name': '面积计算器', 'task_version': 'react-url'}
             journal.write_boundary(task, mode='autonomous', requested_goal=None, site_tasks=[])
             frame_one = journal.add_frame(_captured(_state()))
-            frame_two = journal.add_frame(_captured(_state(scroll=[0, 300])))
+            frame_two = journal.add_frame(_captured(_state(scroll=[0, 300]), png=_png(color=(100, 100, 100))))
+            # 同像素但不同PNG元数据/编码，交付screen_changed必须仍为false。
+            from PIL.PngImagePlugin import PngInfo
+            png_metadata = PngInfo()
+            png_metadata.add_text('comment', 'same visible pixels')
+            alternate_png = io.BytesIO()
+            Image.new('RGB', (40, 30), (240, 240, 240)).save(
+                alternate_png, format='PNG', pnginfo=png_metadata, compress_level=0)
             frame_three = journal.add_frame(_captured(_state(
                 values=[{'element_id': 'e1', 'value': '12.5', 'value_visible': True,
-                         'focused': False}])))
+                         'focused': False}]), png=alternate_png.getvalue()))
+            from webcollect.stepwise.session import frames_pixels_equal
+            self.assertNotEqual(Path(frame_one['png']).read_bytes(), Path(frame_three['png']).read_bytes())
+            self.assertTrue(frames_pixels_equal(frame_one, frame_three))
+            self.assertFalse(frames_pixels_equal(frame_one, frame_two))
             element = frame_one['state']['elements'][2]
             operation = {'action_type': 'click',
                          'arguments': {'x': 130, 'y': 215},
@@ -385,6 +502,8 @@ class StepwiseRecordsAndAnnotation(unittest.TestCase):
             self.assertEqual(dispatch_file['operation']['action_type'], 'click')
             step_file = json.loads(Path(entry['raw_step_ref']['path']).read_text())
             self.assertEqual(step_file['controller_dispatch']['sha256'], entry['dispatch_ref']['sha256'])
+            self.assertEqual(step_file['state'], frame_one['state'])
+            self.assertEqual(step_file['after_state'], frame_two['state'])
             # annotation 生成：交付用干净原图；末步 complete 省略 screen_changed。
             from webcollect.stepwise.annotation import build_delivery
             sample = Path(tmp) / 'samples' / 'S000001'
@@ -409,6 +528,7 @@ class StepwiseRecordsAndAnnotation(unittest.TestCase):
                               'action_space': 'unified_gui_v4'})
             self.assertEqual(len(annotation['steps']), 2)
             self.assertNotIn('screen_changed', annotation['steps'][-1]['tool_result']['return_value'])
+            self.assertFalse(annotation['steps'][0]['tool_result']['return_value']['screen_changed'])
             self.assertEqual(annotation['steps'][0]['action']['target_text'], '计算')
             from webcollect.stepwise.annotation import UI_ELEMENT_FIELDS
             tree = json.loads((sample / 'ui_tree' / 'step_001.json').read_text())

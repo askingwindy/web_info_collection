@@ -1,0 +1,11 @@
+{
+  "source": "current production pool read-only",
+  "palace_archived_candidates": 100,
+  "current_rows": 100,
+  "requested_goal_empty": 100,
+  "requested_goal_nonempty": 0,
+  "claim_states": {},
+  "writes": 0,
+  "model_calls": 0,
+  "page_requests": 0
+}

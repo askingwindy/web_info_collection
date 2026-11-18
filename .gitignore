@@ -18,6 +18,7 @@
 # User-authorized repair verification and producer run log archives.
 !/collection_logs/stepwise-switch-20261118/**/*.log
 !/collection_logs/producer-new100-20261118/**/*.log
+!/collection_logs/stepwise-consumer-repair-20261118/**/*.log
 **/browser-state/
 **/credentials/
 **/*.egg-info/

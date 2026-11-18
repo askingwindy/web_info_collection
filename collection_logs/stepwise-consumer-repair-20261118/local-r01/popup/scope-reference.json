@@ -1,0 +1,16 @@
+{
+  "scope": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/scope.json",
+  "batch": "stepwise-offline-popup-1795007907839048000-producer/entry-batch/main",
+  "consumer_config": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/consumer-config.json",
+  "consumer_db": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/consumer-jobs.sqlite3",
+  "consumer_worker": "stepwise-offline-popup-1795007907839048000-worker-1",
+  "history_set": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/chain/manifest.json",
+  "output": "/Users/hemiao/projects/2610/WebCollect/collection_logs/stepwise-consumer-repair-20261118/local-r01/popup/collections/consumer",
+  "policy": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/policy.json",
+  "pool": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/candidate-pool.sqlite3",
+  "producer_config": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/producer-config.json",
+  "producer_db": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/producer-jobs.sqlite3",
+  "registry": "/Users/hemiao/projects/2610/WebCollect/database/sqllite/verification/stepwise-offline-popup-1795007907839048000/production-registry.sqlite3",
+  "request_prefix": "stepwise-offline-popup-1795007907839048000-main-1",
+  "started_at": 1795007907.839288
+}

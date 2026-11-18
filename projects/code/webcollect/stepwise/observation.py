@@ -5,14 +5,14 @@
 合同、覆盖率或依赖图。
 """
 import re
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from . import prompt
 
 POINTER_ACTIONS = ('click', 'double_click', 'right_click', 'select', 'scroll')
 CONTROL_ACTIONS = ('click', 'double_click', 'right_click', 'select', 'type')
 
-# 登录/注册/支付/下载/隐私等排除词（URL片段与页面标题/正文关键词）。
+# 登录/注册/支付/下载/隐私等排除词（URL 路径单词与页面标题关键词）。
 _EXCLUDE_URL_PATTERNS = (
     'login', 'signin', 'sign-in', 'signup', 'sign-up', 'register', 'logout',
     'passport', 'account/login', 'pay', 'payment', 'checkout', 'cart',
@@ -89,6 +89,27 @@ def _center(bbox):
     return int((left + right) // 2), int((top + bottom) // 2)
 
 
+def _hotkey_allowed(state, keys):
+    if (not isinstance(keys, list) or not keys or len(keys) > 4
+            or any(not isinstance(key, str) or not key or key.lower() not in prompt.ALLOWED_KEYS
+                   for key in keys)):
+        return False
+    lowered = [key.lower() for key in keys]
+    if 'a' not in lowered:
+        return True
+    # 新增字母键仅用于当前可编辑输入的全选，不能扩展成任意浏览器快捷键。
+    if (len(lowered) != 2 or lowered[-1] != 'a'
+            or lowered[0] not in ('ctrl', 'control', 'meta', 'command', 'cmd')):
+        return False
+    elements = {item.get('element_id'): item for item in state.get('elements') or []}
+    return any(value.get('focused') is True and not value.get('readonly')
+               and elements.get(value.get('element_id'), {}).get('inputable') is True
+               and elements[value['element_id']].get('visible') is True
+               and elements[value['element_id']].get('enabled') is True
+               and value.get('input_type') not in {'date', 'time', 'month', 'week', 'datetime-local'}
+               for value in state.get('values') or [])
+
+
 def bind_action(state, rows, arguments):
     """把模型动作参数绑定为一次可派发的原子操作。失败抛 ActionRejected。"""
     action = arguments.get('action')
@@ -126,9 +147,7 @@ def bind_action(state, rows, arguments):
             raise ActionRejected('TYPE_TEXT_REQUIRED')
     elif action == 'hotkey':
         keys = arguments.get('keys')
-        if (not isinstance(keys, list) or not keys or len(keys) > 4
-                or any(not isinstance(key, str) or not key or key.lower() not in prompt.ALLOWED_KEYS
-                       for key in keys)):
+        if not _hotkey_allowed(state, keys):
             raise ActionRejected('HOTKEY_KEYS_NOT_ALLOWED:' + str(keys))
     elif action == 'scroll':
         if number is not None:
@@ -184,6 +203,16 @@ def bind_action(state, rows, arguments):
         operation['evidence']['element_bbox'] = list(element['bbox'])
         operation['evidence']['element_type'] = element.get('element_type')
         operation['evidence']['element_inputable'] = bool(element.get('inputable'))
+        if action in ('click', 'double_click'):
+            # 公共导航读回从此真实点击节点查找已捕获的链接/原生表单来源。
+            operation['evidence']['anchor_element_id'] = element['element_id']
+        elif action == 'type':
+            operation['evidence']['focused_element_id'] = element['element_id']
+    elif action == 'hotkey':
+        focused = next((value.get('element_id') for value in state.get('values') or []
+                        if value.get('focused')), None)
+        if focused is not None:
+            operation['evidence']['focused_element_id'] = focused
     return operation, element
 
 
@@ -239,18 +268,21 @@ def require_action(state, operation):
         element_id = evidence.get('element_id')
         element = next((item for item in state.get('elements') or []
                         if item.get('element_id') == element_id), None)
-        if element is None or not element.get('inputable'):
+        if (element is None or not element.get('inputable')
+                or not element.get('visible') or not element.get('enabled')):
             raise ValueError('TYPE_TARGET_NOT_INPUTABLE')
         value = _element_values(state, element_id)
         if not value.get('focused'):
             raise ValueError('TYPE_REQUIRES_FOCUSED_INPUT')
+        if value.get('readonly'):
+            raise ValueError('TYPE_TARGET_READONLY')
+        if value.get('input_type') in {'date', 'time', 'month', 'week', 'datetime-local'}:
+            raise ValueError('NATIVE_DATE_INPUT_UNSUPPORTED')
         if not isinstance(arguments.get('text'), str) or not arguments['text']:
             raise ValueError('TYPE_TEXT_REQUIRED')
     elif action == 'hotkey':
         keys = arguments.get('keys')
-        if (not isinstance(keys, list) or not keys or len(keys) > 4
-                or any(not isinstance(key, str) or not key or key.lower() not in prompt.ALLOWED_KEYS
-                       for key in keys)):
+        if not _hotkey_allowed(state, keys):
             raise ValueError('HOTKEY_KEYS_NOT_ALLOWED')
     elif action == 'scroll':
         if arguments.get('direction') not in ('up', 'down', 'left', 'right'):
@@ -266,19 +298,49 @@ def require_action(state, operation):
 
 # ---------------------------------------------------------------- 视图比较与效果
 def business_view(state):
-    """业务视图事实：目标、真实输入值、选中状态、当前引用与结果区域相关字段。"""
+    """比较原始可见事实，不使用提示词里已截断的文字或元素列表。
+
+    文字结果、标签/展开状态、焦点、原生选择区和页内滚动都可能是动作的
+    实际效果。像素变化由会话另行核对；光标闪烁本身不能成为有效动作。
+    """
+    clean = lambda text: re.sub(r'\s+', ' ', text or '').strip()
     values = []
     for value in state.get('values') or []:
         values.append({key: value.get(key) for key in (
             'element_id', 'value', 'display_value', 'value_visible', 'checked',
-            'choice', 'focused', 'readonly')})
+            'choice', 'focused', 'readonly', 'selection_start', 'selection_end',
+            'all_text_selected')})
+    visible_elements = [item for item in state.get('elements') or [] if item.get('visible')]
+    controls = []
+    for element in visible_elements:
+        if (element.get('clickable') or element.get('inputable') or element.get('scrollable')
+                or element.get('element_type') in ('link', 'button')
+                or element.get('native_role') in ('link', 'button')):
+            controls.append((clean(element.get('text')), clean(element.get('visible_text')),
+                             element.get('element_type') or '', element.get('native_role') or '',
+                             element.get('state') or '', bool(element.get('enabled')),
+                             bool(element.get('inputable'))))
     return {
         'url': state.get('url'),
         'document_identity': state.get('document_identity'),
         'title': state.get('title'),
         'scroll': state.get('scroll'),
+        'visible_text': clean(state.get('visible_text')),
+        'controls': sorted(controls),
+        'focused_elements': sorted(str(item.get('element_id')) for item in visible_elements
+                                   if item.get('state') == 'focused'),
+        'scroll_containers': sorted(({'element_id': item.get('element_id'),
+                                     'scroll': item.get('scroll')}
+                                    for item in state.get('scroll_containers') or []
+                                    if item.get('visible') is not False),
+                                   key=lambda item: str(item.get('element_id'))),
+        # 图集可能只替换图片而没有新增文字；读取已捕获的图片来源即可识别。
+        'images': sorted((item.get('src') or '', item.get('current_src') or '')
+                         for item in state.get('capture_images') or []
+                         if item.get('eligible') is not True),
         'values': sorted((item for item in values if item.get('value_visible')
-                          or item.get('checked') or item.get('choice')),
+                          or item.get('checked') is not None or item.get('choice')
+                          or item.get('focused')),
                          key=lambda item: str(item.get('element_id'))),
     }
 
@@ -311,13 +373,20 @@ def action_omittable(before, after, action_type):
 
 # ---------------------------------------------------------------- 范围与排除
 def allowed_hosts(task):
-    from urllib.parse import urlparse
-
     def host(url):
-        parsed = urlparse(url or '')
-        return (parsed.hostname or '').lower()
+        value = str(url or '')
+        parsed = urlsplit(value if '://' in value or value.startswith('//') else '//' + value)
+        return (parsed.hostname or '').lower().rstrip('.')
     hosts = {host(task.get('site_uri')), host(task.get('initial_url'))}
     hosts.update(host(url) for url in task.get('allowed_hosts') or [])
+    reference = (task.get('candidate_binding') or {}).get('application_registry')
+    if reference is None:
+        reference = task.get('application_registry')
+    if reference is not None:
+        from ..application_identity import aliases
+        mapping = aliases(reference)  # 同时核验登记文件及其第一方来源原件。
+        canonical = {owner for uri, owner in mapping.items() if host(uri) in hosts}
+        hosts.update(host(uri) for uri, owner in mapping.items() if owner in canonical)
     return {item for item in hosts if item}
 
 
@@ -328,14 +397,14 @@ def destination_allowed(url, hosts):
     parsed = urlsplit(url)
     if parsed.scheme not in ('http', 'https'):
         return False
-    return (parsed.hostname or '').lower() in hosts
+    return (parsed.hostname or '').lower().rstrip('.') in hosts
 
 
 def exclusion_issues(url, state):
     """登录/注册/支付/下载/隐私排除与纯英文页检查；返回 (issue|None)。"""
-    target = (url or '').lower()
+    target = unquote(urlsplit(url or '').path).lower()
     for pattern in _EXCLUDE_URL_PATTERNS:
-        if pattern in target:
+        if re.search(r'(?<![a-z0-9])' + re.escape(pattern) + r'(?![a-z0-9])', target):
             return 'excluded_url_pattern:' + pattern
     title = (state.get('title') or '')
     visible = (state.get('visible_text') or '')

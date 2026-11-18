@@ -143,7 +143,11 @@ class Journal:
                   'omit_reason': omit_reason,
                   'capture': {'screenshot_sha256': self.frames[before_frame]['refs']['image']['sha256']}
                               if before_frame in self.frames else None,
-                  'state': after_state or {},
+                  # Shared identity/navigation readers pair state[i] with
+                  # operation[i], so this is the actual pre-action frame.
+                  'state': (self.frames[before_frame]['state']
+                            if before_frame in self.frames else {}),
+                  'after_state': after_state or {},
                   'settlement': 'completed' if execution_error is None else 'failed',
                   'ended_at': _now()}
         if delivery_index is not None:
