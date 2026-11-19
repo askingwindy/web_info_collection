@@ -1,0 +1,175 @@
+{
+  "at": "2026-11-19T09:25:42+08:00",
+  "segment": "run-02",
+  "plan_id": "20261119084453-4f35f3d9",
+  "strategy": "stepwise",
+  "worker_target": 20,
+  "worker_peak_observed": 20,
+  "state": "FINISHED",
+  "unique_claims": 60,
+  "unclaimed": 90,
+  "formal_attempts": 57,
+  "saved_pending_review": 0,
+  "by_site": {
+    "zh.wikipedia.org": {
+      "selected": 50,
+      "claimed": 22,
+      "claim_states": {
+        "failed": 6,
+        "reconcile": 14,
+        "consuming": 2
+      },
+      "attempt_states": {
+        "rejected": 18,
+        "reserved": 1
+      },
+      "saved_pending_review": 0
+    },
+    "muxtly.com": {
+      "selected": 50,
+      "claimed": 18,
+      "claim_states": {
+        "failed": 7,
+        "reconcile": 8,
+        "consuming": 3
+      },
+      "attempt_states": {
+        "rejected": 16,
+        "reserved": 2
+      },
+      "saved_pending_review": 0
+    },
+    "dpm.org.cn": {
+      "selected": 50,
+      "claimed": 20,
+      "claim_states": {
+        "reconcile": 13,
+        "failed": 7
+      },
+      "attempt_states": {
+        "rejected": 19,
+        "running": 1
+      },
+      "saved_pending_review": 0
+    }
+  },
+  "consumer_model": {
+    "requests": 501,
+    "states": {
+      "invalid_response": 40,
+      "succeeded": 456,
+      "failed": 2,
+      "unknown": 3
+    },
+    "dispatch": {
+      "dispatched": 496,
+      "not_dispatched": 2,
+      "unproven": 3
+    },
+    "input_tokens": null,
+    "output_tokens": null,
+    "known_input_tokens": 1498699,
+    "known_output_tokens": 96558,
+    "unknown_usage_requests": 5,
+    "cost": "UNKNOWN"
+  },
+  "new_consumer_requests_not_yet_attributed": 0,
+  "issues_recorded": 34,
+  "stop_requested": true,
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "dataset_published": false,
+  "customer_acceptance": "UNKNOWN",
+  "validation_only_consumer_model": {
+    "requests": 2,
+    "states": {
+      "succeeded": 2
+    },
+    "dispatch": {
+      "dispatched": 2
+    },
+    "input_tokens": 7456,
+    "output_tokens": 331,
+    "known_input_tokens": 7456,
+    "known_output_tokens": 331,
+    "unknown_usage_requests": 0,
+    "cost": "UNKNOWN"
+  },
+  "segment_new_claims": 30,
+  "segment_new_claims_by_site": {
+    "zh.wikipedia.org": 13,
+    "muxtly.com": 8,
+    "dpm.org.cn": 9
+  },
+  "segment_new_attempts": 29,
+  "segment_saved_pending_review": 0,
+  "segment_consumer_model": {
+    "requests": 233,
+    "states": {
+      "succeeded": 230,
+      "unknown": 3
+    },
+    "dispatch": {
+      "dispatched": 230,
+      "unproven": 3
+    },
+    "input_tokens": null,
+    "output_tokens": null,
+    "known_input_tokens": 723818,
+    "known_output_tokens": 48745,
+    "unknown_usage_requests": 3,
+    "cost": "UNKNOWN"
+  },
+  "controller": {
+    "succeeded": false,
+    "interrupted": false,
+    "unlaunched": 0,
+    "stop_reason": null,
+    "report_integrity": "FAILED",
+    "elapsed_seconds": 1134.013007374946,
+    "worker_exit_codes": {
+      "-2": 20
+    }
+  },
+  "native_report": {
+    "expected_denominator": 150,
+    "denominator": 150,
+    "integrity": "FAILED",
+    "issues": [
+      "fixed_150_claims_incomplete",
+      "candidate_evidence_inconsistencies",
+      "unsettled_claims"
+    ],
+    "saved": 0,
+    "stages": {
+      "claimed": 60,
+      "first_frame": 57,
+      "template_selected": 0,
+      "model_http": 52,
+      "initial_plan_accepted": 0,
+      "effective_steps_ge5": 11,
+      "goal_verified": 0,
+      "formally_saved": 0
+    },
+    "consumer_usage": {
+      "requests": 501,
+      "states": {
+        "invalid_response": 40,
+        "succeeded": 456,
+        "failed": 2,
+        "unknown": 3
+      },
+      "dispatch": {
+        "dispatched": 496,
+        "not_dispatched": 2,
+        "unproven": 3
+      },
+      "input_tokens": null,
+      "output_tokens": null,
+      "known_input_tokens": 1498699,
+      "known_output_tokens": 96558,
+      "unknown_usage_requests": 5,
+      "cost": "UNKNOWN"
+    }
+  }
+}
