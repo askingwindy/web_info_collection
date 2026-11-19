@@ -135,12 +135,15 @@ def quoted_segments(text):
 _PUNCTUATION = str.maketrans('？！，：（）', '?!,:()')
 
 
-def missing_quotes(fields, corpus, location):
+def missing_quotes(fields, state, location):
+    corpus = _corpus(state)
+    selected = prompt.selected_option_labels(state) if isinstance(state, dict) else {}
+    option_labels = {_COMPACT.sub('', label) for label in selected.values()}
     problems = []
     for field, text in fields:
         for quote in quoted_segments(text):
             compact = _COMPACT.sub('', quote)
-            if compact in corpus:
+            if compact in corpus or compact in option_labels:
                 continue
             problem = f'{field} 引文「{quote[:60]}」不在{location}'
             # Suggest the original spelling. A punctuation variant still fails the check.
@@ -155,7 +158,7 @@ def decision_citations_check(arguments, state, *, previous_action):
     fields = ['page_name', 'precondition']
     if previous_action:
         fields.append('last_step_result')
-    return missing_quotes(((name, arguments.get(name)) for name in fields), _corpus(state), '本帧')
+    return missing_quotes(((name, arguments.get(name)) for name in fields), state, '本帧')
 
 
 def citations_check(annotation, frame_texts):
@@ -166,18 +169,17 @@ def citations_check(annotation, frame_texts):
     终态帧）；final_result/completion_judgement 命中终态帧。
     """
     problems = []
-    corpora = [_corpus(item) for item in frame_texts]
     steps = annotation.get('steps') or []
-    if len(corpora) != len(steps):
+    if len(frame_texts) != len(steps):
         raise ValueError('STEPWISE_CITATION_FRAMES_MISMATCH')
     for index, step in enumerate(steps):
-        own = corpora[index]
-        for field in ('page_name', 'precondition'):
-            text = step.get(field)
-            if field == 'precondition' and text is None:
-                text = (step.get('action') or {}).get(field)
-            problems.extend(missing_quotes([(f"step {step.get('step_id')} {field}", text)], own, '本帧'))
-        target = corpora[index + 1] if index + 1 < len(steps) else corpora[-1]
+        prefix = f"step {step.get('step_id')}"
+        precondition = step.get('precondition')
+        if precondition is None:
+            precondition = (step.get('action') or {}).get('precondition')
+        problems.extend(missing_quotes([(prefix + ' page_name', step.get('page_name')),
+                                        (prefix + ' precondition', precondition)], frame_texts[index], '本帧'))
+        target = frame_texts[min(index + 1, len(steps) - 1)]
         problems.extend(missing_quotes([(f"step {step.get('step_id')} step_result", step.get('step_result'))],
                                        target, '下一交付帧'))
     problems.extend(writeback_citations_check(annotation, frame_texts[-1]))
@@ -187,7 +189,7 @@ def citations_check(annotation, frame_texts):
 def writeback_citations_check(writeback, final_state):
     """仅检查可重写的回写字段；不修改历史决策或轨迹引文。"""
     return missing_quotes(((name, writeback.get(name)) for name in ('final_result', 'completion_judgement')),
-                          _corpus(final_state), '终态帧')
+                          final_state, '终态帧')
 
 
 # ---------------------------------------------------------------- 保存资格

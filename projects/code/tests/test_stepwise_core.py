@@ -268,11 +268,17 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
                 {'action': 'hotkey', 'keys': [modifier, 'a']})
             self.assertEqual(selection['evidence']['focused_element_id'], 'e1')
             self.assertTrue(observation.require_action(focused, selection))
-        for keys in (['a'], ['alt', 'a'], ['ctrl', 'shift', 'a']):
+            supplied = {'action': 'hotkey', 'keys': [modifier + '+A']}
+            equivalent, _ = observation.bind_action(focused, focused_rows, supplied)
+            self.assertEqual(equivalent, selection)
+            self.assertEqual(supplied['keys'], [modifier + '+A'])
+        for keys in (['a'], ['alt', 'a'], ['ctrl', 'shift', 'a'], ['ctrl+w'], ['ctrl+shift+a']):
             with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
                 observation.bind_action(focused, focused_rows, {'action': 'hotkey', 'keys': keys})
         with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
             observation.bind_action(state, rows, {'action': 'hotkey', 'keys': ['ctrl', 'a']})
+        with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
+            observation.bind_action(state, rows, {'action': 'hotkey', 'keys': ['Ctrl+A']})
         type_operation, _ = observation.bind_action(focused, focused_rows,
             {'action': 'type', 'element': 1, 'text': '50'})
         self.assertEqual(type_operation['arguments'], {'text': '50'})
@@ -417,6 +423,23 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertTrue(any('本帧原文为「这是什么工具?」' in reason for reason in bad))
         self.assertEqual(len(bad),2)
         self.assertEqual(finalize.decision_citations_check({'precondition':'可见「这是什么工具?」','last_step_result':'显示「20 平方米」'}, frame, previous_action=True),[])
+        field = _state(values=[{'element_id':'e1','value':'key-a','display_value':'后台文本',
+                                'value_visible':True,'input_type':'select-one'}])
+        field['capture_controls'] = [{'element_id':'e1','tag':'select','options':[
+            {'value':'key-a','label':'页面选中项'}, {'value':'key-b','label':'未选项目'}]}]
+        args = {'precondition':'当前选中「页面选中项」'}
+        self.assertEqual(finalize.decision_citations_check(args, field, previous_action=False), [])
+        self.assertEqual(finalize.writeback_citations_check({'final_result':args['precondition']}, field), [])
+        message, _ = prompt.build_decision_message(mode='autonomous', requested_goal_text='', task_goal='',
+            progress='', rows=observation.actionable_rows(field), state=field, history=[], feedback='', note='',site_tasks=[])
+        self.assertIn('当前选中「页面选中项」', message)
+        for absent in ('key-a', '后台文本', '未选项目', '页面选'):
+            self.assertTrue(finalize.decision_citations_check({'precondition':'「'+absent+'」'}, field, previous_action=False))
+        field['capture_controls'][0]['options'].append({'value':'key-a','label':'同值另一项'})
+        self.assertTrue(finalize.decision_citations_check(args, field, previous_action=False))
+        field['capture_controls'][0]['options'].pop()
+        field['values'][0]['value_visible'] = False
+        self.assertTrue(finalize.writeback_citations_check({'final_result':args['precondition']}, field))
 
 
 class StepwiseRecordsAndAnnotation(unittest.TestCase):

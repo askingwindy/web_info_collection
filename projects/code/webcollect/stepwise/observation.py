@@ -149,6 +149,11 @@ def bind_action(state, rows, arguments):
             raise ActionRejected('TYPE_TEXT_REQUIRED')
     elif action == 'hotkey':
         keys = arguments.get('keys')
+        if isinstance(keys, list) and len(keys) == 1 and isinstance(keys[0], str):
+            modifier, _, key = keys[0].lower().partition('+')
+            if modifier in ('ctrl', 'control', 'meta', 'command', 'cmd') and key == 'a':
+                keys = [modifier, key]
+                arguments = {**arguments, 'keys': keys}
         if not _hotkey_allowed(state, keys):
             raise ActionRejected('HOTKEY_KEYS_NOT_ALLOWED:' + str(keys))
     elif action == 'scroll':

@@ -105,7 +105,8 @@ def next_action_schema(*, autonomous=True):
         'action': {'enum': list(ACTIONS)},
         'element': {'type': 'integer', 'minimum': 1, 'maximum': LIMIT_ELEMENT_ROWS},
         'text': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_TYPE_TEXT},
-        'keys': {'type': 'array', 'items': {'type': 'string', 'minLength': 1},
+        'keys': {'type': 'array', 'description': '每个键一个数组项，例如 ["ctrl","a"]。',
+                 'items': {'type': 'string', 'minLength': 1},
                  'minItems': 1, 'maxItems': 4},
         'direction': {'enum': ['up', 'down', 'left', 'right']},
         'option': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_OPTION},
@@ -186,6 +187,24 @@ def element_row(number, element, value=None):
     return row
 
 
+def selected_option_labels(state):
+    """当前可见的原生单选下拉控件，取已选项的实际显示标签。"""
+    visible = {el['element_id'] for el in state.get('elements') or []
+               if el.get('visible') is True and el.get('element_id')}
+    values = {item['element_id']: item['value'] for item in state.get('values') or []
+              if item.get('value_visible') is True and item.get('input_type') == 'select-one'
+              and item.get('element_id') in visible and isinstance(item.get('value'), str)}
+    labels = {}
+    for control in state.get('capture_controls') or []:
+        element_id = control.get('element_id')
+        if control.get('tag') == 'select' and element_id in values:
+            matched = [option.get('label') for option in control.get('options') or []
+                       if option.get('value') == values[element_id]]
+            if len(matched) == 1 and isinstance(matched[0], str) and matched[0].strip():
+                labels[element_id] = matched[0].strip()
+    return labels
+
+
 def _structure_lines(state):
     lines = []
     for block in (state.get('text_blocks') or [])[:40]:
@@ -219,8 +238,14 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
     result_hint = ('上一实际动作需要回填。请在 last_step_result 描述本帧可见变化。' if pending_result
                    else '没有待回填的实际动作，last_step_result 填空字符串。')
     values = {item['element_id']: item for item in state.get('values') or [] if item.get('element_id')}
-    rows_block = [element_row(number, element, values.get(element.get('element_id')))
-                  for number, element in rows]
+    selected = selected_option_labels(state)
+    rows_block = []
+    for number, element in rows:
+        element_id = element.get('element_id')
+        row = element_row(number, element, values.get(element_id))
+        if element_id in selected:
+            row += ' 当前选中「' + _bounded(selected[element_id], LIMIT_ELEMENT_TEXT) + '」'
+        rows_block.append(row)
 
     def clip_rows(items):
         total = sum(len(row) + 1 for row in items)
@@ -304,7 +329,7 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
                     + '。last_step_result 始终保留字段，依照本轮任务与进度中标出的回填要求填写。'
                     'thought 简述选择本动作的依据，expected_result 写预期可见结果。'
                     '\nclick、double_click、right_click 给 element；type 给 element 和 text；'
-                    'hotkey 只加 keys；scroll 给 direction，可加可滚动的 element；'
+                    'hotkey 只加 keys，全选写 ["ctrl","a"] 或 ["cmd","a"]；scroll 给 direction，可加可滚动的 element；'
                     'select 给 element 和 option；complete 只加 status；back、wait 无专用参数。')
     instructions += (' 引用当前页面标题、可见正文或元素中的连续短原文，保留繁简和标点。'
                      '截图中文字无法准确辨认时，只描述实际可见变化，不能补写名称或数值。')
@@ -338,6 +363,9 @@ def writeback_message(*, mode, requested_goal_text, task_goal, actions_summary,
         labels = dict.fromkeys((el.get('text') or el.get('visible_text') or '').strip()
                                for el in final_state.get('elements') or [])
         lines.append(_bounded(' · '.join(label for label in labels if label), 480))
+        selected = selected_option_labels(final_state)
+        if selected:
+            lines.append(_bounded('当前选中项：' + ' · '.join(selected.values()), 480))
     if site_tasks:
         lines += ['', '【本页已采任务（避免重复，不作为依据）】']
         lines += list(site_tasks)
