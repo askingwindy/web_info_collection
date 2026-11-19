@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .. import browser
 from ..action_stability import navigation_carrier, post_action_document_scope
-from ..batch_core import BudgetStop, OutcomeUnknown
+from ..batch_core import BudgetStop, JobLeaseLost, OutcomeUnknown
 from ..browser import EvidenceStale
 from ..session_core import ReactStop
 from . import finalize, observation, prompt, records
@@ -88,6 +88,8 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
         try:
             job = ledger.claim('stepwise-decision', job_id=jid,
                                **({'parent_job': parent_job} if parent_job is not None else {}))
+        except JobLeaseLost:
+            raise
         except ValueError as error:
             if _job_request_count(ledger, jid):
                 raise OutcomeUnknown('Original stepwise call claim has request records; reconcile') from error
@@ -116,7 +118,12 @@ def stepwise_caller(ledger, task, attempt_id, *, parent_job=None, runlog=None):
                 ledger.finish(job, 'failed', error=type(error).__name__ + ': ' + str(error))
                 raise
             except OutcomeUnknown as error:
-                ledger.finish(job, 'review_required', error='unknown:' + type(error).__name__)
+                try:
+                    ledger.finish(job, 'review_required', error='unknown:' + type(error).__name__)
+                except JobLeaseLost as lost:
+                    error.add_note(str(lost))
+                raise
+            except JobLeaseLost:
                 raise
             except Exception as error:
                 ledger.finish(job, 'review_required', error=type(error).__name__)
@@ -145,6 +152,8 @@ def exception_classification(error):
     from ..model_gateway import ProviderFinishIncomplete
 
     failure_class = getattr(error, 'failure_class', None)
+    if failure_class == 'interrupted' or isinstance(error, InterruptedError):
+        return 'interrupted', 'interrupted'
     if failure_class:
         return 'error', failure_class
     if isinstance(error, BudgetStop):
@@ -367,86 +376,63 @@ class StepwiseSession:
                     self.runlog.info('context_trimmed', round=self.decision_round + 1,
                                      blocks=[item['block'] for item in trimmed])
             self.explore_calls += 1
+            frame_name = prompt.frame_page_name(frame['state'])
             response = await self.call(
                 phase='decision', system=self._system_prompt(),
-                tools=prompt.next_action_tools(autonomous=self.mode == 'autonomous'),
+                tools=prompt.next_action_tools(autonomous=self.mode == 'autonomous', frame_name=frame_name),
                 user_text=user_text, images=[frame['refs']['numbered']['path']],
                 reasoning_effort='low', dispatch_deadline=self._soft_deadline(),
                 request_deadline=self._hard_deadline(),
                 round_index=self.decision_round + 1, tool_name='next_action')
-            arguments = response.get('arguments') or {}
+            original = response.get('arguments') or {}
+            arguments = ({**original, 'page_name': frame_name}
+                         if frame_name and isinstance(original, dict) else original)
             self.decision_round += 1
-            invalid = self._validate_decision(arguments, complete_only, pending_result=pending_result is not None)
-            if not invalid:
-                citation_errors = finalize.decision_citations_check(arguments, frame['state'],
-                    previous_action=pending_result is not None)
-                if citation_errors:
-                    invalid = 'CURRENT_FRAME_CITATION: ' + '；'.join(citation_errors)
-            # 目标/笔记变化与决策原文先落盘（含被拒绝的决策）。
-            goal_before = self.goal
-            if invalid is None and self.mode == 'autonomous':
-                goal = arguments.get('task_goal')
-                if isinstance(goal, str) and goal.strip() and goal.strip() != self.goal:
-                    updated_goal = goal.strip()[:prompt.LIMIT_TASK_GOAL * 2]
-                    if self.initial_goal is None:
-                        self.initial_goal = updated_goal
-                    elif updated_goal != self.goal:
-                        self.task_modifications += 1
-                        if self.runlog is not None:
-                            self.runlog.info('task_goal_changed', round=self.decision_round,
-                                             taskModifications=self.task_modifications)
-                    self.goal = updated_goal
-            note_before = self.note
-            if invalid is None and isinstance(arguments.get('note'), str):
-                note = arguments['note']
-                self.note = note.strip()[:prompt.LIMIT_NOTE] if note else ''
-            self.journal.add_decision(
-                round_index=self.decision_round, frame_id=frame['frame_id'],
-                request_id=response.get('request_id'), arguments=arguments,
-                goal_before=goal_before, goal_after=self.goal,
-                note_before=note_before, note_after=self.note,
-                model_ref={'request_id': response.get('request_id'),
-                           'tool_call_id': response.get('tool_call_id')})
-            if invalid:
-                self._record_reject(frame, invalid, arguments)
-                continue
-            # last_step_result 绑定它实际观察的上一派发后帧（下一次合法决策）。
-            if pending_result is not None:
-                pending_result['step_result'] = str(arguments.get('last_step_result') or '')[:600]
-                pending_result['result_round'] = self.decision_round
-                pending_result = None
+            goal_before, note_before = self.goal, self.note
+            accepted = False
             try:
-                operation, element = observation.bind_action(frame['state'], rows, arguments)
-            except observation.ActionRejected as rejected:
-                self._record_reject(frame, rejected.reason, arguments)
-                continue
-            if arguments['action'] == 'complete':
-                if await self._handle_complete(frame, arguments):
-                    return
-                continue
-            if self._repeated_read_move(frame, operation, element):
-                self._record_reject(frame, 'READ_VIEW_ALREADY_VISITED: 同一画面已执行过此滚动。选择尚未取得的业务事实，或结束任务。', arguments)
-                continue
-            link = self._link_carrier(frame, element) if operation['action_type'] in ('click', 'double_click') else None
-            if link:
-                from urllib.parse import urljoin, urlsplit
-                destination = urljoin(frame['state'].get('url') or '', link['href'])
-                scheme = urlsplit(destination).scheme
-                if scheme not in ('http', 'https', 'javascript'):
-                    self._record_reject(frame, 'NAVIGATION_SCHEME_NOT_PERMITTED:' + scheme, arguments)
+                invalid = self._validate_decision(arguments, complete_only, pending_result=pending_result is not None)
+                if not invalid:
+                    problems = finalize.decision_citations_check(arguments, frame['state'],
+                        previous_action=pending_result is not None)
+                    if problems:
+                        invalid = 'CURRENT_FRAME_CITATION: ' + '；'.join(problems)
+                if invalid:
+                    self._record_reject(frame, invalid, arguments)
                     continue
-                if scheme in ('http', 'https'):
-                    issue = observation.exclusion_issues(destination, {})
-                    if issue or not observation.destination_allowed(destination, self.allowed_hosts):
-                        self._record_reject(frame, 'NAVIGATION_DESTINATION_NOT_PERMITTED:'
-                                            + str(issue or destination), arguments)
+                try:
+                    operation, element = observation.bind_action(frame['state'], rows, arguments)
+                except observation.ActionRejected as rejected:
+                    self._record_reject(frame, rejected.reason, arguments)
+                    continue
+                if arguments['action'] == 'complete':
+                    if not await self._handle_complete(frame, arguments):
                         continue
-            try:
-                await self._verify_frame(frame)
-            except EvidenceStale:
-                self.current = self.journal.add_frame(await self._capture())
-                self.feedback = '画面已变化，上一决策作废；请按当前画面重新决策。'
-                continue
+                else:
+                    issue = self._proposed_action_issue(frame, operation, element)
+                    if issue:
+                        self._record_reject(frame, issue, arguments)
+                        continue
+                    try:
+                        await self._verify_frame(frame)
+                    except EvidenceStale:
+                        self.current = self.journal.add_frame(await self._capture())
+                        self.feedback = '画面已变化，上一决策作废；请按当前画面重新决策。'
+                        continue
+                self._accept_context(arguments, pending_result)
+                pending_result = None
+                accepted = True
+            finally:
+                self.journal.add_decision(
+                    round_index=self.decision_round, frame_id=frame['frame_id'],
+                    request_id=response.get('request_id'), arguments=original,
+                    goal_before=goal_before, goal_after=self.goal,
+                    note_before=note_before, note_after=self.note,
+                    model_ref={'request_id': response.get('request_id'),
+                               'tool_call_id': response.get('tool_call_id')},
+                    accepted=accepted, frame_page_name=frame_name)
+            if arguments['action'] == 'complete':
+                return
             outcome = await self._dispatch(frame, operation, element, arguments)
             if outcome == 'delivered':
                 pending_result = self.dispatch_rows[-1]
@@ -456,6 +442,42 @@ class StepwiseSession:
             # 'failed'：画面未捕获，当前帧保持不变，反馈已写。
 
     # ------------------------------------------------------------ 决策校验
+    def _proposed_action_issue(self, frame, operation, element):
+        if self._repeated_read_move(frame, operation, element):
+            return 'READ_VIEW_ALREADY_VISITED: 同一画面已执行过此操作。选择尚未取得的业务事实，或结束任务。'
+        if operation['action_type'] in ('click', 'double_click'):
+            link = self._link_carrier(frame, element)
+            if link:
+                from urllib.parse import urljoin, urlsplit
+                destination = urljoin(frame['state'].get('url') or '', link['href'])
+                scheme = urlsplit(destination).scheme
+                if scheme not in ('http', 'https', 'javascript'):
+                    return 'NAVIGATION_SCHEME_NOT_PERMITTED:' + scheme
+                if scheme in ('http', 'https'):
+                    exclusion = observation.exclusion_issues(destination, {})
+                    if exclusion or not observation.destination_allowed(destination, self.allowed_hosts):
+                        return 'NAVIGATION_DESTINATION_NOT_PERMITTED:' + str(exclusion or destination)
+        return None
+
+    def _accept_context(self, arguments, pending_result):
+        if self.mode == 'autonomous':
+            goal = arguments['task_goal'].strip()
+            if self.initial_goal is None:
+                self.initial_goal = goal
+            elif goal != self.goal:
+                self.task_modifications += 1
+                if self.runlog is not None:
+                    self.runlog.info('task_goal_changed', round=self.decision_round,
+                                     taskModifications=self.task_modifications)
+            self.goal = goal
+        if isinstance(arguments.get('note'), str):
+            self.note = arguments['note'].strip()[:prompt.LIMIT_NOTE]
+        if pending_result is not None:
+            result = arguments['last_step_result'].strip()
+            pending_result.update(step_result=result, result_round=self.decision_round)
+            if self.history:
+                self.history[-1] += '。实际观察：' + result
+
     def _validate_decision(self, arguments, complete_only, *, pending_result=False):
         if not isinstance(arguments, dict):
             return 'DECISION_NOT_OBJECT'
@@ -481,7 +503,7 @@ class StepwiseSession:
         from ..agent_controller import exclusive
         key = prompt.compact_json({
             'view': observation.business_view(frame['state']),
-            'reason': reason,
+            'reason': 'CURRENT_FRAME_CITATION' if reason.startswith('CURRENT_FRAME_CITATION:') else reason,
             'action': arguments.get('action') if isinstance(arguments, dict) else None,
             'element': arguments.get('element') if isinstance(arguments, dict) else None,
             'text': arguments.get('text') if isinstance(arguments, dict) else None,
@@ -499,7 +521,10 @@ class StepwiseSession:
                    'created_at': datetime.now(timezone.utc).isoformat()})
         if self.repeat_reject_run >= REPEAT_REJECT_LIMIT:
             self._stop('repeat_reject', '同视图同一动作连续 %d 次派发前拒绝' % REPEAT_REJECT_LIMIT, 'model')
-        self.feedback = '上一决策被拒绝：%s。请修正后重试。' % reason
+        if reason.startswith('CURRENT_FRAME_CITATION:'):
+            self.feedback = '请从本帧正文复制连续短原文；无法辨认时用自己的话描述实际变化。' + reason
+        else:
+            self.feedback = '上一决策被拒绝：%s。请修正后重试。' % reason
 
     # ------------------------------------------------------------ complete
     def _reject_complete(self, frame, arguments, reason):

@@ -7,6 +7,7 @@ context_trimmed 事件。
 """
 import io
 import json
+import re
 
 from PIL import Image, ImageDraw
 
@@ -77,7 +78,7 @@ _SPECIFIED_PARAGRAPH = '按【任务】中的指定目标完成任务；不能�
 
 SYSTEM_PROMPT += """
 
-每个下一步在 thought 中写明还缺哪条业务事实。已看到的内容计入历史；同一区域上下滚动或点回顶部不会产生新事实。若本页一屏已读完，立即结束或明确不可延伸。计算、查询类任务先取得具体结果，再决定是否需要其他操作；结束时把用于证明完成的数值、单位或原文留在当前视口。当前页的 page_name、precondition 和上一动作的 last_step_result 只照抄本帧可见的「原文」，保留标点。"""
+每个下一步在 thought 中写明还缺哪条业务事实。参考已执行动作及其实际结果，避免重复打开已读章节、同一张图片或已看过的详情。五步后目标已完成且当前帧有证据就提交 complete。若本页一屏已读完，立即结束或明确不可延伸。计算、查询类任务先取得具体结果，结束时把用于证明完成的数值、单位或原文留在当前视口。precondition 和 last_step_result 中的「原文」只取本帧的连续短片段，保留繁简和标点。"""
 
 AUTONOMOUS_PARAGRAPH = SYSTEM_PROMPT.split('\n\n')[1]
 
@@ -95,7 +96,17 @@ def _bounded(value, limit):
 
 
 # ---------------------------------------------------------------- 扁平工具 schema
-def next_action_schema(*, autonomous=True):
+def frame_page_name(state):
+    """用当前标题的连续原文生成交付页名，为简体叙述和引号预留四个字符。"""
+    title = (state.get('title') or '').strip()
+    parts = re.split(r'[「」\r\n]', title)
+    snippet = next((part.strip() for part in parts if part.strip()), '')[:LIMIT_PAGE_NAME - 4].rstrip()
+    if not snippet or re.search(r'https?://|www\.', snippet, re.I):
+        return None
+    return '网页「' + snippet + '」'
+
+
+def next_action_schema(*, autonomous=True, frame_name=None):
     properties = {
         'last_step_result': {'type': 'string', 'maxLength': LIMIT_LAST_STEP_RESULT},
         'page_name': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_PAGE_NAME},
@@ -105,7 +116,7 @@ def next_action_schema(*, autonomous=True):
         'action': {'enum': list(ACTIONS)},
         'element': {'type': 'integer', 'minimum': 1, 'maximum': LIMIT_ELEMENT_ROWS},
         'text': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_TYPE_TEXT},
-        'keys': {'type': 'array', 'description': '每个键一个数组项，例如 ["ctrl","a"]。',
+        'keys': {'type': 'array', 'description': '一次组合键，每个键只出现一次，例如 ["ctrl","a"]。替换输入框用全选后输入新值。',
                  'items': {'type': 'string', 'minLength': 1},
                  'minItems': 1, 'maxItems': 4},
         'direction': {'enum': ['up', 'down', 'left', 'right']},
@@ -116,6 +127,10 @@ def next_action_schema(*, autonomous=True):
     }
     required = ['last_step_result', 'page_name', 'precondition', 'thought',
                 'user_goal', 'action', 'expected_result']
+    if frame_name:
+        required.remove('page_name')
+        # Existing clients can echo the full title. Only the captured short name reaches delivery.
+        properties['page_name'] = {'type': 'string', 'description': '宿主已从本帧标题填写，请省略。'}
     if autonomous:
         properties['task_goal'] = {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_TASK_GOAL}
         required.insert(0, 'task_goal')
@@ -123,9 +138,9 @@ def next_action_schema(*, autonomous=True):
             'required': required, 'properties': properties}
 
 
-def next_action_tools(*, autonomous=True):
+def next_action_tools(*, autonomous=True, frame_name=None):
     return [{'type': 'function', 'function': {
-        'name': 'next_action', 'parameters': next_action_schema(autonomous=autonomous)}}]
+        'name': 'next_action', 'parameters': next_action_schema(autonomous=autonomous, frame_name=frame_name)}}]
 
 
 WRITEBACK_SCHEMA = {'type': 'object', 'additionalProperties': False,
@@ -171,7 +186,7 @@ def element_row(number, element, value=None):
     label = label.replace('\n', ' ')
     kind = element.get('element_type') or element.get('native_role') or 'node'
     state = element.get('state') or 'default'
-    row = '%d. %s %s %s' % (number, kind, _bounded(label, LIMIT_ELEMENT_TEXT), state)
+    row = '%d. %s %s %s' % (number, kind, label[:LIMIT_ELEMENT_TEXT], state)
     if element.get('inputable'):
         value = value or {}
         input_type = value.get('input_type') or ''
@@ -244,7 +259,7 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         element_id = element.get('element_id')
         row = element_row(number, element, values.get(element_id))
         if element_id in selected:
-            row += ' 当前选中「' + _bounded(selected[element_id], LIMIT_ELEMENT_TEXT) + '」'
+            row += ' 当前选中「' + selected[element_id][:LIMIT_ELEMENT_TEXT] + '」'
         rows_block.append(row)
 
     def clip_rows(items):
@@ -259,7 +274,7 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         return items
 
     rows_block = clip_rows(rows_block)
-    visible = _bounded((state.get('visible_text') or '').strip(), LIMIT_VISIBLE_TEXT)
+    visible = (state.get('visible_text') or '').strip()[:LIMIT_VISIBLE_TEXT]
     structure_items = _structure_lines(state)[:LIMIT_STRUCTURE_ITEMS]
     structure_total = 0
     structure = []
@@ -288,9 +303,10 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         site_block.append(piece)
         total_site += len(piece)
 
+    frame_name = frame_page_name(state)
     blocks = {
         '任务与进度': task_block + '\n' + progress_block + '\n' + result_hint,
-        '当前页面标题': _bounded(state.get('title') or '', 100),
+        '当前页面标题': frame_name or (state.get('title') or '')[:LIMIT_PAGE_NAME],
         '可操作元素': '\n'.join(rows_block) if rows_block else '（本帧无可操作元素）',
         '可见正文': visible or '（无）',
         '页面结构': '\n'.join(structure) if structure else '（无）',
@@ -324,12 +340,14 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
     if dynamic_size() > LIMIT_TOTAL_DYNAMIC:
         raise ValueError('STEPWISE_CONTEXT_OVER_BUDGET: 不可裁剪内容超过 %d 字符预算' % LIMIT_TOTAL_DYNAMIC)
 
-    required = next_action_schema(autonomous=mode == 'autonomous')['required']
+    required = next_action_schema(autonomous=mode == 'autonomous', frame_name=frame_name)['required']
+    name_hint = ('page_name 由宿主填写，可以省略。' if frame_name else
+                 f'请用不超过 {LIMIT_PAGE_NAME} 字的简体中文填写 page_name。')
     instructions = ('每轮只调用一次next_action，所有动作（含complete）必填 ' + '、'.join(required)
-                    + '。last_step_result 始终保留字段，依照本轮任务与进度中标出的回填要求填写。'
+                    + '。' + name_hint + 'last_step_result 始终保留字段，依照本轮任务与进度中标出的回填要求填写。'
                     'thought 简述选择本动作的依据，expected_result 写预期可见结果。'
                     '\nclick、double_click、right_click 给 element；type 给 element 和 text；'
-                    'hotkey 只加 keys，全选写 ["ctrl","a"] 或 ["cmd","a"]；scroll 给 direction，可加可滚动的 element；'
+                    'hotkey 给 keys，全选写 ["ctrl","a"] 或 ["cmd","a"]，可省略焦点编号；一次组合键中每个键只出现一次；scroll 给 direction，可加可滚动的 element；'
                     'select 给 element 和 option；complete 只加 status；back、wait 无专用参数。')
     instructions += (' 引用当前页面标题、可见正文或元素中的连续短原文，保留繁简和标点。'
                      '截图中文字无法准确辨认时，只描述实际可见变化，不能补写名称或数值。')
@@ -346,8 +364,8 @@ def writeback_message(*, mode, requested_goal_text, task_goal, actions_summary,
              '- task_instruction：具体任务指令（简体中文，界面原文用「」）；未知答案不能倒写成任务条件',
              '- 指令必须从第一步起覆盖全部保留动作，不能删去早期任务来迁就后续结果',
              '- task_type：从给定标签中选1–3项：' + '、'.join(TASK_TYPE_LABELS),
-             '- final_result：基于末帧的最终结果描述',
-             '- completion_judgement：末帧上可核验任务完成的具体内容',
+             f'- task_instruction 最多 {LIMIT_INSTRUCTION} 字。final_result 最多 {LIMIT_FINAL_RESULT} 字，写末帧上与指令直接相关的结果。',
+             f'- completion_judgement 最多 {LIMIT_COMPLETION_JUDGEMENT} 字，只摘最短充分的末帧原文、数值或单位。无需抄录整页。',
              '', '【任务来源】' + ('指定目标（不得改写或缩小）：' + _bounded(requested_goal_text, 300)
                               if mode == 'specified' else
                               '自主任务（按最终目标改写为可交付指令）：' + _bounded(task_goal, 120)),
@@ -359,13 +377,13 @@ def writeback_message(*, mode, requested_goal_text, task_goal, actions_summary,
     if final_state is not None:
         lines += ['', '【终态帧可核验原文】',
                   '下列文字来自末帧，与第二张图对应。请复制需要的原文，保留标点、数值及单位。只在末帧有证据的结果可写成最终结果。',
-                  _bounded(final_state.get('visible_text') or '', 1800)]
-        labels = dict.fromkeys((el.get('text') or el.get('visible_text') or '').strip()
-                               for el in final_state.get('elements') or [])
-        lines.append(_bounded(' · '.join(label for label in labels if label), 480))
+                  (final_state.get('visible_text') or '')[:1800]]
+        labels = dict.fromkeys((el.get('visible_text', el.get('text')) or '').strip()
+                               for el in final_state.get('elements') or [] if el.get('visible') is True)
+        lines.append(' · '.join(label for label in labels if label)[:480])
         selected = selected_option_labels(final_state)
         if selected:
-            lines.append(_bounded('当前选中项：' + ' · '.join(selected.values()), 480))
+            lines.append('当前选中项：' + ' · '.join(selected.values())[:480])
     if site_tasks:
         lines += ['', '【本页已采任务（避免重复，不作为依据）】']
         lines += list(site_tasks)
@@ -382,8 +400,8 @@ def judgement_message(*, task_instruction, actions_summary, final_result,
                       completion_judgement):
     lines = ['你是独立复核者。只依据所给三张截图与动作记录，输出 submit_judgement：',
              '- instruction_specific / completed / judgement_supported 三个布尔值',
-             '- redundant_steps / mismatch_steps：冗余或与任务矛盾的动作step_id（从1连续编号）',
-             '- reason：一两句依据',
+             '- redundant_steps / mismatch_steps 两个数组分别列出冗余、错配步骤的 step_id。没有对应步骤时也须给出空数组。',
+             f'- reason 最多 {LIMIT_JUDGEMENT_REASON} 字。六个字段均必填，每项依据实际证据独立判断。',
              '', '【任务指令】' + _bounded(task_instruction, LIMIT_INSTRUCTION),
              '', '【实际动作与结果】']
     lines += ['%d. %s' % (index + 1, item)

@@ -96,6 +96,8 @@ def _hotkey_allowed(state, keys):
                    for key in keys)):
         return False
     lowered = [key.lower() for key in keys]
+    if len(set(lowered)) != len(lowered):
+        return False
     if 'a' not in lowered:
         return True
     # 新增字母键仅用于当前可编辑输入的全选，不能扩展成任意浏览器快捷键。
@@ -159,6 +161,11 @@ def bind_action(state, rows, arguments):
         if any(key.lower() == 'a' for key in keys):
             # 校验过的字母 a 仅代表焦点输入框全选。原决策保留原键名，派发与交付记录实际按键。
             arguments = {**arguments, 'keys': ['meta' if sys.platform == 'darwin' else 'ctrl', 'a']}
+            if 'element' in arguments:
+                focused = [v.get('element_id') for v in state.get('values') or [] if v.get('focused') is True]
+                if type(number) is not int or number not in by_number or focused != [by_number[number]['element_id']]:
+                    raise ActionRejected('HOTKEY_FOCUS_TARGET_MISMATCH: 全选只作用于当前已聚焦的输入框')
+                del arguments['element']
     elif action == 'scroll':
         if number is not None:
             if type(number) is not int or number not in by_number:
@@ -291,6 +298,10 @@ def require_action(state, operation):
         keys = arguments.get('keys')
         if not _hotkey_allowed(state, keys):
             raise ValueError('HOTKEY_KEYS_NOT_ALLOWED')
+        if any(key.lower() == 'a' for key in keys) and evidence.get('focused_element_id'):
+            focused = [v.get('element_id') for v in state.get('values') or [] if v.get('focused') is True]
+            if focused != [evidence['focused_element_id']]:
+                raise ValueError('HOTKEY_FOCUS_TARGET_MISMATCH')
     elif action == 'scroll':
         if arguments.get('direction') not in ('up', 'down', 'left', 'right'):
             raise ValueError('SCROLL_DIRECTION_REQUIRED')

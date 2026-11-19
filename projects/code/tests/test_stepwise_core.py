@@ -122,7 +122,7 @@ class StepwiseExceptionClosure(unittest.TestCase):
                   (TimeoutError('视口截图超过25秒'), 'collector', 'capture_timeout'),
                   (BrowserTimeout('page.screenshot timed out'), 'collector', 'capture_timeout'),
                   (SessionGLMCallLimit('attempt-limit', 40), 'model', 'http_budget'),
-                  (UserStopped('用户停止，未派发'), 'interrupted', 'error'),
+                  (UserStopped('用户停止，未派发'), 'interrupted', 'interrupted'),
                   (EvidenceStale('stale pixels'), 'collector', 'capture_stale'),
                   (SnapshotFault('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
                   (BrowserError('UNSUPPORTED_GEOMETRY: rotated target'), 'collector', 'capture_stale'),
@@ -208,6 +208,23 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         errors = schema_errors_feedback(Draft202012Validator(autonomous).iter_errors(partial))
         self.assertEqual({row['field_path'][0] for row in errors}, missing)
         self.assertTrue(all(row['field_path'][0] in row['detail'] for row in errors))
+        title = '藏品著录与展览研究' * 8
+        name = prompt.frame_page_name({'title': title})
+        self.assertEqual(name, '网页「' + title[:26] + '」')
+        host_schema = prompt.next_action_schema(frame_name=name)
+        decision = {field:'逐帧记录' for field in host_schema['required']}
+        decision.update(action='click', element=1)
+        Draft202012Validator(host_schema).validate(decision)
+        Draft202012Validator(host_schema).validate({**decision, 'page_name': title})
+        self.assertIn('page_name', prompt.next_action_schema(frame_name=prompt.frame_page_name({}))['required'])
+        errors = schema_errors_feedback(Draft202012Validator(autonomous).iter_errors({**decision, 'page_name': title}))
+        self.assertEqual(errors, [{'field_path':['page_name'], 'detail':f'maxLength=30, received {len(title)}'}])
+        proof = {'title':'馆藏', 'visible_text':'原画\n尺寸', 'text_blocks':[{'visible_text':'卷轴'}],
+                 'elements':[{'visible':False,'text':'库存编号'}, {'visible':True,'text':'控件别名','visible_text':''}]}
+        self.assertEqual(finalize.missing_quotes([('结果','可见「卷轴」')], proof, '末帧'), [])
+        self.assertEqual(finalize.missing_quotes([('step 1 page_name','网页「馆藏」')], proof, '本帧'), [])
+        for unsupported in ('馆藏', '馆藏原画', '原画尺寸', '库存编号', '控件别名', '字' * 201):
+            self.assertTrue(finalize.missing_quotes([('结果','「'+unsupported+'」')], proof, '末帧'))
         # 裁剪次序：页面结构 → 可见正文 → 较早历史 → 导航元素；任务与反馈保留。
         state = _state()
         state['visible_text'] = '正文' * 400
@@ -272,6 +289,15 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
             equivalent, _ = observation.bind_action(focused, focused_rows, supplied)
             self.assertEqual(equivalent, selection)
             self.assertEqual(supplied['keys'], [modifier + '+A'])
+            with_focus = {**supplied, 'element': 1}
+            self.assertEqual(observation.bind_action(focused, focused_rows, with_focus)[0], selection)
+            self.assertEqual(with_focus['element'], 1)
+            with self.assertRaisesRegex(observation.ActionRejected, 'FOCUS_TARGET_MISMATCH'):
+                observation.bind_action(focused, focused_rows, {**supplied, 'element': 2})
+            with self.assertRaisesRegex(ValueError, 'FOCUS_TARGET_MISMATCH'):
+                observation.require_action(focused, {**selection, 'evidence': {**selection['evidence'], 'focused_element_id':'other-input'}})
+        with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
+            observation.bind_action(focused, focused_rows, {'action':'hotkey','keys':['backspace'] * 4})
         for keys in (['a'], ['alt', 'a'], ['ctrl', 'shift', 'a'], ['ctrl+w'], ['ctrl+shift+a']):
             with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
                 observation.bind_action(focused, focused_rows, {'action': 'hotkey', 'keys': keys})

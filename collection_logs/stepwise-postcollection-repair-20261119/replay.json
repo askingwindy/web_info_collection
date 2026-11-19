@@ -1,0 +1,187 @@
+{
+  "claimed": 33,
+  "attempts": 32,
+  "invalid_responses": 38,
+  "schema_errors_by_phase_fields": {
+    "decision/page_name": 30,
+    "decision/keys": 2,
+    "writeback/final_result": 2,
+    "writeback/final_result,completion_judgement": 2,
+    "judgement/redundant_steps": 1,
+    "judgement/judgement_supported": 1
+  },
+  "title_responses_replayed": 30,
+  "title_affected_attempts": 6,
+  "title_receipts": [
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "85a206f3b0d04c78aeeb90280fba71d8",
+      "frame": "observation-002.numbered"
+    },
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "f215c41ccef74b01822e31f5607f21ba",
+      "frame": "observation-003.numbered"
+    },
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "584f8a6454d64a6aad3d17a054f0d51a",
+      "frame": "observation-003.numbered"
+    },
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "2ee61be573ea4909bc5e0675b2887218",
+      "frame": "observation-003.numbered"
+    },
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "60a937f478f34b05b108bc89fa045efd",
+      "frame": "observation-004.numbered"
+    },
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "76f3b592efe840f29672ee809861679f",
+      "frame": "observation-004.numbered"
+    },
+    {
+      "attempt_id": "04f5bf66-2a81-41b1-92a8-e84898535236",
+      "request_id": "23b13836a8674cb19a178df432f79892",
+      "frame": "observation-004.numbered"
+    },
+    {
+      "attempt_id": "c3b1b995-d725-4629-b533-54b6a05f2b0b",
+      "request_id": "44ae0dd1b37747fa987391593d163a44",
+      "frame": "observation-014.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "7578c5c5746047b18dc446f9f52350a5",
+      "frame": "observation-001.numbered"
+    },
+    {
+      "attempt_id": "f0112172-e502-4763-b7a1-70dfb59afb6b",
+      "request_id": "e916320367f049adb4f8f696d0523e31",
+      "frame": "observation-002.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "408a97652d1d4795b5267f5317952d18",
+      "frame": "observation-004.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "509d95f8f9f448c2a26f6c9e3a53d820",
+      "frame": "observation-006.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "50d62e717efb4f39bded2081df72a073",
+      "frame": "observation-006.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "78cff488371c43138e573a8fdf187553",
+      "frame": "observation-007.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "b432d0c4dfe04842af7a291a4b578743",
+      "frame": "observation-007.numbered"
+    },
+    {
+      "attempt_id": "d7db01ff-c96f-4ee3-aaa8-84a1fd0f63e1",
+      "request_id": "6ecd3ec34374470e8b170e3cf1360258",
+      "frame": "observation-001.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "30f4b023423e4998b4084e70928735ca",
+      "frame": "observation-007.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "d0771d7652364777920e1b943f469436",
+      "frame": "observation-007.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "3c465af2223f4c788158ea782948605a",
+      "frame": "observation-007.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "e8d999882d874772ae0358dc1f70c526",
+      "frame": "observation-008.numbered"
+    },
+    {
+      "attempt_id": "d7db01ff-c96f-4ee3-aaa8-84a1fd0f63e1",
+      "request_id": "df22426dd0b34ef5b7dd9ebe9418eb7e",
+      "frame": "observation-008.numbered"
+    },
+    {
+      "attempt_id": "8f47d291-bf94-4646-ac91-6f51f448cc80",
+      "request_id": "4b1002f00f3f48ff8d5eab5f797c7d34",
+      "frame": "observation-005.numbered"
+    },
+    {
+      "attempt_id": "d7db01ff-c96f-4ee3-aaa8-84a1fd0f63e1",
+      "request_id": "41c7e36f14784f388b8f6c043a0c8c20",
+      "frame": "observation-010.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "3fd87322253840d2b77ddc4f5252d14d",
+      "frame": "observation-011.numbered"
+    },
+    {
+      "attempt_id": "d7db01ff-c96f-4ee3-aaa8-84a1fd0f63e1",
+      "request_id": "83a593d05bce4d1b873130043a8bb946",
+      "frame": "observation-011.numbered"
+    },
+    {
+      "attempt_id": "8f47d291-bf94-4646-ac91-6f51f448cc80",
+      "request_id": "8d8c83a3915a4ef18e82040ee075d962",
+      "frame": "observation-007.numbered"
+    },
+    {
+      "attempt_id": "8f47d291-bf94-4646-ac91-6f51f448cc80",
+      "request_id": "b0dabec227d946ad91a75b19d518881c",
+      "frame": "observation-009.numbered"
+    },
+    {
+      "attempt_id": "d7db01ff-c96f-4ee3-aaa8-84a1fd0f63e1",
+      "request_id": "877d175bfa124ddcb89b45c6ecaf3fb7",
+      "frame": "observation-012.numbered"
+    },
+    {
+      "attempt_id": "d7db01ff-c96f-4ee3-aaa8-84a1fd0f63e1",
+      "request_id": "d585693bba0b45e09bd0c47317de9fe2",
+      "frame": "observation-012.numbered"
+    },
+    {
+      "attempt_id": "5da44094-dec4-4971-85fb-e588c745862d",
+      "request_id": "b711b70166eb4e95a69650cb1239704a",
+      "frame": "observation-011.numbered"
+    }
+  ],
+  "historic_rejected_decisions_changing_goal_or_note": {
+    "TYPE_REQUIRES_FOCUSED_INPUT": 1,
+    "TYPE_TEXT_REQUIRED": 1,
+    "HOTKEY_KEYS_NOT_ALLOWED": 4,
+    "SELECT_OPTION_REQUIRED": 1,
+    "READ_VIEW_ALREADY_VISITED": 1,
+    "ELEMENT_NOT_IN_FRAME": 1
+  },
+  "historical_hotkey_rejections_replayed": {
+    "fully_valid": 28,
+    "still_rejected": 7,
+    "matching_focus_number": 12
+  },
+  "citation_rejections_by_latest_frame_check": {
+    "still_unsupported": 147,
+    "now_grounded": 24
+  },
+  "citation_affected_pages": 19,
+  "new_production_claims": 0,
+  "new_model_requests": 0
+}

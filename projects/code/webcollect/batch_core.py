@@ -37,6 +37,11 @@ class UserStopped(BudgetStop):
     failure_class = 'interrupted'
 
 
+class JobLeaseLost(ValueError):
+    failure_class = 'interrupted'
+    code = 'job_lease_lost'
+
+
 class SessionGLMCallLimit(BudgetStop):
     code = 'glm_session_call_limit'
     # 会话实际模型HTTP请求上限（含修复与补证），对消费者会话同样生效。
@@ -538,17 +543,19 @@ class BatchLedger:
     def _owned(self, con, job):
         row = con.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone()
         if not row or row['owner'] != job['owner'] or row['state'] != 'running' or row['lease'] < time.time():
-            raise ValueError('Lost/expired job lease')
+            raise JobLeaseLost('Lost/expired job lease')
         if con.execute("SELECT 1 FROM sqlite_master WHERE name='job_parents'").fetchone():
             parent=con.execute('SELECT j.state,j.owner,j.lease,p.parent_owner FROM job_parents p JOIN jobs j ON j.id=p.parent_id WHERE p.job_id=?',(job['id'],)).fetchone()
             if parent and (parent[0]!='running' or parent[1]!=parent[3] or parent[2]<time.time()):
-                raise ValueError('Lost/expired parent collection lease')
+                raise JobLeaseLost('Lost/expired parent collection lease')
         return row
 
-    def heartbeat(self, job, *, request_timeout=None):
+    def heartbeat(self, job, *, request_timeout=None, only_if_due=False):
         with self.connect() as read:
             prior = self._owned(read,job)
             remaining=max(0,prior['lease']-time.time())
+            if only_if_due and request_timeout is None and remaining > self.config['budget']['lease_seconds'] * 2 / 3:
+                return
         with self.transaction(timeout=min(90,remaining)) as con:
             row = self._owned(con, job)
             lease_seconds = self.config['budget']['lease_seconds']

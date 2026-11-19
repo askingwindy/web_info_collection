@@ -536,7 +536,10 @@ def schema_errors_feedback(errors):
         action = (schema.get('properties', {}).get('action') or {}).get('const')
         if action and isinstance(instance, dict) and instance.get('action') != action:
             return
-        detail = e.message[:350]
+        if e.validator in ('maxLength', 'minLength', 'maxItems', 'minItems'):
+            detail = f'{e.validator}={e.validator_value}, received {len(instance)}'
+        else:
+            detail = e.message[:350]
         if e.validator == 'not' and isinstance(e.validator_value, dict):
             forbidden = [branch['required'][0] for branch in e.validator_value.get('anyOf', [])
                          if isinstance(branch, dict) and len(branch.get('required') or []) == 1]
@@ -1486,6 +1489,7 @@ class ModelGateway:
                 valid_usage = usage is not None and all(type(usage.get(k)) is int and usage[k]>=0
                     for k in ('input_tokens', 'output_tokens', 'cached_input_tokens')) and usage['cached_input_tokens']<=usage['input_tokens']
                 finish_incomplete = error if isinstance(error, ProviderFinishIncomplete) else None
+                field_errors = [] if finish_incomplete else schema_errors_feedback(native_validation_errors or [error])
                 self._settle_failure(job,rid, state='invalid_response' if valid_usage else 'unknown',
                                            usage=usage if valid_usage else None,
                                            response={'result': parsed, 'provider_response': raw, **transport_receipt,
@@ -1496,7 +1500,7 @@ class ModelGateway:
                                                    'source': (finish_incomplete.kind if finish_incomplete
                                                               else 'no_provider_response' if raw is None else 'response_validation'),
                                                    'error_type': type(error).__name__,
-                                                   'schema_errors': [] if finish_incomplete else schema_errors_feedback(native_validation_errors or [error]),
+                                                   'schema_errors': field_errors,
                                                    **({'provider_detail': finish_incomplete.detail[:200]}
                                                       if finish_incomplete else {}),
                                                    **({'local_cause': str(error)[:350]}
@@ -1512,7 +1516,9 @@ class ModelGateway:
                 if field_repair:
                     raise ValueError('bounded_field_repair_failed: patch retained; no further correction dispatch') from None
                 if invalid_attempts >= 2:
-                    raise ValueError('bounded_plan_correction_failed: raw replies retained; no further correction dispatch') from None
+                    fields = ', '.join('.'.join(map(str, item['field_path'])) for item in field_errors if item['field_path'])
+                    raise ValueError(f'bounded_plan_correction_failed: {purpose}, request {rid}, '
+                                     f'{fields or type(error).__name__}; raw replies retained') from None
                 failure_key = protocol_failure_key(error)
                 if consumer and failure_key in protocol_failures:
                     with self.ledger.transaction() as con:

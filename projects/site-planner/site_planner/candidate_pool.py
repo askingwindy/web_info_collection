@@ -164,6 +164,11 @@ def validate_candidate_v2(value):
         normalize(goal['parameters'])
 
 
+class CandidateLeaseLost(ValueError):
+    failure_class = 'interrupted'
+    code = 'candidate_lease_lost'
+
+
 class CandidatePool:
     def __init__(self, path, *, install=False, readonly=False):
         self.pool = SitePool(path, readonly=readonly)
@@ -773,15 +778,20 @@ class CandidatePool:
         row = con.execute('SELECT claim_id,candidate_id,token,worker_id,state,expires,snapshot,version,binding,stage '
                           'FROM candidate_claims WHERE claim_id=?', (claim['claim_id'],)).fetchone()
         if not row or row['token'] != claim['token'] or row['worker_id'] != claim['worker_id'] or row['state'] != 'consuming' or row['expires'] <= time.time():
-            raise ValueError('Expired or invalid candidate credential; reconcile original')
+            raise CandidateLeaseLost('Expired or invalid candidate credential; reconcile original')
         if json.loads(row['snapshot']) != claim['snapshot'] or row['version'] != claim['version']:
             raise ValueError('Claim target changed')
         return row
 
-    def heartbeat(self, claim, seconds=300, *, deadline=None, stopped=None):
+    def heartbeat(self, claim, seconds=300, *, deadline=None, stopped=None, only_if_due=False):
         if not 1 <= seconds <= 86400: raise ValueError('Bounded lease required')
         with self.pool.connect() as con:
-            current=con.execute('SELECT expires FROM candidate_claims WHERE claim_id=?',(claim['claim_id'],)).fetchone()
+            if only_if_due:
+                current = self._fence(con, claim)
+                if current['expires'] - time.time() > seconds * 2 / 3:
+                    return
+            else:
+                current=con.execute('SELECT expires FROM candidate_claims WHERE claim_id=?',(claim['claim_id'],)).fetchone()
         if current is None:raise ValueError('Unknown claim')
         limit=min(deadline or float('inf'),time.monotonic()+max(0,current['expires']-time.time()))
         with self.transaction(timeout=min(90,max(0,limit-time.monotonic()))) as con:

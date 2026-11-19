@@ -41,7 +41,7 @@ class StepwiseSessionCore(unittest.IsolatedAsyncioTestCase):
             args = decision(action=action)
             del args['status']
             return {'arguments': {**args, **fields}}
-        bad = answer('type', text='50')
+        bad = answer('type', text='50', task_goal='无效提议', note='无效笔记', last_step_result='驳回轮的结果')
         call = AsyncMock(side_effect=[bad, bad, answer('wait'), bad, bad, answer('complete', status='success')])
         call.requests_used = lambda: 0
         with tempfile.TemporaryDirectory() as folder:
@@ -59,6 +59,26 @@ class StepwiseSessionCore(unittest.IsolatedAsyncioTestCase):
             rejects = [json.loads(p.read_text()) for p in sorted(session.root.glob('decision-rejection-*.json'))]
             self.assertEqual([r['consecutive'] for r in rejects], [1, 2, 1, 2])
             self.assertTrue(all(r['reason'].startswith('TYPE_ELEMENT_REQUIRED') for r in rejects))
+            decisions = [json.loads(p.read_text()) for p in sorted(session.root.glob('decision-[0-9]*.json'))]
+            self.assertEqual([r['accepted'] for r in decisions], [False, False, True, False, False, True])
+            self.assertTrue(all(r['task_goal_before'] == r['task_goal_after'] and r['note_before'] == r['note_after']
+                                for r in decisions if not r['accepted']))
+            self.assertEqual(decisions[0]['arguments']['task_goal'], '无效提议')
+            self.assertEqual(decisions[-1]['frame_page_name'], '网页「计算器」')
+            self.assertEqual(session.initial_goal, '查看参数并比较结果')
+            self.assertEqual(session.dispatch_rows[-1]['step_result'], '结果已显示')
+            self.assertEqual(session.dispatch_rows[-1]['result_round'], 6)
+            self.assertIn('实际观察：结果已显示', session.history[-1])
+            varying = AsyncMock(side_effect=[answer('wait', precondition='显示「虚构%s」' % word)
+                                             for word in ('甲','乙','丙')])
+            varying.requests_used = lambda: 0
+            blocked = StepwiseSession(session.task, Path(folder)/'citations', varying, object(), attempt_id='b')
+            blocked.current = blocked.journal.add_frame(data)
+            with self.assertRaises(StepwiseStop) as stopped:
+                await blocked._loop()
+            self.assertEqual((stopped.exception.stop_reason, blocked.dispatches), ('repeat_reject', 0))
+            self.assertEqual([json.loads(p.read_text())['consecutive']
+                              for p in sorted(blocked.root.glob('decision-rejection-*.json'))], [1,2,3])
 
     async def test_bounded_autonomous_completion_and_specified_goal(self):
         with tempfile.TemporaryDirectory() as tmp, patch(

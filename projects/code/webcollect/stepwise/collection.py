@@ -136,14 +136,14 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
                              strategy_save_status='not_saved', strategy_eligibility=None):
         if strategy_eligibility is None:
             strategy_eligibility = 'unresolved' if summary.get('unknown') else 'ineligible'
+        from ..failure_policy import disposition
+        handling = disposition(failure_class=failure_class, reason=root_cause)
         failure = evidence / 'failure.json'
         if not failure.exists():
             write_json(failure, {'error': root_cause, 'timestamp': _now(),
                 'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'],
-                'failure_class': failure_class, 'raw_saved': True,
+                'failure_class': failure_class, 'failure_disposition': handling, 'raw_saved': raw_receipt is not None,
                 'stop_reason': summary.get('stop_reason'), 'stop_summary': summary.get('stop_summary')})
-        from ..failure_policy import disposition
-        handling = disposition(failure_class=failure_class, reason=root_cause)
         feedback_ref = await asyncio.to_thread(save_attempt_feedback, evidence, attempt,
                                                'rejected', root_cause)
         await asyncio.to_thread(store.finish_attempt, attempt['attempt_id'],
@@ -168,7 +168,7 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
                 'failure_disposition': handling, 'stop_reason': summary.get('stop_reason'),
                 'raw_receipt': raw_receipt, 'strategy_result': final_result}
 
-    if summary.get('unknown') or summary.get('failure_class') == 'interrupted':
+    if summary.get('unknown'):
         return await settle_failure('interrupted',
             'stepwise_unknown:' + str(summary.get('stop_summary') or summary.get('stop_reason')))
     if summary.get('stop_reason') != 'complete_success':

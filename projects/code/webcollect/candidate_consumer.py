@@ -11,7 +11,7 @@ from webcollect import workspace_json as json
 from pathlib import Path
 import sqlite3
 import time
-from site_planner.candidate_pool import CandidatePool, VERSION2 as CANDIDATE_VERSION2
+from site_planner.candidate_pool import CandidateLeaseLost, CandidatePool, VERSION2 as CANDIDATE_VERSION2
 from .batch_core import BatchLedger, BudgetStop, load_json, file_sha, OutcomeUnknown, save_json
 from .planning import canonical, verify_evidence
 from .agent_controller import exclusive
@@ -104,12 +104,12 @@ def _original_attempts(claim):
     with closing(workspace_connect(Path(registry).resolve().as_uri()+'?mode=ro',uri=True)) as con:
         con.row_factory=sqlite3.Row
         if not con.execute("SELECT 1 FROM sqlite_master WHERE name='m4_attempts'").fetchone(): return []
-        rows=[]
-        for r in con.execute('SELECT a.*,t.task_json FROM m4_attempts a JOIN m4_tasks t ON a.task_key=t.task_key'):
-            task=json.loads(r['task_json']); cb=task.get('candidate_binding',{})
-            if cb.get('candidate_id')==claim['candidate_id'] and cb.get('claim_id')==claim['claim_id']:
-                rows.append((dict(r),task))
-        return rows
+        selected = con.execute("""
+            SELECT a.*, t.task_json FROM m4_tasks t JOIN m4_attempts a ON a.task_key=t.task_key
+            WHERE json_extract(t.task_json,'$.candidate_binding.claim_id')=?
+              AND json_extract(t.task_json,'$.candidate_binding.candidate_id')=?""",
+            (claim['claim_id'], claim['candidate_id']))
+        return [(dict(row), json.loads(row['task_json'])) for row in selected]
 
 
 def settle_unstarted_research(pool, claim_id, *, process_exit):
@@ -208,12 +208,18 @@ def unverified_original_actions(attempt):
 
 def verified_saved(claim):
     """Only RuntimeStore committed pending attempts with a complete receipt qualify."""
+    return verify_saved_attempts(claim, _original_attempts(claim))
+
+
+def verify_saved_attempts(claim, attempts):
     found=[]
-    for row,task in _original_attempts(claim):
+    for row,task in attempts:
         if row['status']!='collected_pending_review': continue
         from .candidate_contract import validate_task_binding
         cb=validate_task_binding(task)
-        if cb['candidate']!=claim['snapshot'] or cb['version']!=claim['version']: raise ValueError('Runtime target differs from claim')
+        if (cb['claim_id'] != claim['claim_id'] or cb['candidate_id'] != claim['candidate_id']
+                or cb['candidate'] != claim['snapshot'] or cb['version'] != claim['version']):
+            raise ValueError('Runtime target differs from claim')
         refs=json.loads(row['evidence_json']); verify_evidence(refs)
         from .production_identity import verify_saved
         verify_saved(task,row['sample_id'],refs)
@@ -479,6 +485,7 @@ async def _entry_session(ledger, pool, claim, root, *, session_soft_seconds=None
         raise OutcomeUnknown('Original entry observation not claimable')
     browser = context = None
     observed = False
+    anchor = None
     access_rejection = None
     try:
         ledger.consume('probe_pages', jid, 1)
@@ -547,7 +554,8 @@ async def _entry_session(ledger, pool, claim, root, *, session_soft_seconds=None
         if not observed:
             failure = exclusive(root/'first-observation-failure.json', {'job_id':jid, 'stage':'entry_observation',
                 'error_type':type(error).__name__, 'reason':str(error), 'accepted_as_formal_frame':False,
-                'capture':getattr(error,'capture',None)})
+                'capture':getattr(error,'capture',None),
+                **({'first_frame_evidence':anchor} if anchor else {})})
             visits = [v for v in ledger.visits() if v['job_id']==jid]
             # Navigation already records its own failure or UNKNOWN in the ledger.
             # A local capture, identity or file error does not establish a site failure.
@@ -694,7 +702,7 @@ async def consume(pool, claim, ledger, **kwargs):
                     current=con.execute('SELECT state FROM candidate_claims WHERE claim_id=?',(claim['claim_id'],)).fetchone()
                 if not current or current['state'] != 'consuming':
                     return
-                pool.heartbeat(claim)
+                pool.heartbeat(claim, only_if_due=True)
             except Exception as error:
                 loop.call_soon_threadsafe(cancel_for_lease, error)
                 return
@@ -721,7 +729,9 @@ async def consume(pool, claim, ledger, **kwargs):
         # lease callback. Never clear cancellation state or swallow the signal.
         if lease_cancelled and not caller.cancelling():
             receipt('claim_cancelled', reason='candidate_lease_lost')
-            raise ValueError('Candidate lease lost; original claim remains fenced') from lost[0]
+            if isinstance(lost[0], CandidateLeaseLost):
+                raise CandidateLeaseLost('Candidate lease lost; original claim remains fenced') from lost[0]
+            raise lost[0]
         receipt('claim_cancelled', reason='worker_or_external_cancel')
         try:
             settle_cancelled_claim(pool, claim)

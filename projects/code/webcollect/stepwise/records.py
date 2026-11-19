@@ -86,12 +86,15 @@ class Journal:
 
     # ------------------------------------------------------------ decisions
     def add_decision(self, *, round_index, frame_id, request_id, arguments,
-                     goal_before, goal_after, note_before, note_after, model_ref):
+                     goal_before, goal_after, note_before, note_after, model_ref,
+                     accepted=None, frame_page_name=None):
         record = {'schema_version': 'stepwise-decision-1',
                   'round': round_index, 'frame_id': frame_id,
                   'request_id': request_id, 'arguments': arguments,
                   'task_goal_before': goal_before, 'task_goal_after': goal_after,
                   'note_before': note_before, 'note_after': note_after,
+                  **({'accepted': accepted} if accepted is not None else {}),
+                  **({'frame_page_name': frame_page_name} if frame_page_name else {}),
                   'model_response': model_ref, 'decided_at': _now()}
         exclusive(self.root / ('decision-%03d.json' % round_index), record)
         return record

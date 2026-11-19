@@ -1482,7 +1482,7 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     async def renew():
         while True:
             await asyncio.sleep(2)
-            ledger.heartbeat(job)
+            await asyncio.to_thread(ledger.heartbeat, job, only_if_due=True)
     async def work():
         from .telemetry import preparation_phase
         timing = output / "preparation-timings.jsonl"

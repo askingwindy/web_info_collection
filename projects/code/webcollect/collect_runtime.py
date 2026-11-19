@@ -39,6 +39,8 @@ def runtime_scope(output):
 
 def classify_failure(error):
     """Only explicit transport failures are retried; selector timeouts are not."""
+    if getattr(error, 'failure_class', None) == 'interrupted':
+        return 'interrupted'
     from .candidate_navigation import NavigationRejected
     if isinstance(error, NavigationRejected):
         return 'collector'
@@ -349,6 +351,54 @@ async def _with_lease(job, store, attempt, lease_seconds):
             if not task.done():
                 task.cancel()
         await asyncio.gather(running, heartbeat, return_exceptions=True)
+
+
+async def _prepare_owned_attempt(store, output, manifest, attempt, lease_seconds, bind=None):
+    """Close this reservation even if preparation is cancelled between its two ledgers."""
+    from .agent_controller import exclusive
+    from .failure_policy import disposition
+
+    stage = 'sync_manifest'
+    async def prepare():
+        nonlocal stage
+        async def joined(function, *args):
+            work = asyncio.create_task(asyncio.to_thread(function, *args))
+            try:
+                return await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # A thread can finish a transaction after its asyncio caller is cancelled.
+                await asyncio.gather(work, return_exceptions=True)
+                raise
+        snapshot = await joined(sync_manifest, store, output, manifest)
+        stage = 'start_attempt'
+        started = await joined(store.start_attempt, attempt['attempt_id'], attempt['worker_id'], attempt['lease_token'])
+        if bind is not None:
+            stage = 'bind_entry'
+            await joined(bind, started)
+        return snapshot, started
+
+    try:
+        return await _with_lease(prepare(), store, attempt, lease_seconds)
+    except (Exception, asyncio.CancelledError) as error:
+        cancelled = isinstance(error, asyncio.CancelledError)
+        cause = 'runner_cancelled' if cancelled else f'{stage}: {type(error).__name__}: {error}'
+        kind = 'interrupted' if cancelled else classify_failure(error)
+        evidence = Path(output) / 'evidence' / attempt['sample_id']
+        try:
+            ref = exclusive(evidence / 'failure.json', {
+                'attempt_id': attempt['attempt_id'], 'task_id': attempt['task_id'], 'stage': stage,
+                'error': str(error) or type(error).__name__, 'root_cause': cause, 'failure_class': kind,
+                'failure_disposition': disposition(error, failure_class=kind),
+                'before_trajectory': True, 'timestamp': datetime.now(timezone.utc).isoformat()})
+            await asyncio.to_thread(store.finish_attempt, attempt['attempt_id'], attempt['worker_id'],
+                                    attempt['lease_token'], 'preparation_failed', failure_class=kind,
+                                    root_cause=cause, evidence=[ref])
+        except Exception as close_error:
+            error.add_note('Preparation closeout: ' + str(close_error))
+            exclusive(evidence / 'preparation-closeout-error.json', {
+                'attempt_id': attempt['attempt_id'], 'stage': stage, 'primary_error': cause,
+                'closeout_error': str(close_error), 'ledger_settled': False})
+        raise
 
 
 def refresh_metadata(output):
@@ -1105,21 +1155,14 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         await asyncio.sleep(1)
                         continue
                     break
-                async def prepare_attempt():
-                    # A reservation already owns a lease. Keep renewing while
-                    # history/manifest preparation runs outside the event loop.
-                    prepared_snapshot = await asyncio.to_thread(sync_manifest, store, output, manifest)
-                    started = await asyncio.to_thread(store.start_attempt, attempt['attempt_id'],
-                                                     worker_id, attempt['lease_token'])
-                    return prepared_snapshot, started
-                snapshot, attempt = await _with_lease(prepare_attempt(), store, attempt,
-                                                      snapshot['policy']['lease_seconds'])
-                if entry_session is not None:
-                    entry_session['bind_attempt'](attempt)
+                snapshot, attempt = await _prepare_owned_attempt(
+                    store, output, manifest, attempt, snapshot['policy']['lease_seconds'],
+                    entry_session['bind_attempt'] if entry_session is not None else None)
                 sample = output / 'samples' / attempt['sample_id']
                 evidence = output / 'evidence' / attempt['sample_id']
                 context = None
                 meter = None
+                task = {**attempt['task'], '_plan_schema_version': plan['schema_version'], 'require_public_origin': True}
                 meter_identity = {key: attempt[key] for key in ('attempt_id', 'task_id', 'task_version', 'sample_id')}
                 async def execute_and_finish():
                     nonlocal context, meter
@@ -1129,8 +1172,6 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                                 device_scale_factor=1, locale='zh-CN', timezone_id='Asia/Shanghai'))
                         meter = NetworkMeter(context, output / 'metering' / attempt['attempt_id'], meter_identity)
                         ids = {key: attempt[key] for key in ('sample_id', 'site_id', 'batch_id')}
-                        task = {**attempt['task'], '_plan_schema_version': plan['schema_version'],
-                                'require_public_origin': True}
                         from .session_core import is_react_task
                         if is_react_task(task):
                             if controller_ledger is None:
@@ -1217,7 +1258,8 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             if not failure.exists():
                                 write_json(failure, {'error': 'runner cancelled; partial trajectory is not success',
                                     'timestamp': now(), 'attempt_id': attempt['attempt_id'],
-                                    'task_id': attempt['task_id'], 'failure_class': 'interrupted'})
+                                    'task_id': attempt['task_id'], 'failure_class': 'interrupted',
+                                    'root_cause': 'runner_cancelled'})
                             # Settle the ledger first: a cleanup failure must not
                             # mask the primary outcome or strand a running row.
                             try:

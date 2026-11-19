@@ -651,6 +651,13 @@ class RuntimeStore:
         next_at = current + policy['task_interval_seconds']
         con.execute('INSERT INTO m4_domains VALUES(?,?) ON CONFLICT(domain_key) DO UPDATE SET next_start_at=MAX(next_start_at,excluded.next_start_at)', (row['domain_key'], next_at))
 
+    @staticmethod
+    def _release_unstarted(con, row, current):
+        status = 'needs_replan' if continuous_task(json.loads(row['task_json'])) else 'queued'
+        con.execute('UPDATE m4_tasks SET status=?,quota_reserved=?,next_eligible_at=? WHERE task_key=?',
+                    (status, int(status == 'queued'), current, row['task_key']))
+        return {'next_status': status, 'real_attempt': False}
+
     def _derived_recovery(self, con, row, recovery, evidence):
         """Validate an offline successor derivation, never resume an execution."""
         from .batch_core import load_json, file_sha
@@ -821,12 +828,14 @@ class RuntimeStore:
                 'browser_calls':0, 'model_calls':0, 'new_attempts':0}
 
     def finish_attempt(self, attempt_id, worker_id, lease_token, outcome, *, failure_class=None, root_cause=None, evidence=None, exact_images=None, now=None, derivation_recovery=None):
-        if outcome not in ('collected_pending_review', 'rejected'):
+        if outcome not in ('collected_pending_review', 'rejected', 'preparation_failed'):
             raise ValueError('生产只能保存待审或拒绝，不授予QC/客户PASS')
         evidence = evidence or []
         if evidence:
             verify_evidence(evidence)
-        if outcome == 'rejected' and (failure_class not in FAILURES or not isinstance(root_cause, str) or not root_cause.strip()):
+        if outcome == 'preparation_failed' and not evidence:
+            raise ValueError('Preparation closeout requires the original failure receipt')
+        if outcome != 'collected_pending_review' and (failure_class not in FAILURES or not isinstance(root_cause, str) or not root_cause.strip()):
             raise ValueError('失败必须有分类与实际根因')
         if outcome == 'collected_pending_review' and (failure_class or root_cause or not evidence):
             raise ValueError('保存成功需要证据且不能带失败原因')
@@ -863,6 +872,8 @@ class RuntimeStore:
         with self._transaction() as con:
             current = timestamp(now)
             row = self._owned(con, attempt_id, worker_id, lease_token, current, terminal_ok=True)
+            if outcome == 'preparation_failed':
+                outcome = 'abandoned' if row['started_at'] is None else 'rejected'
             recovery_proof = None
             if derivation_recovery is not None:
                 if outcome != 'collected_pending_review' or exact_images is None:
@@ -874,7 +885,7 @@ class RuntimeStore:
                 if (row['status'], row['failure_class'], row['root_cause'], row['evidence_json']) != (outcome, failure_class, root_cause, canonical(evidence)):
                     raise ValueError('已终结attempt不可覆盖为另一结果')
                 return self._view(row)
-            if row['started_at'] is None:
+            if row['started_at'] is None and outcome != 'abandoned':
                 raise ValueError('未开始的预留不能记为真实执行结果')
             if outcome == 'collected_pending_review':
                 saved, annotation, receipt = completion_facts
@@ -933,7 +944,9 @@ class RuntimeStore:
                         (outcome, current, failure_class, root_cause, canonical(evidence), attempt_id))
             saved = self._attempt(con, attempt_id)
             transition = {}
-            if outcome == 'rejected':
+            if outcome == 'abandoned':
+                transition = self._release_unstarted(con, row, current)
+            elif outcome == 'rejected':
                 transition = self._failure_transition(con, saved, current, policy)
             else:
                 con.execute('UPDATE m4_tasks SET status=? WHERE task_key=?', (outcome, row['task_key']))
@@ -1217,10 +1230,7 @@ class RuntimeStore:
                 if row['started_at'] is not None:
                     transition = self._failure_transition(con, saved, current, policy)
                 else:
-                    next_status = 'needs_replan' if continuous_task(json.loads(row['task_json'])) else 'queued'
-                    con.execute('UPDATE m4_tasks SET status=?,quota_reserved=?,next_eligible_at=? WHERE task_key=?',
-                                (next_status, int(next_status == 'queued'), current, row['task_key']))
-                    transition = {'next_status': next_status, 'real_attempt': False}
+                    transition = self._release_unstarted(con, row, current)
                 self._domain_finished(con, row, current, policy)
                 self._event(con, 'lease_recovered', current, {'reason': reason, 'status': status, **transition}, row['task_key'], attempt_id)
                 recovered.append(self._view(saved))

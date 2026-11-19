@@ -1,0 +1,211 @@
+{
+  "cohort": {
+    "pages": 150,
+    "formal_attempts_recorded": 142,
+    "by_site": {
+      "Wiki": {
+        "selected": 50,
+        "claimed": 50,
+        "first_frame": 45,
+        "decision_http": 42,
+        "effective_ge1": 42,
+        "effective_ge5": 30,
+        "complete_accepted": 11,
+        "writeback_http": 9,
+        "writeback_validated": 7,
+        "judgement_http": 7,
+        "judgement_passed": 3,
+        "formally_saved": 3
+      },
+      "Muxtly": {
+        "selected": 50,
+        "claimed": 50,
+        "first_frame": 49,
+        "decision_http": 45,
+        "effective_ge1": 41,
+        "effective_ge5": 25,
+        "complete_accepted": 10,
+        "writeback_http": 8,
+        "writeback_validated": 5,
+        "judgement_http": 5,
+        "judgement_passed": 5,
+        "formally_saved": 5
+      },
+      "故宫": {
+        "selected": 50,
+        "claimed": 50,
+        "first_frame": 49,
+        "decision_http": 45,
+        "effective_ge1": 42,
+        "effective_ge5": 24,
+        "complete_accepted": 9,
+        "writeback_http": 5,
+        "writeback_validated": 3,
+        "judgement_http": 3,
+        "judgement_passed": 0,
+        "formally_saved": 0
+      }
+    },
+    "page_funnel": {
+      "selected": 150,
+      "claimed": 150,
+      "first_frame": 143,
+      "decision_http": 132,
+      "effective_ge1": 125,
+      "effective_ge5": 79,
+      "complete_accepted": 30,
+      "writeback_http": 22,
+      "writeback_validated": 15,
+      "judgement_http": 15,
+      "judgement_passed": 8,
+      "formally_saved": 8
+    },
+    "cumulative_integrity": "FAILED",
+    "pending_review": 8,
+    "qc": "NOT_RUN",
+    "human_review": "NOT_RUN"
+  },
+  "selected_core_tests": {
+    "first": "13 passed in 0.52s",
+    "after_focus_and_lease_changes": "6 passed in 0.27s",
+    "varying_citation_on_same_frame": "1 passed in 0.08s",
+    "new_maintained_test_methods": 0
+  },
+  "local_chrome_cli": {
+    "passing_checks": 146,
+    "checks": 146,
+    "elapsed_seconds": 65.68,
+    "saved": 6,
+    "exports_read_back": 6,
+    "cases": [
+      "tabs",
+      "expand",
+      "popup",
+      "slowlink",
+      "extend",
+      "overwrite"
+    ],
+    "synthetic_model_transport_calls": 50,
+    "sources_unchanged_within_run": true,
+    "verified_overwrite": {
+      "raw_title_chars": 35,
+      "delivery_name_chars": 30,
+      "raw_keys": [
+        "Ctrl+A"
+      ],
+      "supplied_focus_number": 1,
+      "executed_keys": [
+        "meta",
+        "a"
+      ],
+      "selected_range": [
+        0,
+        3
+      ],
+      "value_before": "100",
+      "value_after": "50",
+      "final_visible_result": "计算结果：50"
+    }
+  },
+  "preparation_and_navigation": {
+    "cancel_before_start": {
+      "fault": "CancelledError",
+      "status": "abandoned",
+      "started": false,
+      "task_status": "needs_replan",
+      "ledger_failure_class": "interrupted",
+      "receipt_stage": "sync_manifest"
+    },
+    "cancel_during_start": {
+      "fault": "CancelledError",
+      "status": "rejected",
+      "started": true,
+      "task_status": "needs_replan",
+      "ledger_failure_class": "interrupted",
+      "receipt_stage": "start_attempt"
+    },
+    "cancel_during_bind": {
+      "fault": "CancelledError",
+      "status": "rejected",
+      "started": true,
+      "task_status": "needs_replan",
+      "ledger_failure_class": "interrupted",
+      "receipt_stage": "bind_entry"
+    },
+    "busy_bind": {
+      "fault": "OperationalError",
+      "status": "rejected",
+      "started": true,
+      "task_status": "needs_replan",
+      "ledger_failure_class": "transient",
+      "receipt_stage": "bind_entry"
+    },
+    "lost_fence": {
+      "fault": "ValueError",
+      "status": "reserved",
+      "started": false,
+      "task_status": "reserved",
+      "ledger_failure_class": null,
+      "receipt_stage": "start_attempt"
+    },
+    "navigation": {
+      "same_endpoint_accepted": true,
+      "unproven_live_landing": "business",
+      "tampered_saved_chain": "rejected"
+    }
+  },
+  "lease_stress": {
+    "concurrent_processes": 20,
+    "exit_zero": 20,
+    "polls_per_lease_per_phase": 3,
+    "db_order": [
+      "candidate_pool",
+      "model_jobs"
+    ],
+    "candidate_journal": "wal",
+    "model_journal": "delete",
+    "writes": {
+      "force_every_poll": [
+        60,
+        60
+      ],
+      "healthy_periodic": [
+        0,
+        0
+      ],
+      "due_periodic": [
+        20,
+        20
+      ]
+    },
+    "revoked_claim_owner_and_revoked_job_owner_rejected": true,
+    "revoked_parent_job_rejected": true,
+    "model_requests": 0,
+    "elapsed_seconds": 1.173
+  },
+  "read_only_production_report": {
+    "before_seconds": 203.184,
+    "after_seconds": 28.016,
+    "all_fields_equal": true,
+    "archive_funnel_and_consumer_usage_equal": true,
+    "verified_saved_receipts": 8,
+    "old_unsettled": {
+      "reserved": 3,
+      "running": 2
+    }
+  },
+  "current_repair_usage": {
+    "external_model_requests": 0,
+    "external_site_visits": 0,
+    "new_production_claims": 0,
+    "new_production_samples": 0,
+    "protected_requests_resent": 0,
+    "qc": "NOT_RUN",
+    "human_review": "NOT_RUN",
+    "published": false,
+    "acceptance": "UNKNOWN"
+  },
+  "verification_notes": [
+    "First isolated heartbeat fixture declared min_domain_interval_seconds=0 and exited during initialization. It passed with the required fixture value 1."
+  ]
+}

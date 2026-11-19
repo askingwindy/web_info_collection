@@ -93,7 +93,18 @@ async def capture_http_chain(response, initial_url, landed_url, *, source_url=No
             'status': reply.status, 'location': headers.get('location')})
     proof = {'kind':'http_navigation','initial_url':initial_url,'landed_url':landed_url,
         'source_url':source_url,'operation_id':operation_id,'requests':rows}
-    validate_http_chain(proof, initial_url, landed_url, source_url=source_url, operation_id=operation_id)
+    try:
+        validate_http_chain(proof, initial_url, landed_url, source_url=source_url, operation_id=operation_id)
+    except ValueError as error:
+        if str(error) != 'HTTP_NAVIGATION_ENDPOINT_UNPROVEN':
+            raise
+        from .candidate_navigation import NavigationRejected
+        rejected = NavigationRejected(str(error), source=initial_url, destination=landed_url,
+                                      phase='live_http_chain')
+        rejected.capture = {'requested': initial_url, 'observed_landing': landed_url,
+                            'first_document_request': rows[0]['url'], 'last_document_response': rows[-1]['url'],
+                            'document_response_count': len(rows)}
+        raise rejected from error
     return proof
 
 

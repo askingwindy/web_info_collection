@@ -111,21 +111,24 @@ def judgement_passed(judgement):
 
 
 # ---------------------------------------------------------------- 事实引文核对
-_QUOTED = re.compile(r'「([^」]{1,200})」')
+_QUOTED = re.compile(r'「([^」]+)」')
 _COMPACT = re.compile(r'\s+')
 
 
-def _corpus(text_source):
-    parts = []
+def _corpus(text_source, *, include_title=True):
+    """Keep separately observed labels and text runs apart during literal matching."""
     if isinstance(text_source, dict):
-        parts.append(text_source.get('title') or '')
-        parts.append(text_source.get('visible_text') or '')
+        parts = [text_source.get('visible_text')]
+        if include_title:
+            parts.insert(0, text_source.get('title'))
+        parts.extend(block.get('visible_text') for block in text_source.get('text_blocks') or [])
         for element in text_source.get('elements') or []:
-            parts.append(element.get('text') or '')
-            parts.append(element.get('visible_text') or '')
+            if element.get('visible') is True:
+                parts.append(element.get('visible_text', element.get('text')))
     else:
-        parts.append(str(text_source or ''))
-    return _COMPACT.sub('', ' '.join(parts))
+        parts = [str(text_source or '')]
+    return '\0'.join(_COMPACT.sub('', line) for part in parts if part
+                      for line in part.splitlines() if line.strip())
 
 
 def quoted_segments(text):
@@ -136,14 +139,16 @@ _PUNCTUATION = str.maketrans('？！，：（）', '?!,:()')
 
 
 def missing_quotes(fields, state, location):
-    corpus = _corpus(state)
+    visible = _corpus(state, include_title=False)
+    title = _COMPACT.sub('', state.get('title') or '') if isinstance(state, dict) else ''
     selected = prompt.selected_option_labels(state) if isinstance(state, dict) else {}
     option_labels = {_COMPACT.sub('', label) for label in selected.values()}
     problems = []
     for field, text in fields:
+        corpus = title + '\0' + visible if field.split()[-1] == 'page_name' else visible
         for quote in quoted_segments(text):
             compact = _COMPACT.sub('', quote)
-            if compact in corpus or compact in option_labels:
+            if compact and '\0' not in compact and (compact in corpus or compact in option_labels):
                 continue
             problem = f'{field} 引文「{quote[:60]}」不在{location}'
             # Suggest the original spelling. A punctuation variant still fails the check.
@@ -218,7 +223,7 @@ def save_eligibility(annotation, raw_execution):
                      and not any(step.get('exception_evidence') for step in steps))
     # 封存原始记录的有效步数必须与交付 annotation 一致；不一致即不可保存。
     sealed_effective = raw_execution.get('effective_steps')
-    consistent = sealed_effective is None or sealed_effective == effective
+    consistent = type(sealed_effective) is int and sealed_effective == effective
     eligible = bool(completed and consistent
                     and MIN_EFFECTIVE_STEPS <= effective <= MAX_EFFECTIVE_STEPS
                     and MIN_EFFECTIVE_STEPS <= sealed_effective <= MAX_EFFECTIVE_STEPS

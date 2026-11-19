@@ -315,7 +315,11 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                                 item['effective_steps_lower_bound'] = len(partial)
                                 if len(partial) >= 5:
                                     facts['effective_steps_ge5']={'state':'reached','evidence':partial}
-                        if (raw_refs and a['status']=='rejected' and a.get('finished_at') is not None
+                        preparation = (failure.get('before_trajectory') is True and not raw_refs
+                            and Path(ref['path']).parent.name == a['sample_id']
+                            and failure.get('stage') in ('sync_manifest','start_attempt','bind_entry')
+                            and a['status'] == ('abandoned' if a['started_at'] is None else 'rejected'))
+                        if ((preparation or raw_refs and a['status']=='rejected') and a.get('finished_at') is not None
                                 and failure.get('attempt_id')==a['attempt_id'] and failure.get('failure_class')==a.get('failure_class')
                                 and (failure.get('root_cause') or failure.get('error'))==a.get('root_cause')):item['closure_proven']=True
                         faults.append({'claim_id':next(iter(claim_ids),None),'attempt_id':a['attempt_id'],
@@ -360,9 +364,16 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                                'code':abandoned.get('reason') if abandoned else None,'retry_count':0})
             if c['state'] not in ('consuming','reconcile') and c.get('updated') is not None:item['claim_elapsed_seconds']=max(0,c['updated']-c['created'])
             try:
-                from .candidate_consumer import verified_saved
+                from .candidate_consumer import verified_saved, verify_saved_attempts
                 hydrated={**c,'binding':json.loads(c.get('binding') or '{}'),'snapshot':json.loads(c['snapshot'])}
-                saved=verified_saved(hydrated)
+                bound_registry = hydrated['binding'].get('registry')
+                if bound_registry and Path(bound_registry).resolve() == Path(scope['registry']).resolve():
+                    own_tasks = {t['task_key']:task for t,task in task_by_claim[c['claim_id']]
+                                 if task['candidate_binding'].get('candidate_id') == c['candidate_id']}
+                    saved = verify_saved_attempts(hydrated, ((a,own_tasks[a['task_key']]) for a in own_attempts
+                                                             if a['task_key'] in own_tasks))
+                else:
+                    saved=verified_saved(hydrated)
                 if saved:
                     if any(r['claim_id']==c['claim_id'] and r['candidate_id']==key[0] and r.get('effective')==1
                            and r.get('sample_id')==saved['sample_id'] and json.loads(r['record']).get('attempt_id')==saved['attempt_id'] for r in result_rows):
