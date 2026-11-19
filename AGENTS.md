@@ -1,4 +1,4 @@
-2026-11-19 08:46 三站策略3已在原名单上重新采集，同时观测到 20 个消费者。新作业单步决策 1 张原图、回写 2 张、独立判定 1–3 张，真实 GLM 已完成两图回写和三图判定。首段已领 30 页，第二段从 Wiki 41、Muxtly 40、故宫 39 页继续。维护时先读[第二段状态与问题日志](collection_logs/stepwise-three-sites-150-20261118/README.md)，按原 claim 及请求账接手。
+2026-11-19 09:25 三站策略3第二段已停派。新作业按决策 1 张、回写 2 张、独立判定 1–3 张原图执行。真实模型验证两图回写、三图判定均通过。第二段 20 进程实采新增 30 页、29 次正式尝试、0 条保存，5 次双图回写收到响应。合盖休眠 300 秒后三条租约过期，累计 60/150 页已领、57 次尝试，3 笔新 UNKNOWN 隔离。第三段已登记为本机正常唤醒后一次性接续余下 Wiki 28、Muxtly 32、故宫 30 页。先读[本批运行状态](collection_logs/stepwise-three-sites-150-20261118/README.md)与[系统时间及原账核对](collection_logs/stepwise-three-sites-150-20261118/run-02-sleep.json)。
 
 2026-11-18 三站实采已工程停派，不在后台运行：中文 Wiki、Muxtly（mul）、故宫各固定 50 页，总并发峰值 20；分别领取 9/10/11（共 30/150），正式尝试 28、保存 0；41/40/39 页仍未领取。只允许新策略3 `stepwise`，不切策略、不补位、不续跑旧 attempt 或重发 UNKNOWN。正式绑定 `max_images=1` 与回写需2张原图、判定最多3张不兼容；在保持原账且解决并确认新请求的多图能力前不可重启此轮。20 个 worker 全部退出；QC/人审 NOT_RUN、未发布、验收 UNKNOWN。[运行及 Git 日志](collection_logs/stepwise-three-sites-150-20261118/README.md) · [故障与恢复条件](collection_logs/stepwise-three-sites-150-20261118/incident.md)。
 

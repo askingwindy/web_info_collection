@@ -42,6 +42,14 @@ def select(path, sql, args=()):
 
 
 def issue_type(reason):
+    reason = reason or ''
+    if reason.startswith('Candidate lease lost'):
+        return 'CANDIDATE_LEASE_LOST'
+    if reason.startswith('Expired or invalid candidate credential'):
+        return 'CANDIDATE_CREDENTIAL_EXPIRED_OR_INVALID'
+    stepwise = re.match(r'(stepwise_[a-zA-Z_]+)(?:\b|:)', reason)
+    if stepwise:
+        return stepwise.group(1)
     if 'Image limit exceeded' in (reason or ''):
         return 'STEPWISE_IMAGE_CAPACITY'
     if 'Scoped action proof was lost or changed before dispatch' in (reason or ''):
@@ -123,8 +131,10 @@ def snapshot(directory, scope, baseline, sites):
         result['controller']['worker_exit_codes'] = dict(Counter(str(worker['returncode']) for worker in summary['workers']))
     if result['stop_requested'] and (directory / 'stop.request').read_text().startswith('ENGINEERING_STOP:'):
         result['dispatch_stop_origin'] = 'OPERATOR_ENGINEERING_STOP'
-        if report_done and result['unclaimed']:
-            result['collection_outcome'] = 'STOPPED_INCOMPLETE'
+    elif any(event['segment'] == directory.name and event['stop_dispatch'] for event in faults):
+        result['dispatch_stop_origin'] = 'NATIVE_FAILURE_POLICY'
+    if report_done and result['unclaimed'] and (result['stop_requested'] or result.get('dispatch_stop_origin')):
+        result['collection_outcome'] = 'STOPPED_INCOMPLETE'
     return result, faults
 
 

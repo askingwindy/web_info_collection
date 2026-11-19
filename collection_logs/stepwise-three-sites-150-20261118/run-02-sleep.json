@@ -1,0 +1,111 @@
+{
+  "run": "run-02",
+  "plan_id": "20261119084453-4f35f3d9",
+  "observed_at": "2026-11-19T09:31:55+08:00",
+  "outcome": "STOPPED_INCOMPLETE",
+  "dispatch_stop_origin": "NATIVE_FAILURE_POLICY",
+  "power_log": [
+    {
+      "at": "2026-11-19 09:00:52 +0800",
+      "event": "Entering Sleep state due to 'Clamshell Sleep':TCPKeepAlive=active Using AC (Charge:100%) 300 secs"
+    },
+    {
+      "at": "2026-11-19 09:05:52 +0800",
+      "event": "DarkWake from Deep Idle [CDNP] : due to NUB.SPMI0Sw3IRQ nub-spmi.0x02 rtc/Maintenance Using AC (Charge:100%)"
+    },
+    {
+      "at": "2026-11-19 09:06:38 +0800",
+      "event": "Entering Sleep state due to 'Maintenance Sleep':TCPKeepAlive=active Using AC (Charge:100%) 945 secs"
+    },
+    {
+      "at": "2026-11-19 09:22:23 +0800",
+      "event": "DarkWake from Deep Idle [CDNPB] : due to NUB.SPMI0Sw3IRQ nub-spmi.0x02 rtc/Maintenance Using AC (Charge:100%)"
+    }
+  ],
+  "lease_seconds": 300,
+  "lease_loss": [
+    {
+      "claim_id": "fecc5637-6d80-4422-a71b-64d40e3748a8",
+      "state": "consuming",
+      "stage": "save_reconciliation",
+      "expiry": "2026-11-19T09:05:54.470+08:00",
+      "last_update": "2026-11-19T09:00:54.602+08:00",
+      "loss_event": "2026-11-19T09:06:01.928+08:00"
+    },
+    {
+      "claim_id": "447350c7-023f-405a-99af-1c5def8e009e",
+      "state": "consuming",
+      "stage": "execution",
+      "expiry": "2026-11-19T09:05:52.832+08:00",
+      "last_update": "2026-11-19T09:00:52.832+08:00",
+      "loss_event": "2026-11-19T09:06:17.338+08:00"
+    },
+    {
+      "claim_id": "685b13fd-74bc-4574-b3ec-444f058acf11",
+      "state": "consuming",
+      "stage": "execution",
+      "expiry": "2026-11-19T09:05:52.756+08:00",
+      "last_update": "2026-11-19T09:00:52.756+08:00",
+      "loss_event": "2026-11-19T09:06:17.444+08:00"
+    }
+  ],
+  "first_stop_dispatch": {
+    "at": "2026-11-19T09:06:17.449+08:00",
+    "claim_id": "685b13fd-74bc-4574-b3ec-444f058acf11",
+    "feature": "builtins.ValueError:candidate_pool.py:_fence:776"
+  },
+  "new_model_by_phase": [
+    {
+      "phase": "decision",
+      "images": 1,
+      "state": "succeeded",
+      "requests": 225
+    },
+    {
+      "phase": "decision",
+      "images": 1,
+      "state": "unknown",
+      "requests": 3
+    },
+    {
+      "phase": "writeback",
+      "images": 2,
+      "state": "succeeded",
+      "requests": 5
+    }
+  ],
+  "segment_issue_counts": {
+    "HTTP_NAVIGATION_ENDPOINT_UNPROVEN": 1,
+    "SQLITE_BUSY": 9,
+    "stepwise_repeat_reject": 2,
+    "stepwise_no_effect": 1,
+    "stepwise_capture_timeout": 1,
+    "stepwise_citation_check_failed": 2,
+    "stepwise_WRITEBACK_CHECK_FAILED": 2,
+    "CANDIDATE_LEASE_LOST": 3,
+    "CANDIDATE_CREDENTIAL_EXPIRED_OR_INVALID": 2
+  },
+  "preserved_unsettled_ledger_requests": {
+    "consumer_db": 43,
+    "producer_db": 21
+  },
+  "new_requests_on_prior_jobs": {
+    "consumer_db": 0,
+    "producer_db": 0
+  },
+  "remaining_by_site": {
+    "zh.wikipedia.org": 28,
+    "muxtly.com": 32,
+    "dpm.org.cn": 30
+  },
+  "continuation_at_observation": {
+    "state": "WAITING_FOR_FULL_WAKE",
+    "at": "2026-11-19T09:31:22.650190+08:00",
+    "coordinator_pid": 6020,
+    "power": {
+      "capabilities": 9,
+      "wake_type": "Maintenance",
+      "lid_closed": true
+    }
+  }
+}

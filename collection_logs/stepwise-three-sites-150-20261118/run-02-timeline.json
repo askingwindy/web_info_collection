@@ -179,7 +179,21 @@
     }
   },
   {
-    "at": "2026-11-19T09:25:42+08:00",
+    "at": "2026-11-19T09:26:18+08:00",
+    "state": "FINISHED",
+    "claimed": 60,
+    "formal_attempts": 57,
+    "saved_pending_review": 0,
+    "issues": 34,
+    "model_states": {
+      "invalid_response": 40,
+      "succeeded": 456,
+      "failed": 2,
+      "unknown": 3
+    }
+  },
+  {
+    "at": "2026-11-19T09:28:47+08:00",
     "state": "FINISHED",
     "claimed": 60,
     "formal_attempts": 57,

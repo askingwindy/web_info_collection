@@ -51,7 +51,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:0c11f6ed-0b0b-4615-be78-55b7e8be755e",
-    "reason_code": "SCOPED_ACTION_PROOF_CHANGED",
+    "reason_code": "stepwise_error",
     "stop_dispatch": false
   },
   {
@@ -73,7 +73,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:797795e6-eea6-42cb-9c58-788b517d6f42",
-    "reason_code": "STEPWISE_IMAGE_CAPACITY",
+    "reason_code": "stepwise_error",
     "stop_dispatch": false
   },
   {
@@ -84,7 +84,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:3db33a1f-6628-4d63-9049-886a10e7cf9c",
-    "reason_code": "SCOPED_ACTION_PROOF_CHANGED",
+    "reason_code": "stepwise_error",
     "stop_dispatch": false
   },
   {
@@ -106,7 +106,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:364e05f6-7107-4b3b-ab4f-ada0adbfacb0",
-    "reason_code": "STEPWISE_IMAGE_CAPACITY",
+    "reason_code": "stepwise_error",
     "stop_dispatch": false
   },
   {
@@ -117,7 +117,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "unlocated:b327afbc-0030-4d3d-8eb2-8d7f020dce69",
-    "reason_code": "STEPWISE_IMAGE_CAPACITY",
+    "reason_code": "stepwise_error",
     "stop_dispatch": false
   },
   {
@@ -238,7 +238,7 @@
     "disposition": "business",
     "owner": "business",
     "feature": null,
-    "reason_code": "TimeoutError",
+    "reason_code": "stepwise_capture_timeout",
     "stop_dispatch": false
   },
   {
@@ -260,7 +260,7 @@
     "disposition": "business",
     "owner": "business",
     "feature": null,
-    "reason_code": "see_local_original",
+    "reason_code": "stepwise_WRITEBACK_CHECK_FAILED",
     "stop_dispatch": false
   },
   {
@@ -271,7 +271,7 @@
     "disposition": "business",
     "owner": "business",
     "feature": null,
-    "reason_code": "see_local_original",
+    "reason_code": "stepwise_WRITEBACK_CHECK_FAILED",
     "stop_dispatch": false
   },
   {
@@ -326,7 +326,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "builtins.TimeoutError:sqlite_connection.py:begin_immediate:71",
-    "reason_code": "see_local_original",
+    "reason_code": "CANDIDATE_LEASE_LOST",
     "stop_dispatch": false
   },
   {
@@ -337,7 +337,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "builtins.ValueError:candidate_pool.py:_fence:776",
-    "reason_code": "see_local_original",
+    "reason_code": "CANDIDATE_CREDENTIAL_EXPIRED_OR_INVALID",
     "stop_dispatch": false
   },
   {
@@ -348,7 +348,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "builtins.ValueError:candidate_pool.py:_fence:776",
-    "reason_code": "see_local_original",
+    "reason_code": "CANDIDATE_LEASE_LOST",
     "stop_dispatch": false
   },
   {
@@ -359,7 +359,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "builtins.TimeoutError:sqlite_connection.py:begin_immediate:71",
-    "reason_code": "see_local_original",
+    "reason_code": "CANDIDATE_LEASE_LOST",
     "stop_dispatch": false
   },
   {
@@ -370,7 +370,7 @@
     "disposition": "page_program",
     "owner": "program",
     "feature": "builtins.ValueError:candidate_pool.py:_fence:776",
-    "reason_code": "see_local_original",
+    "reason_code": "CANDIDATE_CREDENTIAL_EXPIRED_OR_INVALID",
     "stop_dispatch": true
   }
 ]
