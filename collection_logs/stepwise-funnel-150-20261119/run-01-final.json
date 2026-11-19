@@ -1,0 +1,123 @@
+{
+  "at": "2026-11-19T21:57:39+08:00",
+  "segment": "run-01",
+  "plan_id": "20261119214155-c8a05953",
+  "strategy": "stepwise",
+  "worker_target": 20,
+  "worker_peak_observed": 20,
+  "state": "FINISHED",
+  "unique_claims": 32,
+  "unclaimed": 118,
+  "formal_attempts": 29,
+  "saved_pending_review": 3,
+  "by_site": {
+    "zh.wikipedia.org": {
+      "selected": 50,
+      "claimed": 10,
+      "claim_states": {
+        "failed": 10
+      },
+      "attempt_states": {
+        "rejected": 8
+      },
+      "saved_pending_review": 0
+    },
+    "muxtly.com": {
+      "selected": 50,
+      "claimed": 11,
+      "claim_states": {
+        "failed": 9,
+        "succeeded": 2
+      },
+      "attempt_states": {
+        "collected_pending_review": 2,
+        "rejected": 8
+      },
+      "saved_pending_review": 2
+    },
+    "dpm.org.cn": {
+      "selected": 50,
+      "claimed": 11,
+      "claim_states": {
+        "failed": 10,
+        "succeeded": 1
+      },
+      "attempt_states": {
+        "rejected": 10,
+        "collected_pending_review": 1
+      },
+      "saved_pending_review": 1
+    }
+  },
+  "consumer_model": {
+    "requests": 436,
+    "states": {
+      "succeeded": 432,
+      "failed": 3,
+      "invalid_response": 1
+    },
+    "dispatch": {
+      "dispatched": 436
+    },
+    "input_tokens": null,
+    "output_tokens": null,
+    "known_input_tokens": 1405945,
+    "known_output_tokens": 93986,
+    "unknown_usage_requests": 3,
+    "cost": "UNKNOWN"
+  },
+  "new_consumer_requests_not_yet_attributed": 0,
+  "issues_recorded": 29,
+  "stop_requested": false,
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "dataset_published": false,
+  "customer_acceptance": "UNKNOWN",
+  "controller": {
+    "succeeded": false,
+    "interrupted": false,
+    "unlaunched": 0,
+    "stop_reason": "drain_requested",
+    "report_integrity": "FAILED",
+    "elapsed_seconds": 876.9445163329365,
+    "worker_exit_codes": {
+      "0": 20
+    }
+  },
+  "native_report": {
+    "expected_denominator": 150,
+    "denominator": 150,
+    "integrity": "FAILED",
+    "issues": [
+      "fixed_150_claims_incomplete"
+    ],
+    "saved": 3,
+    "stages": {
+      "claimed": 32,
+      "first_frame": 29,
+      "template_selected": 0,
+      "model_http": 29,
+      "initial_plan_accepted": 0,
+      "effective_steps_ge5": 16,
+      "goal_verified": 3,
+      "formally_saved": 3
+    },
+    "consumer_usage": {
+      "requests": 436,
+      "states": {
+        "succeeded": 432,
+        "invalid_response": 1,
+        "failed": 3
+      },
+      "dispatch": {
+        "dispatched": 436
+      },
+      "input_tokens": null,
+      "output_tokens": null,
+      "known_input_tokens": 1405945,
+      "known_output_tokens": 93986,
+      "unknown_usage_requests": 3,
+      "cost": "UNKNOWN"
+    }
+  }
+}
