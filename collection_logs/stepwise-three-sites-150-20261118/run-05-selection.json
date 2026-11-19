@@ -1,0 +1,18 @@
+{
+  "scope": "Original fixed cohort after the page-boundary drain of segment 4. Only never-claimed candidates are eligible.",
+  "original_cohort": 150,
+  "previously_claimed": 149,
+  "remaining": 1,
+  "by_site": {
+    "zh.wikipedia.org": 1
+  },
+  "pages": [
+    {
+      "order": 16,
+      "candidate_id": "candidate-b55c3ef3-b453-4f6f-b8e5-50118461293b",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    }
+  ]
+}

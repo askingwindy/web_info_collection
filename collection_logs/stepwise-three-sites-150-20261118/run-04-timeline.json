@@ -1,0 +1,251 @@
+[
+  {
+    "at": "2026-11-19T22:11:13+08:00",
+    "state": "RUNNING",
+    "claimed": 117,
+    "formal_attempts": 110,
+    "saved_pending_review": 3,
+    "issues": 231,
+    "model_states": {
+      "invalid_response": 41,
+      "succeeded": 898,
+      "failed": 4,
+      "unknown": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:12:45+08:00",
+    "state": "RUNNING",
+    "claimed": 117,
+    "formal_attempts": 110,
+    "saved_pending_review": 3,
+    "issues": 231,
+    "model_states": {
+      "invalid_response": 41,
+      "succeeded": 898,
+      "failed": 4,
+      "unknown": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:14:19+08:00",
+    "state": "RUNNING",
+    "claimed": 133,
+    "formal_attempts": 112,
+    "saved_pending_review": 3,
+    "issues": 231,
+    "model_states": {
+      "invalid_response": 41,
+      "succeeded": 898,
+      "failed": 4,
+      "unknown": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:15:50+08:00",
+    "state": "RUNNING",
+    "claimed": 134,
+    "formal_attempts": 126,
+    "saved_pending_review": 3,
+    "issues": 233,
+    "model_states": {
+      "invalid_response": 42,
+      "succeeded": 921,
+      "failed": 4,
+      "unknown": 3,
+      "reserved": 4
+    }
+  },
+  {
+    "at": "2026-11-19T22:17:27+08:00",
+    "state": "RUNNING",
+    "claimed": 134,
+    "formal_attempts": 126,
+    "saved_pending_review": 5,
+    "issues": 233,
+    "model_states": {
+      "invalid_response": 45,
+      "succeeded": 1025,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 5
+    }
+  },
+  {
+    "at": "2026-11-19T22:18:59+08:00",
+    "state": "RUNNING",
+    "claimed": 139,
+    "formal_attempts": 130,
+    "saved_pending_review": 5,
+    "issues": 237,
+    "model_states": {
+      "invalid_response": 49,
+      "succeeded": 1082,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 10
+    }
+  },
+  {
+    "at": "2026-11-19T22:20:30+08:00",
+    "state": "RUNNING",
+    "claimed": 141,
+    "formal_attempts": 132,
+    "saved_pending_review": 7,
+    "issues": 238,
+    "model_states": {
+      "invalid_response": 51,
+      "succeeded": 1171,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 11
+    }
+  },
+  {
+    "at": "2026-11-19T22:22:01+08:00",
+    "state": "RUNNING",
+    "claimed": 142,
+    "formal_attempts": 134,
+    "saved_pending_review": 7,
+    "issues": 245,
+    "model_states": {
+      "invalid_response": 53,
+      "succeeded": 1254,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 8
+    }
+  },
+  {
+    "at": "2026-11-19T22:23:31+08:00",
+    "state": "RUNNING",
+    "claimed": 144,
+    "formal_attempts": 135,
+    "saved_pending_review": 7,
+    "issues": 248,
+    "model_states": {
+      "invalid_response": 60,
+      "succeeded": 1307,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 6
+    }
+  },
+  {
+    "at": "2026-11-19T22:25:02+08:00",
+    "state": "RUNNING",
+    "claimed": 146,
+    "formal_attempts": 138,
+    "saved_pending_review": 7,
+    "issues": 253,
+    "model_states": {
+      "invalid_response": 67,
+      "succeeded": 1343,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 4
+    }
+  },
+  {
+    "at": "2026-11-19T22:26:32+08:00",
+    "state": "RUNNING",
+    "claimed": 147,
+    "formal_attempts": 139,
+    "saved_pending_review": 7,
+    "issues": 254,
+    "model_states": {
+      "invalid_response": 73,
+      "succeeded": 1373,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 4
+    }
+  },
+  {
+    "at": "2026-11-19T22:28:03+08:00",
+    "state": "RUNNING",
+    "claimed": 149,
+    "formal_attempts": 140,
+    "saved_pending_review": 8,
+    "issues": 256,
+    "model_states": {
+      "invalid_response": 79,
+      "succeeded": 1387,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 2
+    }
+  },
+  {
+    "at": "2026-11-19T22:29:33+08:00",
+    "state": "RUNNING",
+    "claimed": 149,
+    "formal_attempts": 141,
+    "saved_pending_review": 8,
+    "issues": 257,
+    "model_states": {
+      "invalid_response": 79,
+      "succeeded": 1410,
+      "failed": 5,
+      "unknown": 3,
+      "reserved": 2
+    }
+  },
+  {
+    "at": "2026-11-19T22:31:04+08:00",
+    "state": "RUNNING",
+    "claimed": 149,
+    "formal_attempts": 141,
+    "saved_pending_review": 8,
+    "issues": 258,
+    "model_states": {
+      "invalid_response": 79,
+      "succeeded": 1430,
+      "failed": 5,
+      "unknown": 4,
+      "reserved": 1
+    }
+  },
+  {
+    "at": "2026-11-19T22:32:35+08:00",
+    "state": "REPORTING",
+    "claimed": 149,
+    "formal_attempts": 141,
+    "saved_pending_review": 8,
+    "issues": 259,
+    "model_states": {
+      "invalid_response": 79,
+      "succeeded": 1435,
+      "failed": 5,
+      "unknown": 4
+    }
+  },
+  {
+    "at": "2026-11-19T22:34:07+08:00",
+    "state": "REPORTING",
+    "claimed": 149,
+    "formal_attempts": 141,
+    "saved_pending_review": 8,
+    "issues": 259,
+    "model_states": {
+      "invalid_response": 79,
+      "succeeded": 1435,
+      "failed": 5,
+      "unknown": 4
+    }
+  },
+  {
+    "at": "2026-11-19T22:34:55+08:00",
+    "state": "FINISHED",
+    "claimed": 149,
+    "formal_attempts": 141,
+    "saved_pending_review": 8,
+    "issues": 259,
+    "model_states": {
+      "invalid_response": 79,
+      "succeeded": 1435,
+      "failed": 5,
+      "unknown": 4
+    }
+  }
+]

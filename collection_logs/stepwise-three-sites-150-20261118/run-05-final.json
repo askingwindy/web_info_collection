@@ -1,0 +1,174 @@
+{
+  "at": "2026-11-19T22:52:46+08:00",
+  "segment": "run-05",
+  "plan_id": "20261119223935-167e76a6",
+  "strategy": "stepwise",
+  "worker_target": 20,
+  "worker_peak_observed": 20,
+  "state": "FINISHED",
+  "unique_claims": 150,
+  "unclaimed": 0,
+  "formal_attempts": 142,
+  "saved_pending_review": 8,
+  "by_site": {
+    "zh.wikipedia.org": {
+      "selected": 50,
+      "claimed": 50,
+      "claim_states": {
+        "failed": 23,
+        "reconcile": 22,
+        "succeeded": 3,
+        "consuming": 2
+      },
+      "attempt_states": {
+        "rejected": 41,
+        "reserved": 1,
+        "collected_pending_review": 3
+      },
+      "saved_pending_review": 3
+    },
+    "muxtly.com": {
+      "selected": 50,
+      "claimed": 50,
+      "claim_states": {
+        "failed": 28,
+        "reconcile": 14,
+        "consuming": 3,
+        "succeeded": 5
+      },
+      "attempt_states": {
+        "rejected": 42,
+        "reserved": 2,
+        "collected_pending_review": 5
+      },
+      "saved_pending_review": 5
+    },
+    "dpm.org.cn": {
+      "selected": 50,
+      "claimed": 50,
+      "claim_states": {
+        "failed": 26,
+        "reconcile": 24
+      },
+      "attempt_states": {
+        "rejected": 46,
+        "running": 2
+      },
+      "saved_pending_review": 0
+    }
+  },
+  "consumer_model": {
+    "requests": 1556,
+    "states": {
+      "invalid_response": 79,
+      "succeeded": 1468,
+      "failed": 5,
+      "unknown": 4
+    },
+    "dispatch": {
+      "dispatched": 1548,
+      "not_dispatched": 4,
+      "unproven": 4
+    },
+    "input_tokens": null,
+    "output_tokens": null,
+    "known_input_tokens": 4947969,
+    "known_output_tokens": 331565,
+    "unknown_usage_requests": 9,
+    "cost": "UNKNOWN"
+  },
+  "new_consumer_requests_not_yet_attributed": 533,
+  "issues_recorded": 260,
+  "stop_requested": false,
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "dataset_published": false,
+  "customer_acceptance": "UNKNOWN",
+  "validation_only_consumer_model": {
+    "requests": 2,
+    "states": {
+      "succeeded": 2
+    },
+    "dispatch": {
+      "dispatched": 2
+    },
+    "input_tokens": 7456,
+    "output_tokens": 331,
+    "known_input_tokens": 7456,
+    "known_output_tokens": 331,
+    "unknown_usage_requests": 0,
+    "cost": "UNKNOWN"
+  },
+  "segment_new_claims": 1,
+  "segment_new_claims_by_site": {
+    "zh.wikipedia.org": 1
+  },
+  "segment_new_attempts": 1,
+  "segment_saved_pending_review": 0,
+  "segment_consumer_model": {
+    "requests": 33,
+    "states": {
+      "succeeded": 33
+    },
+    "dispatch": {
+      "dispatched": 33
+    },
+    "input_tokens": 125187,
+    "output_tokens": 8441,
+    "known_input_tokens": 125187,
+    "known_output_tokens": 8441,
+    "unknown_usage_requests": 0,
+    "cost": "UNKNOWN"
+  },
+  "controller": {
+    "succeeded": false,
+    "interrupted": false,
+    "unlaunched": 0,
+    "stop_reason": null,
+    "report_integrity": "FAILED",
+    "elapsed_seconds": 568.3560371251078,
+    "worker_exit_codes": {
+      "0": 20
+    }
+  },
+  "native_report": {
+    "expected_denominator": 150,
+    "denominator": 150,
+    "integrity": "FAILED",
+    "issues": [
+      "candidate_evidence_inconsistencies",
+      "unsettled_claims"
+    ],
+    "saved": 8,
+    "stages": {
+      "claimed": 150,
+      "first_frame": 143,
+      "template_selected": 0,
+      "model_http": 132,
+      "initial_plan_accepted": 0,
+      "effective_steps_ge5": 79,
+      "goal_verified": 8,
+      "formally_saved": 8
+    },
+    "consumer_usage": {
+      "requests": 1556,
+      "states": {
+        "invalid_response": 79,
+        "succeeded": 1468,
+        "failed": 5,
+        "unknown": 4
+      },
+      "dispatch": {
+        "dispatched": 1548,
+        "not_dispatched": 4,
+        "unproven": 4
+      },
+      "input_tokens": null,
+      "output_tokens": null,
+      "known_input_tokens": 4947969,
+      "known_output_tokens": 331565,
+      "unknown_usage_requests": 9,
+      "cost": "UNKNOWN"
+    }
+  }
+}

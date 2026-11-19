@@ -1,0 +1,248 @@
+{
+  "at": "2026-11-19T22:06:05.318032+08:00",
+  "scope": "original_150_never_claimed_only",
+  "original_cohort": 150,
+  "previously_claimed": 117,
+  "previously_saved": 3,
+  "extra_cohort_counted_in_original": 0,
+  "new_candidates_or_replacements_allowed": false,
+  "remaining": 33,
+  "by_site": {
+    "muxtly.com": 12,
+    "dpm.org.cn": 10,
+    "zh.wikipedia.org": 11
+  },
+  "pages": [
+    {
+      "order": 14,
+      "candidate_id": "candidate-d731d175-1460-4374-b26a-7d78af18a771",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 15,
+      "candidate_id": "candidate-b7aa909c-22d9-4035-859a-635f6fe49caf",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 16,
+      "candidate_id": "candidate-b55c3ef3-b453-4f6f-b8e5-50118461293b",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 22,
+      "candidate_id": "candidate-195c328d-c6e5-4619-b8e8-61a5d10f6a20",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 23,
+      "candidate_id": "candidate-0583332d-dc8f-4f18-a333-6120d938f0eb",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 24,
+      "candidate_id": "candidate-b5dd7725-319b-40f4-85f8-79d004809452",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 37,
+      "candidate_id": "candidate-4d335894-1833-46eb-8967-e102b5d04cc8",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 38,
+      "candidate_id": "candidate-73e0ee41-7d8c-4fd7-bb00-0647b87846ed",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 39,
+      "candidate_id": "candidate-86ff6fc5-10ad-40df-b0f0-b5be91ab5ae2",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 40,
+      "candidate_id": "candidate-a2e75d9a-db16-4ebb-b9f9-56ae477c2663",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 46,
+      "candidate_id": "candidate-71cc5f0c-0635-4dc0-a962-65fc13e971a2",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 47,
+      "candidate_id": "candidate-94f4ab9b-2ffc-4662-bca4-cb88db8a3ebf",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 48,
+      "candidate_id": "candidate-1268b76f-0914-4bbc-b989-a75c0f7f9322",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 54,
+      "candidate_id": "candidate-de342f76-6b84-4022-996f-df1310dee94a",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 55,
+      "candidate_id": "candidate-9e153d57-9bf0-43fd-812a-b9bde3ac349b",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 56,
+      "candidate_id": "candidate-d5bb20b6-5a90-490a-b57b-c568aecfbcdd",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 63,
+      "candidate_id": "candidate-4904479b-acd5-469e-b301-7820c6a39699",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 64,
+      "candidate_id": "candidate-472df00e-70cb-47a0-a4e1-9ab976078fc2",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 71,
+      "candidate_id": "candidate-391ff306-020b-4d2e-94d5-7154d148e0d6",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 72,
+      "candidate_id": "candidate-885e78aa-51db-4920-a347-b0237d024373",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 80,
+      "candidate_id": "candidate-0df3d169-d44e-45a9-99c4-8a440bbeca0e",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 85,
+      "candidate_id": "candidate-34ab8422-c2f2-4b32-bdb8-97e6657ad178",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 86,
+      "candidate_id": "candidate-f128464a-2d2e-4652-bed3-940f919ed293",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 87,
+      "candidate_id": "candidate-d0b89968-d401-43f2-8943-6f5a5dad2d2c",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 94,
+      "candidate_id": "candidate-ef43ca51-cd39-43bc-a1ae-f9981467284d",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 101,
+      "candidate_id": "candidate-4dca9d7a-135e-4432-bc8b-3d6643aee2de",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 107,
+      "candidate_id": "candidate-caa452b4-7fa6-4e08-b250-5f643db56a4a",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 108,
+      "candidate_id": "candidate-813f698b-f6c3-4edc-86c3-df26d58120ce",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 115,
+      "candidate_id": "candidate-da11af3e-8073-44b8-9000-b41199fefcb0",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 122,
+      "candidate_id": "candidate-0bbbeee3-082c-4c77-98a4-d1f883831948",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    },
+    {
+      "order": 129,
+      "candidate_id": "candidate-f03d4acc-6dca-421e-9b6e-8a73a6429622",
+      "application_id": "app-54680a484ea549505a7bd126",
+      "host": "www.dpm.org.cn",
+      "has_requested_goal": false
+    },
+    {
+      "order": 142,
+      "candidate_id": "candidate-d42c1b93-e96d-46c6-952b-9bb795a7ef72",
+      "application_id": "app-692a94fed923f056a6a862fd",
+      "host": "zh.wikipedia.org",
+      "has_requested_goal": false
+    },
+    {
+      "order": 143,
+      "candidate_id": "candidate-f0025b69-f3ad-443a-ad63-273ab8ab9246",
+      "application_id": "app-98bb795629ae9e7d8271f984",
+      "host": "www.muxtly.com",
+      "has_requested_goal": false
+    }
+  ]
+}

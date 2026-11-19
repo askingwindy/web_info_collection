@@ -1,0 +1,48 @@
+{
+  "pool": {
+    "protected": 1024,
+    "different_or_missing_ids": []
+  },
+  "registry": {
+    "protected": 753,
+    "different_or_missing_ids": []
+  },
+  "consumer_db": {
+    "protected": 46,
+    "different_or_missing_ids": [],
+    "new_request_rows_on_prior_unsettled_jobs": 0,
+    "all_new_request_rows": 533,
+    "new_requests_on_preexisting_jobs": 0
+  },
+  "producer_db": {
+    "protected": 21,
+    "different_or_missing_ids": [],
+    "new_request_rows_on_prior_unsettled_jobs": 0,
+    "all_new_request_rows": 0,
+    "new_requests_on_preexisting_jobs": 0
+  },
+  "before_this_segment": {
+    "pool": {
+      "protected": 1056,
+      "different_or_missing_ids": []
+    },
+    "registry": {
+      "protected": 782,
+      "different_or_missing_ids": []
+    },
+    "consumer_db": {
+      "protected": 46,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 97,
+      "new_requests_on_preexisting_jobs": 0
+    },
+    "producer_db": {
+      "protected": 21,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 0,
+      "new_requests_on_preexisting_jobs": 0
+    }
+  }
+}

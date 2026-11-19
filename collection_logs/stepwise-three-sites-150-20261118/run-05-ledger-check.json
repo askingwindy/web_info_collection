@@ -1,0 +1,46 @@
+{
+  "pool": {
+    "protected": 907,
+    "different_or_missing_ids": []
+  },
+  "registry": {
+    "protected": 643,
+    "different_or_missing_ids": []
+  },
+  "consumer_db": {
+    "protected": 43,
+    "different_or_missing_ids": [],
+    "new_request_rows_on_prior_unsettled_jobs": 0,
+    "all_new_request_rows": 2091
+  },
+  "producer_db": {
+    "protected": 21,
+    "different_or_missing_ids": [],
+    "new_request_rows_on_prior_unsettled_jobs": 0,
+    "all_new_request_rows": 0
+  },
+  "before_this_segment": {
+    "pool": {
+      "protected": 1112,
+      "different_or_missing_ids": []
+    },
+    "registry": {
+      "protected": 833,
+      "different_or_missing_ids": []
+    },
+    "consumer_db": {
+      "protected": 47,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 33,
+      "new_requests_on_preexisting_jobs": 0
+    },
+    "producer_db": {
+      "protected": 21,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 0,
+      "new_requests_on_preexisting_jobs": 0
+    }
+  }
+}

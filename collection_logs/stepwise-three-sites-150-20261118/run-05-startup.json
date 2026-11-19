@@ -1,0 +1,13 @@
+{
+  "plan_id": "20261119223935-167e76a6",
+  "commit": "d78a1d0fa48ba63b398e6e8bba9191239cb92dab",
+  "started": "2026-11-19T22:39:35.726119+08:00",
+  "workers": 20,
+  "local_product_changes": [],
+  "observed_at": "2026-11-19T22:39:43.698995+08:00",
+  "distinct_pids_at_peak": 20,
+  "remaining_only": 1,
+  "frozen_cohort": 150,
+  "prior_claims": 149,
+  "independent_cohort_included": false
+}

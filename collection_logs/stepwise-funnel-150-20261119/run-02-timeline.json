@@ -1,0 +1,135 @@
+[
+  {
+    "at": "2026-11-19T21:58:05+08:00",
+    "state": "RUNNING",
+    "claimed": 32,
+    "formal_attempts": 29,
+    "saved_pending_review": 3,
+    "issues": 29,
+    "model_states": {
+      "succeeded": 432,
+      "failed": 3,
+      "invalid_response": 1
+    }
+  },
+  {
+    "at": "2026-11-19T21:59:35+08:00",
+    "state": "RUNNING",
+    "claimed": 32,
+    "formal_attempts": 29,
+    "saved_pending_review": 3,
+    "issues": 29,
+    "model_states": {
+      "succeeded": 432,
+      "failed": 3,
+      "invalid_response": 1
+    }
+  },
+  {
+    "at": "2026-11-19T22:01:05+08:00",
+    "state": "RUNNING",
+    "claimed": 52,
+    "formal_attempts": 29,
+    "saved_pending_review": 3,
+    "issues": 29,
+    "model_states": {
+      "succeeded": 432,
+      "failed": 3,
+      "invalid_response": 1
+    }
+  },
+  {
+    "at": "2026-11-19T22:02:36+08:00",
+    "state": "RUNNING",
+    "claimed": 53,
+    "formal_attempts": 41,
+    "saved_pending_review": 3,
+    "issues": 30,
+    "model_states": {
+      "succeeded": 433,
+      "failed": 3,
+      "invalid_response": 1,
+      "reserved": 1
+    }
+  },
+  {
+    "at": "2026-11-19T22:04:08+08:00",
+    "state": "RUNNING",
+    "claimed": 53,
+    "formal_attempts": 48,
+    "saved_pending_review": 3,
+    "issues": 37,
+    "model_states": {
+      "succeeded": 450,
+      "failed": 3,
+      "invalid_response": 1,
+      "reserved": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:05:39+08:00",
+    "state": "RUNNING",
+    "claimed": 56,
+    "formal_attempts": 49,
+    "saved_pending_review": 3,
+    "issues": 40,
+    "model_states": {
+      "succeeded": 524,
+      "failed": 4,
+      "invalid_response": 3,
+      "reserved": 2
+    }
+  },
+  {
+    "at": "2026-11-19T22:07:09+08:00",
+    "state": "RUNNING",
+    "claimed": 56,
+    "formal_attempts": 49,
+    "saved_pending_review": 3,
+    "issues": 41,
+    "model_states": {
+      "succeeded": 526,
+      "failed": 4,
+      "invalid_response": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:08:39+08:00",
+    "state": "RUNNING",
+    "claimed": 56,
+    "formal_attempts": 49,
+    "saved_pending_review": 3,
+    "issues": 41,
+    "model_states": {
+      "succeeded": 526,
+      "failed": 4,
+      "invalid_response": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:10:09+08:00",
+    "state": "REPORTING",
+    "claimed": 56,
+    "formal_attempts": 49,
+    "saved_pending_review": 3,
+    "issues": 41,
+    "model_states": {
+      "succeeded": 526,
+      "failed": 4,
+      "invalid_response": 3
+    }
+  },
+  {
+    "at": "2026-11-19T22:11:05+08:00",
+    "state": "FINISHED",
+    "claimed": 56,
+    "formal_attempts": 49,
+    "saved_pending_review": 3,
+    "issues": 41,
+    "model_states": {
+      "succeeded": 526,
+      "failed": 4,
+      "invalid_response": 3
+    }
+  }
+]
