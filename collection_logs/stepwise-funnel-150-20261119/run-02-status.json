@@ -1,0 +1,109 @@
+{
+  "at": "2026-11-19T22:01:05+08:00",
+  "segment": "run-02",
+  "plan_id": "20261119215804-5588546e",
+  "strategy": "stepwise",
+  "worker_target": 20,
+  "worker_peak_observed": 20,
+  "state": "RUNNING",
+  "unique_claims": 52,
+  "unclaimed": 98,
+  "formal_attempts": 29,
+  "saved_pending_review": 3,
+  "by_site": {
+    "zh.wikipedia.org": {
+      "selected": 50,
+      "claimed": 18,
+      "claim_states": {
+        "failed": 10,
+        "consuming": 8
+      },
+      "attempt_states": {
+        "rejected": 8
+      },
+      "saved_pending_review": 0
+    },
+    "muxtly.com": {
+      "selected": 50,
+      "claimed": 16,
+      "claim_states": {
+        "consuming": 5,
+        "failed": 9,
+        "succeeded": 2
+      },
+      "attempt_states": {
+        "collected_pending_review": 2,
+        "rejected": 8
+      },
+      "saved_pending_review": 2
+    },
+    "dpm.org.cn": {
+      "selected": 50,
+      "claimed": 18,
+      "claim_states": {
+        "consuming": 7,
+        "failed": 10,
+        "succeeded": 1
+      },
+      "attempt_states": {
+        "rejected": 10,
+        "collected_pending_review": 1
+      },
+      "saved_pending_review": 1
+    }
+  },
+  "consumer_model": {
+    "requests": 436,
+    "states": {
+      "succeeded": 432,
+      "failed": 3,
+      "invalid_response": 1
+    },
+    "dispatch": {
+      "dispatched": 436
+    },
+    "input_tokens": null,
+    "output_tokens": null,
+    "known_input_tokens": 1405945,
+    "known_output_tokens": 93986,
+    "unknown_usage_requests": 3,
+    "cost": "UNKNOWN"
+  },
+  "new_consumer_requests_not_yet_attributed": 0,
+  "issues_recorded": 29,
+  "stop_requested": false,
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN",
+  "dataset_published": false,
+  "customer_acceptance": "UNKNOWN",
+  "validation_only_consumer_model": {
+    "requests": 0,
+    "states": {},
+    "dispatch": {},
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "known_input_tokens": 0,
+    "known_output_tokens": 0,
+    "unknown_usage_requests": 0,
+    "cost": "UNKNOWN"
+  },
+  "segment_new_claims": 20,
+  "segment_new_claims_by_site": {
+    "muxtly.com": 5,
+    "dpm.org.cn": 7,
+    "zh.wikipedia.org": 8
+  },
+  "segment_new_attempts": 0,
+  "segment_saved_pending_review": 0,
+  "segment_consumer_model": {
+    "requests": 0,
+    "states": {},
+    "dispatch": {},
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "known_input_tokens": 0,
+    "known_output_tokens": 0,
+    "unknown_usage_requests": 0,
+    "cost": "UNKNOWN"
+  }
+}
