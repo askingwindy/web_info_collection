@@ -88,7 +88,9 @@ async def run_collection(context, task, attempt, sample, evidence, output, store
     """策略 3 的一次完整采集（会话、结束加工、结算）。"""
     from ..collect_runtime import _run_owned_session, sample_hashes
     from ..postprocess import post_seal_name
+    from . import require_image_capacity
 
+    require_image_capacity(ledger.config, ledger=ledger)
     evidence, sample = Path(evidence), Path(sample)
     if runlog is not None:
         runlog.attach(attemptId=attempt['attempt_id'], sampleId=attempt['sample_id'],

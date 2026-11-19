@@ -60,7 +60,8 @@ def required_schema():
     return expected
 
 
-def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 1024**3):
+def check(scope_path, *, cohort_path=None, plan=None, launch_role='consumer',
+          minimum_free_bytes=2 * 1024**3):
     """No constructors, DDL, recovery, writes, DNS, credentials or browser calls."""
     from .site_inventory import load_scope
     if plan:
@@ -71,6 +72,10 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
     def fail(code, field, reason):
         errors.append({'code': code, 'field': field, 'reason': reason})
     try:
+        if launch_role not in ('producer', 'consumer'):
+            raise ValueError('Unknown launch role: ' + str(launch_role))
+        if launch_role != 'consumer' and (cohort_path or plan):
+            raise ValueError('Fixed collection cohorts require consumer launch checks')
         _, scope = load_scope(scope_path)
         config = load_json(scope['consumer_config'])
         policy = load_json(scope['policy'])
@@ -95,6 +100,12 @@ def check(scope_path, *, cohort_path=None, plan=None, minimum_free_bytes=2 * 102
                 frozen=con.execute('SELECT config FROM batch_meta WHERE id=1').fetchone()
                 if not frozen or json.loads(frozen[0])!=expected:
                     fail('CONFIG_BINDING_MISMATCH',role+'_config','stored config differs from launch file')
+                if role == launch_role == 'consumer' and frozen:
+                    from .stepwise import FinalImagesUnavailable, require_image_capacity
+                    try:
+                        require_image_capacity(json.loads(frozen[0]), connection=con)
+                    except FinalImagesUnavailable as error:
+                        fail(error.code, 'consumer_db.model', str(error))
         from .current_chain import read_chain_scope, assert_current_result_path, check_project_guard
         chain = read_chain_scope(scope['history_set'])
         assert_current_result_path(chain, scope['output'])
@@ -199,8 +210,9 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--scope',required=True,type=Path)
     p.add_argument('--cohort',type=Path)
+    p.add_argument('--role', choices=('producer', 'consumer'), default='consumer')
     a=p.parse_args(argv)
-    try:result=check(a.scope,cohort_path=a.cohort)
+    try:result=check(a.scope,cohort_path=a.cohort,launch_role=a.role)
     except Strategy1Forbidden as error:p.error(str(error))
     print(json.dumps(result,ensure_ascii=False,indent=2))
     return 0 if result['status']=='PASS' else 2

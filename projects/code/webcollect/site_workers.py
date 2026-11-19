@@ -80,7 +80,7 @@ def prepare_sites(scope_path, selectors, *, sources_path=None):
         plan['ready'] = True
         return plan
     from .collection_startup import check
-    checked=check(scope_path)
+    checked=check(scope_path, launch_role='producer')
     if checked['status']!='PASS':
         raise ValueError('Preparation launch preflight failed: '+json.dumps(checked,ensure_ascii=False))
     if not sources_path:
@@ -366,7 +366,8 @@ def launch(plan):
     previous={sig:signal.signal(sig,request_stop) for sig in (signal.SIGINT,signal.SIGTERM)}
     try:
         if stop.exists():raise InterruptedError('Stopped before launch')
-        preflight=check(plan['scope'],**({'cohort_path':plan['cohort'],'plan':plan} if plan.get('fixed') else {}))
+        preflight=check(plan['scope'], launch_role=plan['role'],
+                        **({'cohort_path':plan['cohort'],'plan':plan} if plan.get('fixed') else {}))
         if preflight['status']!='PASS':
             stop_reason='preflight_failed'
             raise ValueError('Launch preflight failed; see preflight errors')

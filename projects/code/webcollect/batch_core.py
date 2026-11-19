@@ -9,6 +9,7 @@ from webcollect.sqlite_connection import raw_connect as workspace_connect
 from contextlib import contextmanager
 from collections import Counter, defaultdict
 from copy import deepcopy
+from functools import cached_property
 import hashlib
 from webcollect import workspace_json as json
 import math
@@ -314,6 +315,12 @@ class BatchLedger:
                         or type(decision.get('max_concurrent_jobs')) is not int
                         or decision['max_concurrent_jobs'] < 1):
                     raise ValueError('Producer concurrency decision does not match its original ledger')
+
+    @cached_property
+    def stepwise_image_authorization(self):
+        from .stepwise.image_capacity import image_authorization
+        with self.connect() as connection:
+            return image_authorization(connection, self.config)
 
     @property
     def max_concurrent_jobs(self):

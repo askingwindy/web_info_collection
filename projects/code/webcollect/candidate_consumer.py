@@ -345,6 +345,8 @@ def startup_check(ledger, *, output, registry, policy, history_set, qc_policy=No
     """Validate the original local execution scope before taking a candidate."""
     from .current_chain import read_chain_history, assert_registry_scope, current_evidence_roots
     from .runtime import validate_policy
+    from .stepwise import require_image_capacity
+    require_image_capacity(ledger.config, ledger=ledger)
     paths = {}
     for key, value in dict(output=output, registry=registry, policy=policy, history_set=history_set).items():
         path = Path(value).absolute()
@@ -1106,6 +1108,9 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 'candidate_id': claim.get('candidate_id') if claim else getattr(error, 'candidate_id', None),
                 'evidence_context': getattr(error, 'context', None),
                 'no_dispatch_proof': getattr(error, 'no_dispatch_proof', None)}
+            if phase in ('startup_preflight', 'before_claim_preflight') and getattr(error, 'failure_class', None) == 'configuration':
+                handling = round_failures.record('before_claim', disposition(error, phase=phase))
+                stop_details.update({key: handling[key] for key in ('disposition', 'code', 'stop_dispatch')})
             if diagnostic:
                 stop_details['diagnostic'] = diagnostic
         if campaign:

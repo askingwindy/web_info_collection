@@ -440,9 +440,11 @@ class GatewayRunlogTests(unittest.TestCase):
         self.f = self.fixture
         self.serial = 0
 
-    def _gateway(self, level='INFO'):
+    def _gateway(self, level='INFO', *, max_images=None):
         self.serial += 1
         cfg = self.f.config('glm', vision=True)
+        if max_images is not None:
+            cfg['model']['max_images'] = max_images
         cfg['budget']['min_model_interval_seconds'] = 0
         ledger = BatchLedger(self.f.root / f'runlog-{self.serial}.sqlite3', cfg,
                              initialize=True)
@@ -561,7 +563,45 @@ class GatewayRunlogTests(unittest.TestCase):
         self.assertEqual(clipped['state'], 'unknown')
         self.assertEqual(json.loads(clipped['response'])['request_timeout_seconds'], seen_timeouts[0])
 
+    def _check_stepwise_prospective_images(self):
+        from webcollect.stepwise.image_capacity import FinalImagesUnavailable, authorize_final_images, require_image_capacity
+        ledger, previous, gateway, _ = self._gateway(max_images=1)
+        ledger.finish(previous)
+        original_parent = ledger.enqueue('collection', {'test': 'before image authorization'})
+        previous_call = ledger.enqueue('stepwise-decision', {'phase': 'writeback', 'case': 'old'})
+        with self.assertRaises(FinalImagesUnavailable):
+            require_image_capacity(ledger.config, ledger=ledger)
+        authorization = authorize_final_images(ledger, 'offline prospective image check')
+        self.assertEqual(authorize_final_images(ledger, 'same setting'), authorization)
+        reader = BatchLedger(ledger.path, ledger.config)
+        self.assertEqual(require_image_capacity(reader.config, ledger=reader), 3)
+        old_parent_call = ledger.enqueue('stepwise-decision', {'phase': 'writeback', 'parent_job_id': original_parent})
+        for job_id in (previous_call, old_parent_call):
+            with self.assertRaises(FinalImagesUnavailable):
+                require_image_capacity(reader.config, ledger=reader, job_id=job_id)
+        originals = [self.f.image]
+        for name, color in [('before', 'red'), ('terminal', 'blue')]:
+            path = self.f.root / (name + '.png')
+            Image.new('RGB', (8, 8), color).save(path)
+            originals.append(path)
+        self.fixture.response(self.fixture.message())
+        for phase, count in [('decision', 1), ('writeback', 2), ('judgement', 3)]:
+            job = ledger.claim('stepwise-decision', job_id=ledger.enqueue(
+                'stepwise-decision', {'phase': phase, 'case': 'new'}))
+            if count < 3:
+                with self.assertRaisesRegex(ValueError, 'Invalid stepwise'):
+                    self.fixture.call(gateway, job, attempt_id='claim-1', images=originals[:count + 1])
+            self.fixture.call(gateway, job, attempt_id='claim-1', images=originals[:count])
+            ledger.finish(job)
+        with reader.connect() as connection:
+            bound = json.loads(connection.execute('SELECT config FROM batch_meta').fetchone()[0])
+            calls = [json.loads(row[0]) for row in connection.execute('SELECT request_json FROM model_requests ORDER BY rowid')]
+            self.assertEqual(bound['model']['max_images'], 1)
+            self.assertEqual([(call['stepwise_phase'], call['image_count'], call['stage_max_images']) for call in calls],
+                             [('decision', 1, 1), ('writeback', 2, 2), ('judgement', 3, 3)])
+
     def test_provider_rejections_settle_without_unknown_and_preserve_holds(self):
+        self._check_stepwise_prospective_images()
         from urllib.error import HTTPError
         from webcollect.provider_recovery import holds
         from site_planner.producer_business_content import _purpose_holds
@@ -571,7 +611,7 @@ class GatewayRunlogTests(unittest.TestCase):
             ledger, job, gateway, _ = self._gateway()
             ledger.finish(job)
             job = ledger.claim('stepwise-decision', job_id=ledger.enqueue(
-                'stepwise-decision', {'attempt_id': 'claim-1', 'offline': True}))
+                'stepwise-decision', {'attempt_id': 'claim-1', 'phase': 'decision', 'offline': True}))
             detail = {'code': 'rate_limit_exceeded' if status == 429 else '1301',
                       'message': 'controlled provider rejection'}
             self.f.opener.error = HTTPError('https://provider.invalid/chat/completions', status,
@@ -579,7 +619,7 @@ class GatewayRunlogTests(unittest.TestCase):
             before = len(self.f.opener.calls)
             expected = ProviderRejected if status < 500 else OutcomeUnknown
             with self.assertRaises(expected):
-                self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2)
+                self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2, images=[self.f.image])
             with ledger.connect() as con:
                 original = dict(con.execute('SELECT * FROM model_requests').fetchone())
                 unresolved = ledger.session_http_usage(con, 'claim-1')['unresolved']
@@ -596,7 +636,7 @@ class GatewayRunlogTests(unittest.TestCase):
                     self.assertEqual(con.execute('SELECT status FROM consumer_key_health').fetchone()[0], 'rate_limited')
             # Same job/purpose cannot turn a settled rejection into a new call.
             with self.assertRaises(expected):
-                self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2)
+                self.fixture.call(gateway, job, attempt_id='claim-1', attempts=2, images=[self.f.image])
             self.assertEqual(len(self.f.opener.calls) - before, 1)
             with ledger.connect() as con:
                 self.assertEqual(dict(con.execute('SELECT * FROM model_requests').fetchone()), original)

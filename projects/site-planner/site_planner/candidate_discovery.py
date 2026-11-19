@@ -555,7 +555,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
     # Read-only launch validation precedes even additive pool/ledger initialization.
     from webcollect.collection_startup import check
     scope_path=Path(ledger_path).resolve().parent/'scope.json'
-    checked=check(scope_path)
+    checked=check(scope_path, launch_role='producer')
     if checked['status']!='PASS':
         return {'status':'STARTUP_FAILED','startup_check':checked,'disposition':'global','reason_owner':'program','dispatches':0}
     owner=load_json(scope_path)

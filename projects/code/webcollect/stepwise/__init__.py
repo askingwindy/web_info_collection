@@ -9,6 +9,7 @@ collection_contract/collection_evidence/closing_policy/goal_evidence/
 postprocess/candidate_navigation），见《策略3独立逐步采集代码实现SDD》§2。
 """
 from ..collection_strategy import STRATEGY_STEPWISE as STRATEGY_ID
+from .image_capacity import FinalImagesUnavailable, require_image_capacity
 
 
 def run_collection(*args, **kwargs):
@@ -17,4 +18,4 @@ def run_collection(*args, **kwargs):
     return _run(*args, **kwargs)
 
 
-__all__ = ['STRATEGY_ID', 'run_collection']
+__all__ = ['STRATEGY_ID', 'run_collection', 'require_image_capacity', 'FinalImagesUnavailable']

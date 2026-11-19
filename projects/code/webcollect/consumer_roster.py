@@ -48,6 +48,11 @@ def main():
     policy = json.loads(Path(scope['policy']).read_text())
     if a.workers < 1:
         p.error('--workers must be positive')
+    if a.launch:
+        from .collection_startup import check
+        checked = check(a.scope)
+        if checked['status'] != 'PASS':
+            p.error('Consumer launch preflight failed: ' + json.dumps(checked['errors'], ensure_ascii=False))
     a.output.mkdir(parents=True, exist_ok=False)
     if a.launch:
         reason = f'consumer_roster --workers {a.workers} --prefix {a.prefix}'

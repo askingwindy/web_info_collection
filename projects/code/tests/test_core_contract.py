@@ -441,7 +441,7 @@ class StrategyResultContract(unittest.TestCase):
             with sqlite3.connect(registry) as con:
                 con.execute('CREATE TABLE m4_campaigns(campaign_id,policy_json)')
                 con.execute('INSERT INTO m4_campaigns VALUES(?,?)', ('offline', '{}'))
-            ledger = SimpleNamespace(config={'mode': 'real'}, enqueue=Mock(return_value='job'),
+            ledger = SimpleNamespace(config={'mode': 'real', 'model': {'max_images': 3}}, enqueue=Mock(return_value='job'),
                 get=Mock(return_value={'state': 'queued'}), finish=Mock(), heartbeat=Mock())
             collected = AsyncMock(return_value={'collection_status': 'complete', 'collected': 0})
             with patch.object(generation, 'generation_source_identity', return_value={'new.py': 'new'}), \

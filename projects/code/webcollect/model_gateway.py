@@ -958,7 +958,16 @@ class ModelGateway:
                 raise ValueError('Stage output limit may only tighten the original reservation')
             purpose += ':output-'+str(output_limit)
         compatible_provider = model['provider'] in ('deepseek', 'glm', 'ark')
-        if len(images) > model['max_images']:
+        image_limit = model['max_images']
+        if job['kind'] == 'stepwise-decision':
+            from .stepwise.image_capacity import STAGE_IMAGES, require_image_capacity
+            require_image_capacity(self.config, ledger=self.ledger, job_id=job['id'])
+            phase = job['payload'].get('phase')
+            bounds = STAGE_IMAGES.get(phase)
+            if not bounds or not bounds[0] <= len(images) <= bounds[1] or (native_context or {}).get('history'):
+                raise ValueError(f'Invalid stepwise {phase} input: {len(images)} images or unexpected history')
+            image_limit = bounds[1]
+        if len(images) > image_limit:
             raise ValueError('Image limit exceeded; segment with overlapping adjacent frames')
         if images and not model.get('supports_vision', True):
             raise ValueError('Configured model does not support original-image review')
@@ -1013,7 +1022,7 @@ class ModelGateway:
             historical_images = sum(1 for m in native_context['history'] for p in
                 (m.get('content') if isinstance(m.get('content'), list) else [])
                 if isinstance(p, dict) and p.get('type') == 'image_url')
-            if len(images) + historical_images > model['max_images']:
+            if len(images) + historical_images > image_limit:
                 raise ValueError('History and current images exceed image limit')
             if historical_images and not model.get('supports_vision', True):
                 raise ValueError('Configured model does not support original-image review')
@@ -1149,6 +1158,8 @@ class ModelGateway:
                             'bytes':Path(p).stat().st_size,
                             'kind':('derived_jpeg' if str(p).endswith('.jpg') else 'original_png')} for p in images],
                         'image_count':len(images),
+                        **({'stepwise_phase':phase, 'stage_max_images':image_limit}
+                           if job['kind']=='stepwise-decision' else {}),
                         'provider':model['provider'],'model':model['model'],'prompt_identity':purpose,
                         **({'tools':tools,'tool_choice':tool_choice} if native_tools else {}),
                         **({'protocol':native_context['version'], 'history':native_context['history'],

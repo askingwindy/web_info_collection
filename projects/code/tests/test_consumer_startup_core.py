@@ -133,6 +133,16 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
     async def test_standalone_checks_scope_then_probes_once_and_stops_unavailable(self):
         from webcollect.current_chain import CurrentChainError
         with tempfile.TemporaryDirectory() as directory:
+            pool = MagicMock()
+            with patch('webcollect.key_health.probe_accounts') as probe:
+                blocked = await run(pool, SimpleNamespace(config={'model': {'max_images': 1}}),
+                    worker_id='single-image', request_prefix='blocked', limit=1, output=Path(directory),
+                    registry='unused', policy='unused', history_set='unused')
+            self.assertEqual((blocked['stop_reason'], blocked['processed']), ('engineering_failure', 0))
+            self.assertEqual(blocked['stop_details']['disposition'], 'global')
+            self.assertIn('STEPWISE_FINAL_IMAGES_UNAVAILABLE', str(blocked['stop_details']))
+            pool.claim_next.assert_not_called()
+            probe.assert_not_called()
             calls = []
             with patch('webcollect.candidate_consumer.startup_check', side_effect=lambda *a, **k: calls.append('scope') or {}), \
                  patch('webcollect.key_health.pool_available', return_value=False), \
@@ -169,7 +179,6 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             # Original GET bytes remain checked; candidate audit hashes do not
             # block a stable business identity before claim/IO.
             import json
-            from types import SimpleNamespace
             from webcollect.batch_core import file_sha
             from webcollect.planning import object_sha256
             from webcollect.candidate_consumer import preflight_cohort_sources
@@ -262,7 +271,7 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
 
     def _check_cohort_audit_hashes(self, root):
         from webcollect.collection_startup import check
-        config=root/'startup-config.json';config.write_text('{}')
+        config=root/'startup-config.json';config.write_text('{"model":{"max_images":3}}')
         cohort=root/'startup-cohort.json';cohort.write_text('{}')
         scope={key:str(config) for key in ('producer_config','consumer_config','policy','history_set')}
         scope.update(pool='pool',producer_db='producer',consumer_db='consumer',registry='registry',output=str(root))
@@ -271,7 +280,7 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             'producer_row_response_sha256':'old','body_sha256':'old','sources_sha256':'old'} for i in range(100)]
         current=[{**row,'eligible':True,'producer_row_response_sha256':'new',
             'body_sha256':'new','sources_sha256':'new'} for row in rows]
-        connection=MagicMock();connection.execute.return_value.fetchone.return_value=('{}',)
+        connection=MagicMock();connection.execute.return_value.fetchone.return_value=(config.read_text(),)
         pool=MagicMock();poolcon=pool.pool.connect.return_value.__enter__.return_value
         poolcon.execute.return_value.fetchone.return_value={'version':1,'state':'pending'}
         poolcon.execute.return_value.fetchall.return_value=[]
@@ -291,6 +300,14 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
             current[0]['entry_http']={'path':'different','sha256':'different'}
             result=check(config,cohort_path=cohort,minimum_free_bytes=0)
             self.assertIn('COHORT_EVIDENCE_MISMATCH',[e['code'] for e in result['errors']])
+            connection.execute.return_value.fetchone.return_value=('{"model":{"max_images":1}}',)
+            errors = {e['code'] for e in check(config, minimum_free_bytes=0)['errors']}
+            self.assertTrue({'CONFIG_BINDING_MISMATCH', 'STEPWISE_FINAL_IMAGES_UNAVAILABLE'} <= errors)
+            config.write_text('{"model":{"max_images":1}}')
+            self.assertEqual(check(config, launch_role='producer', minimum_free_bytes=0)['status'], 'PASS')
+            blocked = check(config, minimum_free_bytes=0)
+            self.assertEqual([e['code'] for e in blocked['errors']], ['STEPWISE_FINAL_IMAGES_UNAVAILABLE'])
+            self.assertEqual([blocked[k] for k in ('dispatches','browser_calls','account_probes','ledger_writes')], [0]*4)
 
     async def test_available_pool_and_campaign_workers_never_probe(self):
         from webcollect.consumer_campaign import stop_engineering_failure, stopped

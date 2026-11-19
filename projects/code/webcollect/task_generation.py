@@ -1363,6 +1363,8 @@ async def execute(ledger, plan_path, catalog_path, output, registry, policy, *, 
     from .collection_strategy import select
     for task in plan['tasks']:
         select(task)
+    from .stepwise import require_image_capacity
+    require_image_capacity(ledger.config, ledger=ledger)
     validate_plan(plan)
     from .plan_protocol import PLAN_PROTOCOL
     from .closing_policy import COMPLETED_GOAL_DELIVERY

@@ -381,6 +381,10 @@ async def collect_m4(plan_path, output, registry, **options):
     from .collection_strategy import select
     for task in read_json(plan_path)['tasks']:
         select(task)
+    ledger = options.get('controller_ledger')
+    if ledger is not None:
+        from .stepwise import require_image_capacity
+        require_image_capacity(ledger.config, ledger=ledger)
     for key in ('publication_path','policy_path'):
         if options.get(key) is not None:
             options[key]=Path(options[key])
