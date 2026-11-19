@@ -1,0 +1,227 @@
+{
+  "denominator": 30,
+  "pages": [
+    {
+      "candidate_id": "candidate-9ee5d851-0a06-4b7d-a29a-ea6480ecff84",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E4%B8%AD%E5%9B%BD%E4%BA%BA%E6%B0%91%E9%93%B6%E8%A1%8C",
+      "host": "zh.wikipedia.org",
+      "order": 1,
+      "original_order": 7
+    },
+    {
+      "candidate_id": "candidate-b1bb7ad7-fb84-4342-af6a-6fc78e903d7d",
+      "entry_url": "https://www.muxtly.com/zh-CN/social-security-calculator/",
+      "host": "www.muxtly.com",
+      "order": 2,
+      "original_order": 5
+    },
+    {
+      "candidate_id": "candidate-88445be9-ed44-4f53-a56a-d3ec02f871cf",
+      "entry_url": "https://www.dpm.org.cn/explore/building/236465.html",
+      "host": "www.dpm.org.cn",
+      "order": 3,
+      "original_order": 6
+    },
+    {
+      "candidate_id": "candidate-ec04e05d-3cb7-4ba7-9209-2d194c307fa8",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E6%B6%88%E8%B2%BB%E8%80%85%E7%89%A9%E5%83%B9%E6%8C%87%E6%95%B8",
+      "host": "zh.wikipedia.org",
+      "order": 4,
+      "original_order": 13
+    },
+    {
+      "candidate_id": "candidate-72dbb33b-cbcc-44d6-9e27-f94cdfa00af5",
+      "entry_url": "https://www.muxtly.com/zh-CN/sip-calculator/",
+      "host": "www.muxtly.com",
+      "order": 5,
+      "original_order": 8
+    },
+    {
+      "candidate_id": "candidate-6206530b-eaad-4213-b02b-4c015675c9bb",
+      "entry_url": "https://www.dpm.org.cn/announce_detail/379709.html",
+      "host": "www.dpm.org.cn",
+      "order": 6,
+      "original_order": 12
+    },
+    {
+      "candidate_id": "candidate-04fd1d7b-4089-4c0f-a432-41c860da5257",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E7%88%B1%E5%BE%B7%E5%8D%8E%C2%B7%E6%99%AE%E9%9B%B7%E6%96%AF%E7%A7%91%E7%89%B9",
+      "host": "zh.wikipedia.org",
+      "order": 7,
+      "original_order": 16
+    },
+    {
+      "candidate_id": "candidate-e97696ee-1611-4cda-ba71-4d55787adeeb",
+      "entry_url": "https://www.muxtly.com/zh-CN/roth-ira-calculator/",
+      "host": "www.muxtly.com",
+      "order": 8,
+      "original_order": 14
+    },
+    {
+      "candidate_id": "candidate-c7a3b02c-6ebf-477c-b575-c172f340af1d",
+      "entry_url": "https://www.dpm.org.cn/learing_detail/379645.html",
+      "host": "www.dpm.org.cn",
+      "order": 9,
+      "original_order": 15
+    },
+    {
+      "candidate_id": "candidate-e8a106a6-b381-4a2b-bb3c-1d954aace971",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E5%8A%A8%E6%80%81%E9%9A%8F%E6%9C%BA%E4%B8%80%E8%88%AC%E5%9D%87%E8%A1%A1",
+      "host": "zh.wikipedia.org",
+      "order": 10,
+      "original_order": 22
+    },
+    {
+      "candidate_id": "candidate-b99de50b-a980-45ff-b7b7-51c18c0d648a",
+      "entry_url": "https://www.muxtly.com/zh-CN/present-value-calculator/",
+      "host": "www.muxtly.com",
+      "order": 11,
+      "original_order": 20
+    },
+    {
+      "candidate_id": "candidate-22a9abf6-c470-4bf8-9571-6dd4c3f4f137",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/379521.html",
+      "host": "www.dpm.org.cn",
+      "order": 12,
+      "original_order": 21
+    },
+    {
+      "candidate_id": "candidate-9bc6fe83-4fac-405d-96c3-341478c536ec",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E9%98%BF%E6%8B%89%E4%BC%AF%E8%81%94%E5%90%88%E9%85%8B%E9%95%BF%E5%9B%BD",
+      "host": "zh.wikipedia.org",
+      "order": 13,
+      "original_order": 28
+    },
+    {
+      "candidate_id": "candidate-048f2656-1540-47c9-b831-9f69ad4fc6a9",
+      "entry_url": "https://www.muxtly.com/zh-CN/australia-child-care-subsidy-calculator/",
+      "host": "www.muxtly.com",
+      "order": 14,
+      "original_order": 23
+    },
+    {
+      "candidate_id": "candidate-62e5bbb2-f228-45fa-adad-d07686303dd7",
+      "entry_url": "https://www.dpm.org.cn/announce_detail/379784.html",
+      "host": "www.dpm.org.cn",
+      "order": 15,
+      "original_order": 24
+    },
+    {
+      "candidate_id": "candidate-332b5d14-5478-4387-8713-55a830ab3b95",
+      "entry_url": "https://zh.wikipedia.org/wiki/World",
+      "host": "zh.wikipedia.org",
+      "order": 16,
+      "original_order": 31
+    },
+    {
+      "candidate_id": "candidate-72237fbb-0ff7-49c1-aed3-1494fe19b156",
+      "entry_url": "https://www.muxtly.com/zh-CN/payback-period-calculator/",
+      "host": "www.muxtly.com",
+      "order": 17,
+      "original_order": 29
+    },
+    {
+      "candidate_id": "candidate-6da9e1f0-6e44-4323-a846-0c4ef816ecc5",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/102447.html",
+      "host": "www.dpm.org.cn",
+      "order": 18,
+      "original_order": 27
+    },
+    {
+      "candidate_id": "candidate-b59d9ebf-2d99-4630-bf08-73881f41d9b4",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E5%A4%A7%E9%9F%A9%E6%B0%91%E5%9B%BD",
+      "host": "zh.wikipedia.org",
+      "order": 19,
+      "original_order": 37
+    },
+    {
+      "candidate_id": "candidate-9f696379-3492-4326-a120-8ccc9fb9e5f3",
+      "entry_url": "https://www.muxtly.com/zh-CN/npv-calculator/",
+      "host": "www.muxtly.com",
+      "order": 20,
+      "original_order": 32
+    },
+    {
+      "candidate_id": "candidate-3bf19d48-2040-4721-b09a-b4793ed0166e",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/379529.html",
+      "host": "www.dpm.org.cn",
+      "order": 21,
+      "original_order": 30
+    },
+    {
+      "candidate_id": "candidate-e94677a2-7f0d-4160-8bf7-cd98a6a63a79",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E5%9F%83%E5%BE%B7%E8%92%99%C2%B7%E8%B4%B9%E5%B0%94%E6%99%AE%E6%96%AF",
+      "host": "zh.wikipedia.org",
+      "order": 22,
+      "original_order": 40
+    },
+    {
+      "candidate_id": "candidate-4885baa1-d1d6-4841-a45d-784c039f4f01",
+      "entry_url": "https://www.muxtly.com/zh-CN/irr-calculator/",
+      "host": "www.muxtly.com",
+      "order": 23,
+      "original_order": 35
+    },
+    {
+      "candidate_id": "candidate-a9e79e7c-bb2b-49a7-8cfd-3d9256d6542b",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/379597.html",
+      "host": "www.dpm.org.cn",
+      "order": 24,
+      "original_order": 36
+    },
+    {
+      "candidate_id": "candidate-16c0fe2a-d7ed-42f5-9c90-e2e5ea94e919",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E9%9B%B7%E6%A0%B9%E7%B6%93%E6%BF%9F%E5%AD%B8",
+      "host": "zh.wikipedia.org",
+      "order": 25,
+      "original_order": 46
+    },
+    {
+      "candidate_id": "candidate-65b3d78c-3eca-4f8e-af21-4080d507ed21",
+      "entry_url": "https://www.muxtly.com/zh-CN/investment-calculator/",
+      "host": "www.muxtly.com",
+      "order": 26,
+      "original_order": 38
+    },
+    {
+      "candidate_id": "candidate-9a54b637-d911-494b-9fde-2befecf648ef",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/101813.html",
+      "host": "www.dpm.org.cn",
+      "order": 27,
+      "original_order": 39
+    },
+    {
+      "candidate_id": "candidate-e93840e2-c616-4754-9b03-8c5b553795b9",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E5%80%9F%E8%B4%B7",
+      "host": "zh.wikipedia.org",
+      "order": 28,
+      "original_order": 52
+    },
+    {
+      "candidate_id": "candidate-85fe4452-f69b-4f0f-9a3f-12c8cb190704",
+      "entry_url": "https://www.muxtly.com/zh-CN/memory-match-game/",
+      "host": "www.muxtly.com",
+      "order": 29,
+      "original_order": 47
+    },
+    {
+      "candidate_id": "candidate-433e0882-1528-4499-abfa-65bdcefc944b",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/104381.html",
+      "host": "www.dpm.org.cn",
+      "order": 30,
+      "original_order": 45
+    }
+  ],
+  "per_site": {
+    "dpm.org.cn": 10,
+    "muxtly.com": 10,
+    "zh.wikipedia.org": 10
+  },
+  "replacement_allowed": false,
+  "selected_at": "2026-11-20T07:39:57.265367+08:00",
+  "selection": "各站按原序取前十个从未领取的候选",
+  "source": "results/stepwise-funnel-150-20261119/selection/cohort.json",
+  "target_palace_saved": 1,
+  "target_saved": 6,
+  "workers": 20
+}

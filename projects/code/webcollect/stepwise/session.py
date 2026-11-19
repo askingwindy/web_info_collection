@@ -343,6 +343,23 @@ class StepwiseSession:
                 return True
         return False
 
+    def _returned_click(self, rows, frame):
+        """识别点开详情后立即原路返回、且入口业务画面相同的一对实际动作。"""
+        if len(rows) != 2:
+            return None
+        opened, returned = rows
+        if (opened['operation']['action_type'] != 'click' or returned['operation']['action_type'] != 'back'
+                or not opened.get('effective') or not returned.get('effective') or not opened.get('element')):
+            return None
+        frames = self.journal.frames
+        source = frames[opened['frame_id']]['state']
+        destination = frames[opened['after_frame']]['state'].get('url')
+        if (destination and destination != source.get('url')
+                and frames[returned['frame_id']]['state'].get('url') == destination
+                and observation.view_equal(source, frame['state'])):
+            return opened['element']
+        return None
+
     async def _loop(self):
         pending_result = None   # 上一次实际派发行，等待下一次合法决策的 last_step_result
         while True:
@@ -445,6 +462,12 @@ class StepwiseSession:
     def _proposed_action_issue(self, frame, operation, element):
         if self._repeated_read_move(frame, operation, element):
             return 'READ_VIEW_ALREADY_VISITED: 同一画面已执行过此操作。选择尚未取得的业务事实，或结束任务。'
+        if (self.mode == 'autonomous' and operation['action_type'] == 'click' and element
+                and len(self.dispatch_rows) >= 4):
+            controls = [self._returned_click(pair, frame) for pair in
+                        (self.dispatch_rows[-4:-2], self.dispatch_rows[-2:])]
+            if all(control and control['element_id'] == element['element_id'] for control in controls):
+                return 'REPEATED_DETAIL_ROUNDTRIP: 已从同一入口连续两次打开详情后直接返回。请核对正文中的缺失事实，或结束。'
         if operation['action_type'] in ('click', 'double_click'):
             link = self._link_carrier(frame, element)
             if link:
@@ -945,8 +968,13 @@ class StepwiseSession:
         base = '已派发 %d/%d 次，有效 %d 个，结束前至少需要 %d 个（最多 %d）；连续无效果 %d/%d；实际 HTTP 请求 %d/%d。' % (
             self.dispatches, MAX_BROWSER_DISPATCHES, self.effective, MIN_EFFECTIVE_STEPS, MAX_EFFECTIVE_STEPS,
             self.no_effect_run, NO_EFFECT_LIMIT, self._requests_used(), EXPLORE_HTTP_BUDGET)
-        if self.mode == 'autonomous' and self.goal:
-            base += '当前任务：' + self.goal
+        if self.mode == 'autonomous' and self.current:
+            visited = self._returned_click(self.dispatch_rows[-2:], self.current)
+            if visited:
+                base += '刚从「%s」详情直接返回。此入口已看过，请在当前页寻找尚缺的事实。' % (
+                    (visited.get('text') or '这个入口')[:32])
+        if self.effective >= MIN_EFFECTIVE_STEPS:
+            base += '步数已足；如果当前帧已证明任务答案，本轮直接 complete。'
         return base
 
     # ------------------------------------------------------------ 收口

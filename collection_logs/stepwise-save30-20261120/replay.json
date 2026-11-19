@@ -1,0 +1,16 @@
+{
+  "original_missing": [
+    "开放公告",
+    "关于延禧宫停止开放的公告",
+    "雕版馆临时闭馆公告"
+  ],
+  "fixed_recovered": [
+    "开放公告",
+    "关于延禧宫停止开放的公告",
+    "雕版馆临时闭馆公告"
+  ],
+  "covered_titles_excluded": true,
+  "visible_title_on_clickable_link": true,
+  "real_roundtrip_advice_after_first_return": true,
+  "third_identical_open_rejected": true
+}

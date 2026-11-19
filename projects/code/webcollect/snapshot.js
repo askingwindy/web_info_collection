@@ -458,7 +458,14 @@
     if(['none','normal'].includes(p.content)||clean(p.content.replace(/^(['"])([\s\S]*)\1$/,'$2'))||p.position!=='absolute'||p.display!=='block'||s.position==='static'||owner.getClientRects().length!==1)return null;
     if([p,s].some(c=>c.boxShadow!=='none'||c.textShadow!=='none'||c.filter!=='none'||c.backdropFilter!=='none'||c.perspective!=='none'||c.offsetPath!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.mixBlendMode!=='normal'||c.maskImage!=='none'||c.clipPath!=='none'||c.outlineStyle!=='none'&&parseFloat(c.outlineWidth)>0))return null;
     for(let n=owner;n;n=n.parentElement){const c=styleOf(n);if(c.transform!=='none'||c.rotate!=='none'||c.scale!=='none'||c.translate!=='none'||c.perspective!=='none'||parseFloat(c.zoom||'1')!==1||c.writingMode!=='horizontal-tb')return null;}
-    if(['Top','Right','Bottom','Left'].some(k=>px(p['padding'+k])!==0||px(p['border'+k+'Width'])!==0||px(s['padding'+k])!==0||px(s['border'+k+'Width'])!==0))return null;
+    const sides=['Top','Right','Bottom','Left'];
+    if(sides.some(k=>px(p['padding'+k])!==0||px(p['border'+k+'Width'])!==0||px(s['border'+k+'Width'])!==0))return null;
+    // An absolutely positioned marker is measured from the padding box.
+    // With zero owner borders its origin is the border-box origin even when
+    // padding reserves a gutter for the marker. Keep fragmented inlines out.
+    if(sides.some(k=>px(s['padding'+k])!==0)&&
+       (!['block','inline-block','flex','inline-flex','grid','inline-grid','flow-root'].includes(s.display)||
+        !['auto','1'].includes(s.columnCount)||s.columnWidth!=='auto'))return null;
     const w=px(p.width),h=px(p.height),left=px(p.left),top=px(p.top),ml=px(p.marginLeft),mt=px(p.marginTop),origin=p.transformOrigin.split(' ').map(px);
     if([w,h,left,top,ml,mt,...origin].some(v=>v===null)||w<=0||h<=0||origin.length!==2)return null;
     const animations=document.getAnimations().filter(a=>a.effect&&a.effect.target===owner&&a.effect.pseudoElement===which);
