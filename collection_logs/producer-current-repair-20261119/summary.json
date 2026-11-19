@@ -1,0 +1,260 @@
+{
+  "production": {
+    "original_rows": {
+      "NEW": 100,
+      "REJECTED": 40,
+      "DUPLICATE": 29,
+      "OVER_LIMIT": 1
+    },
+    "approved_passed_script_gate": 100,
+    "blocked_unique": 22,
+    "blocked_original_rows": 40,
+    "duplicate_rows_same_as_previous_NEW": 29,
+    "original_purpose_requests": 24,
+    "affected_original_requests": 14,
+    "all_pages_blocked_in_original_request": 1,
+    "actual_original_GET_per_100": 219,
+    "actual_original_input_tokens_per_100": 232243,
+    "actual_original_wall_seconds_per_100": 1731.95,
+    "sampled_catalog_history": {
+      "expert_detail": {
+        "NEW": 41,
+        "DUPLICATE": 25,
+        "LANGUAGE": 8
+      },
+      "learing_detail": {
+        "DUPLICATE": 1,
+        "NEW": 6,
+        "LANGUAGE": 1
+      },
+      "collection": {
+        "NEW": 2
+      },
+      "explore": {
+        "NEW": 6,
+        "LANGUAGE": 6,
+        "DUPLICATE": 3
+      },
+      "shuziwenwu": {
+        "NEW": 1
+      },
+      "activity": {
+        "NEW": 4
+      },
+      "singles_detail": {
+        "NEW": 5
+      },
+      "classify_detail": {
+        "LANGUAGE": 2,
+        "NEW": 15
+      },
+      "volunteer": {
+        "NEW": 1
+      },
+      "association_related": {
+        "NEW": 1
+      },
+      "teaching": {
+        "NEW": 1
+      },
+      "training": {
+        "NEW": 1
+      },
+      "curriculum": {
+        "NEW": 1
+      },
+      "architectural_art": {
+        "LANGUAGE": 1,
+        "NEW": 3
+      },
+      "building": {
+        "NEW": 1,
+        "LANGUAGE": 2
+      },
+      "announce_detail": {
+        "NEW": 7
+      },
+      "bottom": {
+        "NEW": 1,
+        "LANGUAGE": 1
+      },
+      "topic": {
+        "LANGUAGE": 1
+      },
+      "about": {
+        "NEW": 1
+      },
+      "lights": {
+        "NEW": 1
+      },
+      "About": {
+        "NEW": 1
+      }
+    }
+  },
+  "serial": {
+    "counts": {
+      "probe_dispatch": 2,
+      "model_dispatch": 1
+    },
+    "new": 1,
+    "rows": {
+      "NEW": 1
+    },
+    "outcomes": [
+      [
+        "simplified_chinese_not_evidenced",
+        null
+      ],
+      [
+        null,
+        "p1"
+      ]
+    ],
+    "menus": [
+      {
+        "p1": "https://www.dpm.org.cn/About.html"
+      }
+    ]
+  },
+  "overlap": {
+    "counts": {
+      "probe_dispatch": 2,
+      "model_dispatch": 1
+    },
+    "new": 2,
+    "rows": {
+      "NEW": 2
+    },
+    "outcomes": [
+      [
+        "simplified_chinese_not_evidenced",
+        null
+      ],
+      [
+        "published_candidate",
+        null
+      ],
+      [
+        null,
+        "p1"
+      ],
+      [
+        null,
+        "p2"
+      ]
+    ],
+    "menus": [
+      {
+        "p1": "https://www.dpm.org.cn/lights/royal.html",
+        "p2": "https://www.dpm.org.cn/about/organization.html"
+      }
+    ]
+  },
+  "invalid": {
+    "counts": {
+      "probe_dispatch": 1,
+      "model_dispatch": 1
+    },
+    "new": 0,
+    "rows": {},
+    "outcomes": [
+      [
+        "invalid_business_decision",
+        "p1"
+      ]
+    ],
+    "menus": [
+      {
+        "p1": "https://www.dpm.org.cn/learing_detail/379645.html"
+      }
+    ]
+  },
+  "partial": {
+    "counts": {
+      "probe_dispatch": 2,
+      "model_dispatch": 1
+    },
+    "new": 1,
+    "rows": {
+      "NEW": 1
+    },
+    "outcomes": [
+      [
+        null,
+        "p1"
+      ],
+      [
+        "invalid_business_decision",
+        "p2"
+      ]
+    ],
+    "menus": [
+      {
+        "p1": "https://www.dpm.org.cn/bottom/aboutus.html",
+        "p2": "https://www.dpm.org.cn/classify_detail/257625.html"
+      }
+    ]
+  },
+  "peer": {
+    "counts": {},
+    "new": 0,
+    "rows": {},
+    "outcomes": [
+      [
+        "page_work_in_flight",
+        null
+      ]
+    ],
+    "menus": []
+  },
+  "owner": {
+    "counts": {
+      "probe_dispatch": 1,
+      "model_dispatch": 1
+    },
+    "new": 1,
+    "rows": {
+      "NEW": 1
+    },
+    "outcomes": [
+      [
+        null,
+        "p1"
+      ]
+    ],
+    "menus": [
+      {
+        "p1": "https://www.dpm.org.cn/announce_detail/379784.html"
+      }
+    ]
+  },
+  "edge_cases": {
+    "planning_queued_vs_dispatched": [
+      "当前规则新词",
+      "已结算旧词"
+    ],
+    "target_isolation": true,
+    "landing_alias_deduplication": true,
+    "hash_route_preserved": true,
+    "historical_cache_read_only": true,
+    "held_request_states_unchanged": [
+      "reserved",
+      "unknown"
+    ],
+    "rank_first_ten": [
+      "high",
+      "high",
+      "high",
+      "high",
+      "new",
+      "high",
+      "high",
+      "high",
+      "high",
+      "new"
+    ]
+  },
+  "real_network_or_model_calls": 0,
+  "production_mutations": 0
+}

@@ -4,7 +4,7 @@ import re
 from webcollect.model_gateway import ModelGateway
 from webcollect.batch_core import OutcomeUnknown, save_json, load_json
 from webcollect.planning import object_sha256, verify_evidence
-from .discovery_agent import model_decision, PLAN_SCHEMA
+from .discovery_agent import model_decision, original_model_result, started_model_job, PLAN_SCHEMA
 from .discovery_tools import reference
 
 PROMPT = ('只生成1–2个面向目标类目的功能型中文搜索词，用于发现此前未发现的公开中文应用。'
@@ -56,16 +56,19 @@ def next_query(pool, ledger, run, key, categories, state, failures, root, *, ind
             payload['purpose_policy']=VERSION
             payload['goal']='寻找有第一方证据、基本公开业务内容且与目标站点主类一致的入口。'
             payload['instruction']+=' '+SYSTEM
-        # Freeze before model dispatch; interruption resumes this exact input.
         original=pool.checkpoint(run,checkpoint+'/input')
-        if original is None and page_feedback:
+        started=started_model_job(ledger,'ai-search-plan',payload['scope'])
+        schema=PLAN_SCHEMA
+        if started:
+            payload=started[1]['input'];schema=started[1]['schema']
+        elif page_feedback:
             from .producer_page_feedback import snapshot,QUERY_VERSION,INSTRUCTION
             summary,ref=snapshot(ledger,root)
             payload.update(version=QUERY_VERSION,page_visit_feedback=summary,page_visit_feedback_reference=ref)
             payload['instruction']+=INSTRUCTION
-        payload=original if original is not None else pool.checkpoint(run,checkpoint+'/input',payload)
+        if original is None:pool.checkpoint(run,checkpoint+'/input',payload)
         if payload.get('page_visit_feedback_reference'):verify_evidence([payload['page_visit_feedback_reference']])
-        job_id=object_sha256({'kind':'ai-search-plan','payload':{'input':payload,'schema':PLAN_SCHEMA,'image_refs':[]}})
+        job_id=started[0] if started else object_sha256({'kind':'ai-search-plan','payload':{'input':payload,'schema':schema,'image_refs':[]}})
         from .producer_authority import disjoint_requests
         isolated = disjoint_requests(ledger,scope=payload['scope'],categories=categories,independent=True) if independent else ()
         with ledger.connect() as con:
@@ -74,9 +77,9 @@ def next_query(pool, ledger, run, key, categories, state, failures, root, *, ind
                     "SELECT 1 FROM model_requests WHERE job_id=? AND state IN ('reserved','unknown') LIMIT 1",
                     (job_id,)).fetchone():
                 raise OutcomeUnknown('Original model request unresolved; category planner cannot dispatch: '+job_id)
-        plan=model_decision(ledger,ModelGateway(ledger),'ai-search-plan',payload,PLAN_SCHEMA)
+        plan=original_model_result(ledger,job_id) if started else model_decision(ledger,ModelGateway(ledger),'ai-search-plan',payload,schema)
         from jsonschema import Draft202012Validator
-        Draft202012Validator(PLAN_SCHEMA).validate(plan)
+        Draft202012Validator(schema).validate(plan)
         path=root/('query-plan-'+object_sha256(run+'/'+checkpoint)+'.json')
         save_json(path,{'input':payload,'output':plan})
         frozen=pool.checkpoint(run,checkpoint,{'plan':plan,'reference':reference(path)})

@@ -239,14 +239,16 @@ class SitePool:
             con.commit()
         return identity
 
-    def freeze_run(self, run_id, config, *, inventory=True):
+    def freeze_run(self, run_id, config, *, inventory=True, constraints=None):
         if inventory:
             self.verify_identity_evidence()
         with self.connect(write=True) as con:
             begin_immediate(con)
             old = con.execute('SELECT * FROM runs WHERE id=?', (run_id,)).fetchone()
             if old:
-                if old['config'] != canonical(config):
+                original = json.loads(old['config'])
+                matches = canonical(constraints(original)) == canonical(constraints(config)) if constraints else old['config'] == canonical(config)
+                if not matches:
                     raise ValueError('Run configuration cannot change on resume')
                 return json.loads(old['baseline'])
             baseline = [dict(r) for r in con.execute('SELECT id,host,name FROM applications ORDER BY id')] if inventory else []

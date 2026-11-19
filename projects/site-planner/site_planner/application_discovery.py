@@ -504,7 +504,7 @@ def classify_homepage(pool, ledger, document, output, *, protocol='producer-site
     The protocol value is caller data; the classification behavior is single-current.
     """
     from webcollect.model_gateway import ModelGateway
-    from .discovery_agent import model_tool_decision
+    from .discovery_agent import model_tool_decision, original_model_result, started_model_job
     from .entry_selection import VERSION
     verify_document(document)
     if document.get('site_evidence')!='homepage' or not document.get('chinese'):
@@ -543,7 +543,15 @@ def classify_homepage(pool, ledger, document, output, *, protocol='producer-site
             '健康科普面向公众，须有健康知识、疾病或预防内容服务证据。'
             ' 音乐播放平台归音乐，综合视频平台归视频，短视频归短视频；不得因旧15类枚举缺项而归UNKNOWN。具体业务类型优先采用新增的准确父类，仍须首页事实支持。quote_ids最多6个。')
     tools=[{'type':'function','function':{'name':'submit_site_classification','description':system,'parameters':schema}}]
-    jid,envelope=model_tool_decision(ledger,ModelGateway(ledger),'ai-application-site-classification-1',payload,tools,system=system)
+    prior=started_model_job(ledger,'ai-application-site-classification-1',app['id'],homepage=document['reference'])
+    if prior:
+        original=prior[1]
+        if original['input'].get('homepage_material')!=payload['homepage_material']:
+            raise OutcomeUnknown('Original homepage quotation mapping differs; no replacement: '+prior[0])
+        payload=original['input']
+        jid,envelope=prior[0],original_model_result(ledger,prior[0],tool=True)
+    else:
+        jid,envelope=model_tool_decision(ledger,ModelGateway(ledger),'ai-application-site-classification-1',payload,tools,system=system)
     result=envelope['arguments'];path=Path(output)/('site-classification-'+jid+'.json')
     save_json(path,{'protocol':payload['protocol'],'job_id':jid,'request_id':envelope['request_id'],
                     'tool_call_id':envelope['tool_call_id'],'arguments':result,'homepage_reference':document['reference']})

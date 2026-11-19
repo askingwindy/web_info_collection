@@ -23,7 +23,7 @@ from .candidate_pool import (CandidatePool, VERSION2, validate_target, normalize
                              validate_candidate_v2)
 from .site_pool import SitePool, page_uri, host_identity
 from .discovery_tools import glm_search, reference
-from .entry_access import POLICY as ENTRY_HTTP_POLICY, check_entry
+from .entry_access import check_entry
 from .discovery_agent import model_decision, model_tool_decision, SettledSelectionRejected
 from .qualification import CANONICAL_CATEGORIES, BUSINESS_CATEGORIES
 from . import entry_selection as selection
@@ -91,14 +91,6 @@ def reference_article_for_tool_query(query, hit):
     return bool(re.search(r'使用指南|操作教程|工具推荐|APP\s*推荐',title)
         or re.search(r'作者\s*\n',content)
         or '/article/details/' in hit['uri'] or '/article/' in hit['uri'])
-
-
-def _entry_http_binding(previous, config):
-    if previous is not None and 'entry_http_policy' not in previous:
-        return {}  # Original batches retain their frozen policy and receipts.
-    if config['mode']=='real' and not config.get('site_failure_guard'):
-        raise ValueError('Real producer entry checks require the original whole-site failure guard')
-    return {'entry_http_policy': ENTRY_HTTP_POLICY}
 
 
 def _save_bound_json(path, value):
@@ -198,8 +190,6 @@ class QueryPolicy:
         return zero >= threshold
 
     def next_query(self, state):
-        if state.get('version') != QUERY_POLICY:
-            raise ValueError('Original query policy version required')
         threshold = state.get('stall_threshold', 2)
         per = self._entries(state)
         eligible, stalled = [], []
@@ -248,9 +238,8 @@ def fold_query_state(pool_pool, run_id, policy):
     state = policy.initial_state()
     if row:
         saved = json.loads(row['value'])
-        if saved.get('version') != QUERY_POLICY:
-            raise ValueError('Original query policy state version required')
-        state.update(saved)
+        for field in ('queries', 'order', 'blocked'):
+            state[field] = saved[field]
     state['stall_threshold'] = policy.stall_threshold
     state['per_direction_cap'] = policy.cap
     return state
@@ -436,17 +425,15 @@ def _publish_entry(pool, ledger, batch, root, header, candidate, source, row, *,
     if shared_language is None:
         return pool.record_row_conclusion(header, result='HELD',
             reason='rendered_observation_missing', original_row=row)
-    if source.get('simplified_chinese_only'):
-        script = selection.simplified_chinese_evidence(shared_language[0])
-        if not script['eligible']:
-            return pool.record_row_conclusion(header, result='REJECTED',
-                reason='simplified_chinese_not_evidenced',
-                original_row={**row, 'page_language_evidence': script})
-        source = {**source, 'page_language_evidence': script}
+    if exclusions and selection.entry_is_excluded(shared_language[0]['landed_uri'], exclusions):
+        return pool.record_row_conclusion(header, result='REJECTED',
+            reason='operator_landing_exclusion', original_row=row)
+    script = selection.simplified_chinese_evidence(shared_language[0])
+    if not script['eligible']:
+        return pool.record_row_conclusion(header, result='REJECTED',reason='simplified_chinese_not_evidenced',
+            original_row={**row,'page_language_evidence':script})
+    source = {**source,'simplified_chinese_only':True,'page_language_evidence':script}
     if shared_language is not None:
-        if exclusions and selection.entry_is_excluded(shared_language[0]['landed_uri'], exclusions):
-            return pool.record_row_conclusion(header, result='REJECTED',
-                reason='operator_landing_exclusion', original_row=row)
         from .page_consumption import blank_frame_exclusion, required_login_exclusion
         blank = blank_frame_exclusion(shared_language[1]) or required_login_exclusion(shared_language[1])
         if blank:
@@ -572,20 +559,14 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
         raise ValueError('Bounded explicit batch key required')
     run_id = session_id + '/entry-batch/' + scope_tail
     with pool.pool.connect() as con:
-        frozen_rows = {r['id']: json.loads(r['config']) for r in con.execute(
-            'SELECT id,config FROM runs WHERE id IN (?,?)', (session_id,run_id))}
-    previous = frozen_rows.get(session_id, {})
-    previous_batch = frozen_rows.get(run_id, {})
+        row=con.execute('SELECT config FROM runs WHERE id=?',(run_id,)).fetchone()
+    previous_batch=json.loads(row['config']) if row else {}
     category_only=bool(categories and discovery_mode=='new-sites' and not (queries or sources or directions or goals_path))
     if search_engine is None:
         search_engine=previous_batch.get('search_engine') or ('public' if category_only else 'search_std')
     scoped_expand=bool(discovery_mode=='expand' and allowed_hosts)
     if search_engine=='public' and (not (category_only or scoped_expand) or probe_search_hold):
         raise ValueError('Public search requires category-only new-sites. A paid probe requires an explicit BigModel search engine.')
-    table_policy = previous_batch.get('table_policy') if previous_batch else site_tables.POLICY
-    if table_policy:
-        if table_policy != site_tables.POLICY: raise ValueError('Unsupported frozen site-table policy')
-        site_tables.Discovery(pool,install=True)
     if previous_batch:
         if max_batches is None:
             max_batches = previous_batch['max_batches']
@@ -593,10 +574,8 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
             max_searches = previous_batch['max_searches']
         if per_direction_cap is None:
             per_direction_cap = previous_batch.get('query_policy',previous_batch).get('per_direction_cap')
-    http_binding = _entry_http_binding(frozen_rows.get(run_id),config)
-    # The grounded business-content entry pipeline is the only producer path.
-    # A frozen batch resumes with its recorded run-config metadata as data.
-    model_protocol = (previous_batch or previous).get('model_protocol') or 'entry-tools'
+    if config['mode']=='real' and not config.get('site_failure_guard'):
+        raise ValueError('Real producer entry checks require the original whole-site failure guard')
     from .grounded_entries import produce as produce_grounded
     return produce_grounded(config,pool_path=pool_path,ledger_path=ledger_path,output=output or previous_batch.get('output'),
         history_set=history_set or previous.get('current_chain_manifest',{}).get('path'),
@@ -604,7 +583,7 @@ def produce_entries(config, *, pool_path, ledger_path, output=None, history_set=
         max_searches=max_searches,max_batches=max_batches,batch_size=batch_size,search_engine=search_engine,
         stall_threshold=stall_threshold,per_direction_cap=per_direction_cap,batch_key=batch_key,
         excluded_applications=excluded_applications,discovery_mode=discovery_mode,feedback_scope=feedback_scope,
-        search_count=search_count,entry_selection=entry_selection,model_protocol=model_protocol,categories=categories,
+        search_count=search_count,entry_selection=entry_selection,categories=categories,
         probe_search_hold=probe_search_hold,dispatch_holds=dispatch_holds,producer_pipeline=producer_pipeline,
         producer_optimization=producer_optimization, application_pending_cap=application_pending_cap, application_new_target=application_new_target, allowed_hosts=allowed_hosts, site_expansion=site_expansion, prefer_simplified_chinese=prefer_simplified_chinese)
 def main(argv=None):

@@ -282,13 +282,15 @@ class CandidateStorageCore(unittest.TestCase):
         from webcollect.batch_core import BudgetStop, OutcomeUnknown
         from site_planner.producer_authority import claim_producer_job
         from site_planner.producer_business_content import _purpose_holds
-        from site_planner.discovery_agent import model_tool_decision
+        from site_planner.discovery_agent import model_tool_decision, started_model_job
         ledger = BatchLedger(temporary / 'capacity.sqlite3', offline_config(), initialize=True)
         payload = {'scope': 'old-scope', 'source_uris': ['https://example.org/unsettled']}
         frozen = {'protocol': 'native-tool-1', 'input': payload, 'tools': [],
                   'system': 'original', 'reasoning_effort': 'low'}
         old_id = ledger.enqueue('ai-target-page-purpose-1', frozen)
+        self.assertIsNone(started_model_job(ledger,'ai-target-page-purpose-1',payload['scope']))
         ledger.claim('ai-target-page-purpose-1', job_id=old_id)
+        self.assertEqual(started_model_job(ledger,'ai-target-page-purpose-1',payload['scope']),(old_id,frozen))
         with ledger.transaction() as con:
             con.execute('UPDATE jobs SET lease=? WHERE id=?', (time.time()-10, old_id))
             for state in ('unknown', 'reserved'):

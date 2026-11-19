@@ -611,8 +611,13 @@ class CandidatePoolContract(unittest.TestCase):
                 application_id = connection.execute(
                     'SELECT application_id FROM data_candidates WHERE candidate_id=?', (cid,)).fetchone()[0]
             run_id = 'offline-core-tests/entry-batch/concurrent-limit'
-            pool.pool.freeze_run(run_id, {'application_new_target': 1,
+            from site_planner.grounded_entries import batch_constraints
+            pool.pool.freeze_run(run_id, {'purpose_system':'retired','model_protocol':'historical','application_new_target': 1,
                                          'application_pending_cap': 100}, inventory=False)
+            limits={'application_new_target':1,'application_pending_cap':100}
+            pool.pool.freeze_run(run_id,limits,inventory=False,constraints=batch_constraints)
+            with self.assertRaisesRegex(ValueError,'configuration'):
+                pool.pool.freeze_run(run_id,{**limits,'application_new_target':2},inventory=False,constraints=batch_constraints)
             source = {'origin': 'codex_session', 'run_id': 'offline-core-tests',
                       'references': [reference(proof)]}
 
@@ -661,6 +666,10 @@ class CandidatePoolContract(unittest.TestCase):
             rejected = _publish_entry(fake_pool, None, 'batch', None, header,
                 {'entry_url': 'https://zh.wikipedia.org/wiki/物理学'}, excluded_source, {})
         self.assertEqual(rejected['reason'], 'operator_landing_exclusion')
+        with patch('site_planner.producer_observation.from_pool', return_value=(
+                {'landed_uri':'https://example.org/entry','content':'這個頁面只提供繁體業務內容。'*8}, {})):
+            rejected=_publish_entry(fake_pool,None,'batch',None,header,{'entry_url':'https://example.org/entry'},{},{})
+        self.assertEqual(rejected['reason'],'simplified_chinese_not_evidenced')
         with patch('site_planner.producer_observation.from_pool', return_value=None), \
              patch('site_planner.candidate_discovery.check_entry', side_effect=AssertionError('HTTP-only publication')):
             held = _publish_entry(fake_pool, None, 'batch', None, header,

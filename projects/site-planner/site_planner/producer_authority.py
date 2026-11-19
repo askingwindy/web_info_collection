@@ -41,7 +41,7 @@ def isolation_host(uri,registry):
     return urlsplit(canonical_key(uri,registry)).hostname.removeprefix('www.')
 
 
-def grounded_timeout_scope(pool, config, row):
+def grounded_timeout_scope(pool, config, row, ledger_path):
     """Bind the timed-out numbered rows to their original checkpoint and hosts."""
     payload = json.loads(row['payload'])['input']
     scope = payload['scope']
@@ -59,7 +59,7 @@ def grounded_timeout_scope(pool, config, row):
     links = prepared['links'][int(offset):int(offset)+frozen['batch_size']]
     menu = [{'row':i,'quotes':{str(j):q for j,q in enumerate(dict.fromkeys(
         q for q in (h['anchor'],h['heading']) if q))}} for i,h in enumerate(links)]
-    if (not links or frozen['config_sha256'] != object_sha256(config) or menu != payload['links']):
+    if (not links or Path(frozen['ledger']).resolve()!=Path(ledger_path).resolve() or menu != payload['links']):
         raise ValueError('Cannot bind original model rows to frozen site URLs')
     return {'job_id':row['job_id'],'scope':scope,'checkpoint':key,'checkpoint_sha256':object_sha256(prepared),
             'source_urls':sorted({h['uri'] for h in links})}
@@ -135,7 +135,7 @@ def authorize(scope_path, deferred_requests, reason):
             row = con.execute("SELECT r.state,r.error,r.job_id,r.finished,r.response,j.kind,j.payload,j.attempts,j.state AS job_state FROM model_requests r "
                               "JOIN jobs j ON j.id=r.job_id WHERE r.id=?", (rid,)).fetchone()
             if row and row['state']=='unknown' and row['kind']=='ai-grounded-entry-ids-1':
-                deferred[rid] = grounded_timeout_scope(pool,config,row)
+                deferred[rid] = grounded_timeout_scope(pool,config,row,ledger.path)
                 continue
             if not row or (row['state'],row['kind'],row['job_state']) != ('unknown','ai-candidate-entry-tool-1','review_required'):
                 raise ValueError('Original unsettled entry selection required')

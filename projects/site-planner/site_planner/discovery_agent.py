@@ -33,6 +33,22 @@ ASSESS_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'page_kind': {'enum': ['TARGET_APPLICATION', 'DIRECTORY_OR_INTRODUCTION', 'DOWNLOAD_OR_ARTICLE', 'UNKNOWN']}}}
 
 
+def started_model_job(ledger, kind, scope, *, homepage=None):
+    predicate="json_extract(j.payload,'$.input.scope')=?"
+    values=[scope]
+    if homepage is not None:
+        predicate="json_extract(j.payload,'$.input.application_id')=? AND json_extract(j.payload,'$.input.homepage_reference.path')=? AND json_extract(j.payload,'$.input.homepage_reference.sha256')=?"
+        values=[scope,homepage['path'],homepage['sha256']]
+    with ledger.connect() as con:
+        jobs = con.execute('SELECT j.id,j.payload,j.state,j.attempts FROM jobs j WHERE j.kind=? AND '+predicate+' '
+            "AND (j.attempts>0 OR j.state!='queued' OR EXISTS(SELECT 1 FROM model_requests r WHERE r.job_id=j.id)) "
+            "ORDER BY j.created,j.id LIMIT 2", (kind,*values)).fetchall()
+    if len(jobs)>1:raise OutcomeUnknown('Multiple original model jobs for this scope; no replacement: '+scope)
+    if jobs and jobs[0]['state']=='queued' and not jobs[0]['attempts']:
+        raise OutcomeUnknown('Original request exists for an unclaimed job; no replacement: '+jobs[0]['id'])
+    return (jobs[0]['id'],json.loads(jobs[0]['payload'])) if jobs else None
+
+
 def model_decision(ledger, gateway, purpose, payload, schema, *, images=(), output_limit=None):
     jid = ledger.enqueue(purpose, {'input': payload, 'schema': schema,
                                   'image_refs': [reference(p) for p in images], **({'output_limit':output_limit} if output_limit else {})})
@@ -87,6 +103,14 @@ def _raise_settled_selection(ledger,jid):
         raise SettledSelectionRejected(jid,[r['id'] for r in rows])
 
 
+def original_model_result(ledger, job_id, *, tool=False):
+    job=ledger.get(job_id)
+    if job['state']=='done':return job['result']
+    _raise_provider_rejected(ledger,job_id)
+    if tool and job['state']=='review_required':_raise_settled_selection(ledger,job_id)
+    raise OutcomeUnknown('Original model job has no settled result; no replacement: '+job_id)
+
+
 def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, reasoning_effort='low', isolated_requests=(), source_uris=()):
     """One durable selection tool call, without a follow-up completion to ack IO."""
     if isolated_requests:
@@ -110,13 +134,8 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
               'system': system, 'reasoning_effort': reasoning_effort}
     jid = ledger.enqueue(purpose, frozen)
     old = ledger.get(jid)
-    if old['state'] == 'done':
-        return jid, old['result']
     if old['state'] != 'queued' or old['attempts']:
-        _raise_provider_rejected(ledger, jid)
-        if old['state']=='review_required':
-            _raise_settled_selection(ledger,jid)
-        raise OutcomeUnknown('Original tool selection unresolved; no replacement: ' + jid)
+        return jid,original_model_result(ledger,jid,tool=True)
     with ledger.connect() as con:
         parallel=bool(ledger.producer_concurrency and ledger.max_concurrent_jobs>1)
         from .producer_authority import isolation_host
@@ -125,21 +144,19 @@ def model_tool_decision(ledger, gateway, purpose, payload, tools, *, system, rea
         current_hosts={isolation_host(uri,registry) for uri in current_urls}
         for unresolved in con.execute("SELECT r.id,r.job_id,r.state,r.response,j.kind,j.payload FROM model_requests r JOIN jobs j ON j.id=r.job_id "
                 "WHERE r.state IN ('reserved','unknown') OR (r.state='failed' AND json_extract(r.response,'$.provider_error.http_status') BETWEEN 400 AND 499)"):
+            if purpose==unresolved['kind']=='ai-target-page-purpose-1' and current_urls:
+                original_urls=json.loads(unresolved['payload']).get('input',{}).get('source_uris') or []
+                if original_urls and {entry_identity(uri) for uri in current_urls}.isdisjoint(entry_identity(uri) for uri in original_urls):continue
+                if original_urls and unresolved['state'] in ('reserved','unknown'):
+                    raise OutcomeUnknown('Original page purpose request unresolved: '+unresolved['id'])
             if unresolved['state'] in ('unknown','failed') and unresolved['id'] in isolated_requests:continue
             if parallel and unresolved['job_id']!=jid:
                 # A live independent job owns its own claim/reservation. It is
                 # not an UNKNOWN outcome and must not lock the whole ledger.
                 if unresolved['state']=='reserved':continue
                 original=json.loads(unresolved['payload']).get('input',{})
-                if (unresolved['kind']=='ai-target-page-purpose-1' and current_urls
-                        and original.get('source_uris')
-                        and {entry_identity(u) for u in current_urls}.isdisjoint(
-                            {entry_identity(u) for u in original['source_uris']})):
-                    # A purpose UNKNOWN belongs to its exact original pages, not
-                    # every page sharing this host (page-scoped holds in
-                    # producer_business_content); page-disjoint new work is
-                    # not blocked by it, whatever the original error type.
-                    continue
+                if (unresolved['kind']=='ai-target-page-purpose-1' and current_urls and original.get('source_uris')
+                        and {entry_identity(uri) for uri in current_urls}.isdisjoint(entry_identity(uri) for uri in original['source_uris'])):continue
                 original_urls=(original.get('source_uris',[]) if unresolved['kind']=='ai-target-page-purpose-1'
                                else [original['homepage_uri']] if unresolved['kind']=='ai-application-site-classification-1' and original.get('homepage_uri') else [])
                 original_hosts={isolation_host(uri,registry) for uri in original_urls}

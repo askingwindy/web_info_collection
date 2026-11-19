@@ -1,5 +1,6 @@
 """Public first-party business evidence only; consumer goals belong to consumers."""
 from webcollect import workspace_json as json
+from contextlib import ExitStack
 import re
 import time
 
@@ -11,8 +12,9 @@ from webcollect.planning import canonical, object_sha256, verify_evidence
 from . import page_purpose_v6 as previous
 from . import producer_observation
 from .discovery_agent import model_tool_decision
-from .entry_selection import PAGE_TYPES
+from .entry_selection import PAGE_TYPES, simplified_chinese_evidence
 from .candidate_pool import entry_identity
+from . import producer_dispatch as dispatch
 
 VERSION = 'producer-business-value-3'
 CACHE = 'producer-business-value-decisions-3'
@@ -29,16 +31,11 @@ SYSTEM = ('判断本页是否有与站点主营相关的基本公开业务内容
           '标题、日期、空来源作者、导航、分页、版权与站点权威不能独自证明本页业务；没有正文不能说正文被省略而补推。'
           '短的真实说明、工具控件、有内容的条目列表允许，不要求长正文；列表价值或截断材料不足时保留UNKNOWN。'
           'omitted_main_units与excluded_non_main_units分开；省略部分不构成已见正文证据。不得从另一页借编号。'
-          'page_type及purpose_quote_ids仅为可选辅助信息；不确定或证据不合适直接UNKNOWN或省略，不影响业务判断。'
           '本次只调用submit_supply_decisions一次。没有inspect、补分类或重试请求，不要求结构编号，不回抄正文。'
-          '返回decisions对象，每个提供的page_key必须逐字完整返回，不省略或以placeholder代替；不回传row、URL或数据库ID，不声明消费、QC或人工通过。'
+          'decisions只用本次的p1、p2等页码作键，每页恰好一项。每项只填business、business_quote_ids、content_kind、public_access；不要写原因或添加其他键。'
           ' 新政策：public_access只可为public_content/login_required/UNKNOWN。登录后才能使用的界面不选；公开可独立读取的具体产品条件、业务查询、条目列表与知识正文允许，不要求直接交易或输入。'
           ' content_kind必须是tool、business_information、business_list、business_content、support、marketing、legal、UNKNOWN之一。具体费用、年龄/容量/期限/适用条件可作business_information；只有口号、产品功能泛宣传、使用教程、售后/隐私/服务协议、登录帮助不选。'
           ' 只能引用原截图当帧可见的主区材料，DOM中后来出现或当前不可见内容不能证明公开业务。')
-
-# The frozen grounded_entries caller still reads these historical V3 names.
-VERSION_V3 = VERSION
-SYSTEM_V3 = SYSTEM
 
 QUOTES = {'type': 'array', 'maxItems': 6, 'uniqueItems': True,
           'items': {'type': 'string', 'pattern': '^q[0-9]+$'}}
@@ -48,21 +45,27 @@ CORE = {'type': 'object', 'required': ['business', 'business_quote_ids'], 'prope
     'business': {'enum': ['public_business', 'support', 'marketing', 'mismatch', 'UNKNOWN']},
     'business_quote_ids': QUOTES,
     'reason': {'type': 'string', 'minLength': 1, 'maxLength': 250}}}
+DECISION = {'type':'object','additionalProperties':False,'required':['business','business_quote_ids','content_kind','public_access'],
+    'properties':{'business':CORE['properties']['business'],'business_quote_ids':QUOTES,
+        'content_kind':{'enum':['tool','business_information','business_list','business_content','support','marketing','legal','UNKNOWN']},
+        'public_access':{'enum':['public_content','login_required','UNKNOWN']}}}
 
 
-def evidence_for(pool, ledger, link, *, policy=None):
+def evidence_for(pool, ledger, link):
     """Never fetch another document to fill a classification or evidence gap."""
     original = producer_observation.from_pool(pool, ledger, link['uri'])
     if original is None:
         return None
     doc, result = original
-    evidence = previous.material({'reference': result['document'], 'raw_html': doc['rendered_dom'],
-                                 'encoding': 'utf-8', 'uri': doc['landed_uri']})
+    evidence = dict(version=VERSION, document=result['document'], raw_html=doc['raw_html'],
+                    rendered_dom=doc['rendered_dom'], observation=result['observation'], landed_uri=doc['landed_uri'],
+                    screenshot=result['image'], source_probe_job_id=doc['job_id'], source_probe_visit_id=doc['visit_id'],
+                    page_language_evidence=simplified_chinese_evidence(doc), material_source='shared_anonymous_rendered_dom')
+    if not evidence['page_language_evidence']['eligible']:return evidence
+    material = previous.material({'reference':result['document'],'raw_html':doc['rendered_dom'],
+                                  'encoding':'utf-8','uri':doc['landed_uri']})
+    evidence = {**material,**evidence}
     from .producer_eligibility import visible_units
-    evidence.update(version=VERSION, document=result['document'], raw_html=doc['raw_html'],
-                    rendered_dom=doc['rendered_dom'], observation=result['observation'],
-                    screenshot=result['image'], source_probe_job_id=doc['job_id'],
-                    source_probe_visit_id=doc['visit_id'], material_source='shared_anonymous_rendered_dom')
     evidence['units'],evidence['page_eligibility']=visible_units(evidence)
     return evidence
 
@@ -70,7 +73,6 @@ def evidence_for(pool, ledger, link, *, policy=None):
 def prepare(link, evidence, model):
     binding = object_sha256([evidence.get('version',VERSION), evidence['document'], evidence['rendered_dom'],
                             previous.site_context(link), link['uri'], model])
-    key = 'p' + binding[:12]
     units = evidence['units']
     chosen, seen, size = [], set(), 0
     main = [u for u in units if u.get('region')]
@@ -92,8 +94,8 @@ def prepare(link, evidence, model):
     menu = {'q' + str(i): u for i, u in enumerate(chosen)}
     evidence.update(menu=menu, structures=previous.structure.facts(evidence),
                     evidence_characters=size, omitted_units=len(units) - len(chosen))
-    visible = {'page_key': key, 'title': evidence.get('title', ''),
-               'site_context': previous.site_context(link),
+    visible = {'title': evidence.get('title', ''),
+               'site_context': {'category':link.get('site_category')},
                'evidence': {q: u['kind'] + ': ' + u['text'][:900] for q, u in menu.items()},
                'omitted_units': evidence['omitted_units']}
     evidence['omitted_main_units'] = len(main) - len(chosen)
@@ -101,7 +103,7 @@ def prepare(link, evidence, model):
     visible.update(content_evidence_ids=content_ids(evidence),
                    omitted_main_units=evidence['omitted_main_units'],
                    excluded_non_main_units=evidence['excluded_non_main_units'])
-    return binding, key, visible
+    return binding, visible
 
 
 def quotes_valid(ids, menu):
@@ -147,7 +149,7 @@ def content_ids(evidence):
             if u.get('kind') in ('body', 'link', 'control') and not shell_reason(u, evidence)]
 
 
-def assess(proposal, evidence, *, policy=None):
+def assess(proposal, evidence):
     """Core errors can hold supply; auxiliary-purpose errors cannot."""
     try:
         Draft202012Validator(CORE).validate(proposal)
@@ -186,7 +188,7 @@ def assess(proposal, evidence, *, policy=None):
             'reason_origin': 'model' if 'reason' in proposal else REASON_REVISION}
 
 
-def _cache(pool, ledger, binding, *, version=VERSION, namespace=CACHE):
+def _cache(pool, ledger, binding, *, namespace=CACHE):
     cached = pool.pool.checkpoint(namespace, binding)
     if cached is None:
         return None
@@ -197,11 +199,27 @@ def _cache(pool, ledger, binding, *, version=VERSION, namespace=CACHE):
                               (call['request_id'], call['job_id'])).fetchone()
     if not request or request['state'] not in ('succeeded', 'invalid_response') or not request['usage']:
         raise OutcomeUnknown('Original supply request not settled; no replacement')
-    if (cached['binding'] != binding or cached['version'] != version
-            or original['payload']['input']['version'] != version
+    if (cached['binding'] != binding or cached['version'] != original['payload']['input']['version']
             or object_sha256(original['payload']['input']) != call['input_sha256']):
         raise ValueError('Original supply decision binding changed')
-    return cached
+    return {**cached,'original_prompt_changed':True} if original['payload']['system']!=SYSTEM else cached
+
+
+def reuse_proposal(record, cached):
+    evidence=record['target_evidence'];proposal=cached.get('proposal')
+    record.update(original_page_key=cached.get('page_key'),model_calls=[{**call,'reused':True} for call in cached['model_calls']])
+    if cached.get('original_prompt_changed'):record['reassessed_original_with_current_rules']=True
+    if isinstance(proposal,dict):
+        proposal={field:proposal[field] for field in DECISION['required'] if field in proposal}
+        old_menu=cached['target_evidence']['menu']
+        if isinstance(proposal.get('business_quote_ids'),list):
+            proposal['business_quote_ids']=[next((key for key,unit in evidence['menu'].items() if isinstance(quote,str)
+                and old_menu.get(quote)==unit),'unbound') for quote in proposal['business_quote_ids']]
+    valid=cached.get('selection_reason')!='invalid_business_decision' and Draft202012Validator(DECISION).is_valid(proposal)
+    record.update(proposal=proposal,**assess(proposal if valid else None,evidence))
+    if record['selection_reason']=='invalid_business_decision':record['status']='HELD'
+    elif not record['selected'] and (proposal['business'] in ('support','marketing','mismatch') or proposal['public_access']=='login_required'):
+        record['status']='REJECTED'
 
 
 def _purpose_holds(ledger):
@@ -217,15 +235,26 @@ def _purpose_holds(ledger):
     return held
 
 
-def classify(ledger, links, scope, root, *, pool, policy=None):
-    # The policy value is caller data; the supply implementation is single-current.
-    if policy not in (None, VERSION):
-        raise ValueError('Unsupported supply policy')
+def classify(ledger, links, scope, root, *, pool, recovering=False):
+    with ExitStack() as locks:
+        return _classify(ledger,links,scope,pool,locks,recovering)
+
+
+def _classify(ledger, links, scope, pool, locks, recovering):
     version,namespace,system=VERSION,CACHE,SYSTEM
     records, pending, calls, rows = [], {}, [], {}
     # A purpose UNKNOWN belongs to its exact original pages, not every page
     # sharing this batch/site. Keep it out of a new multi-page model request.
     held = _purpose_holds(ledger)
+    earlier={}
+    if recovering:
+        with ledger.connect() as connection:
+            originals=connection.execute("SELECT j.id,r.id AS request_id,r.state,json_extract(j.payload,'$.input.source_uris') AS uris "
+                "FROM jobs j JOIN model_requests r ON r.job_id=j.id WHERE j.kind='ai-target-page-purpose-1' "
+                "AND json_extract(j.payload,'$.input.scope')=?",(scope,))
+            for original in originals:
+                for uri in json.loads(original['uris']):
+                    earlier[entry_identity(uri)]={key:original[key] for key in ('id','request_id','state')}
     for index, link in enumerate(links):
         verify_evidence([link['reference']])
         record = {'row': index, 'link_id': link['link_id'], 'source_reference': link['reference'],
@@ -242,7 +271,7 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
                           original_requests=held[entry_identity(link['uri'])])
             continue
         try:
-            evidence = evidence_for(pool, ledger, link, policy=policy)
+            evidence = evidence_for(pool, ledger, link)
         except (OSError, OutcomeUnknown) as error:
             record.update(reason='原观察未决或不可读；不重开页面', evidence_error=type(error).__name__)
             continue
@@ -250,18 +279,25 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
             record['reason'] = '原成功观察未保存文档；不为补分类或材料重新读取'
             continue
         record['target_evidence'] = evidence
-        if evidence.get('page_eligibility',{}).get('status')=='REJECTED':
-            record.update(selection_reason=evidence['page_eligibility']['reason'],reason='原当帧中文/登录资格不满足；不派发业务模型')
+        script=evidence['page_language_evidence'];record['page_language_evidence']=script
+        if not script['eligible']:
+            record.update(status='REJECTED',selection_reason='simplified_chinese_not_evidenced',reason=script['reason'])
             continue
-        binding, key, visible = prepare(link, evidence, ledger.config.get('model'))
-        record.update(binding=binding, page_key=key)
-        cached = _cache(pool, ledger, binding,version=version,namespace=namespace)
+        if evidence.get('page_eligibility',{}).get('status')=='REJECTED':
+            record.update(status='REJECTED',selection_reason=evidence['page_eligibility']['reason'],reason='原当帧中文/登录资格不满足；不派发业务模型')
+            continue
+        remaining,existing=dispatch.unpublished(pool,link,evidence['landed_uri'])
+        if not remaining:
+            record.update(status='DUPLICATE',selection_reason='published_landing',candidate_ids=existing)
+            continue
+        link={**link,'producer_goals':remaining}
+        record['producer_goals']=remaining
+        binding, visible = prepare(link, evidence, ledger.config.get('model'))
+        record['binding']=binding
+        cached = _cache(pool, ledger, binding,namespace=namespace)
         if cached is not None:
-            records[index] = {**cached, 'row': index, 'link_id': link['link_id'],
-                              'source_reference': link['reference'],
-                              'model_calls': [{**call, 'reused': True} for call in cached['model_calls']]}
-            if cached['selected']:
-                rows[index] = previous.decision_row(link, cached)
+            reuse_proposal(record,cached)
+            if record['selected']:rows[index]=previous.decision_row(link,record)
             continue
         if not content_ids(evidence):
             record.update(selection_reason='no_citable_main_content',
@@ -270,25 +306,40 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
         if not evidence['menu']:
             record['reason'] = '原材料无主区业务证据；不派发空材料模型'
             continue
-        pending[key] = (index, link, record, visible)
+        available,keys=dispatch.claim_pages(pool,link,evidence['landed_uri'],locks)
+        if not available:
+            record.update(status='HELD',selection_reason='purpose_page_in_flight')
+            continue
+        link={**link,'producer_goals':available}
+        record['producer_goals']=available
+        cached=_cache(pool,ledger,binding,namespace=namespace)
+        if cached is not None:
+            reuse_proposal(record,cached)
+            if record['selected']:rows[index]=previous.decision_row(link,record)
+            continue
+        original=dispatch.prior_dispatch(ledger,keys) or earlier.get(entry_identity(link['uri']))
+        if original:
+            record.update(status='HELD',selection_reason='original_purpose_dispatch',original_requests=[original])
+            continue
+        record['dispatch_keys']=keys
+        pending[index] = (index, link, record, visible)
     while pending:
-        one = {**CORE, 'additionalProperties': False, 'properties': {
-            **CORE['properties'], 'page_type': {'enum': list(PAGE_TYPES)}, 'purpose_quote_ids': QUOTES}}
-        one['required']=[*one['required'],'content_kind','public_access']
-        one['properties'].update(content_kind={'enum':['tool','business_information','business_list','business_content','support','marketing','legal','UNKNOWN']},public_access={'enum':['public_content','login_required','UNKNOWN']})
+        pending={f'p{number}':value for number,value in enumerate(pending.values(),1)}
+        for key,(_,_,record,visible) in pending.items():record['page_key']=visible['page_key']=key
         schema = {'type': 'object', 'additionalProperties': False, 'required': ['decisions'],
                   'properties': {'decisions': {'type': 'object', 'additionalProperties': False,
-                    'required': list(pending), 'properties': {key: one for key in pending}}}}
+                    'required': list(pending), 'properties': {key: DECISION for key in pending}}}}
         payload = {'version': version, 'scope': scope,
                    'source_uris': [link['uri'] for _, link, _, _ in pending.values()],
                    'pages': [value[3] for value in pending.values()]}
         tools = [{'type': 'function', 'function': {'name': 'submit_supply_decisions',
-                  'description': '一次提交本页基本公开业务依据；用途可选，不生成消费者任务', 'parameters': schema}}]
+                  'description': '每个给定页码提交一次公开业务判断与本页引文编号。', 'parameters': schema}}]
         jid = object_sha256({'kind': 'ai-target-page-purpose-1', 'payload': {
             'protocol': 'native-tool-1', 'input': payload, 'tools': tools, 'system': system, 'reasoning_effort': 'low'}})
         mode, args, tid = 'native_tool', None, None
         with ledger.connect() as con:
             before_requests = {r[0] for r in con.execute('SELECT id FROM model_requests WHERE job_id=?', (jid,))}
+        dispatch.remember_dispatch(ledger,jid,[value[2] for value in pending.values()])
         try:
             jid, env = model_tool_decision(ledger, ModelGateway(ledger), 'ai-target-page-purpose-1',
                 payload, tools, system=system, source_uris=payload['source_uris'])
@@ -337,9 +388,15 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
                 'input_sha256': object_sha256(payload), 'response_mode': mode, 'reused': False}
         calls.append(call)
         decisions = args.get('decisions', {}) if isinstance(args, dict) else {}
+        call['missing_page_keys']=[key for key in pending if not isinstance(decisions,dict) or key not in decisions]
+        call['unexpected_page_keys']=[key for key in decisions if key not in pending] if isinstance(decisions,dict) else []
         for key, (index, link, record, _) in pending.items():
             proposal = decisions.get(key) if isinstance(decisions, dict) else None
-            record.update(proposal=proposal, model_calls=[call], **assess(proposal, record['target_evidence'],policy=policy))
+            valid=Draft202012Validator(DECISION).is_valid(proposal)
+            record.update(proposal=proposal, model_calls=[call], **assess(proposal if valid else None, record['target_evidence']))
+            if not valid:record['status']='HELD'
+            elif not record['selected'] and (proposal['business'] in ('support','marketing','mismatch') or proposal['public_access']=='login_required'):
+                record['status']='REJECTED'
             # Cache both accepted and rejected paid originals, including UNKNOWN
             # purpose/core failures. A different chunk is not another paid attempt.
             # Parallel batches may settle the same observed page independently.
@@ -348,12 +405,9 @@ def classify(ledger, links, scope, root, *, pool, policy=None):
             with pool.transaction() as con:
                 con.execute('INSERT OR IGNORE INTO checkpoints VALUES(?,?,?,?)',
                             (namespace, record['binding'], canonical(record), time.time()))
-            cached = _cache(pool, ledger, record['binding'],version=version,namespace=namespace)
+            cached = _cache(pool, ledger, record['binding'],namespace=namespace)
             if cached != record:
-                record = {**cached, 'row': index, 'link_id': link['link_id'],
-                          'source_reference': link['reference'],
-                          'model_calls': [{**c, 'reused': True} for c in cached['model_calls']]}
-                records[index] = record
+                reuse_proposal(record,cached)
             if record['selected']:
                 rows[index] = previous.decision_row(link, record)
         break

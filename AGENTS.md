@@ -18,6 +18,8 @@
 
 # Agent 接手说明
 
+2026-11-19 生产者现在对新工作使用启动时的当前代码与提示，不要求旧实现 SHA；原请求、授权与证据身份仍保留。故宫原件和竞争回放已离线通过，未启动新挖掘。见[更新规则与验证记录](docs/生产者按当前代码挖掘与提效修复-20261119.md)。
+
 2026-11-18 故宫运行后取证小修：`discovery_tools.py` 提前保存响应正文，确认最多同页两次，失败保留 JSON/PNG/DOM，区分空主区与签名变化。三份历史失败均为空签名；activity 可见正文投影漏检具体原因仍未知，不称原页已成功。定向6方法/7场景通过（0.329秒），维护44方法/45展开场景（≤50）；独立复审无必修。开始时工作区干净、registry无history_read_slot、stash为空，未执行restore。未真实请求、消费、提交或推送。见[修复记录](docs/生产者正文与确认帧修复-20261118.md)。
 
 2026-11-18 稳定性S1–S6进度同步：gpt-6.1-sol / medium首轮修复与独立审核均结束，**整体REQUIRES_FIXES，6项P1+3项P2必修尚未关闭，另有A01 P3提醒**（[当前进度与未关闭清单](docs/采集链路稳定性修复实施说明-20261117.md)、[独立审核](verify_results/collection-stability-repair-20261117-r01/independent-full-code-review.md)、[最终矩阵](verify_results/collection-stability-repair-20261117-r01/independent-requirements-matrix.json)）。F01入口业务拒绝误归program、F02原生DNS无截止、F03新claim领取改无关旧claim、F04跨根路径解析错误、F05无失败原件也可报终态PASS、F06外围异常丢原始处置/特征、F07禁用/readonly路由不符原生schema、F08已有HTTP响应的UNKNOWN漏计、F09启动probe中断缺自动报表。audit-session.json的STARTED_REVIEW_PENDING仅为较早启动回执。11-18只读核对248个产品/资源文件与最终审核快照一致，无后续修复证据；本次只更新文档，未改产品、运行测试或启动任务。
