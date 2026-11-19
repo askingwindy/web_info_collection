@@ -396,7 +396,8 @@ class StepwiseSession:
             frame_name = prompt.frame_page_name(frame['state'])
             response = await self.call(
                 phase='decision', system=self._system_prompt(),
-                tools=prompt.next_action_tools(autonomous=self.mode == 'autonomous', frame_name=frame_name),
+                tools=prompt.next_action_tools(autonomous=self.mode == 'autonomous', frame_name=frame_name,
+                                               complete_only=complete_only),
                 user_text=user_text, images=[frame['refs']['numbered']['path']],
                 reasoning_effort='low', dispatch_deadline=self._soft_deadline(),
                 request_deadline=self._hard_deadline(),
@@ -545,7 +546,8 @@ class StepwiseSession:
         if self.repeat_reject_run >= REPEAT_REJECT_LIMIT:
             self._stop('repeat_reject', '同视图同一动作连续 %d 次派发前拒绝' % REPEAT_REJECT_LIMIT, 'model')
         if reason.startswith('CURRENT_FRAME_CITATION:'):
-            self.feedback = '请从本帧正文复制连续短原文；无法辨认时用自己的话描述实际变化。' + reason
+            self.feedback = (prompt.citation_hint(frame['state'], reason) +
+                             '。请核对实际变化，只引用当前帧上的连续片段；不能把省略号、上一帧人名或页标题补进引文。' + reason)
         else:
             self.feedback = '上一决策被拒绝：%s。请修正后重试。' % reason
 

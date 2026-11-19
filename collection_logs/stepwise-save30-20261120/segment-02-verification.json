@@ -1,0 +1,26 @@
+{
+  "historic_replay": {
+    "omitted_status_caught_on_wire": 12,
+    "citation_rejections_with_verified_examples": 30,
+    "citation_rejections": 30
+  },
+  "isolated_sql_trace": {
+    "consumer_global_job_counts": 0,
+    "consumer_producer_account_scans": 0,
+    "producer_uses_both_checks": true,
+    "reserved_identity_still_blocks": true
+  },
+  "production_readonly_query_probe": {
+    "unused_consumer_account_scan_plan": "SCAN r; SEARCH j USING INDEX sqlite_autoindex_jobs_1 (id=?)",
+    "observed_seconds_one_scan": 0.459,
+    "writer_in_historical_incidents_identified": false
+  },
+  "native_consumer": {
+    "cases": 6,
+    "checks_passed": 146,
+    "saved": 6,
+    "export_readbacks": 6,
+    "seconds": 67.02
+  },
+  "core": "49 passed, 2 subtests passed in 3.07s"
+}

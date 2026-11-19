@@ -106,14 +106,15 @@ def frame_page_name(state):
     return '网页「' + snippet + '」'
 
 
-def next_action_schema(*, autonomous=True, frame_name=None):
+def next_action_schema(*, autonomous=True, frame_name=None, complete_only=False):
     properties = {
         'last_step_result': {'type': 'string', 'maxLength': LIMIT_LAST_STEP_RESULT},
         'page_name': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_PAGE_NAME},
         'precondition': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_PRECONDITION},
         'thought': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_THOUGHT},
         'user_goal': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_USER_GOAL},
-        'action': {'enum': list(ACTIONS)},
+        'action': {'enum': ['complete'] if complete_only else list(ACTIONS),
+                   'description': '选择 complete 时同时填写 status；success 表示当前帧已证明目标，infeasible 表示无法完成。'},
         'element': {'type': 'integer', 'minimum': 1, 'maximum': LIMIT_ELEMENT_ROWS},
         'text': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_TYPE_TEXT},
         'keys': {'type': 'array', 'description': '一次组合键，每个键只出现一次，例如 ["ctrl","a"]。替换输入框用全选后输入新值。',
@@ -134,13 +135,20 @@ def next_action_schema(*, autonomous=True, frame_name=None):
     if autonomous:
         properties['task_goal'] = {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_TASK_GOAL}
         required.insert(0, 'task_goal')
-    return {'type': 'object', 'additionalProperties': False,
-            'required': required, 'properties': properties}
+    schema = {'type': 'object', 'additionalProperties': False,
+              'required': required, 'properties': properties}
+    if complete_only:
+        required.append('status')
+    else:
+        schema['if'] = {'required': ['action'], 'properties': {'action': {'const': 'complete'}}}
+        schema['then'] = {'required': ['status']}
+    return schema
 
 
-def next_action_tools(*, autonomous=True, frame_name=None):
+def next_action_tools(*, autonomous=True, frame_name=None, complete_only=False):
     return [{'type': 'function', 'function': {
-        'name': 'next_action', 'parameters': next_action_schema(autonomous=autonomous, frame_name=frame_name)}}]
+        'name': 'next_action', 'parameters': next_action_schema(autonomous=autonomous, frame_name=frame_name,
+                                                                 complete_only=complete_only)}}]
 
 
 WRITEBACK_SCHEMA = {'type': 'object', 'additionalProperties': False,
@@ -234,6 +242,23 @@ def _structure_lines(state):
     return lines
 
 
+def citation_hint(state, problems):
+    """Offer literal substrings of this viewport for a rejected quotation."""
+    lines = [line.strip() for line in (state.get('visible_text') or '').splitlines() if line.strip()]
+    preferred = []
+    for quote in re.findall(r'引文「([^」]+)」', problems):
+        for part in re.split(r'…+|\.{2,}|\s*[>›]\s*', quote):
+            part = part.strip()
+            if len(part) >= 3 and any(part in line for line in lines):
+                preferred.append(part[:20])
+    # A Chinese and an English paragraph can share a viewport. Keep a short
+    # Chinese example when available, with the longest on-screen lines first.
+    ranked = sorted(lines, key=lambda s: (bool(re.search(r'[\u3400-\u9fff]', s)), len(s)), reverse=True)
+    examples = list(dict.fromkeys(s for s in preferred + [s[:20] for s in ranked]
+                                  if len(s) >= 2 and '「' not in s and '」' not in s))[:2]
+    return '本帧可复制的连续原文示例：' + '、'.join('「' + s + '」' for s in examples) if examples else ''
+
+
 def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
                            rows, state, history, feedback, note, site_tasks,
                            complete_only=False, pending_result=False):
@@ -248,7 +273,9 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
     if mode == 'specified':
         task_block = '【任务】' + _bounded(requested_goal_text, LIMIT_TASK_PROGRESS * 4)
     else:
-        goal_text = _bounded(task_goal, LIMIT_TASK_GOAL) if task_goal else '（首轮需在task_goal给出具体任务）'
+        goal_text = _bounded(task_goal, LIMIT_TASK_GOAL) if task_goal else (
+            '首轮请在 task_goal 写明所问问题与可验证的终点。若首屏导语已直接写出答案，'
+            '选择需要借助目录、正文或关联条目才能查清的问题；如果是计算器，选择需要实际设置参数的具体情境。')
         task_block = '【任务】' + goal_text
     if complete_only:
         task_block += '\n宿主提示：本轮只能结束（返回complete）。'
@@ -344,7 +371,8 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
     if dynamic_size() > LIMIT_TOTAL_DYNAMIC:
         raise ValueError('STEPWISE_CONTEXT_OVER_BUDGET: 不可裁剪内容超过 %d 字符预算' % LIMIT_TOTAL_DYNAMIC)
 
-    required = next_action_schema(autonomous=mode == 'autonomous', frame_name=frame_name)['required']
+    required = next_action_schema(autonomous=mode == 'autonomous', frame_name=frame_name,
+                                  complete_only=complete_only)['required']
     name_hint = ('page_name 由宿主填写，可以省略。' if frame_name else
                  f'请用不超过 {LIMIT_PAGE_NAME} 字的简体中文填写 page_name。')
     instructions = ('每轮只调用一次next_action，所有动作（含complete）必填 ' + '、'.join(required)
@@ -352,7 +380,7 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
                     'thought 简述选择本动作的依据，expected_result 写预期可见结果。'
                     '\nclick、double_click、right_click 给 element；type 给 element 和 text；'
                     'hotkey 给 keys，全选写 ["ctrl","a"] 或 ["cmd","a"]，可省略焦点编号；一次组合键中每个键只出现一次；scroll 给 direction，可加可滚动的 element；'
-                    'select 给 element 和 option；complete 只加 status；back、wait 无专用参数。')
+                    'select 给 element 和 option；结束必须同时给出 "action":"complete" 和 "status":"success" 或 "status":"infeasible"；back、wait 无专用参数。')
     instructions += (' 引用当前页面标题、可见正文或元素中的连续短原文，保留繁简和标点。'
                      '截图中文字无法准确辨认时，只描述实际可见变化，不能补写名称或数值。')
     text = instructions + '\n\n' + '\n\n'.join(
@@ -397,6 +425,10 @@ def writeback_message(*, mode, requested_goal_text, task_goal, actions_summary,
                   '【上次回写】' + compact_json(previous_writeback),
                   '【需修正的问题】']
         lines += ['- ' + str(problem) for problem in correction_problems]
+        if final_state:
+            hint = citation_hint(final_state, ' '.join(correction_problems))
+            if hint:
+                lines.append(hint)
     return '\n'.join(lines)
 
 

@@ -521,12 +521,13 @@ class BatchLedger:
                     raise BudgetStop('Parent already has an active decision; no parallel child')
             # Expired owners cannot dispatch under _owned(). Keep their jobs,
             # visits and UNKNOWN requests untouched, but do not reserve a slot.
-            running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
-                                  'AND j.lease>? AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)',
-                                  (time.time(),)).fetchone()[0]
             job_limit = None if kind in CONSUMER_KINDS else self._job_concurrency_limit(con)
-            if parent_job is None and job_limit is not None and running >= job_limit:
-                raise BudgetStop('max_concurrent_jobs reached; queued work retained')
+            if parent_job is None and job_limit is not None:
+                running = con.execute("SELECT COUNT(*) FROM jobs j WHERE state='running' AND kind!='frozen-plan' "
+                                      'AND j.lease>? AND NOT EXISTS(SELECT 1 FROM job_parents p WHERE p.job_id=j.id)',
+                                      (time.time(),)).fetchone()[0]
+                if running >= job_limit:
+                    raise BudgetStop('max_concurrent_jobs reached; queued work retained')
             if domain and kind not in CONSUMER_KINDS:
                 last = con.execute('SELECT dispatched FROM domain_dispatch WHERE domain=?', (domain,)).fetchone()
                 if last and time.time() - last[0] < self.config['budget']['min_domain_interval_seconds']:
@@ -976,17 +977,18 @@ class BatchLedger:
                             raise OutcomeUnknown('Original timeout unresolved at the attempt request limit')
                         raise BudgetStop('max_requests reached for original attempt')
                 account = request_json.get('account_id')
-                if not consumer and account in self._unavailable_model_accounts(con):
-                    raise OutcomeUnknown('Original account/model hold; no replacement request')
-                producer_kinds=('ai-application-site-classification-1','ai-target-page-purpose-1',
-                                'ai-grounded-entry-ids-1','ai-candidate-entry-tool-1','ai-search-plan')
-                parallel_producer=bool(self.producer_concurrency and self.producer_concurrency['max_concurrent_jobs']>1
-                                       and owned['kind'] in producer_kinds)
-                active=con.execute("SELECT r.job_id,j.kind FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE r.state='reserved' "
-                    "AND json_extract(r.request_json,'$.account_id')=? "
-                    "AND json_extract(r.request_json,'$.model')=?", (account, model['model']))
-                if not consumer and any(not (parallel_producer and r['job_id']!=job['id'] and r['kind'] in producer_kinds) for r in active):
-                    raise ModelRateWait(1)
+                if not consumer:
+                    if account in self._unavailable_model_accounts(con):
+                        raise OutcomeUnknown('Original account/model hold; no replacement request')
+                    producer_kinds=('ai-application-site-classification-1','ai-target-page-purpose-1',
+                                    'ai-grounded-entry-ids-1','ai-candidate-entry-tool-1','ai-search-plan')
+                    parallel_producer=bool(self.producer_concurrency and self.producer_concurrency['max_concurrent_jobs']>1
+                                           and owned['kind'] in producer_kinds)
+                    active=con.execute("SELECT r.job_id,j.kind FROM model_requests r JOIN jobs j ON j.id=r.job_id WHERE r.state='reserved' "
+                        "AND json_extract(r.request_json,'$.account_id')=? "
+                        "AND json_extract(r.request_json,'$.model')=?", (account, model['model']))
+                    if any(not (parallel_producer and r['job_id']!=job['id'] and r['kind'] in producer_kinds) for r in active):
+                        raise ModelRateWait(1)
                 # A known/unknown request pins its attempt to one account. A new
                 # independent attempt may select another healthy authorized key.
                 if aid is not None and con.execute("SELECT 1 FROM model_requests "

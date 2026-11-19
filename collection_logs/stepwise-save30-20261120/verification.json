@@ -1,0 +1,28 @@
+{
+  "core": "49 passed, 2 subtests passed in 2.65s",
+  "native_chrome_consumer": {
+    "passes": 146,
+    "checks": 146,
+    "elapsed_seconds": 65.44039433391299,
+    "saves": 6,
+    "exports": 6,
+    "scenarios": [
+      "tabs",
+      "expand",
+      "popup",
+      "slowlink",
+      "extend",
+      "overwrite"
+    ]
+  },
+  "first_native_run": {
+    "saved": 5,
+    "failure": "输入控件名称前新增标记导致定位绑定到同名标签，已修正名称与证据标记的位置并复测六链。"
+  },
+  "external_stylesheet_fetches": {
+    "purpose": "用原站样式离线重放历史 HTML",
+    "successful_gets": 2,
+    "paid_model_calls": 0
+  },
+  "history_unmodified_by_replay": true
+}

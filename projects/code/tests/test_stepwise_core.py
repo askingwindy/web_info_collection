@@ -202,6 +202,21 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertFalse(specified['additionalProperties'])
         from jsonschema import Draft202012Validator
         from webcollect.model_gateway import schema_errors_feedback
+        complete = {key: '已见结果' for key in autonomous['required']}
+        complete['action'] = 'complete'
+        validator = Draft202012Validator(autonomous)
+        self.assertFalse(validator.is_valid(complete))
+        self.assertTrue(validator.is_valid(dict(complete, status='infeasible')))
+        self.assertTrue(validator.is_valid(dict(complete, action='back')))
+        terminal = Draft202012Validator(prompt.next_action_schema(complete_only=True))
+        self.assertTrue(terminal.is_valid(dict(complete, status='success')))
+        self.assertFalse(terminal.is_valid(dict(complete, action='back', status='success')))
+        frame = {'visible_text': '太和学者计划学术来访支持的重点方向包括明清官式建筑研究。\n学术交流与文献整理',
+                 'title': '另一个人名'}
+        hint = prompt.citation_hint(frame, 'last_step_result 引文「明清官式建筑研究……」不在本帧')
+        self.assertIn('「明清官式建筑研究」', hint)
+        self.assertNotIn('另一个人名', hint)
+        self.assertEqual(finalize.missing_quotes([('last_step_result', hint)], frame, '本帧'), [])
         missing = {'last_step_result', 'thought', 'expected_result'}
         partial = {key: '已见结果' for key in autonomous['required'] if key not in missing}
         partial.update(action='click', element=1)

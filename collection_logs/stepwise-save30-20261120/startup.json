@@ -1,0 +1,39 @@
+{
+  "plan_id": "20261120074447-360b6b5a",
+  "product_commit": "b0df635",
+  "started": "2026-11-20T07:44:48.243399+08:00",
+  "workers": 20,
+  "observed_peak": 20,
+  "worker_shard_sizes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "stage_image_requirements": {
+    "decision": 1,
+    "writeback": 2,
+    "judgement_max": 3
+  },
+  "base_model_max_images": 1,
+  "effective_stepwise_capacity_for_new_jobs": 3,
+  "provider_startup_probes": 0,
+  "strategy": "stepwise",
+  "selection_frozen_before_start": true
+}
