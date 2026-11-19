@@ -279,6 +279,12 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
             observation.bind_action(state, rows, {'action': 'hotkey', 'keys': ['ctrl', 'a']})
         with self.assertRaisesRegex(observation.ActionRejected, 'KEYS_NOT_ALLOWED'):
             observation.bind_action(state, rows, {'action': 'hotkey', 'keys': ['Ctrl+A']})
+        from unittest.mock import patch
+        for host, modifier in [('darwin', 'meta'), ('linux', 'ctrl'), ('win32', 'ctrl')]:
+            with patch.object(observation.sys, 'platform', host):
+                for keys in (['Ctrl+A'], ['cmd', 'a']):
+                    bound, _ = observation.bind_action(focused, focused_rows, {'action': 'hotkey', 'keys': keys})
+                    self.assertEqual(bound['arguments']['keys'], [modifier, 'a'])
         type_operation, _ = observation.bind_action(focused, focused_rows,
             {'action': 'type', 'element': 1, 'text': '50'})
         self.assertEqual(type_operation['arguments'], {'text': '50'})

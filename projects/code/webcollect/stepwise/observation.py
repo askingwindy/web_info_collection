@@ -5,6 +5,7 @@
 合同、覆盖率或依赖图。
 """
 import re
+import sys
 from urllib.parse import unquote, urlsplit
 
 from . import prompt
@@ -153,9 +154,11 @@ def bind_action(state, rows, arguments):
             modifier, _, key = keys[0].lower().partition('+')
             if modifier in ('ctrl', 'control', 'meta', 'command', 'cmd') and key == 'a':
                 keys = [modifier, key]
-                arguments = {**arguments, 'keys': keys}
         if not _hotkey_allowed(state, keys):
             raise ActionRejected('HOTKEY_KEYS_NOT_ALLOWED:' + str(keys))
+        if any(key.lower() == 'a' for key in keys):
+            # 校验过的字母 a 仅代表焦点输入框全选。原决策保留原键名，派发与交付记录实际按键。
+            arguments = {**arguments, 'keys': ['meta' if sys.platform == 'darwin' else 'ctrl', 'a']}
     elif action == 'scroll':
         if number is not None:
             if type(number) is not int or number not in by_number:
