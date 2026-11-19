@@ -75,7 +75,10 @@ def snapshot(directory, scope, baseline, sites):
     for row in attempts:
         if row['attempt_id'] in by_attempt:
             by_site[by_attempt[row['attempt_id']]]['attempt_states'][row['status']] += 1
-    requests = select(scope['consumer_db'], '''SELECT r.state,r.usage,r.response,
+    requests = select(scope['consumer_db'], '''SELECT r.rowid AS request_rowid,r.state,r.usage,
+        json_object('http_dispatched',json(CASE json_type(r.response,'$.http_dispatched') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' ELSE 'null' END),
+          'http_timing',json(coalesce(json_extract(r.response,'$.http_timing'),json_extract(r.response,'$.timing'),json_extract(r.response,'$.transport_timing'),'{}')),
+          'provider_error',json_object('http_status',json_extract(r.response,'$.provider_error.http_status'))) AS response,
         json_object('provider',json_extract(r.request_json,'$.provider'),'http_dispatch',json(CASE json_type(r.request_json,'$.http_dispatch')
                 WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' ELSE 'null' END)) AS request_json,
         coalesce(json_extract(r.request_json,'$.dispatch_attempt_id'),json_extract(j.payload,'$.attempt_id')) AS attempt_id,
@@ -101,6 +104,20 @@ def snapshot(directory, scope, baseline, sites):
         'by_site': by_site, 'consumer_model': request_summary(owned), 'new_consumer_requests_not_yet_attributed': len(requests) - len(owned),
         'issues_recorded': len(faults), 'stop_requested': (directory / 'stop.request').exists(),
         'qc': 'NOT_RUN', 'human_review': 'NOT_RUN', 'dataset_published': False, 'customer_acceptance': 'UNKNOWN'}
+    if (directory / 'segment-before.json').is_file():
+        prior = read(directory / 'segment-before.json')
+        old_claims = {row[0] for row in prior['prior_claims']}
+        old_attempts = {row[0] for row in prior['prior_attempts']}
+        fresh_claims = [row for row in claims if row['claim_id'] not in old_claims]
+        verified = read(RUN / 'image-repair-20261119/live-validation/receipt.json')
+        validation = [row for row in requests if row['attempt_id'] == verified['session_id']]
+        result.update(validation_only_consumer_model=request_summary(validation),
+            new_consumer_requests_not_yet_attributed=len(requests) - len(owned) - len(validation),
+            segment_new_claims=len(fresh_claims),
+            segment_new_claims_by_site=dict(Counter(by_claim[row['claim_id']] for row in fresh_claims)),
+            segment_new_attempts=len(set(by_attempt) - old_attempts),
+            segment_saved_pending_review=sum(bool(row['sample_id']) and row['qc_state'] == 'pending_review' for row in fresh_claims),
+            segment_consumer_model=request_summary([row for row in owned if row['request_rowid'] > prior['consumer_db']['last_request_rowid']]))
     if summary:
         result['controller'] = {key: summary.get(key) for key in ('succeeded', 'interrupted', 'unlaunched', 'stop_reason', 'report_integrity', 'elapsed_seconds')}
         result['controller']['worker_exit_codes'] = dict(Counter(str(worker['returncode']) for worker in summary['workers']))
@@ -124,6 +141,10 @@ def history(scope, baseline):
             fresh = select(scope[role], 'SELECT id,job_id FROM model_requests WHERE rowid>?', (baseline[role]['last_request_rowid'],))
             result[role]['new_request_rows_on_prior_unsettled_jobs'] = sum(row['job_id'] in jobs for row in fresh)
             result[role]['all_new_request_rows'] = len(fresh)
+            if 'last_job_rowid' in baseline[role]:
+                result[role]['new_requests_on_preexisting_jobs'] = select(scope[role],
+                    'SELECT count(*) AS count FROM model_requests r JOIN jobs j ON r.job_id=j.id WHERE r.rowid>? AND j.rowid<=?',
+                    (baseline[role]['last_request_rowid'], baseline[role]['last_job_rowid']))[0]['count']
     return result
 
 
@@ -145,12 +166,13 @@ def main():
             time.sleep(10)
             continue
         stamp = directory.name
-        write(ARCHIVE / f'{stamp}-status.json', status)
-        write(ARCHIVE / f'{stamp}-issues.json', faults)
+        if status['state'] != 'FINISHED' or not (directory / 'segment-before.json').exists():
+            write(ARCHIVE / f'{stamp}-status.json', status)
+            write(ARCHIVE / f'{stamp}-issues.json', faults)
         with (RUN / f'{stamp}-progress.jsonl').open('a') as stream:
             stream.write(json.dumps(status, ensure_ascii=False) + '\n')
         print(status['at'], status['state'], 'claims', status['unique_claims'], 'attempts', status['formal_attempts'], 'saved', status['saved_pending_review'], flush=True)
-        if status['state'] == 'FINISHED':
+        if status['state'] == 'FINISHED' and not (directory / 'segment-before.json').exists():
             write(ARCHIVE / f'{stamp}-ledger-check.json', history(scope, baseline))
         if not args.watch or status['state'] == 'FINISHED':
             break

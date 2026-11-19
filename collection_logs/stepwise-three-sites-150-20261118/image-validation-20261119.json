@@ -1,0 +1,41 @@
+{
+  "status": "PASS",
+  "started": "2026-11-19T08:43:45.111471+08:00",
+  "finished": "2026-11-19T08:44:07.326832+08:00",
+  "session_id": "stepwise-final-images-20261119-tabs",
+  "material": "saved local tabs fixture; new verification session; not a production claim",
+  "model": "glm-5.3-flash",
+  "frozen_max_images": 1,
+  "writeback_valid": true,
+  "judgement_valid": true,
+  "fixture_semantic_pass": true,
+  "prior_claims_attempts_and_unsettled_unchanged": true,
+  "authorization": {
+    "run_id": "producer-muxtly-wiki-200-20261111-r01-consumer",
+    "model": "glm-5.3-flash",
+    "max_images": 3,
+    "after_job_rowid": 4839
+  },
+  "physical_requests": [
+    {
+      "phase": "writeback",
+      "request_id": "fade5c2913bf44da9e5e74f1a6f8aeb2",
+      "images": 2,
+      "stage_limit": 2,
+      "state": "succeeded",
+      "input_tokens": 3150,
+      "output_tokens": 156
+    },
+    {
+      "phase": "judgement",
+      "request_id": "e01b7e8182b64b65b42eee133f10489e",
+      "images": 3,
+      "stage_limit": 3,
+      "state": "succeeded",
+      "input_tokens": 4306,
+      "output_tokens": 175
+    }
+  ],
+  "charged_amount": "UNKNOWN",
+  "production_claims": 0
+}

@@ -1,3 +1,5 @@
+2026-11-19 08:46 三站策略3已在原名单上重新采集，同时观测到 20 个消费者。新作业单步决策 1 张原图、回写 2 张、独立判定 1–3 张，真实 GLM 已完成两图回写和三图判定。首段已领 30 页，第二段从 Wiki 41、Muxtly 40、故宫 39 页继续。维护时先读[第二段状态与问题日志](collection_logs/stepwise-three-sites-150-20261118/README.md)，按原 claim 及请求账接手。
+
 2026-11-18 三站实采已工程停派，不在后台运行：中文 Wiki、Muxtly（mul）、故宫各固定 50 页，总并发峰值 20；分别领取 9/10/11（共 30/150），正式尝试 28、保存 0；41/40/39 页仍未领取。只允许新策略3 `stepwise`，不切策略、不补位、不续跑旧 attempt 或重发 UNKNOWN。正式绑定 `max_images=1` 与回写需2张原图、判定最多3张不兼容；在保持原账且解决并确认新请求的多图能力前不可重启此轮。20 个 worker 全部退出；QC/人审 NOT_RUN、未发布、验收 UNKNOWN。[运行及 Git 日志](collection_logs/stepwise-three-sites-150-20261118/README.md) · [故障与恢复条件](collection_logs/stepwise-three-sites-150-20261118/incident.md)。
 
 2026-11-18 策略3消费者启动前修复与B方案已完成本地实现及离线收口：页内语义+像素计有效、popup/慢链接/输入覆盖、实际HTTP预算、complete字段和有界驳回、两次回写上限与单次判定、同页历史提示/同候选未决查询、失败图片及跨页前帧接线已修。受影响核心8项最新通过（累计14次12P/2次夹具F，1.65秒）；维护47方法/48展开项≤50。本地六链6保存/6导出、146/146检查、66.62秒，运行源码不变；交叉复审本轮必修关闭。故宫100候选只读确认requested_goal全空且未claim。真实模型/目标站/生产新增0，QC/人审NOT_RUN，发布false、验收UNKNOWN；未commit/push、未启动20页试采。原生日期type、超窗无href异步popup、未知越界轨迹保存仍有明确边界。见[本轮报告](collection_logs/stepwise-consumer-repair-20261118/report.md)。

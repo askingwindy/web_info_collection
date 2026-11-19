@@ -49,6 +49,8 @@ def main():
     write(paths[0], status)
     write(paths[1], issues)
     audit = history(scope, baseline)
+    if (directory / 'segment-before.json').is_file():
+        audit['before_this_segment'] = history(scope, read(directory / 'segment-before.json'))
     write(paths[2], audit)
     timeline = [{'at': item['at'], 'state': item['state'], 'claimed': item['unique_claims'], 'formal_attempts': item['formal_attempts'],
                  'saved_pending_review': item['saved_pending_review'], 'issues': item['issues_recorded'],
@@ -64,8 +66,10 @@ def main():
     text += ['', f"同时运行峰值 {status['worker_peak_observed']}；共领取 {status['unique_claims']}/150，未领 {status['unclaimed']}，正式保存待审 {status['saved_pending_review']}。",
         f"消费者请求状态：`{dict(usage['states'])}`；已证 HTTP {usage['dispatch'].get('dispatched',0)}，未证 {usage['dispatch'].get('unproven',0)}。已知输入/输出 token：{usage['known_input_tokens']}/{usage['known_output_tokens']}，缺 usage {usage['unknown_usage_requests']} 笔，费用 UNKNOWN。",
         f"调度问题记录 {len(issues)} 条，分类 `{dict(Counter(event['disposition'] for event in issues))}`。原生报告与独立账表都保留；缺原件或缺归因不作为通过。",
-        f"历史保护字段有差异的行数：`{ {role:len(item['different_or_missing_ids']) for role,item in audit.items()} }`；原未决消费者/生产者作业上新增请求数：{audit['consumer_db']['new_request_rows_on_prior_unsettled_jobs']}/{audit['producer_db']['new_request_rows_on_prior_unsettled_jobs']}。",
+        f"历史保护字段有差异的行数：`{ {role:len(item['different_or_missing_ids']) for role,item in audit.items() if role!='before_this_segment'} }`；原未决消费者/生产者作业上新增请求数：{audit['consumer_db']['new_request_rows_on_prior_unsettled_jobs']}/{audit['producer_db']['new_request_rows_on_prior_unsettled_jobs']}。",
         '', '本批未启动自动导出、QC 或人审；数据集未发布，客户验收 UNKNOWN。']
+    if 'segment_new_claims' in status:
+        text += ['', f"本段新增领取 {status['segment_new_claims']}，正式尝试 {status['segment_new_attempts']}，正式保存待审 {status['segment_saved_pending_review']}。本段消费者用量和独立多图验证用量在 JSON 中分列。"]
     paths[4].write_text('\n'.join(text) + '\n')
     canonical = [ARCHIVE / f'{stamp}-status.json', ARCHIVE / f'{stamp}-issues.json']
     write(canonical[0], status)

@@ -1,0 +1,189 @@
+[
+  {
+    "segment": "run-01",
+    "at": 1795011755.9764931,
+    "site": "zh.wikipedia.org",
+    "claim_id": "45e74da0-57a8-47fc-b056-90d14c77e4a6",
+    "disposition": "business",
+    "owner": "site",
+    "feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636",
+    "reason_code": "ERR_CONNECTION_CLOSED",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795011757.728357,
+    "site": "zh.wikipedia.org",
+    "claim_id": "8561565c-d65a-4623-bdab-84e51ee4d231",
+    "disposition": "business",
+    "owner": "site",
+    "feature": "playwright._impl._errors.Error:_connection.py:wrap_api_call:636",
+    "reason_code": "ERR_CONNECTION_CLOSED",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795011827.718622,
+    "site": "dpm.org.cn",
+    "claim_id": "dfb48b04-a29e-4f6b-9205-fa7d418907ed",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "SQLITE_BUSY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012067.766659,
+    "site": "muxtly.com",
+    "claim_id": "faa9895f-016e-4b75-bb12-cd4af93b0c7a",
+    "disposition": "business",
+    "owner": "model",
+    "feature": null,
+    "reason_code": "stepwise_repeat_reject",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012078.548511,
+    "site": "dpm.org.cn",
+    "claim_id": "19f07b86-3ada-49b0-a13a-6e31411c6cd3",
+    "disposition": "page_program",
+    "owner": "program",
+    "feature": "unlocated:0c11f6ed-0b0b-4615-be78-55b7e8be755e",
+    "reason_code": "SCOPED_ACTION_PROOF_CHANGED",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012123.796352,
+    "site": "muxtly.com",
+    "claim_id": "9c062d9a-2afb-4eb4-96b3-84417b65877f",
+    "disposition": "business",
+    "owner": "model",
+    "feature": null,
+    "reason_code": "stepwise_repeat_reject",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012194.717004,
+    "site": "muxtly.com",
+    "claim_id": "de29eb73-2bf5-4cb0-a147-16d429e16667",
+    "disposition": "page_program",
+    "owner": "program",
+    "feature": "unlocated:797795e6-eea6-42cb-9c58-788b517d6f42",
+    "reason_code": "STEPWISE_IMAGE_CAPACITY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012263.5569038,
+    "site": "zh.wikipedia.org",
+    "claim_id": "bc66f183-5b26-4e65-a586-7c8a6ee6d5ac",
+    "disposition": "page_program",
+    "owner": "program",
+    "feature": "unlocated:3db33a1f-6628-4d63-9049-886a10e7cf9c",
+    "reason_code": "SCOPED_ACTION_PROOF_CHANGED",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012338.8188832,
+    "site": "muxtly.com",
+    "claim_id": "76bdd627-0a05-4239-b95e-c0ea4c1bb155",
+    "disposition": "business",
+    "owner": "model",
+    "feature": null,
+    "reason_code": "stepwise_repeat_reject",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012372.166487,
+    "site": "zh.wikipedia.org",
+    "claim_id": "a57f2b31-15be-46c6-a672-dd89c4603153",
+    "disposition": "page_program",
+    "owner": "program",
+    "feature": "unlocated:364e05f6-7107-4b3b-ab4f-ada0adbfacb0",
+    "reason_code": "STEPWISE_IMAGE_CAPACITY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-01",
+    "at": 1795012384.388917,
+    "site": "dpm.org.cn",
+    "claim_id": "0718561f-22c2-4b9a-9866-cec7b154fe1d",
+    "disposition": "page_program",
+    "owner": "program",
+    "feature": "unlocated:b327afbc-0030-4d3d-8eb2-8d7f020dce69",
+    "reason_code": "STEPWISE_IMAGE_CAPACITY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-02",
+    "at": 1795049274.086533,
+    "site": "zh.wikipedia.org",
+    "claim_id": "b6b4e5d9-27ee-437c-a211-72ff7ca3c544",
+    "disposition": "page_program",
+    "owner": "program",
+    "feature": "builtins.ValueError:navigation.py:validate_http_chain:42",
+    "reason_code": "HTTP_NAVIGATION_ENDPOINT_UNPROVEN",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-02",
+    "at": 1795049358.13012,
+    "site": "muxtly.com",
+    "claim_id": "c90a3129-3402-4b2e-a852-d6a3994e57b6",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "SQLITE_BUSY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-02",
+    "at": 1795049367.3427358,
+    "site": "muxtly.com",
+    "claim_id": "685b13fd-74bc-4574-b3ec-444f058acf11",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "SQLITE_BUSY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-02",
+    "at": 1795049367.885569,
+    "site": "zh.wikipedia.org",
+    "claim_id": "5ef9e051-8a11-4a38-8f5d-254de2abf6e5",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "SQLITE_BUSY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-02",
+    "at": 1795049368.8845088,
+    "site": "zh.wikipedia.org",
+    "claim_id": "5fd429ac-6da5-429a-84cc-09af07d59ecc",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "SQLITE_BUSY",
+    "stop_dispatch": false
+  },
+  {
+    "segment": "run-02",
+    "at": 1795049375.367609,
+    "site": "dpm.org.cn",
+    "claim_id": "0d6cf5d9-545f-4ac6-b16e-c8f7e9b1f490",
+    "disposition": "transient",
+    "owner": "program",
+    "feature": "sqlite3.OperationalError:sqlite_connection.py:begin_immediate:77",
+    "reason_code": "SQLITE_BUSY",
+    "stop_dispatch": false
+  }
+]

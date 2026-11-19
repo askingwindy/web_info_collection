@@ -1,0 +1,79 @@
+{
+  "segment": "run-02",
+  "strategy": "stepwise",
+  "plan_id": "20261119084453-4f35f3d9",
+  "controller_pid": 3288,
+  "controller_started": "2026-11-19T08:44:54.259413+08:00",
+  "base_commit": "4d7deafad9a5c2ec856c232f495091e721ecd2d7",
+  "runtime_product_worktree": [
+    " M projects/code/webcollect/batch_core.py",
+    " M projects/code/webcollect/candidate_consumer.py",
+    " M projects/code/webcollect/collect_runtime.py",
+    " M projects/code/webcollect/collection_startup.py",
+    " M projects/code/webcollect/consumer_roster.py",
+    " M projects/code/webcollect/model_gateway.py",
+    " M projects/code/webcollect/site_workers.py",
+    " M projects/code/webcollect/stepwise/__init__.py",
+    " M projects/code/webcollect/stepwise/collection.py",
+    " M projects/code/webcollect/stepwise/observation.py",
+    " M projects/code/webcollect/stepwise/prompt.py",
+    " M projects/code/webcollect/stepwise/session.py",
+    " M projects/code/webcollect/task_generation.py",
+    " M projects/site-planner/site_planner/candidate_discovery.py",
+    "?? projects/code/webcollect/stepwise/image_capacity.py"
+  ],
+  "selected_by_site": {
+    "zh.wikipedia.org": 50,
+    "muxtly.com": 50,
+    "dpm.org.cn": 50
+  },
+  "unclaimed_at_restart": {
+    "zh.wikipedia.org": 41,
+    "muxtly.com": 40,
+    "dpm.org.cn": 39
+  },
+  "old_claims_excluded": 30,
+  "startup_account_probes": 0,
+  "first_observation_of_20_processes": {
+    "at": "2026-11-19T08:46:40.953342+08:00",
+    "live": 20,
+    "peak": 20,
+    "workers": {
+      "fixed-20261119084453-4f35f3d9-01": 3429,
+      "fixed-20261119084453-4f35f3d9-02": 3430,
+      "fixed-20261119084453-4f35f3d9-03": 3431,
+      "fixed-20261119084453-4f35f3d9-04": 3432,
+      "fixed-20261119084453-4f35f3d9-05": 3433,
+      "fixed-20261119084453-4f35f3d9-06": 3434,
+      "fixed-20261119084453-4f35f3d9-07": 3435,
+      "fixed-20261119084453-4f35f3d9-08": 3436,
+      "fixed-20261119084453-4f35f3d9-09": 3437,
+      "fixed-20261119084453-4f35f3d9-10": 3438,
+      "fixed-20261119084453-4f35f3d9-11": 3439,
+      "fixed-20261119084453-4f35f3d9-12": 3440,
+      "fixed-20261119084453-4f35f3d9-13": 3441,
+      "fixed-20261119084453-4f35f3d9-14": 3442,
+      "fixed-20261119084453-4f35f3d9-15": 3443,
+      "fixed-20261119084453-4f35f3d9-16": 3444,
+      "fixed-20261119084453-4f35f3d9-17": 3445,
+      "fixed-20261119084453-4f35f3d9-18": 3446,
+      "fixed-20261119084453-4f35f3d9-19": 3447,
+      "fixed-20261119084453-4f35f3d9-20": 3448
+    }
+  },
+  "first_claim_snapshot": {
+    "at": "2026-11-19T08:47:30+08:00",
+    "worker_peak_observed": 20,
+    "segment_new_claims": 20,
+    "segment_new_claims_by_site": {
+      "zh.wikipedia.org": 9,
+      "muxtly.com": 5,
+      "dpm.org.cn": 6
+    },
+    "segment_new_attempts": 0,
+    "segment_saved_pending_review": 0,
+    "unclaimed": 100
+  },
+  "qc": "NOT_RUN",
+  "human_review": "NOT_RUN"
+}
