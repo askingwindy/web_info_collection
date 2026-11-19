@@ -1,0 +1,67 @@
+{
+  "run": "20261118 three segments",
+  "stages": {
+    "claimed": 117,
+    "complete_accepted": 17,
+    "decision_http": 100,
+    "effective_ge1": 95,
+    "effective_ge5": 57,
+    "first_frame": 111,
+    "formally_saved": 3,
+    "judgement_http": 4,
+    "judgement_passed": 3,
+    "selected": 150,
+    "writeback_http": 9,
+    "writeback_validated": 4
+  },
+  "by_site": {
+    "dpm.org.cn": {
+      "claimed": 40,
+      "complete_accepted": 6,
+      "decision_http": 36,
+      "effective_ge1": 33,
+      "effective_ge5": 20,
+      "first_frame": 40,
+      "formally_saved": 0,
+      "judgement_http": 1,
+      "judgement_passed": 0,
+      "selected": 50,
+      "writeback_http": 2,
+      "writeback_validated": 1
+    },
+    "zh.wikipedia.org": {
+      "claimed": 39,
+      "complete_accepted": 4,
+      "decision_http": 31,
+      "effective_ge1": 31,
+      "effective_ge5": 21,
+      "first_frame": 34,
+      "formally_saved": 1,
+      "judgement_http": 1,
+      "judgement_passed": 1,
+      "selected": 50,
+      "writeback_http": 2,
+      "writeback_validated": 1
+    },
+    "muxtly.com": {
+      "claimed": 38,
+      "complete_accepted": 7,
+      "decision_http": 33,
+      "effective_ge1": 31,
+      "effective_ge5": 16,
+      "first_frame": 37,
+      "formally_saved": 2,
+      "judgement_http": 2,
+      "judgement_passed": 2,
+      "selected": 50,
+      "writeback_http": 5,
+      "writeback_validated": 2
+    }
+  },
+  "integrity": "FAILED",
+  "issues": [
+    "fixed_150_claims_incomplete",
+    "candidate_evidence_inconsistencies",
+    "unsettled_claims"
+  ]
+}

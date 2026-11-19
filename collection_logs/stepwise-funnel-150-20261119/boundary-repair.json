@@ -1,0 +1,21 @@
+{
+  "reason": "A retry of the first decision was required to describe a prior browser action even when no action had been dispatched.",
+  "fence": "drain.request",
+  "hard_stop_requested": false,
+  "worker_return_codes": {
+    "0": 20
+  },
+  "native_stop_reason": "drain_requested",
+  "replay": {
+    "rejected_before_first_action_now_accepted": 40,
+    "empty_records_checked_with_an_outstanding_action": 14,
+    "affected_samples_before_first_action": 4
+  },
+  "core": "49 passed, 2 subtests passed in 8.91s",
+  "cli_checks": 146,
+  "cli_checks_passed": 146,
+  "cli_saved": 6,
+  "cli_seconds": 85.93,
+  "new_selection": false,
+  "prior_claims_replayed": false
+}

@@ -115,6 +115,11 @@ class StepwiseSessionCore(unittest.IsolatedAsyncioTestCase):
             malformed.pop('status')
             self.assertIn('STATUS_REQUIRED', extended._validate_decision(malformed, False))
             self.assertIsNone(extended._validate_decision(decision(), False))
+            extended.decision_round = 3
+            empty = decision(last_step_result='')
+            self.assertIsNone(extended._validate_decision(empty, False, pending_result=False))
+            self.assertTrue(extended._validate_decision(empty, False, pending_result=True).startswith('LAST_STEP_RESULT_REQUIRED'))
+            self.assertIsNone(extended._validate_decision(decision(last_step_result='本帧显示数量50'), False, pending_result=True))
 
     async def test_actual_http_reserve_and_visible_effect_accounting(self):
         class Ledger:

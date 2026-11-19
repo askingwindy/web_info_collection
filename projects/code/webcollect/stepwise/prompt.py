@@ -198,7 +198,7 @@ def _structure_lines(state):
 
 def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
                            rows, state, history, feedback, note, site_tasks,
-                           complete_only=False):
+                           complete_only=False, pending_result=False):
     """拼装单轮用户消息（纯文本块）。返回 (text, trimmed_events)。"""
     trimmed = []
 
@@ -216,6 +216,8 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         task_block += '\n宿主提示：本轮只能结束（返回complete）。'
 
     progress_block = _bounded(progress, LIMIT_TASK_PROGRESS)
+    result_hint = ('上一实际动作需要回填。请在 last_step_result 描述本帧可见变化。' if pending_result
+                   else '没有待回填的实际动作，last_step_result 填空字符串。')
     values = {item['element_id']: item for item in state.get('values') or [] if item.get('element_id')}
     rows_block = [element_row(number, element, values.get(element.get('element_id')))
                   for number, element in rows]
@@ -262,7 +264,8 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         total_site += len(piece)
 
     blocks = {
-        '任务与进度': task_block + '\n' + progress_block,
+        '任务与进度': task_block + '\n' + progress_block + '\n' + result_hint,
+        '当前页面标题': _bounded(state.get('title') or '', 100),
         '可操作元素': '\n'.join(rows_block) if rows_block else '（本帧无可操作元素）',
         '可见正文': visible or '（无）',
         '页面结构': '\n'.join(structure) if structure else '（无）',
@@ -298,11 +301,13 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
 
     required = next_action_schema(autonomous=mode == 'autonomous')['required']
     instructions = ('每轮只调用一次next_action，所有动作（含complete）必填 ' + '、'.join(required)
-                    + '。首轮 last_step_result 可写空字符串，后续写看到的变化或尚无变化。'
+                    + '。last_step_result 始终保留字段，依照本轮任务与进度中标出的回填要求填写。'
                     'thought 简述选择本动作的依据，expected_result 写预期可见结果。'
                     '\nclick、double_click、right_click 给 element；type 给 element 和 text；'
                     'hotkey 只加 keys；scroll 给 direction，可加可滚动的 element；'
                     'select 给 element 和 option；complete 只加 status；back、wait 无专用参数。')
+    instructions += (' 引用当前页面标题、可见正文或元素中的连续短原文，保留繁简和标点。'
+                     '截图中文字无法准确辨认时，只描述实际可见变化，不能补写名称或数值。')
     text = instructions + '\n\n' + '\n\n'.join(
         '【%s】\n%s' % (name, body) for name, body in blocks.items())
     return text, trimmed

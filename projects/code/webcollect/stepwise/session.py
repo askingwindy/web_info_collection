@@ -359,7 +359,8 @@ class StepwiseSession:
                 state=frame['state'], history=self.history,
                 feedback=('宿主提示：只能结束（返回complete）。' if complete_only else '')
                 + self.feedback,
-                note=self.note, site_tasks=self.site_tasks, complete_only=complete_only)
+                note=self.note, site_tasks=self.site_tasks, complete_only=complete_only,
+                pending_result=pending_result is not None)
             if trimmed:
                 self.context_trims.extend([{'round': self.decision_round + 1, **item} for item in trimmed])
                 if self.runlog is not None:
@@ -375,7 +376,7 @@ class StepwiseSession:
                 round_index=self.decision_round + 1, tool_name='next_action')
             arguments = response.get('arguments') or {}
             self.decision_round += 1
-            invalid = self._validate_decision(arguments, complete_only)
+            invalid = self._validate_decision(arguments, complete_only, pending_result=pending_result is not None)
             if not invalid:
                 citation_errors = finalize.decision_citations_check(arguments, frame['state'],
                     previous_action=pending_result is not None)
@@ -455,7 +456,7 @@ class StepwiseSession:
             # 'failed'：画面未捕获，当前帧保持不变，反馈已写。
 
     # ------------------------------------------------------------ 决策校验
-    def _validate_decision(self, arguments, complete_only):
+    def _validate_decision(self, arguments, complete_only, *, pending_result=False):
         if not isinstance(arguments, dict):
             return 'DECISION_NOT_OBJECT'
         for field in ('last_step_result', 'page_name', 'precondition', 'thought',
@@ -470,8 +471,8 @@ class StepwiseSession:
             goal = arguments.get('task_goal')
             if not (isinstance(goal, str) and goal.strip() and goal.strip() != '同上'):
                 return 'TASK_GOAL_REQUIRED'
-        if self.decision_round > 1 and not str(arguments.get('last_step_result') or '').strip():
-            return 'LAST_STEP_RESULT_REQUIRED'
+        if pending_result and not str(arguments.get('last_step_result') or '').strip():
+            return 'LAST_STEP_RESULT_REQUIRED: 上一实际动作已派发，请依据本帧填写其可见结果'
         if complete_only and arguments.get('action') != 'complete':
             return 'COMPLETE_ONLY_EXPECTED'
         return None
