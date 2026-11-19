@@ -31,10 +31,13 @@ def page_family(host, entry):
     return path.lstrip('/').split('/')[0]
 
 
-def prepare():
+def prepare(run=RUN, *, exclude_cohort=None):
     scope = load_json(SCOPE)
-    directory = RUN / 'selection'
+    directory = run / 'selection'
     directory.mkdir(parents=True, exist_ok=False)
+    old = load_json(exclude_cohort)['selected'] if exclude_cohort else []
+    old_ids = {row['candidate_id'] for row in old}
+    old_landings = {entry_identity(load_json(row['entry_http']['path'])['landed_uri']) for row in old}
     chosen = {host: [] for host in HOSTS}
     skipped = Counter()
     with closing(sqlite3.connect(Path(scope['pool']).as_uri() + '?mode=ro', uri=True)) as connection:
@@ -46,6 +49,8 @@ def prepare():
                 (SELECT 1 FROM candidate_claims c WHERE c.candidate_id=d.candidate_id)
                 AND NOT EXISTS (SELECT 1 FROM candidate_events e WHERE e.candidate_id=d.candidate_id AND e.kind='disposition')
                 ORDER BY d.created DESC,d.candidate_id''', (host,)):
+                if candidate in old_ids:
+                    continue
                 family = page_family(host, entry)
                 if family:
                     groups.setdefault(family, deque()).append(candidate)
@@ -66,7 +71,7 @@ def prepare():
                     landing = load_json(row['entry_http']['path'])['landed_uri']
                     identity = entry_identity(landing)
                     patterns = compile_entry_exclusions(row['sources'])
-                    if identity in landing_ids or urlsplit(landing).hostname not in (host, 'www.' + host) or any(entry_is_excluded(url, patterns) for url in (row['entry_url'], landing)):
+                    if identity in landing_ids or identity in old_landings or urlsplit(landing).hostname not in (host, 'www.' + host) or any(entry_is_excluded(url, patterns) for url in (row['entry_url'], landing)):
                         skipped[(host, 'duplicate, out-of-scope or excluded landing')] += 1
                         continue
                     landing_ids.add(identity)

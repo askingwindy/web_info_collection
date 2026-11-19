@@ -1145,7 +1145,11 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
     # 固定cohort的worker不带--application-id（CLI禁止与--cohort同用），
     # 站点停止判定必须用当前候选自己的application_id：非cohort保持原值。
     site_app = application_id
+    drain = Path(os.environ['WEBCOLLECT_DRAIN_FILE']) if rows is not None and os.environ.get('WEBCOLLECT_DRAIN_FILE') else None
     while limit is None or processed < limit:
+        if drain and drain.exists():
+            stop_reason = 'drain_requested'
+            break
         if round_failures.stopped() or any(os.environ.get(k) and Path(os.environ[k]).exists()
                 for k in ('WEBCOLLECT_STOP_FILE', 'WEBCOLLECT_PRODUCER_STOP_FILE')):
             stop_reason = 'round_stopped'
@@ -1175,6 +1179,9 @@ async def run(pool, ledger, *, worker_id, request_prefix, limit=None, categories
                 stop_dispatch(error, phase='before_claim_preflight')
                 break
             row_batch = selected.get('producer_batch',producer_batch) if selected else producer_batch
+            if drain and drain.exists():
+                stop_reason = 'drain_requested'
+                break
             request_id = f'{request_prefix}/{poll}'
             def claim_next():
                 return pool.claim_next(worker_id,request_id,categories=categories,application_id=application_id,

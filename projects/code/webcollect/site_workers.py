@@ -356,6 +356,7 @@ def launch(plan):
     root=Path(plan['log_root'])
     root.mkdir(parents=True,exist_ok=bool(plan.get('fixed')))
     stop=root/'stop.request';failures=RoundFailures(root/'failure-events.jsonl')
+    drain = root / 'drain.request' if plan.get('fixed') and plan['role'] == 'consumer' else None
     started_at=time.time();started_monotonic=time.monotonic()
     children=[];interrupted=False;error=None;drain_deadline=None
     stop_reason=None;preflight=None;preparing=True
@@ -377,6 +378,7 @@ def launch(plan):
             from .key_health import pool_available,probe_accounts
             _,scope=load_scope(plan['scope'])
             ledger=BatchLedger(scope['consumer_db'],load_json(scope['consumer_config']))
+            ledger.prepare_dispatch_indexes()
             if stop.exists():raise InterruptedError('Stopped before account probes')
             launch_id='fixed-round:'+plan['plan_id']
             probes=[]
@@ -388,6 +390,8 @@ def launch(plan):
                 raise ValueError('No available model account')
         env={**child_environment(),'WEBCOLLECT_STOP_FILE':str(stop),'WEBCOLLECT_PRODUCER_STOP_FILE':str(stop),
              'WEBCOLLECT_ROUND_EVENTS':str(failures.path),'WEBCOLLECT_CENTRAL_KEY_HEALTH':'1'}
+        if drain:
+            env['WEBCOLLECT_DRAIN_FILE'] = str(drain)
         if plan['role']=='producer':
             for index,worker in enumerate(plan['workers'],1):
                 command=worker['command'];at=command.index('--sources')+1
@@ -397,14 +401,21 @@ def launch(plan):
         preparing=False
         with ExitStack() as stack:
             for index,worker in enumerate(plan['workers'],1):
-                if stop.exists() or failures.stopped():break
+                if stop.exists() or failures.stopped() or drain and drain.exists():break
                 command=list(worker['command'])
                 log=stack.enter_context((root/f'w{index:03d}.log').open('xb'))
                 p=subprocess.Popen(command,cwd=REPOSITORY,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT)
                 children.append({'worker_id':worker['worker_id'],'pid':p.pid,'process':p})
             while any(c['process'].poll() is None for c in children):
                 bad=[c for c in children if c['process'].poll() not in (None,0)]
-                if bad or failures.stopped() or stop.exists():
+                failure_stop = failures.stop_disposition()
+                if drain and failure_stop == 'page_program' and not stop.exists() and all(c['process'].returncode == 2 for c in bad):
+                    if not drain.exists():
+                        drain.touch()
+                    stop_reason = 'page_program_drain'
+                elif bad or failure_stop or stop.exists():
+                    if stop_reason == 'page_program_drain':
+                        stop_reason = 'global_stop' if failure_stop == 'global' else 'worker_or_user_stop'
                     stop.touch();drain_deadline=drain_deadline or time.monotonic()+120
                     for child in children:
                         if child['process'].poll() is None and not child.get('stop_sent'):
@@ -433,12 +444,14 @@ def launch(plan):
                 except subprocess.TimeoutExpired:c['process'].kill();c['process'].wait(timeout=5)
         finally:
             for sig,handler in previous.items():signal.signal(sig,handler)
+            if drain and drain.exists() and not stop_reason and not stop.exists():
+                stop_reason = 'drain_requested'
             summary={'plan_id':plan['plan_id'],'interrupted':interrupted,'error':error,'started_at':started_at,
                      'finished_at':time.time(),'elapsed_seconds':time.monotonic()-started_monotonic,
                      'workers':[{**{k:v for k,v in c.items() if k!='process'},'returncode':c['process'].poll()} for c in children],
                      'unlaunched':len(plan.get('workers',[]))-len(children),'automatic_export':False,
                      'stop_reason':stop_reason,'preflight':preflight}
-            summary['succeeded']=bool(children) and len(children)==len(plan.get('workers',[])) and all(c['process'].poll()==0 for c in children) and not interrupted and not error and not stop.exists() and not failures.stopped()
+            summary['succeeded']=bool(children) and len(children)==len(plan.get('workers',[])) and all(c['process'].poll()==0 for c in children) and not interrupted and not error and not stop_reason and not stop.exists() and not failures.stopped()
             try:
                 write_json(root/'summary.json',summary)
             except Exception as diagnostic_error:

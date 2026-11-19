@@ -50,6 +50,7 @@ LIMIT_JUDGEMENT_REASON = 200
 
 ACTIONS = ('click', 'double_click', 'right_click', 'type', 'hotkey', 'scroll',
            'select', 'back', 'wait', 'complete')
+NATIVE_PICKER_TYPES = frozenset(('date', 'time', 'month', 'week', 'datetime-local'))
 
 # 宿主允许的按键集合（与 browser._execute_action 的 keymap 对齐的小子集；
 # 超出集合的键在派发前反馈，不进入交付）。
@@ -73,6 +74,10 @@ last_step_result只描述上一实际动作后当前画面的变化。preconditi
 
 # 指定模式替换第二段；协议其余部分一致。
 _SPECIFIED_PARAGRAPH = '按【任务】中的指定目标完成任务；不能改变、缩小目标或把未完成目标回写成成功。'
+
+SYSTEM_PROMPT += """
+
+每个下一步在 thought 中写明还缺哪条业务事实。已看到的内容计入历史；同一区域上下滚动或点回顶部不会产生新事实。若本页一屏已读完，立即结束或明确不可延伸。计算、查询类任务先取得具体结果，再决定是否需要其他操作；结束时把用于证明完成的数值、单位或原文留在当前视口。当前页的 page_name、precondition 和上一动作的 last_step_result 只照抄本帧可见的「原文」，保留标点。"""
 
 AUTONOMOUS_PARAGRAPH = SYSTEM_PROMPT.split('\n\n')[1]
 
@@ -160,12 +165,25 @@ def forced_tool_choice(name):
 
 
 # ---------------------------------------------------------------- 决策上下文拼装
-def element_row(number, element):
+def element_row(number, element, value=None):
     label = (element.get('text') or element.get('visible_text') or '').strip()
     label = label.replace('\n', ' ')
     kind = element.get('element_type') or element.get('native_role') or 'node'
     state = element.get('state') or 'default'
-    return '%d. %s %s %s' % (number, kind, _bounded(label, LIMIT_ELEMENT_TEXT), state)
+    row = '%d. %s %s %s' % (number, kind, _bounded(label, LIMIT_ELEMENT_TEXT), state)
+    if element.get('inputable'):
+        value = value or {}
+        input_type = value.get('input_type') or ''
+        if value.get('readonly'):
+            capability = '只读'
+        elif input_type in NATIVE_PICKER_TYPES:
+            capability = '原生选择控件，禁用 type 和全选'
+        elif value.get('focused'):
+            capability = '已聚焦，可 type 或全选'
+        else:
+            capability = 'type 前先点击聚焦'
+        row += ' [%s]' % ' '.join(filter(None, (input_type, capability)))
+    return row
 
 
 def _structure_lines(state):
@@ -198,7 +216,9 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         task_block += '\n宿主提示：本轮只能结束（返回complete）。'
 
     progress_block = _bounded(progress, LIMIT_TASK_PROGRESS)
-    rows_block = [element_row(number, element) for number, element in rows]
+    values = {item['element_id']: item for item in state.get('values') or [] if item.get('element_id')}
+    rows_block = [element_row(number, element, values.get(element.get('element_id')))
+                  for number, element in rows]
 
     def clip_rows(items):
         total = sum(len(row) + 1 for row in items)
@@ -276,7 +296,14 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
     if dynamic_size() > LIMIT_TOTAL_DYNAMIC:
         raise ValueError('STEPWISE_CONTEXT_OVER_BUDGET: 不可裁剪内容超过 %d 字符预算' % LIMIT_TOTAL_DYNAMIC)
 
-    text = '每轮只调用一次next_action。\n\n' + '\n\n'.join(
+    required = next_action_schema(autonomous=mode == 'autonomous')['required']
+    instructions = ('每轮只调用一次next_action，所有动作（含complete）必填 ' + '、'.join(required)
+                    + '。首轮 last_step_result 可写空字符串，后续写看到的变化或尚无变化。'
+                    'thought 简述选择本动作的依据，expected_result 写预期可见结果。'
+                    '\nclick、double_click、right_click 给 element；type 给 element 和 text；'
+                    'hotkey 只加 keys；scroll 给 direction，可加可滚动的 element；'
+                    'select 给 element 和 option；complete 只加 status；back、wait 无专用参数。')
+    text = instructions + '\n\n' + '\n\n'.join(
         '【%s】\n%s' % (name, body) for name, body in blocks.items())
     return text, trimmed
 
@@ -284,7 +311,7 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
 # ---------------------------------------------------------------- 回写/判定输入
 def writeback_message(*, mode, requested_goal_text, task_goal, actions_summary,
                       site_tasks, initial_task_goal=None, correction_problems=(),
-                      previous_writeback=None):
+                      previous_writeback=None, final_state=None):
     lines = ['请依据本次轨迹与首帧、终态截图，输出 submit_writeback：',
              '- task_instruction：具体任务指令（简体中文，界面原文用「」）；未知答案不能倒写成任务条件',
              '- 指令必须从第一步起覆盖全部保留动作，不能删去早期任务来迁就后续结果',
@@ -299,6 +326,13 @@ def writeback_message(*, mode, requested_goal_text, task_goal, actions_summary,
              '', '【保留动作与逐步结果】']
     lines += ['%d. %s' % (index + 1, item)
               for index, item in enumerate(actions_summary)]
+    if final_state is not None:
+        lines += ['', '【终态帧可核验原文】',
+                  '下列文字来自末帧，与第二张图对应。请复制需要的原文，保留标点、数值及单位。只在末帧有证据的结果可写成最终结果。',
+                  _bounded(final_state.get('visible_text') or '', 1800)]
+        labels = dict.fromkeys((el.get('text') or el.get('visible_text') or '').strip()
+                               for el in final_state.get('elements') or [])
+        lines.append(_bounded(' · '.join(label for label in labels if label), 480))
     if site_tasks:
         lines += ['', '【本页已采任务（避免重复，不作为依据）】']
         lines += list(site_tasks)

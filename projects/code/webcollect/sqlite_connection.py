@@ -79,6 +79,12 @@ def begin_immediate(con, *, timeout=90):
             except sqlite3.OperationalError as error:
                 from .registry_db import is_locked
                 error.retry_count=attempt
+                if is_locked(error):
+                    from traceback import extract_stack
+                    error.sqlite_database = Path(con.execute('PRAGMA database_list').fetchone()[2]).name
+                    caller = next((frame for frame in reversed(extract_stack(limit=10)[:-1])
+                                   if frame.name not in ('__enter__','_transaction','transaction')), None)
+                    error.sqlite_operation = caller.name if caller else None
                 if attempt==3 or not is_locked(error):raise
                 from .failure_policy import retry_event
                 retry_event(error,attempt+1,operation='begin_immediate')

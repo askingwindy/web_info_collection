@@ -132,6 +132,32 @@ def quoted_segments(text):
     return [match.group(1) for match in _QUOTED.finditer(text or '')]
 
 
+_PUNCTUATION = str.maketrans('？！，：（）', '?!,:()')
+
+
+def missing_quotes(fields, corpus, location):
+    problems = []
+    for field, text in fields:
+        for quote in quoted_segments(text):
+            compact = _COMPACT.sub('', quote)
+            if compact in corpus:
+                continue
+            problem = f'{field} 引文「{quote[:60]}」不在{location}'
+            # Suggest the original spelling. A punctuation variant still fails the check.
+            position = corpus.translate(_PUNCTUATION).find(compact.translate(_PUNCTUATION))
+            if position >= 0:
+                problem += f'，本帧原文为「{corpus[position:position + len(compact)]}」'
+            problems.append(problem)
+    return problems
+
+
+def decision_citations_check(arguments, state, *, previous_action):
+    fields = ['page_name', 'precondition']
+    if previous_action:
+        fields.append('last_step_result')
+    return missing_quotes(((name, arguments.get(name)) for name in fields), _corpus(state), '本帧')
+
+
 def citations_check(annotation, frame_texts):
     """引文按字段所属帧检查；输入值与 expected_result 不作事实核对。
 
@@ -150,26 +176,18 @@ def citations_check(annotation, frame_texts):
             text = step.get(field)
             if field == 'precondition' and text is None:
                 text = (step.get('action') or {}).get(field)
-            for quote in quoted_segments(text):
-                if _COMPACT.sub('', quote) not in own:
-                    problems.append('step %d %s 引文「%s」不在本帧' % (step.get('step_id'), field, quote[:60]))
+            problems.extend(missing_quotes([(f"step {step.get('step_id')} {field}", text)], own, '本帧'))
         target = corpora[index + 1] if index + 1 < len(steps) else corpora[-1]
-        for quote in quoted_segments(step.get('step_result')):
-            if _COMPACT.sub('', quote) not in target:
-                problems.append('step %d step_result 引文「%s」不在下一交付帧' % (step.get('step_id'), quote[:60]))
+        problems.extend(missing_quotes([(f"step {step.get('step_id')} step_result", step.get('step_result'))],
+                                       target, '下一交付帧'))
     problems.extend(writeback_citations_check(annotation, frame_texts[-1]))
     return problems
 
 
 def writeback_citations_check(writeback, final_state):
     """仅检查可重写的回写字段；不修改历史决策或轨迹引文。"""
-    problems = []
-    final = _corpus(final_state)
-    for field in ('final_result', 'completion_judgement'):
-        for quote in quoted_segments(writeback.get(field)):
-            if _COMPACT.sub('', quote) not in final:
-                problems.append('%s 引文「%s」不在终态帧' % (field, quote[:60]))
-    return problems
+    return missing_quotes(((name, writeback.get(name)) for name in ('final_result', 'completion_judgement')),
+                          _corpus(final_state), '终态帧')
 
 
 # ---------------------------------------------------------------- 保存资格

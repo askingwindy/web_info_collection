@@ -24,6 +24,41 @@ CLICK_POINT_VERSION = 'click-dispatch-point'
 BACK_OBSERVED_VERSION = 'back-observed-document'
 
 
+def control_carrier(state, cid):
+    """Nearest captured native action owner, preserving the real child target."""
+    elements = {row['element_id']: row for row in state.get('elements', [])}
+    bindings = {row['element_id']: row for row in state.get('capture_controls', [])}
+    def native(node):
+        return (bindings.get(node.get('element_id'), {}).get('tag') in ('a', 'button', 'input', 'textarea', 'select')
+                or node.get('native_role') in ('a', 'button', 'input', 'textarea', 'select'))
+    node = elements.get(cid, {})
+    seen = set()
+    while not native(node):
+        parent_id = node.get('parent_id')
+        if not parent_id or parent_id in seen:
+            break
+        seen.add(parent_id)
+        parent = elements.get(parent_id, {})
+        if not parent or parent.get('visible') is not True:
+            break
+        node = parent
+        if native(node) and node.get('clickable'):
+            return node['element_id']
+    return cid
+
+
+def navigation_carrier(state, cid):
+    """Captured link provenance for either a link or its real clicked child."""
+    owner = control_carrier(state, cid)
+    element = next((row for row in state.get('elements', []) if row['element_id'] == owner), {})
+    binding = next((row for row in state.get('capture_controls', []) if row['element_id'] == owner), {})
+    if (element.get('visible') is not True
+            or not element.get('clickable') or binding.get('tag') != 'a' or not binding.get('href')):
+        return None
+    return {'target_node': cid, 'link_node': owner, 'selector': binding.get('selector'),
+            'index': binding.get('index', 0), 'href': binding['href'], 'target': binding.get('target')}
+
+
 class ActionScopeError(ValueError):
     """A pre-dispatch failure with the actual missing conditions."""
     def __init__(self, missing, *, node, action):

@@ -133,7 +133,7 @@ class PlanProtocolContract(unittest.TestCase):
                          'from ..task_instruction import', 'from ..collection_strategy import',
                          'from ..collect_runtime import', 'from ..postprocess import post_seal_name',
                          'from ..session_core import ReactStop', 'from ..failure_policy import',
-                         'from ..candidate_contract import',
+                         'from ..candidate_contract import', 'from ..application_identity import aliases',
                          'from ..closing_policy import COMPLETED_GOAL_DELIVERY',
                          'from ..production_identity import actual_proof')
         for path in sorted((Path(__file__).parents[1] / 'webcollect/stepwise').glob('*.py')):

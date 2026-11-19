@@ -270,6 +270,7 @@ class BatchLedger:
     def __init__(self, path, config, *, initialize=False):
         self.path = Path(path).resolve()
         self.config = validate_config(config)
+        self._dispatch_indexes_ready = False
         if initialize:
             if self.path.name == 'production-registry.sqlite3':
                 raise ValueError('Job ledger must be separate from the production ID registry')
@@ -852,22 +853,42 @@ class BatchLedger:
         # its original decision job. Each row represents one dispatch, including retries.
         answered = self._answered_timeout_sql()
         pending = f'(NOT ({answered}))'
-        return con.execute(f"""SELECT COUNT(*) AS used, COUNT(json_extract(r.request_json,'$.dispatch_attempt_id')) AS native_calls,
+        return con.execute(f"""WITH session_requests(row_id) AS (
+              SELECT rowid FROM model_requests WHERE json_extract(request_json,'$.dispatch_attempt_id')=?
+                  AND json_extract(request_json,'$.http_dispatch')=1
+              UNION
+              SELECT r.rowid FROM jobs j JOIN model_requests r ON r.job_id=j.id
+                  WHERE j.kind IN ('react-decision','react-native-decision') AND json_extract(j.payload,'$.attempt_id')=?
+                    AND ? AND COALESCE(json_extract(r.request_json,'$.http_dispatch'),1)=1
+            )
+            SELECT COUNT(*) AS used, COUNT(json_extract(r.request_json,'$.dispatch_attempt_id')) AS native_calls,
             MIN(json_extract(r.request_json,'$.dispatch_max_requests')) AS min_cap,
             MAX(json_extract(r.request_json,'$.dispatch_max_requests')) AS max_cap,
             MAX(j.kind IN ('react-decision','react-native-decision')) AS has_react,
             MIN(CASE WHEN (r.state='unknown' AND {pending}) OR j.state='review_required' THEN r.id END) AS held,
             MIN(CASE WHEN r.state='reserved' OR (r.state='unknown' AND {pending}) OR j.state='review_required' THEN r.id END) AS unresolved
-            FROM model_requests r JOIN jobs j ON j.id=r.job_id
-            WHERE (json_extract(r.request_json,'$.dispatch_attempt_id')=?
-                   AND json_extract(r.request_json,'$.http_dispatch')=1)
-               OR (j.kind IN ('react-decision','react-native-decision') AND json_extract(j.payload,'$.attempt_id')=?
-                   AND ? AND COALESCE(json_extract(r.request_json,'$.http_dispatch'),1)=1)""",
+            FROM session_requests s JOIN model_requests r ON r.rowid=s.row_id JOIN jobs j ON j.id=r.job_id""",
             (attempt_id, attempt_id, self.config['mode']=='real')).fetchone()
+
+    def prepare_dispatch_indexes(self):
+        """Index original request and legacy job identities without editing an accounting row."""
+        if self._dispatch_indexes_ready:
+            return
+        with self.connect() as con:
+            existing=con.execute("""SELECT count(*) FROM sqlite_master WHERE type='index'
+                AND name IN ('request_dispatch_attempt','react_job_attempt')""").fetchone()[0]
+        if existing < 2:
+            with self.transaction() as con:
+                con.execute("CREATE INDEX IF NOT EXISTS request_dispatch_attempt ON model_requests(json_extract(request_json,'$.dispatch_attempt_id'))")
+                con.execute("""CREATE INDEX IF NOT EXISTS react_job_attempt ON jobs(json_extract(payload,'$.attempt_id'))
+                    WHERE kind IN ('react-decision','react-native-decision')""")
+        self._dispatch_indexes_ready = True
 
     def bind_model_session(self, session_id, *, consumer=False):
         """Select/recover once under the existing short SQLite write lock."""
         from .model_credentials import credential, account_id
+        if consumer:
+            self.prepare_dispatch_indexes()
         with self.transaction() as con:
             if not con.execute("SELECT 1 FROM sqlite_master WHERE name='model_sessions'").fetchone():
                 con.execute('CREATE TABLE model_sessions(session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL)')
@@ -965,10 +986,11 @@ class BatchLedger:
                     "WHERE json_extract(request_json,'$.dispatch_attempt_id')=? "
                     "AND json_extract(request_json,'$.account_id')<>?", (aid, account)).fetchone():
                     raise OutcomeUnknown('Original attempt account differs; no account rotation')
-            last=con.execute('SELECT MAX(started) FROM model_requests').fetchone()[0]
-            if last is not None and not consumer:
-                delay=last+budget['min_model_interval_seconds']-time.time()
-                if delay>0:raise ModelRateWait(delay)
+            if not consumer:
+                last=con.execute('SELECT MAX(started) FROM model_requests').fetchone()[0]
+                if last is not None:
+                    delay=last+budget['min_model_interval_seconds']-time.time()
+                    if delay>0:raise ModelRateWait(delay)
             rid = uuid.uuid4().hex
             con.execute('''INSERT INTO model_requests(id,job_id,purpose,attempt,state,reserved_tokens,reserved_cost,started,request_json)
                 VALUES(?,?,?,?,?,?,?,?,?)''', (rid, job['id'], purpose, attempt, 'reserved', tokens,

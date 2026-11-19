@@ -99,7 +99,8 @@ def snapshot(directory, scope, baseline, sites):
             faults.append({'segment': path.parent.name, 'at': event.get('at'), 'site': by_claim.get(event.get('claim_id')),
                 'claim_id': event.get('claim_id'), 'disposition': event.get('disposition'), 'owner': event.get('reason_owner'),
                 'feature': event.get('error_feature'), 'reason_code': issue_type(event.get('reason')),
-                'stop_dispatch': event.get('stop_dispatch')})
+                'stop_dispatch': event.get('stop_dispatch'),
+                **{key:event[key] for key in ('sqlite_database','sqlite_operation') if event.get(key)}})
     peaks = list(records(directory / 'worker-observations.jsonl'))
     summary = read(directory / 'summary.json') if (directory / 'summary.json').exists() else {}
     report_done = 'report_integrity' in summary

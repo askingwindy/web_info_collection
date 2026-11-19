@@ -556,10 +556,13 @@ def schema_errors_feedback(errors):
                     path = path + [schema_path[index + 1]]
                     detail = (str(schema_path[index + 1]) + ' is not allowed for the selected decision; '
                               'remove it or use the decision branch that permits it')
-        if e.validator == 'required':
-            missing = [k for k in e.validator_value if isinstance(instance, dict) and k not in instance]
-            if missing:
-                path = path + [missing[0]]
+        if e.validator == 'required' and isinstance(instance, dict):
+            for field in e.validator_value:
+                if field not in instance:
+                    row = {'field_path': path + [field], 'detail': f'{field!r} is a required property'}
+                    if row not in leaves:
+                        leaves.append(row)
+            return
         if e.validator == 'additionalProperties' and isinstance(instance, dict):
             extras = sorted(set(instance) - set(schema.get('properties', {})))
             if extras:
@@ -707,6 +710,7 @@ class ModelGateway:
         # across sessions, and never enter any business identity.
         self.runlog = runlog
         self._request_clock = {}
+        self.stop_pending_dispatch = None
 
     def _log_request_started(self, job, rid, model, purpose, *, native_context=None):
         if self.runlog is None:
@@ -1095,6 +1099,8 @@ class ModelGateway:
         # One decision has at most two HTTP reservations across *all* correction
         # kinds, including ReAct without a plan normalizer.
         for attempt in range(2 if consumer else min(attempts, 2)):
+            if self.stop_pending_dispatch and self.stop_pending_dispatch():
+                raise InterruptedError('Model dispatch cancelled before reservation')
             if consumer:
                 self.ledger.heartbeat(job)
             dispatch_policy = (native_context or {}).get('dispatch_policy')
@@ -1132,6 +1138,8 @@ class ModelGateway:
                 try:
                     # 会话软时限对消费者决策同样生效：软时限后不再发起新的
                     # 模型HTTP请求（未决请求保留UNKNOWN，不重发）。
+                    if self.stop_pending_dispatch and self.stop_pending_dispatch():
+                        raise InterruptedError('Model dispatch cancelled before reservation')
                     deadline = (native_context or {}).get('dispatch_deadline')
                     if deadline is not None and time.monotonic() >= deadline:
                         raise BudgetStop('consumer_session_soft_deadline: no new HTTP request')

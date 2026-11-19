@@ -243,6 +243,12 @@ def _evidence(path):
     return [{'path': str(Path(path).resolve()), 'sha256': sha(path)}]
 
 
+def _attempt_raw_receipt(evidence, task):
+    from .collection_strategy import is_stepwise
+    receipt = evidence / ('stepwise' if is_stepwise(task) else 'raw') / 'raw-receipt.json'
+    return _evidence(receipt) if receipt.is_file() else []
+
+
 def _root_cause(error):
     import re
     if isinstance(error, sqlite3.OperationalError):
@@ -1217,9 +1223,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                             try:
                                 await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                                     'rejected', failure_class='interrupted', root_cause='runner_cancelled',
-                                    evidence=_evidence(failure) + (
-                                        _evidence(evidence / 'raw' / 'raw-receipt.json')
-                                        if (evidence / 'raw' / 'raw-receipt.json').is_file() else []))
+                                    evidence=_evidence(failure) + _attempt_raw_receipt(evidence, task))
                             except ValueError as cancellation_error:
                                 if not str(cancellation_error).startswith(('worker/lease fencing不匹配',
                                         '租约已过期', 'attempt已结束', '已终结attempt不可覆盖')):
@@ -1266,9 +1270,7 @@ async def _collect_m4_locked(plan_path, output, registry, *, publication_path=No
                         # separately and never mask the primary failure.
                         await asyncio.to_thread(store.finish_attempt,attempt['attempt_id'], worker_id, attempt['lease_token'],
                             'rejected', failure_class=classify_failure(error), root_cause=_root_cause(error),
-                            evidence=_evidence(failure) + [feedback_ref] + (
-                                _evidence(evidence / 'raw' / 'raw-receipt.json')
-                                if (evidence / 'raw' / 'raw-receipt.json').is_file() else []))
+                            evidence=_evidence(failure) + [feedback_ref] + _attempt_raw_receipt(evidence, task))
                         try:
                             quarantine_interrupted(output, [{**attempt, 'status': 'rejected'}])
                         except Exception as cleanup_error:

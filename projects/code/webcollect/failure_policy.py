@@ -69,6 +69,8 @@ def disposition(error=None, *, failure_class=None, reason=None, phase=None):
             'code':'UNSUPPORTED_GEOMETRY' if unsupported_geometry else getattr(error,'code',None), 'retry_count':getattr(error,'retry_count',0),
             'reason': str(error) if error is not None else reason,
             'error_feature': feature(error) if error is not None else None,
+            **({'sqlite_database':error.sqlite_database, 'sqlite_operation':error.sqlite_operation}
+               if getattr(error,'sqlite_database',None) else {}),
             'transient': bool(is_locked(error)) if error is not None else original == 'transient',
             'shared_dependency_exhausted': isinstance(error, PreDispatchDNSFailure)}
 
@@ -100,12 +102,22 @@ class RoundFailures:
             stream.flush()
             return row
 
-    def stopped(self):
+    def stop_disposition(self):
         if not self.path.exists():
-            return False
+            return None
         with self.path.open() as stream:
             fcntl.flock(stream, fcntl.LOCK_SH)
-            return any(json.loads(line).get('stop_dispatch') for line in stream if line.strip())
+            disposition = None
+            for line in stream:
+                row = json.loads(line) if line.strip() else {}
+                if row.get('stop_dispatch'):
+                    if row.get('disposition') != 'page_program':
+                        return 'global'
+                    disposition = 'page_program'
+            return disposition
+
+    def stopped(self):
+        return self.stop_disposition() is not None
 
 
 def safe_retry(operation, *, safe, deadline, stopped=lambda: False, retryable=None, sleep=time.sleep):

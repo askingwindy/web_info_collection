@@ -67,6 +67,27 @@ def request_summary(requests):
             'known_input_tokens':known_in,'known_output_tokens':known_out,'unknown_usage_requests':missing,'cost':'UNKNOWN'}
 
 
+def partial_stepwise_actions(directory):
+    """Prove individual actions for an interrupted attempt lacking a formal terminal."""
+    proven = {}
+    for path in sorted(directory.glob('step_*.json')):
+        step = load_json(path)
+        seq = step.get('dispatch_seq')
+        if (step.get('schema_version') != 'stepwise-step-receipt-1' or type(seq) is not int
+                or step.get('dispatched') is not True or step.get('action_executed') is not True
+                or step.get('effective') is not True or not step.get('after_frame') or not step.get('ended_at')
+                or step['operation']['action_type'] in ('wait', 'complete')):
+            continue
+        dispatch = directory / 'stepwise' / f'dispatch-{seq:03d}.json'
+        verify_evidence([{'path': str(dispatch), 'sha256': step['controller_dispatch']['sha256']}])
+        original = load_json(dispatch)
+        if (original.get('schema_version') != 'stepwise-dispatch-1' or original['before_frame'] != step['before_frame']
+                or original['operation'] != step['operation']):
+            raise ValueError('Partial step does not match its original dispatch')
+        proven[seq] = {'path': str(path), 'dispatch_seq': seq}
+    return list(proven.values())
+
+
 def belongs_to_batches(payload,batches):
     """Only native scope fields; no time, filename or URI-based attribution."""
     if isinstance(payload,dict):
@@ -141,9 +162,11 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     for t in tasks:
         task=json.loads(t['task_json']);binding=task.get('candidate_binding') or {}
         if binding.get('claim_id'):task_by_claim[binding['claim_id']].append((t,task))
-    job_claim={}
+    job_claim={}; stepwise_phases={}
     for j in consumer_jobs:
         payload=json.loads(j['payload']);cb=payload.get('candidate_binding') or {}
+        if j['kind']=='stepwise-decision':
+            stepwise_phases[j['id']] = payload.get('phase')
         cid=payload.get('claim_id') or cb.get('claim_id')
         if cid:job_claim[j['id']]=cid
     # Exact native parent edges only. Never correlate by close timestamps or filenames.
@@ -196,12 +219,25 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                         if facts[later]['state']=='unknown':facts[later]['state']='not_reached'
                 except (ValueError,OSError,KeyError) as error:item['inconsistencies'].append('entry_failure_unreadable:'+str(error))
         selected_tasks=[pair for cid in claim_ids for pair in task_by_claim[cid]]
+        is_stepwise = any((task.get('fragment',{}).get('collection_strategy') or {}).get('id') == 'stepwise'
+                          for _, task in selected_tasks) or (not selected_tasks and run_plan.get('collection_strategy') == 'stepwise')
+        if is_stepwise:
+            item.update(template='stepwise', template_source='not_applicable', stepwise_evidence={})
+            for stage in ('template_selected','initial_plan_accepted'):
+                facts[stage]={'state':'not_applicable','evidence':[],'strategy':'stepwise'}
         task_keys={t['task_key'] for t,task in selected_tasks}
         own_attempts=[a for a in attempts if a['task_key'] in task_keys]
         attempt_ids={a['attempt_id'] for a in own_attempts}
         own_requests=[r for r in consumer_requests if job_claim.get(r['job_id']) in claim_ids
                       or attempt_ids and request_attempts.get(r['id']) in attempt_ids]
         for r in own_requests:used_requests[r['id']]=r
+        sent = {}
+        if is_stepwise:
+            for request in own_requests:
+                phase = stepwise_phases.get(request['job_id'])
+                if phase and request_summary([request])['dispatch'].get('dispatched'):
+                    sent[request['id']] = phase
+                    item['stepwise_evidence'].setdefault(phase+'_http', []).append(request['id'])
         if request_summary(own_requests)['dispatch'].get('dispatched',0):facts['model_http']={'state':'reached','evidence':[{'request_id':r['id']} for r in own_requests]}
         elif claims and request_summary(own_requests)['dispatch'].get('unproven',0)==0:facts['model_http']={'state':'not_reached','evidence':[{'request_id':r['id']} for r in own_requests]}
         for a in own_attempts:
@@ -218,6 +254,9 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                         # 专属阶段记不适用，不伪造达成）。
                         item['template'] = 'stepwise'
                         item['template_source'] = 'not_applicable'
+                        marks = item.setdefault('stepwise_evidence', {})
+                        if terminal.get('stop_reason') == 'complete_success' and (terminal.get('complete_decision') or {}).get('status') == 'success':
+                            marks['complete_accepted'] = [receipt['terminal']]
                         if a['status'] == 'collected_pending_review' and a.get('finished_at') is not None:
                             item['closure_proven'] = True
                         count = terminal.get('effective_steps'); item['effective_steps'] = count
@@ -269,12 +308,47 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                 for ref in refs:
                     if Path(ref.get('path','')).name=='failure.json':
                         verify_evidence([ref]);failure=load_json(ref['path'])
+                        if (is_stepwise and not raw_refs and failure.get('attempt_id') == a['attempt_id']
+                                and Path(ref['path']).parent.name == a['sample_id']):
+                            partial=partial_stepwise_actions(Path(ref['path']).parent)
+                            if partial:
+                                item['effective_steps_lower_bound'] = len(partial)
+                                if len(partial) >= 5:
+                                    facts['effective_steps_ge5']={'state':'reached','evidence':partial}
                         if (raw_refs and a['status']=='rejected' and a.get('finished_at') is not None
                                 and failure.get('attempt_id')==a['attempt_id'] and failure.get('failure_class')==a.get('failure_class')
                                 and (failure.get('root_cause') or failure.get('error'))==a.get('root_cause')):item['closure_proven']=True
                         faults.append({'claim_id':next(iter(claim_ids),None),'attempt_id':a['attempt_id'],
                             'failure_class':a.get('failure_class'),'reason':a.get('root_cause'),
                             **(failure.get('failure_disposition') or {'disposition':'unclassified'})})
+                if is_stepwise:
+                    # Use only the original attempt-bound evidence directory and its settled HTTP identity.
+                    anchors = [Path(ref['path']) for ref in refs if Path(ref['path']).name in ('failure.json','raw-receipt.json')]
+                    if anchors:
+                        anchor=anchors[0]
+                        directory=anchor.parent.parent if anchor.name=='raw-receipt.json' else anchor.parent
+                        if directory.name!=a['sample_id']:
+                            raise ValueError('Stepwise evidence directory sample differs from attempt')
+                        from .stepwise.finalize import judgement_passed
+                        for path in [*sorted(directory.glob('writeback-*.json')), directory/'judgement.json']:
+                            if not path.is_file():
+                                continue
+                            event=load_json(path)
+                            phase='judgement' if path.name=='judgement.json' else 'writeback'
+                            if event.get('attempt_id')!=a['attempt_id'] or sent.get(event.get('request_id'))!=phase:
+                                continue
+                            validated = event.get('validated')
+                            if not validated:
+                                continue
+                            proof={'path':str(path),'request_id':event['request_id']}
+                            if phase=='writeback' and event.get('mechanical_problems')==[]:
+                                item['stepwise_evidence']['writeback_validated']=[proof]
+                            if phase=='judgement' and not event.get('mechanical_problem'):
+                                if judgement_passed(validated):
+                                    item['stepwise_evidence']['judgement_passed']=[proof]
+                                    facts['goal_verified']={'state':'reached','evidence':[proof]}
+                                else:
+                                    facts['goal_verified']={'state':'failed','code':'independent_judgement_failed','evidence':[proof]}
                 if a['status'] in ('reserved','running') or not a.get('finished_at'):item['inconsistencies'].append('unsettled_attempt')
             except (ValueError,OSError,KeyError) as error:item['inconsistencies'].append('attempt_evidence_unreadable:'+str(error))
         for c in claims:
@@ -319,6 +393,21 @@ def build(scope_path, cohort_path, run_root, *, running=False):
                        'top5_rejections':[{'code':code,'unique_candidates':len({i['candidate_id'] for i in chosen if i['stages'][stage].get('code')==code}),
                                            'events':count} for code,count in Counter(i['stages'][stage].get('code') for i in chosen if i['stages'][stage]['state']=='failed').most_common(5)]}
                 for stage in STAGES}
+    def stepwise_funnel(chosen):
+        pages=[page for page in chosen if page.get('template')=='stepwise']
+        if not pages:
+            return {}
+        def stage_count(name):
+            return sum(page['stages'][name]['state']=='reached' for page in pages)
+        def phase_count(name):
+            return sum(bool(page['stepwise_evidence'].get(name)) for page in pages)
+        return dict(selected=len(pages),claimed=stage_count('claimed'),first_frame=stage_count('first_frame'),
+                    decision_http=phase_count('decision_http'),
+                    effective_ge1=sum(max(page['effective_steps'] or 0,page.get('effective_steps_lower_bound',0))>=1 for page in pages),
+                    effective_ge5=stage_count('effective_steps_ge5'),complete_accepted=phase_count('complete_accepted'),
+                    writeback_http=phase_count('writeback_http'),writeback_validated=phase_count('writeback_validated'),
+                    judgement_http=phase_count('judgement_http'),judgement_passed=phase_count('judgement_passed'),
+                    formally_saved=stage_count('formally_saved'))
     batches={r.get('producer_batch') for r in selected if r.get('producer_batch')}
     if cohort.get('audit'):
         verify_evidence([cohort['audit']])
@@ -362,6 +451,8 @@ def build(scope_path, cohort_path, run_root, *, running=False):
     return {'denominator':len(selected),'expected_denominator':expected_pages,'site_denominators':dict(site_counts),'expected_site_denominators':cohort.get('site_denominators',dict(site_counts)),
             'template_denominators':dict(Counter(i['template'] for i in detail)),'stage_order':list(STAGES),'running_snapshot':running,
             'integrity':'FAILED' if issues else 'PASS','issues':issues,'funnel':aggregate(detail),
+            'stepwise_funnel':stepwise_funnel(detail),
+            'stepwise_by_site':{site:stepwise_funnel([p for p in detail if p['application_id']==site]) for site in site_counts},
             'by_site':{site:aggregate([i for i in detail if i['application_id']==site]) for site in sorted({i['application_id'] for i in detail})},
             'by_template':{t:aggregate([i for i in detail if i['template']==t]) for t in sorted({i['template'] for i in detail})},
             'faults':faults,'fault_categories':dict(Counter(r.get('disposition','unclassified') for r in faults)),

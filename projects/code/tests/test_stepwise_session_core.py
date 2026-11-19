@@ -1,22 +1,26 @@
 """Stepwise bounded completion and actual-request/effect accounting, fully offline."""
+import asyncio
 import contextlib
 import io
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 
+from webcollect.action_stability import post_action_document_scope
 from webcollect.batch_core import BudgetStop
 from webcollect.stepwise.session import StepwiseSession, StepwiseStop, stepwise_caller
 
 
-def capture(text='计算器 参数 结果', color='white'):
+def capture(text='计算器 参数 结果', color='white', source_url='https://example.org/tool'):
     png = io.BytesIO()
     Image.new('RGB', (40, 30), color).save(png, format='PNG')
-    return {'png': png.getvalue(), 'capture': {}, 'state': {
+    proof = {'stability': {'action_scope': post_action_document_scope({'url': source_url})}}
+    return {'png': png.getvalue(), 'capture': {'attempts': [proof]}, 'state': {
         'url': 'https://example.org/tool', 'title': '计算器',
         'document_identity': 'doc', 'visible_text': text,
         'screen_resolution': [40, 30], 'elements': [], 'values': [], 'scroll': [0, 0]}}
@@ -30,6 +34,32 @@ def decision(**extra):
 
 
 class StepwiseSessionCore(unittest.IsolatedAsyncioTestCase):
+    async def test_redirected_capture_and_interrupted_rejection_streak(self):
+        source_url = 'https://example.org/before-redirect'
+        data = capture(source_url=source_url)
+        def answer(action, **fields):
+            args = decision(action=action)
+            del args['status']
+            return {'arguments': {**args, **fields}}
+        bad = answer('type', text='50')
+        call = AsyncMock(side_effect=[bad, bad, answer('wait'), bad, bad, answer('complete', status='success')])
+        call.requests_used = lambda: 0
+        with tempfile.TemporaryDirectory() as folder:
+            session = StepwiseSession({'site_uri': 'https://example.org/tool'}, folder, call, object(), attempt_id='a')
+            session.current = session.journal.add_frame(data)
+            session.effective = 5
+            session._execute_observed = AsyncMock(return_value=None)
+            session._capture = AsyncMock(return_value=data)
+            with patch('webcollect.stepwise.session.browser.verify_execution_state', new=AsyncMock()) as verify:
+                await session._loop()
+            self.assertEqual(session.stop_reason, 'complete_success')
+            self.assertEqual(session.dispatches, 1)
+            self.assertEqual([c.kwargs['action_scope']['source_url'] for c in verify.await_args_list],
+                             [source_url, source_url])
+            rejects = [json.loads(p.read_text()) for p in sorted(session.root.glob('decision-rejection-*.json'))]
+            self.assertEqual([r['consecutive'] for r in rejects], [1, 2, 1, 2])
+            self.assertTrue(all(r['reason'].startswith('TYPE_ELEMENT_REQUIRED') for r in rejects))
+
     async def test_bounded_autonomous_completion_and_specified_goal(self):
         with tempfile.TemporaryDirectory() as tmp, patch(
                 'webcollect.stepwise.session.browser.verify_execution_state', new=AsyncMock()):
@@ -56,12 +86,19 @@ class StepwiseSessionCore(unittest.IsolatedAsyncioTestCase):
 
             bounded = new('bounded')
             self.assertFalse(await bounded._handle_complete(bounded.current, decision()))
+            bounded.effective += 1
             self.assertFalse(await bounded._handle_complete(bounded.current, decision()))
             with self.assertRaises(StepwiseStop) as stopped:
                 await bounded._handle_complete(bounded.current, decision())
             self.assertEqual(stopped.exception.stop_reason, 'short_flow')
             self.assertEqual(len(bounded.complete_rejections), 2)
             self.assertIsNone(bounded.complete_decision)
+
+            finished_early = new('finished_early')
+            self.assertFalse(await finished_early._handle_complete(finished_early.current, decision()))
+            with self.assertRaises(StepwiseStop) as stopped:
+                await finished_early._handle_complete(finished_early.current, decision())
+            self.assertEqual((stopped.exception.stop_reason, len(finished_early.complete_rejections)), ('short_flow', 1))
 
             specified = new('specified', {'instruction': '查看原指定结果'})
             with self.assertRaises(StepwiseStop) as stopped:
@@ -110,6 +147,33 @@ class StepwiseSessionCore(unittest.IsolatedAsyncioTestCase):
             for phase in ('writeback', 'writeback', 'judgement'):
                 await call(phase=phase, **kwargs)
             self.assertEqual((attempts, call.requests_used()), ([1, 2, 2, 2], 40))
+
+        entering, release, settled = threading.Event(), threading.Event(), threading.Event()
+        receipts = []
+        class DelayedGateway(Gateway):
+            def call_tool(self, *args, **kwargs):
+                entering.set()
+                if not release.wait(5):
+                    raise TimeoutError('fixture did not release the dispatched request')
+                self.stopped = self.stop_pending_dispatch()
+                return {'request_id':'original', 'cancelled_before_return':self.stopped}
+        def finish(job, *, result):
+            receipts.append((job['id'],result))
+            settled.set()
+        ledger.used = 0
+        ledger.finish = finish
+        with patch('webcollect.model_gateway.ModelGateway', DelayedGateway):
+            owned = stepwise_caller(ledger, {'task_id':'t','site_uri':'https://example.org'}, 'interrupted')
+            in_flight = asyncio.create_task(owned(phase='decision', **kwargs))
+            try:
+                self.assertTrue(await asyncio.to_thread(entering.wait, 3))
+                in_flight.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await in_flight
+            finally:
+                release.set()
+            self.assertTrue(await asyncio.to_thread(settled.wait, 3))
+            self.assertEqual(receipts, [('job-0',{'request_id':'original','cancelled_before_return':True})])
 
         with tempfile.TemporaryDirectory() as tmp:
             def new(name, used=0):

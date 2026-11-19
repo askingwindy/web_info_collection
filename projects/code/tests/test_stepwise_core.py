@@ -200,6 +200,14 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         specified = prompt.next_action_schema(autonomous=False)
         self.assertNotIn('task_goal', specified['properties'])
         self.assertFalse(specified['additionalProperties'])
+        from jsonschema import Draft202012Validator
+        from webcollect.model_gateway import schema_errors_feedback
+        missing = {'last_step_result', 'thought', 'expected_result'}
+        partial = {key: '已见结果' for key in autonomous['required'] if key not in missing}
+        partial.update(action='click', element=1)
+        errors = schema_errors_feedback(Draft202012Validator(autonomous).iter_errors(partial))
+        self.assertEqual({row['field_path'][0] for row in errors}, missing)
+        self.assertTrue(all(row['field_path'][0] in row['detail'] for row in errors))
         # 裁剪次序：页面结构 → 可见正文 → 较早历史 → 导航元素；任务与反馈保留。
         state = _state()
         state['visible_text'] = '正文' * 400
@@ -221,6 +229,8 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertIn('structure', blocks)
         self.assertIn('visible_text', blocks)
         self.assertIn('任务与进度', text)
+        self.assertTrue(all(key in text.split('\n',1)[0] for key in specified['required']))
+        self.assertNotIn('task_goal', text.split('\n',1)[0])
         self.assertIn('上一条反馈', text)
         # 尾部导航先被裁剪，前列业务控件仍在本轮列表中。
         self.assertIn(prompt.element_row(*long_rows[0]), text)
@@ -273,8 +283,13 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'KEYS_NOT_ALLOWED'):
             observation.require_action(focused, selection)
         focused['values'][0].update(readonly=False, input_type='date')
+        self.assertIn('原生选择控件', prompt.element_row(*focused_rows[0], focused['values'][0]))
         with self.assertRaisesRegex(observation.ActionRejected, 'NATIVE_DATE_INPUT_UNSUPPORTED'):
             observation.bind_action(focused, focused_rows, {'action': 'type', 'element': 1, 'text': '2026-11-18'})
+        with self.assertRaisesRegex(observation.ActionRejected, 'TYPE_ELEMENT_REQUIRED'):
+            observation.bind_action(focused, focused_rows, {'action': 'type', 'text': '50'})
+        with self.assertRaisesRegex(observation.ActionRejected, 'UNEXPECTED_ACTION_FIELDS:element'):
+            observation.bind_action(focused, focused_rows, {'action': 'complete', 'status':'success', 'element':1})
         scroll_operation, _ = observation.bind_action(state, rows, {
             'action': 'scroll', 'direction': 'down'})
         self.assertEqual(scroll_operation['arguments'],
@@ -392,6 +407,16 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         english = _state()
         english['visible_text'] = 'This page contains English content only. ' * 20
         self.assertIsNotNone(observation.exclusion_issues('https://example.org/', english))
+        for slug in ('korea-overtime-pay-calculator','korea-severance-pay-calculator'):
+            self.assertIsNone(observation.exclusion_issues('https://muxtly.com/zh-CN/'+slug+'/', {}))
+            self.assertIsNotNone(observation.exclusion_issues('https://muxtly.com/pay/'+slug+'/', {}))
+        self.assertIsNotNone(observation.exclusion_issues('https://muxtly.com/checkout', {}))
+        self.assertIsNotNone(observation.exclusion_issues('https://muxtly.com/zh-CN/korea-overtime-pay-calculator', {'title':'支付'}))
+        frame = {'visible_text':'这是什么工具? 面积 20 平方米'}
+        bad = finalize.decision_citations_check({'precondition':'可见「这是什么工具？」','last_step_result':'显示「80 平方米」'}, frame, previous_action=True)
+        self.assertTrue(any('本帧原文为「这是什么工具?」' in reason for reason in bad))
+        self.assertEqual(len(bad),2)
+        self.assertEqual(finalize.decision_citations_check({'precondition':'可见「这是什么工具?」','last_step_result':'显示「20 平方米」'}, frame, previous_action=True),[])
 
 
 class StepwiseRecordsAndAnnotation(unittest.TestCase):

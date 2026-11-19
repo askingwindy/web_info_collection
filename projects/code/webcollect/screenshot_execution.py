@@ -7,6 +7,7 @@ Behavior stays byte-identical; 策略 2-specific tuning happens here only.
 """
 from copy import deepcopy
 
+from .action_stability import control_carrier, navigation_carrier
 from .batch_core import load_json
 
 # 2026-11-07 wwiki A/B: models describe controls with standard ARIA role words
@@ -54,41 +55,6 @@ def _identity_only_binding(control, semantic):
     if role and not roles_equivalent(role, element.get('native_role')):
         return False
     return True
-
-
-def control_carrier(state, cid):
-    """Nearest captured native action owner, preserving the real child target."""
-    elements = {row['element_id']: row for row in state.get('elements', [])}
-    bindings = {row['element_id']: row for row in state.get('capture_controls', [])}
-    def native(node):
-        return (bindings.get(node.get('element_id'), {}).get('tag') in ('a', 'button', 'input', 'textarea', 'select')
-                or node.get('native_role') in ('a', 'button', 'input', 'textarea', 'select'))
-    node = elements.get(cid, {})
-    seen = set()
-    while not native(node):
-        parent_id = node.get('parent_id')
-        if not parent_id or parent_id in seen:
-            break
-        seen.add(parent_id)
-        parent = elements.get(parent_id, {})
-        if not parent or parent.get('visible') is not True:
-            break
-        node = parent
-        if native(node) and node.get('clickable'):
-            return node['element_id']
-    return cid
-
-
-def navigation_carrier(state, cid):
-    """Captured link provenance for either a link or its real clicked child."""
-    owner = control_carrier(state, cid)
-    element = next((row for row in state.get('elements', []) if row['element_id'] == owner), {})
-    binding = next((row for row in state.get('capture_controls', []) if row['element_id'] == owner), {})
-    if (element.get('visible') is not True
-            or not element.get('clickable') or binding.get('tag') != 'a' or not binding.get('href')):
-        return None
-    return {'target_node': cid, 'link_node': owner, 'selector': binding.get('selector'),
-            'index': binding.get('index', 0), 'href': binding['href'], 'target': binding.get('target')}
 
 
 def bind_target(observation, target, observations=None, *, carriers=True, advisory=False):

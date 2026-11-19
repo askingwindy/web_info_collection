@@ -106,7 +106,7 @@ def _hotkey_allowed(state, keys):
                and elements.get(value.get('element_id'), {}).get('inputable') is True
                and elements[value['element_id']].get('visible') is True
                and elements[value['element_id']].get('enabled') is True
-               and value.get('input_type') not in {'date', 'time', 'month', 'week', 'datetime-local'}
+               and value.get('input_type') not in prompt.NATIVE_PICKER_TYPES
                for value in state.get('values') or [])
 
 
@@ -130,6 +130,8 @@ def bind_action(state, rows, arguments):
         if not (0 <= x < width and 0 <= y < height):
             raise ActionRejected('ELEMENT_OUTSIDE_VIEWPORT')
     elif action == 'type':
+        if number is None:
+            raise ActionRejected('TYPE_ELEMENT_REQUIRED: type 同时填写已聚焦输入框的 element 和 text')
         if type(number) is not int or number not in by_number:
             raise ActionRejected('ELEMENT_NOT_IN_FRAME:' + str(number))
         element = by_number[number]
@@ -140,8 +142,8 @@ def bind_action(state, rows, arguments):
             raise ActionRejected('TYPE_REQUIRES_FOCUSED_INPUT: 请先点击输入框')
         if value.get('readonly'):
             raise ActionRejected('TYPE_TARGET_READONLY')
-        if value.get('input_type') in {'date', 'time', 'month', 'week', 'datetime-local'}:
-            raise ActionRejected('NATIVE_DATE_INPUT_UNSUPPORTED')
+        if value.get('input_type') in prompt.NATIVE_PICKER_TYPES:
+            raise ActionRejected('NATIVE_DATE_INPUT_UNSUPPORTED: 此控件不支持 type 或全选，可选用其他可行操作')
         text = arguments.get('text')
         if not isinstance(text, str) or not text:
             raise ActionRejected('TYPE_TEXT_REQUIRED')
@@ -180,19 +182,16 @@ def bind_action(state, rows, arguments):
             raise ActionRejected('SELECT_OPTION_NOT_PRESENT')
     # 未声明参数不得随动作携带（不同动作只允许自身需要的参数）。
     allowed = {'last_step_result', 'page_name', 'precondition', 'thought',
-               'user_goal', 'expected_result', 'note', 'action'}
-    if action == 'complete':
-        allowed |= {'status'}
-    else:
-        allowed |= {'task_goal'}
+               'user_goal', 'expected_result', 'note', 'action', 'task_goal'}
     allowed |= {
         'click': {'element'}, 'double_click': {'element'}, 'right_click': {'element'},
         'type': {'element', 'text'}, 'hotkey': {'keys'}, 'scroll': {'element', 'direction'},
-        'select': {'element', 'option'}, 'back': set(), 'wait': set(),
+        'select': {'element', 'option'}, 'back': set(), 'wait': set(), 'complete': {'status'},
     }[action]
     extra = set(arguments) - allowed
     if extra:
-        raise ActionRejected('UNEXPECTED_ACTION_FIELDS:' + ','.join(sorted(map(str, extra))))
+        hint = '；hotkey 只加 keys，使用当前焦点' if action == 'hotkey' else ''
+        raise ActionRejected('UNEXPECTED_ACTION_FIELDS:' + ','.join(sorted(map(str, extra))) + hint)
 
     operation = {'action_type': action,
                  'arguments': _native_arguments(action, element, arguments, state),
@@ -276,7 +275,7 @@ def require_action(state, operation):
             raise ValueError('TYPE_REQUIRES_FOCUSED_INPUT')
         if value.get('readonly'):
             raise ValueError('TYPE_TARGET_READONLY')
-        if value.get('input_type') in {'date', 'time', 'month', 'week', 'datetime-local'}:
+        if value.get('input_type') in prompt.NATIVE_PICKER_TYPES:
             raise ValueError('NATIVE_DATE_INPUT_UNSUPPORTED')
         if not isinstance(arguments.get('text'), str) or not arguments['text']:
             raise ValueError('TYPE_TEXT_REQUIRED')
@@ -404,7 +403,10 @@ def exclusion_issues(url, state):
     """登录/注册/支付/下载/隐私排除与纯英文页检查；返回 (issue|None)。"""
     target = unquote(urlsplit(url or '').path).lower()
     for pattern in _EXCLUDE_URL_PATTERNS:
-        if re.search(r'(?<![a-z0-9])' + re.escape(pattern) + r'(?![a-z0-9])', target):
+        # In a calculator slug "pay" can mean wages. Separate payment path components still apply.
+        path = ('/'.join(part for part in target.split('/') if not part.endswith('-pay-calculator'))
+                if pattern == 'pay' else target)
+        if re.search(r'(?<![a-z0-9])' + re.escape(pattern) + r'(?![a-z0-9])', path):
             return 'excluded_url_pattern:' + pattern
     title = (state.get('title') or '')
     visible = (state.get('visible_text') or '')
