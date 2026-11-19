@@ -1,0 +1,82 @@
+{
+  "checked_at": "2026-11-19T08:26:57+08:00",
+  "segment_requested": "run-02",
+  "state": "BLOCKED_BEFORE_DISPATCH",
+  "launch_strategy": "stepwise",
+  "workers_requested": 20,
+  "workers_started": 0,
+  "launcher_exit": 1,
+  "segment_created": false,
+  "configured_model": "glm-5.3-flash",
+  "max_images": {
+    "config": 1,
+    "ledger": 1
+  },
+  "config_matches_ledger": true,
+  "required_images": {
+    "writeback": 2,
+    "judgement_up_to": 3
+  },
+  "preflight": {
+    "status": "FAILED",
+    "errors": [
+      {
+        "code": "STEPWISE_FINAL_IMAGES_UNAVAILABLE",
+        "field": "consumer_db.model",
+        "reason": "STEPWISE_FINAL_IMAGES_UNAVAILABLE: 回写需要 2 张原图，独立判定最多需要 3 张原图；max_images=1, supports_vision=True"
+      }
+    ],
+    "effective_limits": {
+      "http_limit": 40,
+      "soft_seconds": 1800,
+      "closeout_grace_seconds": 120
+    },
+    "dispatches": 0,
+    "browser_calls": 0,
+    "account_probes": 0,
+    "ledger_writes": 0
+  },
+  "sites": {
+    "dpm.org.cn": {
+      "claimed": 11,
+      "unclaimed": 39,
+      "total": 50
+    },
+    "muxtly.com": {
+      "claimed": 10,
+      "unclaimed": 40,
+      "total": 50
+    },
+    "zh.wikipedia.org": {
+      "claimed": 9,
+      "unclaimed": 41,
+      "total": 50
+    }
+  },
+  "new_rows": {
+    "pool.candidate_claims": 0,
+    "pool.candidate_results": 0,
+    "registry.m4_attempts": 0,
+    "consumer_db.jobs": 0,
+    "consumer_db.model_requests": 0,
+    "consumer_db.top_level_visits": 0,
+    "consumer_db.consumer_key_probes": 0,
+    "producer_db.model_requests": 0
+  },
+  "old_claims_checked": 937,
+  "old_attempts_checked": 671,
+  "consumer_unsettled": {
+    "unknown": 43
+  },
+  "producer_unsettled": {
+    "unknown": 19,
+    "reserved": 2
+  },
+  "protected_fields_unchanged": {
+    "prior_claims": true,
+    "prior_attempts": true,
+    "consumer_db": true,
+    "producer_db": true
+  },
+  "validation": "NOT_RUN"
+}
