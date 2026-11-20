@@ -1560,7 +1560,14 @@ class ModelGateway:
                                              'detail': "missing required field '" + row['field'] + "'"}
                                             for row in normalizer_missing
                                             if tuple(row['path'].split('.')) not in known][:12]
-                        if not field_repair_used and name in ('submit_plan', 'plan_decision') and isinstance(arguments, dict):
+                        # A stepwise terminal with an omitted status has already
+                        # chosen its action. The same bounded correction can ask
+                        # explicitly for the missing status and other invalid leaves.
+                        terminal_status_error = (job.get('kind') == 'stepwise-decision' and name == 'next_action'
+                            and isinstance(arguments, dict) and arguments.get('action') == 'complete'
+                            and any(row['field_path'] == ['status'] for row in errors))
+                        if (not field_repair_used and isinstance(arguments, dict)
+                                and (name in ('submit_plan', 'plan_decision') or terminal_status_error)):
                             field_repair = field_repair_plan(error, arguments, native_context['declared'][name], name,
                                                             validation_errors=native_validation_errors)
                             if field_repair:

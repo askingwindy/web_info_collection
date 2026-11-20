@@ -1,0 +1,21 @@
+{
+  "core": "49 passed, 2 subtests passed in 3.22s",
+  "normal_native_six": {
+    "checks_passed": 146,
+    "total_checks": 146,
+    "saved": 6,
+    "exports_read_back": 6,
+    "seconds": 66.22,
+    "external_model_requests": 0
+  },
+  "terminal_fields": {
+    "checks_passed": 25,
+    "total_checks": 25,
+    "saved": 1,
+    "exports_read_back": 1,
+    "seconds": 11.42,
+    "external_model_requests": 0
+  },
+  "terminal_local_model_requests": 9,
+  "actual_new_remote_pages_after_last_edit": 0
+}

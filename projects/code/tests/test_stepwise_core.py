@@ -211,6 +211,19 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         terminal = Draft202012Validator(prompt.next_action_schema(complete_only=True))
         self.assertTrue(terminal.is_valid(dict(complete, status='success')))
         self.assertFalse(terminal.is_valid(dict(complete, action='back', status='success')))
+        from webcollect.model_gateway import field_repair_plan, merge_field_repair
+        incomplete = dict(complete, task_goal='长' * 81)
+        errors = list(validator.iter_errors(incomplete))
+        correction = field_repair_plan(errors[0], incomplete, autonomous, 'next_action', errors)
+        self.assertEqual(correction['paths'], [['status'], ['task_goal']])
+        merged = merge_field_repair(correction, {'field_0': 'infeasible', 'field_1': '核对藏品说明'})
+        self.assertEqual(merged, dict(complete, status='infeasible', task_goal='核对藏品说明'))
+        field = {'inputable': True, 'text': '年龄', 'visible_text': ''}
+        numeric = {'input_type': 'number', 'value_visible': True, 'value': '', 'display_value': ''}
+        self.assertIn('当前值为空', prompt.element_row(1, field, numeric))
+        self.assertIn('当前输入值：62', prompt.element_row(1, field, dict(numeric, value='62', display_value='62')))
+        for hidden in (dict(numeric, input_type='password'), dict(numeric, value_visible=False)):
+            self.assertNotIn('当前输入值', prompt.element_row(1, field, dict(hidden, value='62', display_value='62')))
         frame = {'visible_text': '太和学者计划学术来访支持的重点方向包括明清官式建筑研究。\n学术交流与文献整理',
                  'title': '另一个人名'}
         hint = prompt.citation_hint(frame, 'last_step_result 引文「明清官式建筑研究……」不在本帧')

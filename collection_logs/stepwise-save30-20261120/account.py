@@ -85,7 +85,7 @@ def accounting(final=False):
     out['target_passed'] = funnel['saved'] >= 6 and by_site['dpm.org.cn']['saved'] >= 1
     out['history'] = history(scope, read(RUN / 'before.json'))
     out['failure_events'] = [dict(segment=seg.name, **{k: r.get(k) for k in
-        ('at','claim_id','reason_owner','disposition','reason','stop_dispatch')})
+        ('at','claim_id','reason_owner','disposition','reason','sqlite_database','sqlite_operation','retry_count','stop_dispatch')})
         for seg in segments for r in records(seg / 'failure-events.jsonl')]
     return out
 

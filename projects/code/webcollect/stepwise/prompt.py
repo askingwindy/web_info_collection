@@ -140,8 +140,8 @@ def next_action_schema(*, autonomous=True, frame_name=None, complete_only=False)
     if complete_only:
         required.append('status')
     else:
-        schema['if'] = {'required': ['action'], 'properties': {'action': {'const': 'complete'}}}
-        schema['then'] = {'required': ['status']}
+        schema['allOf'] = [{'if': {'required': ['action'], 'properties': {'action': {'const': 'complete'}}},
+                            'then': {'required': ['status']}}]
     return schema
 
 
@@ -211,6 +211,13 @@ def element_row(number, element, value=None):
         else:
             capability = 'type 前先点击聚焦'
         row += ' [%s]' % ' '.join(filter(None, (input_type, capability)))
+        if (input_type in ('number', 'text', 'search', 'tel', 'url', 'email', 'textarea')
+                and value.get('value_visible') is True and isinstance(value.get('value'), str)):
+            current = value['value']
+            if not current:
+                row += ' [当前值为空；占位示例未填入]'
+            elif value.get('display_value') == current:
+                row += ' [当前输入值：' + current[:LIMIT_ELEMENT_TEXT] + ']'
     return row
 
 

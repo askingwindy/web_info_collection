@@ -1,0 +1,1564 @@
+{
+  "at": "2026-11-20T08:07:13+08:00",
+  "per_site": {
+    "zh.wikipedia.org": {
+      "selected": 10,
+      "claimed": 10,
+      "formal": 7,
+      "saved": 0
+    },
+    "muxtly.com": {
+      "selected": 10,
+      "claimed": 10,
+      "formal": 8,
+      "saved": 3
+    },
+    "dpm.org.cn": {
+      "selected": 10,
+      "claimed": 10,
+      "formal": 10,
+      "saved": 1
+    }
+  },
+  "claim_states": {
+    "failed": 26,
+    "succeeded": 4
+  },
+  "root_causes": {
+    "muxtly.com": {
+      "stepwise_short_flow": 2,
+      "stepwise_complete_infeasible": 1,
+      "stepwise_repeat_reject": 2
+    },
+    "zh.wikipedia.org": {
+      "stepwise_judgement_failed": 2,
+      "stepwise_short_flow": 2,
+      "stepwise_repeat_reject": 2,
+      "stepwise_WRITEBACK_CHECK_FAILED": 1
+    },
+    "dpm.org.cn": {
+      "stepwise_short_flow": 5,
+      "stepwise_repeat_reject": 3,
+      "stepwise_protocol_error": 1
+    }
+  },
+  "observed_peak": 20,
+  "worker_exit_codes": {
+    "0": 20
+  },
+  "stop_reason": null,
+  "integrity": "PASS",
+  "issues": [],
+  "funnel": {
+    "selected": 30,
+    "claimed": 30,
+    "first_frame": 25,
+    "decision_http": 25,
+    "effective_ge1": 25,
+    "effective_ge5": 9,
+    "complete_accepted": 7,
+    "writeback_http": 7,
+    "writeback_validated": 6,
+    "judgement_http": 6,
+    "judgement_passed": 4,
+    "formally_saved": 4
+  },
+  "per_site_funnel": {
+    "zh.wikipedia.org": {
+      "selected": 10,
+      "claimed": 10,
+      "first_frame": 7,
+      "decision_http": 7,
+      "effective_ge1": 7,
+      "effective_ge5": 3,
+      "complete_accepted": 3,
+      "writeback_http": 3,
+      "writeback_validated": 2,
+      "judgement_http": 2,
+      "judgement_passed": 0,
+      "formally_saved": 0
+    },
+    "muxtly.com": {
+      "selected": 10,
+      "claimed": 10,
+      "first_frame": 8,
+      "decision_http": 8,
+      "effective_ge1": 8,
+      "effective_ge5": 5,
+      "complete_accepted": 3,
+      "writeback_http": 3,
+      "writeback_validated": 3,
+      "judgement_http": 3,
+      "judgement_passed": 3,
+      "formally_saved": 3
+    },
+    "dpm.org.cn": {
+      "selected": 10,
+      "claimed": 10,
+      "first_frame": 10,
+      "decision_http": 10,
+      "effective_ge1": 10,
+      "effective_ge5": 1,
+      "complete_accepted": 1,
+      "writeback_http": 1,
+      "writeback_validated": 1,
+      "judgement_http": 1,
+      "judgement_passed": 1,
+      "formally_saved": 1
+    }
+  },
+  "usage": {
+    "requests": 298,
+    "states": {
+      "succeeded": 291,
+      "invalid_response": 7
+    },
+    "dispatch": {
+      "dispatched": 298
+    },
+    "input_tokens": 1082682,
+    "output_tokens": 64834,
+    "known_input_tokens": 1082682,
+    "known_output_tokens": 64834,
+    "unknown_usage_requests": 0,
+    "cost": "UNKNOWN"
+  },
+  "pages": [
+    {
+      "candidate_id": "candidate-048f2656-1540-47c9-b831-9f69ad4fc6a9",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "b6b2f9295d374836bc68bdd03b0c422f",
+          "269306b403744cb6a790f3e6c3342fac",
+          "de9a617235474b2c9b8547369f0f2efa",
+          "a78e6b6140f74c33ad59cd013744c001",
+          "d5ceb6c7869d4e5ba67f9ad0bb9d5a5d",
+          "192fa4782a1a4be4964007bd2973f380",
+          "cc36f1d2584e4818ba476418369022df"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-04fd1d7b-4089-4c0f-a432-41c860da5257",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "01afda6c6f1c4b97846a17d7c11d4a32",
+          "be83875c028a477982e3b9f9913fba89",
+          "b3a5ceb243b240e5a7a686c985bb1d0c",
+          "2ad08b9d01da4de2ad5fd10c54381320",
+          "bee0952d5c49496eb6ff07d5f653177b",
+          "b90fd99caf7646f48ac38f4d24894662",
+          "7275426a9f664042bf37f4cc807632a6",
+          "26ce3f72efc6492f9fc37765c1ade5af",
+          "a02c577b9b44489c93eabcf640364c30",
+          "88bd818892fb43ff820122056c0ef394",
+          "c4ca21f610354851a83971c928121fdd",
+          "4b739552afb54fffacaeff4c33bae92b",
+          "fa2c0be9896348479de51a84f9de6df3",
+          "0c918bcd96d14dd790bc5161b3cfa2f6",
+          "470c46c9a8184f089ad6d3f994515fe6",
+          "47a4cf5effcb4cc995d1a2e83f508a69"
+        ],
+        "writeback_http": [
+          "806c920ba85f4af39d4d5d040514034d",
+          "b3756eea4ad245d185af20731d2bae7c"
+        ],
+        "judgement_http": [
+          "8424174273b34bc1878463f9ac172019"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-04/fc461ab6-18b0-447a-92cd-63aab161d53a/execution/capture/evidence/S000002_sample_000252/stepwise/terminal.json",
+            "sha256": "ef756119753c5fdbf8f5eba1a9c5c3477d6577a35b10ea49e1d7e18440f762dc"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-04/fc461ab6-18b0-447a-92cd-63aab161d53a/execution/capture/evidence/S000002_sample_000252/writeback-002.json",
+            "request_id": "b3756eea4ad245d185af20731d2bae7c"
+          }
+        ]
+      },
+      "cause": "stepwise_judgement_failed:三帧截图与记录吻合：首帧序言明载2004年与基德兰德共同获诺贝尔经济学奖及表彰原文；中帧「获奖和荣誉」章节确认「诺贝尔经济学奖（2004年）」；终帧序言再次印证获奖年份与理由，回写内容与截图一致。步骤2点击基德兰德后记录页面标题仍为普雷斯科特条目，稍有不符但目标信息已获取。步骤4重复滚动至步骤1已核实的「获奖和荣誉」章节，属冗余。",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3,
+        "COMPLETE_STATUS_REQUIRED": 2,
+        "SCROLL_DIRECTION_REQUIRED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "三帧截图与记录吻合：首帧序言明载2004年与基德兰德共同获诺贝尔经济学奖及表彰原文；中帧「获奖和荣誉」章节确认「诺贝尔经济学奖（2004年）」；终帧序言再次印证获奖年份与理由，回写内容与截图一致。步骤2点击基德兰德后记录页面标题仍为普雷斯科特条目，稍有不符但目标信息已获取。步骤4重复滚动至步骤1已核实的「获奖和荣誉」章节，属冗余。",
+        "redundant_steps": [
+          4
+        ],
+        "request_id": "8424174273b34bc1878463f9ac172019"
+      }
+    },
+    {
+      "candidate_id": "candidate-16c0fe2a-d7ed-42f5-9c90-e2e5ea94e919",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "ec8405bcbaf04fc0a76c69cc81514cdd",
+          "787c45c7fa3044de923f325e68f7f95c",
+          "ddff15466a9a4c9da273d8adce320433",
+          "029be4e7eda8439cb6d461b3371569ed",
+          "d91827d2c2e249d889c60c0754663093",
+          "f8816bd9e5c44dcb90c3d6fad61cc94e",
+          "770f3d76e3994e1b8aeb7ef29d8c1d25",
+          "7859ea37a62742e992829bf671857c04"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "COMPLETE_STATUS_REQUIRED": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-22a9abf6-c470-4bf8-9571-6dd4c3f4f137",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "10ed081da8ff46bc977feb25092ff581",
+          "2dc119982dbd47b0aa982badb29c7f99",
+          "52e7c4ef5bc64acabff361917f684688",
+          "1f0b518bbd6b45acae803d10a4313d82",
+          "b4421a5fa587416282f2bdcd95b4a680"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-332b5d14-5478-4387-8713-55a830ab3b95",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": null,
+      "sample_id": null,
+      "effective_steps": null,
+      "phases": {},
+      "cause": null
+    },
+    {
+      "candidate_id": "candidate-3bf19d48-2040-4721-b09a-b4793ed0166e",
+      "site": "dpm.org.cn",
+      "claim_state": "succeeded",
+      "attempt_status": "collected_pending_review",
+      "sample_id": "S000265_sample_000067",
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "6ba8a598b9c74b428483576321de7a16",
+          "df31ee4bc0db492a8a16dd751930bc02",
+          "bfc366c67d154480a69c8d9ae47773b4",
+          "e8a8df2defce4c6f91390a15efb5e8b0",
+          "bee1933385a84edb82711cdfc33419d1",
+          "62c6a98e76e04c37b955ed6a8a05dce8",
+          "08a0ec85f0714c8ea910d4ecb34bb838",
+          "43700d274bf34f958e235dbc38e93dde",
+          "4cf7e6b4a8d44625b1bd85e799a37e07",
+          "937b0c3f111b49778625c8c407297d3e"
+        ],
+        "writeback_http": [
+          "18800160e0884a58ae4d2a7eb7a1f538",
+          "20f37b66bbcb45748e61de30dfecbcba"
+        ],
+        "judgement_http": [
+          "687210396d2d4d8eaa7f3a2eea3f60b6"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-11/0f08d170-4db9-4a91-8010-6adf42f8e875/execution/capture/evidence/S000265_sample_000067/stepwise/terminal.json",
+            "sha256": "dde42c5091487f7e317556292397b2e5021fe9a5170dfbd1605684ad87c7eeb8"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-11/0f08d170-4db9-4a91-8010-6adf42f8e875/execution/capture/evidence/S000265_sample_000067/writeback-002.json",
+            "request_id": "20f37b66bbcb45748e61de30dfecbcba"
+          }
+        ],
+        "judgement_passed": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-11/0f08d170-4db9-4a91-8010-6adf42f8e875/execution/capture/evidence/S000265_sample_000067/judgement.json",
+            "request_id": "687210396d2d4d8eaa7f3a2eea3f60b6"
+          }
+        ]
+      },
+      "cause": null,
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3,
+        "SCROLL_DIRECTION_REQUIRED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "三帧截图证实动作记录属实：首帧为资讯标题页及展台配图，中帧见《千里江山图》文创及下午茶段落原文，终帧见下午茶段落、钟形甜点图与非遗技艺段落原文。回写引用的「柿柿如意」等甜品、1:2明式斗拱模型、1:1清式斗拱互动模型及1:1天花彩画实样均与截图原文一致，判定有据。五步滚动均为阅读正文所需，无冗余或错配步骤。",
+        "redundant_steps": [],
+        "request_id": "687210396d2d4d8eaa7f3a2eea3f60b6"
+      }
+    },
+    {
+      "candidate_id": "candidate-433e0882-1528-4499-abfa-65bdcefc944b",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "7dd5b8c4f35b4be58659fe775e9f2010",
+          "f93c3f7ecb974e38a153b23f81abf549",
+          "632f5ece760c472084ff1e11f285ee5a",
+          "21ef064743ce421cabe4d1a1a7aa01ae",
+          "8eef5cdba20148258e0f34200df3c9ca",
+          "a3b812d6cd23453a84b26242c8d06981",
+          "f87e159c340341299d0c49034005eff3",
+          "4f8e5073d5814ee5b6e45e84bd6c283d"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 4,
+        "READ_VIEW_ALREADY_VISITED": 2
+      }
+    },
+    {
+      "candidate_id": "candidate-4885baa1-d1d6-4841-a45d-784c039f4f01",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": null,
+      "sample_id": null,
+      "effective_steps": null,
+      "phases": {},
+      "cause": null
+    },
+    {
+      "candidate_id": "candidate-6206530b-eaad-4213-b02b-4c015675c9bb",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "ddc502e57d7e49eba1bb9d9a2cc71ade",
+          "6c64aa5456624b2a89b5dbcae9802be8",
+          "3b2ad9f41bfa45d78de40320c5a19dfe",
+          "648203ab5cdd489baef350a32b7c7f9b",
+          "de618f272a5b46d6bd4a1747ea3b08ff"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 2），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-62e5bbb2-f228-45fa-adad-d07686303dd7",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "fe3bb0199206462cab857107d380d558",
+          "9e899dd59e5b4cf293a0d1267f3f3e92",
+          "bcf39f0ac95e4f07b977ae51e593be73",
+          "8902a92d40d245389f3ddde42c8a11ad",
+          "2b25bccfac9d4c0da80a0365d694f622",
+          "19241af24e3e425eb92208b20222798b",
+          "77168c74c31043ada78baeacd89fec35",
+          "c3410b450e164ae6a3d3178037e45a39",
+          "91152f3385e1429a87fec6e752f96dd2",
+          "65f4729dbfe4417b8ade84a7f528f2a3"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "COMPLETE_STATUS_REQUIRED": 4
+      }
+    },
+    {
+      "candidate_id": "candidate-65b3d78c-3eca-4f8e-af21-4080d507ed21",
+      "site": "muxtly.com",
+      "claim_state": "succeeded",
+      "attempt_status": "collected_pending_review",
+      "sample_id": "S000001_sample_000264",
+      "effective_steps": 12,
+      "phases": {
+        "decision_http": [
+          "c8dae114bf6040eb8deca280027cc170",
+          "be2280d094ab44b192f74bf4063e3e7d",
+          "dfa4e71db5a2451692e2da1ed24a7be4",
+          "91c5ada6ab22413e8f0cb1078e17b8e9",
+          "10cdc2eb8f7c419ab963345bfa8a4de9",
+          "d1e4d60389374755813f38202746dd2d",
+          "2dbd8cb0312747e3b8e953d6f304cc50",
+          "8e1d68735d874b088f352c06f2000e93",
+          "9e2c36d90e714dda9123fc276efadd98",
+          "390ef2daeb4b4f21b2350d36668dd52f",
+          "b77d8cb1b6fa45d3bc2032b6f5d90b07",
+          "c780dc22cc644c85b28cd5779fe5f976",
+          "42ece7048beb4efdb54effa4d3674825",
+          "d23b5e5a798a42f199a616909b0c7b00",
+          "dcdeb6b21adb403abe006e8bd8f1cda2",
+          "b2ac600250724380a9bc7183bd587312"
+        ],
+        "writeback_http": [
+          "37af2a2803c04c858aac0e16d5ed8ce1"
+        ],
+        "judgement_http": [
+          "6e3d57957097444e898871092c2f25f9"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-16/3490cf67-3d54-42c8-9125-71e8681bdfff/execution/capture/evidence/S000001_sample_000264/stepwise/terminal.json",
+            "sha256": "af96159b6660d45d1b085f544d7b6ee99bbb99567e5e67aabfc5c22575e24946"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-16/3490cf67-3d54-42c8-9125-71e8681bdfff/execution/capture/evidence/S000001_sample_000264/writeback-001.json",
+            "request_id": "37af2a2803c04c858aac0e16d5ed8ce1"
+          }
+        ],
+        "judgement_passed": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-16/3490cf67-3d54-42c8-9125-71e8681bdfff/execution/capture/evidence/S000001_sample_000264/judgement.json",
+            "request_id": "6e3d57957097444e898871092c2f25f9"
+          }
+        ]
+      },
+      "cause": null,
+      "decision_rejections": {
+        "HOTKEY_KEYS_NOT_ALLOWED": 2,
+        "TYPE_TEXT_REQUIRED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "终态帧确认初始投资5000、每月300、年回报率8、年10（默认值未改），点击计算后结果区显示最终余额$65,982.01、总投入$41,000.00、总利息$24,982.01，获利已读取。步骤2输入时因未替换原值出现「10005000」，属执行失误而非指令错配，随后步骤3-4用全选+输入修正，各步骤均服务于指令目标，无冗余步骤。",
+        "redundant_steps": [],
+        "request_id": "6e3d57957097444e898871092c2f25f9"
+      }
+    },
+    {
+      "candidate_id": "candidate-6da9e1f0-6e44-4323-a846-0c4ef816ecc5",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "3964837edc2f4780a14da0c5f93163e3",
+          "7e7bd6c4bc2a4b6691e7aec553ba7f4b",
+          "0ec0967caf0e4c12883028b0ef065675",
+          "2b98ba828dff4189963f6ec38091a342",
+          "0baebf701e054822aed334942b595d9e",
+          "e4a77debe109458e94e9da2407b4bac8",
+          "7da8a6e59f154715a832c4330a4009cd",
+          "1c559d03c53c44dfa40fb06896c699ec",
+          "f4bbff9000164eb3970f6c5292ad75f0",
+          "2ce18abb1bf744b886ef6f7d05a982d3",
+          "4e21c5f1b408445b8fc04a2c91fb5bd4"
+        ]
+      },
+      "cause": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:7dde332050841e1630543b883652ba1c8216a32aba1153ea79059cdfc86a04a8, request 4e21c5f1b408445b8fc04a2c91fb5bd4, statu",
+      "decision_rejections": {
+        "SCROLL_TARGET_NOT_SCROLLABLE": 1,
+        "CURRENT_FRAME_CITATION": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-72237fbb-0ff7-49c1-aed3-1494fe19b156",
+      "site": "muxtly.com",
+      "claim_state": "succeeded",
+      "attempt_status": "collected_pending_review",
+      "sample_id": "S000001_sample_000266",
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "4367fe26f98340d7ba11fc9a1632503d",
+          "a7eb5c91add842b8b750c30531d763d4",
+          "c56c3b4de61544f7981be8da5c726312",
+          "e4134f9bf8e94f2ebb7a43bfbc3447b1",
+          "dde2a5ecbdca4707bfa3ec7d760ee2f4",
+          "0ba6b5ecbc8a437393ef914d42464101"
+        ],
+        "writeback_http": [
+          "6985ba0795a049f2be9f2c1478dd77ef"
+        ],
+        "judgement_http": [
+          "cc52459ebf81484fa68590525e36f3a3"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-09/8042b5cf-8001-4d13-89de-e77fc42a01cc/execution/capture/evidence/S000001_sample_000266/stepwise/terminal.json",
+            "sha256": "c5db88c825fba10b58ea264b4ea7f14f46eb858d003a61de5f3c9a94fc98f781"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-09/8042b5cf-8001-4d13-89de-e77fc42a01cc/execution/capture/evidence/S000001_sample_000266/writeback-001.json",
+            "request_id": "6985ba0795a049f2be9f2c1478dd77ef"
+          }
+        ],
+        "judgement_passed": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-09/8042b5cf-8001-4d13-89de-e77fc42a01cc/execution/capture/evidence/S000001_sample_000266/judgement.json",
+            "request_id": "cc52459ebf81484fa68590525e36f3a3"
+          }
+        ]
+      },
+      "cause": null,
+      "decision_rejections": {},
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "动作记录与指令完全一致：聚焦并输入初始投资30000（步骤1-2）、聚焦并输入年度现金流12000,12000,12000（步骤3-4）、点击计算（步骤5）。截图证实首帧表单为空、末帧结果区显示「回本期（年）：2.50」与「易读格式：2 年又 6 个月」，输入值与指令一致且计算正确（30000/12000=2.5年），回收期以年和月两种形式核实。无冗余或错配步骤。",
+        "redundant_steps": [],
+        "request_id": "cc52459ebf81484fa68590525e36f3a3"
+      }
+    },
+    {
+      "candidate_id": "candidate-72dbb33b-cbcc-44d6-9e27-f94cdfa00af5",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": null,
+      "sample_id": null,
+      "effective_steps": null,
+      "phases": {},
+      "cause": null
+    },
+    {
+      "candidate_id": "candidate-85fe4452-f69b-4f0f-9a3f-12c8cb190704",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "36a2e820b91646259949439f9935e6ce",
+          "626e03d753964e718da9bcd7343ac427",
+          "15b523e6f2fb46aa97f07d8997a2e17b",
+          "1537eb3e065349d19bfef009bc6cb2ce",
+          "8964caffc5534bdba7b74ea508864afb",
+          "94c87806923b4c798805472fabe240a1",
+          "cc5962d55ff34830897df961634e7e60",
+          "aca1a7c09f3540a7b3d5832054590924",
+          "a6535987a3744e118fa2f4d4947d39dc",
+          "b3a204149dd04911932f6de8988889cf",
+          "75238a69b6034c2abfeceacbe80e614d",
+          "2465b8c6bcf14b0a9f135c8ab2e7964f",
+          "e2e5df2da6ae43dab0985d97994cc929",
+          "ec5ea6752e5741868183fcfa649cb80b",
+          "b7715b72600c4a2aba82b404ae3399a9",
+          "287183feb5c84a3b84c06558722f969f",
+          "fb655cd449c04b9cbb04b4020a019c23",
+          "46e81a771eb64acb96ed2ff94dce99ca",
+          "0d5abf793fd04fd6bb74f6471c9992ef",
+          "1b05bd6c5cc148c5979a3ee01e16e721",
+          "810aef3d1ae64079af32cbc1ef22da55",
+          "367b9940d3694820aab38236021740f5",
+          "c125b6a770c54fae92a64b29d03b6ac5",
+          "926efce8312f49c5a3719d1947a1ab94",
+          "a7e325c0c4424832825736641fd245bf",
+          "10b3e6b59abe488ab2b781fb8e58a657",
+          "f852e2e9ffeb4b3fba65a8b452085368",
+          "12cc334f37f44346a2ef465d8aace02e",
+          "66f07b9446f34ece9de86f1d33c4a691",
+          "193b8557982d4b14b1d59131bcd36208",
+          "3e4886167a0b4c57b1c6ca6bc0810c8b",
+          "5bcebadb3fa94050954b11c2cc2d0aba"
+        ]
+      },
+      "cause": "stepwise_short_flow:剩余派发或探索请求预算不足以继续，当前有效动作 1；不再请求终态",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-88445be9-ed44-4f53-a56a-d3ec02f871cf",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "f8fa97ea2d78460983ee25ba62afde9b",
+          "f4e0d5c00ae54d7bb8aa445439401f7c",
+          "457d6cfd71994852aaa29b2bb6e357df",
+          "659795e2c2e64857835c8ce1a2262e49",
+          "139c5e6730e5483982c236c4cdf85769",
+          "ec88e4a3859641018788c578539b9906",
+          "25deb4ccf91f4814ba97898119313fa5",
+          "9b77e9f50f6f46f298aec3ce66d029a7"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 2
+      }
+    },
+    {
+      "candidate_id": "candidate-9a54b637-d911-494b-9fde-2befecf648ef",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "55b0d76e6e644291ac6b0fd9ee301e37",
+          "25f5c46253d040d590c6987382392bbb",
+          "e49cf3744d5e4721b94d072d550ba60b",
+          "84ba54d16da943e695fee70b4e46d4d4",
+          "b07ef6e1eb8540829f33f06073230bfd",
+          "418c8a2501b84d70b36ec33ee1cdd186",
+          "30a3eed30a9f4710b26526396b8ab212",
+          "bcfd2a764f21474aa0e9c1ca247a2e05"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "COMPLETE_STATUS_REQUIRED": 1,
+        "CURRENT_FRAME_CITATION": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-9bc6fe83-4fac-405d-96c3-341478c536ec",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": null,
+      "sample_id": null,
+      "effective_steps": null,
+      "phases": {},
+      "cause": null
+    },
+    {
+      "candidate_id": "candidate-9ee5d851-0a06-4b7d-a29a-ea6480ecff84",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "6c73d757ac9f4b97aeab8964b4ddbb73",
+          "08ec0d72841f4a0583e248a4d73bff43",
+          "5879073fe3ac4ba9afd0279946eeb0f6",
+          "ebf859e5296c4fdd887d64b96a40fc22",
+          "cbaba972a243451c9d00a8ec6467979b",
+          "bfa9cd03a8fc428287319676fa570284",
+          "6d912bdc76fb46b38c5d63772b7db2f6",
+          "b2efff7baa384abf9ed565be7a3428fc",
+          "c3b598b843c6476aa7dc3c7351eb48b6"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "COMPLETE_STATUS_REQUIRED": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-9f696379-3492-4326-a120-8ccc9fb9e5f3",
+      "site": "muxtly.com",
+      "claim_state": "succeeded",
+      "attempt_status": "collected_pending_review",
+      "sample_id": "S000001_sample_000268",
+      "effective_steps": 7,
+      "phases": {
+        "decision_http": [
+          "1b64669885904b77b37618a694b17e69",
+          "365f095d93984a6ea9cfaad87ba82fa2",
+          "ded2b6603b144b518e5a94813365e4d5",
+          "f4410a9e29db414e99f1a5746a43f836",
+          "51991db8db8e447389a8055f883ec438",
+          "b86043c574ff4ff0b8f1e6836d35887e",
+          "5a7bb33bc0b44707882c7189560a993d",
+          "c103af88e3394f73af5d13b4683defeb",
+          "3b02cc1993d34acdae5f144ad18fe0d5"
+        ],
+        "writeback_http": [
+          "4bcdeb8b79f14be48474a69e82ee28af"
+        ],
+        "judgement_http": [
+          "eb6d9b8d2ed04b4380114ec9b0a14be0"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-10/ba94bbe4-0bdd-4021-bf7c-3ed17c81fbce/execution/capture/evidence/S000001_sample_000268/stepwise/terminal.json",
+            "sha256": "f4e69bd904cd325702b48408a47b7eb62f05842463a9fa30b49d8af49cca2178"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-10/ba94bbe4-0bdd-4021-bf7c-3ed17c81fbce/execution/capture/evidence/S000001_sample_000268/writeback-001.json",
+            "request_id": "4bcdeb8b79f14be48474a69e82ee28af"
+          }
+        ],
+        "judgement_passed": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-10/ba94bbe4-0bdd-4021-bf7c-3ed17c81fbce/execution/capture/evidence/S000001_sample_000268/judgement.json",
+            "request_id": "eb6d9b8d2ed04b4380114ec9b0a14be0"
+          }
+        ]
+      },
+      "cause": null,
+      "decision_rejections": {
+        "TYPE_TEXT_REQUIRED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "三帧截图与动作记录一致：首帧表单为空；末动作前帧输入框显示1000、10、3000,4000,5000；终态帧结果区显示「NPV：8,789.63」与「决策：正值 — 投资会创造价值」。七步均为指令必需步骤（依次点击并输入三项参数、点击计算），无冗余、无错配，回写结果与页面终态相符。",
+        "redundant_steps": [],
+        "request_id": "eb6d9b8d2ed04b4380114ec9b0a14be0"
+      }
+    },
+    {
+      "candidate_id": "candidate-a9e79e7c-bb2b-49a7-8cfd-3d9256d6542b",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "8c265798c82c4e0897f798ae11534be6",
+          "4469f5fb77584557aa9ec33dbac72eb0",
+          "3cc15d4f8cec4cec9c5450921c08de59",
+          "86a842c1e0d5490e9fc306861e51fc52"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-b1bb7ad7-fb84-4342-af6a-6fc78e903d7d",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 12,
+      "phases": {
+        "decision_http": [
+          "30a561e72f8b4169b17e5be37310a286",
+          "0b03895c5a1e42b788b846fa69afc52d",
+          "c9d9790a388447508e8fa6402b2f55ea",
+          "8945bebe6887496798eed9d7e683c9af",
+          "b1c0ecc813c1440fbbde0704fe2f6f51",
+          "ec8466c8ee7243ea864ba7d194f34a5d",
+          "176ac859b2e84a759b0aabfb7d557507",
+          "3ba83941c1e34a60b6845447f5013368",
+          "c401adbcc3014c23954cc564f19249cf",
+          "33b4577624034d5fa0d3bd9a187f8f5a",
+          "e745f9f60d6a4857ba5f8ad714c2f3f9",
+          "a84ab25148d249bdb45bffdc75c87d64",
+          "1fe6423867e643a382f6c4f8a1d067e9",
+          "4ea0f1bddc9b44668eb9955c93d8a0a7"
+        ]
+      },
+      "cause": "stepwise_complete_infeasible:模型声明任务无法完成",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-b59d9ebf-2d99-4630-bf08-73881f41d9b4",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": null,
+      "sample_id": null,
+      "effective_steps": null,
+      "phases": {},
+      "cause": null
+    },
+    {
+      "candidate_id": "candidate-b99de50b-a980-45ff-b7b7-51c18c0d648a",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 11,
+      "phases": {
+        "decision_http": [
+          "c2324691d2344fbbae71bb123c32f575",
+          "580705fbd5cd40378b5863106a24321c",
+          "574a2f1cf4384b069b52b0218c4fd4eb",
+          "1b3dfcf56251484b864f1cb580dbe7d7",
+          "15b2200c267e477ab7388f1b220eb5d4",
+          "2ad8c03cfa1f49438921f02c5be7c320",
+          "b08f91ed6bcc4b1194c0e8bb14a3155a",
+          "a31f9c8554584b6dbd7497bb618a2db6",
+          "e06f708aea014a5089da6aa7fa5a56c4",
+          "ed0ebac90e6a474eb8d3b6fc80157bab",
+          "f123bd97301047e3b1b5ef94c69062ad",
+          "9932abcd49704177b92a507fa00474d4",
+          "0be21e2c9b7249e29645b2ddd9659086",
+          "cb376883c20f4df8a7114660b1ff3560",
+          "80c206fd0d964cbb9667f8a022617267",
+          "335d40877493450a99e2753629422d61",
+          "d046d043eb8d4dd58dc6e2b877c3d212",
+          "cef5d369508c41fb8cb0f14f879b0036",
+          "bfaa2090f9594c5690c85d063d1159e1",
+          "1b80c948ca1840b89f5001d180d5e5b2",
+          "c4a496221534400ca47535e39edf0e1a",
+          "1d7a07a22a294e398cdbf15235a930cd",
+          "dbe04304449b4707a7f1fe1522c6437b",
+          "8fcebd692fbf486591ffa944d22f1972"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "TYPE_REQUIRES_FOCUSED_INPUT": 1,
+        "CURRENT_FRAME_CITATION": 11
+      }
+    },
+    {
+      "candidate_id": "candidate-c7a3b02c-6ebf-477c-b575-c172f340af1d",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "5b8ac9a59ca64b87a137a3c2342f6c83",
+          "6316af77051a4a49bc64c4a45dd2e709",
+          "bc9c403ca3ca412d8e7a5f3cb0f12efb",
+          "3552fc7de04647a3b996cd739b1ff889",
+          "1db62310e2f04c598625c9a32fe07603"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-e8a106a6-b381-4a2b-bb3c-1d954aace971",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "9cb72c91736f46e1bb1270da40020a29",
+          "ac5cbb1054914aadb1352966aa9b9097",
+          "76153236c5344a9893309a5f3796b5f7",
+          "9975561adc2f4dad9ce5f44f41c53e3c",
+          "94ddf48a78524bc880ecef8b493fb9c6",
+          "f87f5bf5f2b94f5a9d82fcb12175a45b",
+          "8defffafba0d48ca8bf414a6c53913b0",
+          "a74b9a30f5ea4741bb2e112b99f70944",
+          "33d6e23c0db343b7b93da51018e50697",
+          "93b5ab86b99b4519b29c9368e38d4fbd",
+          "c09354561c94451e9610e6d300b7f318",
+          "d4fb8f67fdf541b9afabf661ecb46763",
+          "004aa24f4a384e78b2e354d7d4e59362",
+          "ab062b859c3e4dd2b5453582fec73fd3"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "READ_VIEW_ALREADY_VISITED": 6,
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-e93840e2-c616-4754-9b03-8c5b553795b9",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 11,
+      "phases": {
+        "decision_http": [
+          "b243287a4d07420d9ce724b95f000595",
+          "53a3652a1cc7479398b487def768b293",
+          "4a4126e62d6349fe8deab185e8329051",
+          "570b22237ebd495b9cfe8e7fbe07d38d",
+          "f486ba76532a404d9aba949ab0237219",
+          "c6959c4ffbfc42be90aedee3307de9de",
+          "fa2851effd9e4d81bfb17f6aeb4fd9a2",
+          "2e64ae7bc5bd4181a6d09bbedf0bb295",
+          "18b47b1b07c0444db2f491b9955dcd82",
+          "49cd225fa5d8402fbcfc119bad55a292",
+          "57a3c4f8aed34adeb6f253a5dfc7a483",
+          "97e9c6bdcb8844f9ad52e710bee9e9f8",
+          "445d81fe0bc1453a9e236d4d60f5c346",
+          "448834888b894ed88561ecc52de99fee",
+          "56a321b6b346480e8e20022c14c76647",
+          "76bb238d68d84586b44f1b7d0b8d22cf",
+          "03149da2fd674df2bd9274e2783f43ae",
+          "ff180bd56c234f9992d202865f15c6fa",
+          "46ccf3688d544982b4e301b25353b177",
+          "f82b3dcf2af640fc90402f8f8ea5d41b",
+          "0727b63de57d4c368877d042e069ef75",
+          "8c675947f49442b49297530fa158e795",
+          "89d513d9f3fa4339ae85e2b81c49b74f"
+        ],
+        "writeback_http": [
+          "dfb5c48b23fd4852b21cfd9b6808f03a",
+          "c17da051b3514481bd5f87455f9eae9b"
+        ],
+        "judgement_http": [
+          "056b2159e22b4abd96be9a66605a8f6c"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-18/97a20f0d-774c-44e5-a8c4-540c0e052c2b/execution/capture/evidence/S000002_sample_000254/stepwise/terminal.json",
+            "sha256": "a75dab5a54f87bfb27f6fc85da48278e44a4a61420a66c59c75e7f9e175aa076"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-18/97a20f0d-774c-44e5-a8c4-540c0e052c2b/execution/capture/evidence/S000002_sample_000254/writeback-002.json",
+            "request_id": "c17da051b3514481bd5f87455f9eae9b"
+          }
+        ]
+      },
+      "cause": "stepwise_judgement_failed:终帧目录「依用途」下确列六类贷款，与回写一致；正文帧验证了消费贷款（含私人贷款、汽车贷款、房屋净值贷款、信用卡）及商业贷款内容。但资助贷款、国际贷款、国家对外贷款、政策性贷款四类仅见于目录，正文未滚动验证，任务「验证这些贷款类型的内容」未全部完成。回写如实注明未读毕部分，判定有据。",
+      "decision_rejections": {},
+      "judgement": {
+        "completed": false,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "终帧目录「依用途」下确列六类贷款，与回写一致；正文帧验证了消费贷款（含私人贷款、汽车贷款、房屋净值贷款、信用卡）及商业贷款内容。但资助贷款、国际贷款、国家对外贷款、政策性贷款四类仅见于目录，正文未滚动验证，任务「验证这些贷款类型的内容」未全部完成。回写如实注明未读毕部分，判定有据。",
+        "redundant_steps": [],
+        "request_id": "056b2159e22b4abd96be9a66605a8f6c"
+      }
+    },
+    {
+      "candidate_id": "candidate-e94677a2-7f0d-4160-8bf7-cd98a6a63a79",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "42047608c19d4fdd9e05333da9d7123e",
+          "077f838b337d4cf69c37bd8997ab4b04",
+          "59852654ebfb488d8be77986385a8818",
+          "c90a3e2d8e3f4042bdfb9f17b6dd83a1",
+          "e71089bdf20343ca91b3ed5eecbb2392",
+          "a73f431801304bb4a4d575ecef6b015e",
+          "0192b98e077c4184aa74b02385979f3e"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "COMPLETE_STATUS_REQUIRED": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-e97696ee-1611-4cda-ba71-4d55787adeeb",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "56bb18c980b14fe9b63cc9c32b57d2dd",
+          "bfd6c341b9d648bc88373199d99d5990",
+          "cac8fab505fb4156b81b092d2c27fdca",
+          "e77bee7bdfd84d3eb98273f51eb67b8a",
+          "49020b1b3bf84554a7c2e3456c0024df",
+          "bb6fb6f2a48c4e229397edde2a32d677",
+          "402ab3922f2f4816aff647ad4cea804b"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "READ_VIEW_ALREADY_VISITED": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-ec04e05d-3cb7-4ba7-9209-2d194c307fa8",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "745d9bcbcb0040919a9572febe571fda",
+          "c034d7ff129c41af96ec21eee66c02d7",
+          "e07fbc25b55d4aa0a2bbec7d57242bc4",
+          "4a0d83c56b964973a177efe1e5a284b8",
+          "8855706b42674abba076c763c55bd554",
+          "d30e37c5a0a54569a023b09d37625860",
+          "614ad3434cd543ec8b9e82d849e52a66",
+          "20b304f372494dd1b0224a9f3827f0f9",
+          "8e7534d01498496a921cd50d1c935927",
+          "4077e53b08e0463da3408e32b035cc3b",
+          "784c54d4dc864ca2b81daa04eb84f942",
+          "3f45babcfe8f4399a295004c81952676",
+          "e6255dcaa3054bb18ef6a4f9bd730f1d",
+          "6c9a4124acb949758bd8ef538cce7e5f",
+          "8cba4f34128c431a837b5ca5072f5608"
+        ],
+        "writeback_http": [
+          "2dee1f2b088c46dfaa1d195bcab2f0ac",
+          "ac2b8ec5625847dba485eb85e7947484"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120075647-3cfc8ed3/fixed-20261120075647-3cfc8ed3-02/f8c9e3b7-d5ef-4453-bfd9-d24b868eb8b1/execution/capture/evidence/S000002_sample_000258/stepwise/terminal.json",
+            "sha256": "da4daebf9bc795d4a6fff1bbd6ef45f252c10c42e4bdab42885bed85e9adc23b"
+          }
+        ]
+      },
+      "cause": "stepwise_WRITEBACK_CHECK_FAILED:completion_judgement 引文「另一种计算方式为 CPI＝最新成本／基準成本×100」不在终态帧",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    }
+  ],
+  "saved_samples": [
+    {
+      "site": "dpm.org.cn",
+      "sample_id": "S000265_sample_000067",
+      "candidate_id": "candidate-3bf19d48-2040-4721-b09a-b4793ed0166e",
+      "effective_steps": 5,
+      "instruction": "阅读故宫官网资讯「故宫博物院亮相2026中国文化旅游产业博览会」正文，滚动浏览全文，核实故宫参展的展台、文创产品及下午茶、非遗技艺等活动的具体描述。",
+      "evidence": "results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-11/0f08d170-4db9-4a91-8010-6adf42f8e875/execution/capture/evidence/S000265_sample_000067"
+    },
+    {
+      "site": "muxtly.com",
+      "sample_id": "S000001_sample_000264",
+      "candidate_id": "candidate-65b3d78c-3eca-4f8e-af21-4080d507ed21",
+      "effective_steps": 12,
+      "instruction": "在投资计算器中依次输入：初始投资「初始投资（$）」为5000、「每月（$）」为300、「年回报率（%）」为8、「年」为10，点击「计算」按钮，读取结果区的期末金额与获利。",
+      "evidence": "results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-16/3490cf67-3d54-42c8-9125-71e8681bdfff/execution/capture/evidence/S000001_sample_000264"
+    },
+    {
+      "site": "muxtly.com",
+      "sample_id": "S000001_sample_000266",
+      "candidate_id": "candidate-72237fbb-0ff7-49c1-aed3-1494fe19b156",
+      "effective_steps": 5,
+      "instruction": "在「投资回收期计算器」页面，于「初始投资」输入框输入30000，在「年度现金流（以逗号分隔）」输入框输入12000,12000,12000，点击「计算」，在结果区核实以年和月表示的投资回收期。",
+      "evidence": "results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-09/8042b5cf-8001-4d13-89de-e77fc42a01cc/execution/capture/evidence/S000001_sample_000266"
+    },
+    {
+      "site": "muxtly.com",
+      "sample_id": "S000001_sample_000268",
+      "candidate_id": "candidate-9f696379-3492-4326-a120-8ccc9fb9e5f3",
+      "effective_steps": 7,
+      "instruction": "在「NPV 计算器」页面，依次在「初始投资」输入1000、「利率 (%)」输入10、「年度现金流（以逗号分隔）」输入3000,4000,5000，点击「计算」，并在结果区读出NPV数值。",
+      "evidence": "results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120074447-360b6b5a/fixed-20261120074447-360b6b5a-10/ba94bbe4-0bdd-4021-bf7c-3ed17c81fbce/execution/capture/evidence/S000001_sample_000268"
+    }
+  ],
+  "target_passed": false,
+  "history": {
+    "pool": {
+      "protected": 1113,
+      "different_or_missing_ids": []
+    },
+    "registry": {
+      "protected": 834,
+      "different_or_missing_ids": []
+    },
+    "consumer_db": {
+      "protected": 47,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 298,
+      "new_requests_on_preexisting_jobs": 0
+    },
+    "producer_db": {
+      "protected": 21,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 0,
+      "new_requests_on_preexisting_jobs": 0
+    }
+  },
+  "failure_events": [
+    {
+      "segment": "run-01",
+      "at": 1795131990.801255,
+      "claim_id": "e32ed38b-d21d-4b8b-a774-c1aaa0604f58",
+      "reason_owner": "site",
+      "disposition": "business",
+      "reason": "Page.goto: net::ERR_CONNECTION_CLOSED at https://www.muxtly.com/zh-CN/irr-calculator/\nCall log:\n  - navigating to \"https://www.muxtly.com/zh-CN/irr-calculator/\", waiting until \"domcontentloaded\"\n",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795131991.4965172,
+      "claim_id": "8e46e0c0-a2aa-45fd-aa89-f53f9e27f0b8",
+      "reason_owner": "site",
+      "disposition": "business",
+      "reason": "Page.goto: net::ERR_CONNECTION_CLOSED at https://www.muxtly.com/zh-CN/sip-calculator/\nCall log:\n  - navigating to \"https://www.muxtly.com/zh-CN/sip-calculator/\", waiting until \"domcontentloaded\"\n",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132000.876501,
+      "claim_id": "d7ff3a85-0629-45c4-9719-81ca8a11a83f",
+      "reason_owner": "site",
+      "disposition": "business",
+      "reason": "Page.goto: net::ERR_CONNECTION_CLOSED at https://zh.wikipedia.org/wiki/%E9%98%BF%E6%8B%89%E4%BC%AF%E8%81%94%E5%90%88%E9%85%8B%E9%95%BF%E5%9B%BD\nCall log:\n  - navigating to \"https://zh.wikipedia.org/wiki/%E9%98%BF%E6%8B%89%E4%BC%AF%E8%81%94%E5%90%88%E9%85%8B%E9%95%BF%E5%9B%BD\", waiting until \"domcontentloaded\"\n",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132000.898314,
+      "claim_id": "a7594fbe-1523-4279-9d8b-e508c00aab95",
+      "reason_owner": "site",
+      "disposition": "business",
+      "reason": "Page.goto: net::ERR_CONNECTION_CLOSED at https://zh.wikipedia.org/wiki/%E5%A4%A7%E9%9F%A9%E6%B0%91%E5%9B%BD\nCall log:\n  - navigating to \"https://zh.wikipedia.org/wiki/%E5%A4%A7%E9%9F%A9%E6%B0%91%E5%9B%BD\", waiting until \"domcontentloaded\"\n",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132051.3931808,
+      "claim_id": "825b9725-c54d-4cf9-88a4-c2cbe4bc6c26",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132057.857075,
+      "claim_id": "ee6ab6bf-82a6-4fa2-817a-52b34d1604ba",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "finish",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132063.4981272,
+      "claim_id": "1720025e-d1eb-47de-824a-848031211334",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132072.824009,
+      "claim_id": "476ac71a-068f-45aa-8324-e77e79d53127",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132074.621232,
+      "claim_id": "7541f407-6118-41ac-85d8-a457bd89ab71",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132075.364834,
+      "claim_id": "825b9725-c54d-4cf9-88a4-c2cbe4bc6c26",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132079.942613,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132087.959255,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132090.610535,
+      "claim_id": "ba94bbe4-0bdd-4021-bf7c-3ed17c81fbce",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "settle_visit",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132103.06114,
+      "claim_id": "e42b7ec5-12f8-419e-b91f-02af2058575a",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132162.9861372,
+      "claim_id": "1720025e-d1eb-47de-824a-848031211334",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132171.247991,
+      "claim_id": "3490cf67-3d54-42c8-9125-71e8681bdfff",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132195.824769,
+      "claim_id": "c75f67c4-a838-47e0-9181-8c6487ec38f6",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132221.5025558,
+      "claim_id": "b85ef336-73da-4d3a-8285-ebc6d7da6464",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132225.195277,
+      "claim_id": "ceb68ac7-8453-4b94-b100-a840ed9aed21",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132226.205958,
+      "claim_id": "e42b7ec5-12f8-419e-b91f-02af2058575a",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 2），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132226.5975401,
+      "claim_id": "c6e59c52-5f39-4001-a174-f5df909ea132",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132227.253941,
+      "claim_id": "7541f407-6118-41ac-85d8-a457bd89ab71",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132233.877134,
+      "claim_id": "825b9725-c54d-4cf9-88a4-c2cbe4bc6c26",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132246.055008,
+      "claim_id": "d5992c3e-d4a4-42f6-971d-b68aa77d2fef",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132248.1088672,
+      "claim_id": "7af833b9-5fca-4f67-968b-19e5575ecc13",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132314.530855,
+      "claim_id": "ee6ab6bf-82a6-4fa2-817a-52b34d1604ba",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132354.617003,
+      "claim_id": "8c956f84-d97a-4240-9a5b-f4069b3be46a",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132356.2399502,
+      "claim_id": "fc461ab6-18b0-447a-92cd-63aab161d53a",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_judgement_failed:三帧截图与记录吻合：首帧序言明载2004年与基德兰德共同获诺贝尔经济学奖及表彰原文；中帧「获奖和荣誉」章节确认「诺贝尔经济学奖（2004年）」；终帧序言再次印证获奖年份与理由，回写内容与截图一致。步骤2点击基德兰德后记录页面标题仍为普雷斯科特条目，稍有不符但目标信息已获取。步骤4重复滚动至步骤1已核实的「获奖和荣誉」章节，属冗余。",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132415.917807,
+      "claim_id": "476ac71a-068f-45aa-8324-e77e79d53127",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:剩余派发或探索请求预算不足以继续，当前有效动作 1；不再请求终态",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795132457.604239,
+      "claim_id": "97a20f0d-774c-44e5-a8c4-540c0e052c2b",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_judgement_failed:终帧目录「依用途」下确列六类贷款，与回写一致；正文帧验证了消费贷款（含私人贷款、汽车贷款、房屋净值贷款、信用卡）及商业贷款内容。但资助贷款、国际贷款、国家对外贷款、政策性贷款四类仅见于目录，正文未滚动验证，任务「验证这些贷款类型的内容」未全部完成。回写如实注明未读毕部分，判定有据。",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132691.063394,
+      "claim_id": "284042ec-41a9-422e-8138-9524cfd5a09e",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "HTTP_NAVIGATION_ENDPOINT_UNPROVEN",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132754.192653,
+      "claim_id": "ee35c86e-ae6f-4a8b-af68-07dae01c5708",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132767.598649,
+      "claim_id": "05272253-4ed0-46ed-903e-c7dc6b7055e3",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132803.8787,
+      "claim_id": "fcc3f665-97f9-4961-ada9-984cb70d684f",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:7dde332050841e1630543b883652ba1c8216a32aba1153ea79059cdfc86a04a8, request 4e21c5f1b408445b8fc04a2c91fb5bd4, statu",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132826.4715378,
+      "claim_id": "0ed1936e-f984-49fe-b397-1078ecfcdcd9",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132828.4231439,
+      "claim_id": "dd1a0ea6-99a4-4656-822c-9219bab2d527",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_complete_infeasible:模型声明任务无法完成",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-02",
+      "at": 1795132901.250941,
+      "claim_id": "f8c9e3b7-d5ef-4453-bfd9-d24b868eb8b1",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_WRITEBACK_CHECK_FAILED:completion_judgement 引文「另一种计算方式为 CPI＝最新成本／基準成本×100」不在终态帧",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    }
+  ]
+}
