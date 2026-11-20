@@ -1,0 +1,1829 @@
+{
+  "at": "2026-11-20T20:09:24+08:00",
+  "per_site": {
+    "zh.wikipedia.org": {
+      "selected": 10,
+      "claimed": 10,
+      "formal": 10,
+      "saved": 0
+    },
+    "muxtly.com": {
+      "selected": 10,
+      "claimed": 10,
+      "formal": 10,
+      "saved": 1
+    },
+    "dpm.org.cn": {
+      "selected": 10,
+      "claimed": 10,
+      "formal": 10,
+      "saved": 0
+    }
+  },
+  "claim_states": {
+    "failed": 29,
+    "succeeded": 1
+  },
+  "root_causes": {
+    "muxtly.com": {
+      "stepwise_judgement_failed": 3,
+      "stepwise_complete_infeasible": 1,
+      "stepwise_short_flow": 4,
+      "stepwise_repeat_reject": 1
+    },
+    "zh.wikipedia.org": {
+      "stepwise_error": 2,
+      "stepwise_judgement_failed": 1,
+      "stepwise_protocol_error": 2,
+      "stepwise_short_flow": 4,
+      "stepwise_repeat_reject": 1
+    },
+    "dpm.org.cn": {
+      "stepwise_repeat_reject": 6,
+      "stepwise_short_flow": 2,
+      "stepwise_protocol_error": 2
+    }
+  },
+  "observed_peak": 20,
+  "worker_exit_codes": {
+    "0": 20
+  },
+  "stop_reason": null,
+  "integrity": "PASS",
+  "issues": [],
+  "funnel": {
+    "selected": 30,
+    "claimed": 30,
+    "first_frame": 30,
+    "decision_http": 30,
+    "effective_ge1": 29,
+    "effective_ge5": 8,
+    "complete_accepted": 5,
+    "writeback_http": 5,
+    "writeback_validated": 5,
+    "judgement_http": 5,
+    "judgement_passed": 1,
+    "formally_saved": 1
+  },
+  "per_site_funnel": {
+    "zh.wikipedia.org": {
+      "selected": 10,
+      "claimed": 10,
+      "first_frame": 10,
+      "decision_http": 10,
+      "effective_ge1": 10,
+      "effective_ge5": 2,
+      "complete_accepted": 1,
+      "writeback_http": 1,
+      "writeback_validated": 1,
+      "judgement_http": 1,
+      "judgement_passed": 0,
+      "formally_saved": 0
+    },
+    "muxtly.com": {
+      "selected": 10,
+      "claimed": 10,
+      "first_frame": 10,
+      "decision_http": 10,
+      "effective_ge1": 10,
+      "effective_ge5": 5,
+      "complete_accepted": 4,
+      "writeback_http": 4,
+      "writeback_validated": 4,
+      "judgement_http": 4,
+      "judgement_passed": 1,
+      "formally_saved": 1
+    },
+    "dpm.org.cn": {
+      "selected": 10,
+      "claimed": 10,
+      "first_frame": 10,
+      "decision_http": 10,
+      "effective_ge1": 9,
+      "effective_ge5": 1,
+      "complete_accepted": 0,
+      "writeback_http": 0,
+      "writeback_validated": 0,
+      "judgement_http": 0,
+      "judgement_passed": 0,
+      "formally_saved": 0
+    }
+  },
+  "usage": {
+    "requests": 244,
+    "states": {
+      "succeeded": 226,
+      "failed": 2,
+      "invalid_response": 16
+    },
+    "dispatch": {
+      "dispatched": 244
+    },
+    "input_tokens": null,
+    "output_tokens": null,
+    "known_input_tokens": 892359,
+    "known_output_tokens": 52678,
+    "unknown_usage_requests": 2,
+    "cost": "UNKNOWN"
+  },
+  "pages": [
+    {
+      "candidate_id": "candidate-0e24711c-5394-4330-8f14-b57adc3bc22a",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 7,
+      "phases": {
+        "decision_http": [
+          "8761bbb87189498eb2552322e5d0090c",
+          "2631f49d5ab34a9787692627de4f9c3e",
+          "d47dd5a0975b4626b16019ba75843db5",
+          "f9dc0e71c9d647b2ac5569adf3617928",
+          "c44cef2113154c9fa33c868f90a231b2",
+          "1d7d42f7ab494e9d8f67b027a7bf3ada",
+          "cd3951f8652a4b37b1ccb3e2f8f5a6a9",
+          "4e63d170c44f46c2a71aa2efcc327e74",
+          "d4bb8fea9aff4de3a0be431536b14772",
+          "6686d804e8914f02a65d2f62bfc49db2",
+          "17e4ac2b88f14b04b3fc0ac1f2c26fcc"
+        ],
+        "writeback_http": [
+          "b81d618462d44b77a8f341195b14eabf",
+          "3707895ca1124d46aea7c878b1ced03a"
+        ],
+        "judgement_http": [
+          "59f2ec44715340baaf5f2bfe741735dc"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-09/707feeb8-35c3-4c49-b58c-e45768f081cc/execution/capture/evidence/S000001_sample_000275/stepwise/terminal.json",
+            "sha256": "7a3c95074ed15cbf2439dae0ed896a0fa0c8b49af2ef48c0592b03565d66e1f3"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-09/707feeb8-35c3-4c49-b58c-e45768f081cc/execution/capture/evidence/S000001_sample_000275/writeback-002.json",
+            "request_id": "3707895ca1124d46aea7c878b1ced03a"
+          }
+        ]
+      },
+      "cause": "stepwise_judgement_failed:终态帧可核验：输入框为「https://example.com/page」，尺寸为「200 x 200」，二维码完整显示并即时重新生成，任务目标达成，回写判定有依据。但指令要求先完成文本追加与全选替换后再选尺寸，步骤3在文本仍为拼接旧值时提前选择「500 x 500」，与指令顺序不符，计为错配；末步滚动用于核验完整二维码，非冗余。",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 1,
+        "SELECT_OPTION_REQUIRED": 1,
+        "HOTKEY_KEYS_NOT_ALLOWED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [
+          3
+        ],
+        "reason": "终态帧可核验：输入框为「https://example.com/page」，尺寸为「200 x 200」，二维码完整显示并即时重新生成，任务目标达成，回写判定有依据。但指令要求先完成文本追加与全选替换后再选尺寸，步骤3在文本仍为拼接旧值时提前选择「500 x 500」，与指令顺序不符，计为错配；末步滚动用于核验完整二维码，非冗余。",
+        "redundant_steps": [],
+        "request_id": "59f2ec44715340baaf5f2bfe741735dc"
+      }
+    },
+    {
+      "candidate_id": "candidate-12af4969-ba3e-48c9-993c-5f91b79c4ec2",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 11,
+      "phases": {
+        "decision_http": [
+          "62a03609ec564d5e92f2d3f057d507aa",
+          "dc1a8dbc04a24104a0f4b94720ca51c0",
+          "210b3d6b49794959b35ea20c4241b73d",
+          "ce919abefdcd4bada1b839a6eae4c00b",
+          "0f5cc920a5444118a755d6e3b3ef4f15",
+          "5bdcc48c52d94a0da14ba00d7c56bd1b",
+          "785b15b1c05446b0b4bfbc1528cbca04",
+          "4051f90b0d0d403eb2b2ef667eddc963",
+          "758394f3b8294639b303f02b7d9dc218",
+          "a3dec8acad8545bfaccbe2022c5872f4",
+          "5fbec8979d954fbe862464f8919889cc",
+          "c011718db17d4055a7a793a641a5cfde",
+          "fcf1455ce7fe4f539e55780222e51bb3"
+        ],
+        "writeback_http": [
+          "c57d197741c54d048c2ca8a09a1b60a4"
+        ],
+        "judgement_http": [
+          "f92aa248d72e4f03924e4bb67a0333d1"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-13/0fefb17d-0702-488d-a9c5-1e61d8833b8b/execution/capture/evidence/S000001_sample_000277/stepwise/terminal.json",
+            "sha256": "9c381e8c25027e9f6934c482564f0be33481e6a92147b144ea6b9f082e6b2426"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-13/0fefb17d-0702-488d-a9c5-1e61d8833b8b/execution/capture/evidence/S000001_sample_000277/writeback-001.json",
+            "request_id": "c57d197741c54d048c2ca8a09a1b60a4"
+          }
+        ]
+      },
+      "cause": "stepwise_judgement_failed:终态帧显示方向为「农历转公历」，农历年/月/日已填2026、1、1，结果区输出「公历日期: 2026-02-17」，与2026年农历正月初一公历日期一致，任务完成且回写有据。但步骤2、4在农历输入框尚未填入实值前即点击「换算」，为多余重复点击；步骤3点击「公历年」输入框，与指令要求的对象不符，属错配。",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [
+          3
+        ],
+        "reason": "终态帧显示方向为「农历转公历」，农历年/月/日已填2026、1、1，结果区输出「公历日期: 2026-02-17」，与2026年农历正月初一公历日期一致，任务完成且回写有据。但步骤2、4在农历输入框尚未填入实值前即点击「换算」，为多余重复点击；步骤3点击「公历年」输入框，与指令要求的对象不符，属错配。",
+        "redundant_steps": [
+          2,
+          4
+        ],
+        "request_id": "f92aa248d72e4f03924e4bb67a0333d1"
+      }
+    },
+    {
+      "candidate_id": "candidate-174db744-43c8-4dbb-84a0-8f22b0777361",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 12,
+      "phases": {
+        "decision_http": [
+          "64b49dc50ec84e22b5bd7250aa62964d",
+          "03001919d8a14be7a0f58dc3ec94d08c",
+          "48db20e7bc13487e8874f3b7a2d1a3e7",
+          "84fcda82f7ae4d24a397b908e83ea8cb",
+          "882c7f6c9c4542f7847b1a077fa16837",
+          "b1f3760364b346da9128440309c41327",
+          "915695cb182f4d10a79ca2124f00ca0a",
+          "d89cf10518c14ea4b82a8252298daebe",
+          "5e9ab6370ffc43a98337685b371bf59a",
+          "ea0aa0077bd548779bbc3171136a8603",
+          "fdbab4f418184fc9ad62b6a8be40a713",
+          "5126187d26b54e40b56ee176f9186966",
+          "2fa25b36d5504d61957d1805e402717c",
+          "df15124bab39424e96fa487bc4ff0670"
+        ]
+      },
+      "cause": "stepwise_complete_infeasible:模型声明任务无法完成",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-1d681956-3c35-4a5c-b312-12b979c72c9f",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "0ecd20f2c398437bbdba9ed29a56d10b",
+          "1a62f1fcf02b49eebd63234d083de7ce"
+        ]
+      },
+      "cause": "stepwise_error:ProviderRejected: Provider HTTP status 400; request failed; request retained: 1a62f1fcf02b49eebd63234d083de7ce",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-21ad72b5-0a5b-415c-b3eb-136c0cdda204",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "ee22c968a96541ee88a34ada7bbde2b8",
+          "b6c2ee12921043afa21c648e308f7427",
+          "5e0748a0226b4b35aa13c318a7b24cd9",
+          "009b208494414b4e88b429da6d667a77",
+          "c497bacb26b047869a0bb877e9d572ae",
+          "3756483bbf8e4e8a94cdb1a1825e57b9"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 4
+      }
+    },
+    {
+      "candidate_id": "candidate-258e8028-acfb-42a8-8eba-947904ed38cf",
+      "site": "muxtly.com",
+      "claim_state": "succeeded",
+      "attempt_status": "collected_pending_review",
+      "sample_id": "S000001_sample_000278",
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "987f2a0fc9c84ff894525c5bd8f1cc99",
+          "905a777694b54597b4506b4f9b6c54d1",
+          "2c9053d3baa04e8298154c037ba42186",
+          "b3695dd68b154bceaa4f526585d15ac5",
+          "bceaeac3733b4e6fa0c149758c59871e",
+          "6577a7362a474fc2a7da9387be0e9fe9",
+          "5de8aab236df4d149119753d5f6278e4"
+        ],
+        "writeback_http": [
+          "660dbc155ee1483cb8aa5f3466c8e169"
+        ],
+        "judgement_http": [
+          "6889dffe56074666ba57a16118ff33cb"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-01/0f6817c5-508e-47ab-9b4e-c9f3e54f3acc/execution/capture/evidence/S000001_sample_000278/stepwise/terminal.json",
+            "sha256": "7d93a74865f5c5fc29a93def2d22ab56a63a3969ffda5736c364ad06abb98304"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-01/0f6817c5-508e-47ab-9b4e-c9f3e54f3acc/execution/capture/evidence/S000001_sample_000278/writeback-001.json",
+            "request_id": "660dbc155ee1483cb8aa5f3466c8e169"
+          }
+        ],
+        "judgement_passed": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-01/0f6817c5-508e-47ab-9b4e-c9f3e54f3acc/execution/capture/evidence/S000001_sample_000278/judgement.json",
+            "request_id": "6889dffe56074666ba57a16118ff33cb"
+          }
+        ]
+      },
+      "cause": null,
+      "decision_rejections": {
+        "TYPE_TEXT_REQUIRED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "动作记录与指令完全对应：点击收入输入10000、点击成本输入7000、点击计算。截图确认收入10000、成本7000，终态结果区显示「毛利：3,000.00」「净利：3,000.00」「利润率：30.00%」，与10000-7000=3000、3000/10000=30%预期一致，验证通过，无冗余或错配步骤。",
+        "redundant_steps": [],
+        "request_id": "6889dffe56074666ba57a16118ff33cb"
+      }
+    },
+    {
+      "candidate_id": "candidate-3ff2aed4-7bc9-4780-8682-c0bf33673334",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "58c8dcbc820b4676a641bc181c2b5d7e",
+          "3b5c6eef5ed140a183986c35fad219b5",
+          "46fc8192287a43a8b3dbf7bf0c9b6d15",
+          "d5e4cba3259e4854bfc95884a27d5965",
+          "d259cd3f5db24ad1988ead08bfb7ce92",
+          "cf1f7bcd3838462e8921e302a938e63a",
+          "7c80655b75144854b4ab080ae03ba74e",
+          "4ed0b406fa0e4f8ca4a53fc950e95b0e",
+          "b0b6a2f58cae4ee88711fc16d3c2af09",
+          "effde1593b714a3c9032561408808d10",
+          "de274f7e5dfd448fb68236bf126fab7f"
+        ],
+        "writeback_http": [
+          "e9e99ad6e5f147c19d93eeafddf2ebe2",
+          "44ccda42dfc9457ab8c490ba33f8fec8"
+        ],
+        "judgement_http": [
+          "1ad08e02209c448ebcb1189dab575240"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-02/1c4bee7e-2228-4cd1-8260-ae400f6490be/execution/capture/evidence/S000002_sample_000267/stepwise/terminal.json",
+            "sha256": "87a2469ec207f1efe104ac2b0021fe2d2872fcc851e937f5304821b45b9906ec"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-02/1c4bee7e-2228-4cd1-8260-ae400f6490be/execution/capture/evidence/S000002_sample_000267/writeback-002.json",
+            "request_id": "44ccda42dfc9457ab8c490ba33f8fec8"
+          }
+        ]
+      },
+      "cause": "stepwise_judgement_failed:终态帧确认「票房」章节仅有「观影人次为14,257,115人次」，无总票房金额，回写如实说明金额未能查证，判定依据与截图一致。任务要求查证金额与人次两项，金额未查到，故未完全完成。各步均围绕票房目标，无错配；步骤3、4向上滚动偏离目标后又由步骤5滚回，属冗余。",
+      "decision_rejections": {
+        "NAVIGATION_DESTINATION_NOT_PERMITTED": 1
+      },
+      "judgement": {
+        "completed": false,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [],
+        "reason": "终态帧确认「票房」章节仅有「观影人次为14,257,115人次」，无总票房金额，回写如实说明金额未能查证，判定依据与截图一致。任务要求查证金额与人次两项，金额未查到，故未完全完成。各步均围绕票房目标，无错配；步骤3、4向上滚动偏离目标后又由步骤5滚回，属冗余。",
+        "redundant_steps": [
+          3,
+          4
+        ],
+        "request_id": "1ad08e02209c448ebcb1189dab575240"
+      }
+    },
+    {
+      "candidate_id": "candidate-41746aec-8c1c-4d66-bf9d-c8dd45768073",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "b9d0f3bf45ca4ad1b0ce4f18e42e53f9",
+          "fd0b8cf3bdb540f79a35950089e63ece",
+          "36ed8654f0c44cc587b803708124b369",
+          "18f818f1832c4fe7a87a0f07e5a721e7",
+          "c6b274a8cdbd4f2d927deada374a303b",
+          "17c490be0d3c49aead863523c245be7b"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "SELECT_OPTION_REQUIRED": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-42e6ef91-fd5f-4101-910f-652fc4fc97ea",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 0,
+      "phases": {
+        "decision_http": [
+          "11a08ba0e6a846d3babb733c5530dd02",
+          "dfacd1bce7ba461aa8e0319f8952c26a",
+          "3d82678c48364091a7c5a99fbe4ea2e8"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-4eaa7216-123f-4f9f-bdbb-8478c13bed78",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "16169c60fc9b4346a50492006dc6eaf4",
+          "ab6770a067a7406c8b94e1f4a86d1123",
+          "4d34bdbfbaca4334a7b154ee29411f1c",
+          "bc67d350e5a6478a9a4afe144745e0ba",
+          "d2c94a8e009f407eaa1c894746ccd317",
+          "fdfbefd5984e43bf8ad8c266250e3d0c",
+          "3d876ede77dd4f759386bb11cda00ae1",
+          "95931e96c3a04814bdf27e9de24e93f9",
+          "7ec3e6f82318494280f2690a2cb1861d",
+          "e4dbfc5a8ce149a8807005297c61b560",
+          "dc40a80c1bda471685dbee958a581f47"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "SELECT_OPTION_NOT_PRESENT": 1,
+        "SELECT_OPTION_REQUIRED": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-5c0516f2-0b75-41b0-9b0c-0a1e17033f5c",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "cc92b5fa7d7b41989253962a6c99e879",
+          "09a00f5cbd2b4dacbb1503ff723ccc4b",
+          "535350d52e6c42b984bb42e5867913e6",
+          "96e62a66e8e44fa69a3c99754a1ef905",
+          "d2d884d94b6d4e6f9251a8063614c368",
+          "12f9a6315e754b5d88e8413babb62e26",
+          "2e2966887ccd4ac4b3cf4c397911e70c",
+          "3fff72f09a5a40f6ab348b9a2af5d9b8"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "SELECT_OPTION_REQUIRED": 5
+      }
+    },
+    {
+      "candidate_id": "candidate-5d5f39fd-227f-4d29-9ce1-a57fa53e688b",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "112799b160b845a8abeb88593d2e3a12",
+          "5b88c883ae9244a682f4bcc577e12dc8",
+          "8443834a587e4b38a2b7a8d7ded4f853",
+          "7e2c8b10642d42ee9e03ad84f29d21f8",
+          "9a7e4bb97f6e4273b39a8c1f128c012e",
+          "1c388022b88b4079be373eaa44f6ca9d",
+          "87c66d05d004439694918f76f7b27cd0",
+          "e227027786304fb0b8ed179e7dfb4dd5",
+          "9480d18632f84f8cadb4ca04fc971b2f",
+          "79d68bd2dbec4bfcb47381f4b8104969",
+          "3d34bd4171664695b71c204aaf53b7d9"
+        ]
+      },
+      "cause": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:a16500e4784f5b2972bb25d769dbc78387ee94ebf3d352fafe8f078fed4ea433, request 3d34bd4171664695b71c204aaf53b7d9, last_",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 2,
+        "SCROLL_TARGET_NOT_SCROLLABLE": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-672f2079-f6ab-49c9-9edc-db54cdcb8461",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "ce994e33b9174cafb15b80fda08f7f6a",
+          "f0863c1e2afe40bf84de8eb3f9d90bd3",
+          "8c5baf741d2c44fa898c03b9124061ea",
+          "faab802f09ee40e091de9e59c6457c09",
+          "b453471120db49e19d30508f968eca85",
+          "aa8945ae11964ea38ce0e405582ef5cf",
+          "d5023dce90954fd0a2dac4edba4459db"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "TYPE_REQUIRES_FOCUSED_INPUT": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-6b71caf3-b382-4a4e-9b6d-5d1c196f578a",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "d5dea046b6874ff3b05d400ad28536be",
+          "df3fa4836e444013a58476a06fab2155"
+        ]
+      },
+      "cause": "stepwise_error:ProviderRejected: Provider HTTP status 400; request failed; request retained: df3fa4836e444013a58476a06fab2155",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-6d4bcfce-e66a-4625-b828-e846da6fc5a7",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "394815adbfa447208e4099b8b6fced53",
+          "1bd8114f1240430199b3488947ad06e3",
+          "362343e34536469493b9ddd5cfefd1dc",
+          "8c5e2ec7c3ea4ab58716789d84100112",
+          "69450d009e354729bc692b4d35fdd194"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 2），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-72b65df8-0e3d-4d3b-bcec-9279aa49fae5",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "ece04f7b10c540788f61bdca53c2cb3e",
+          "8d05132ddabc460a932479351f2b90b2",
+          "25e4c9d1c5774709bf435023a844f487",
+          "1cc298059fdf438f8bf264160e493e65",
+          "90aecae4c39a40aca506c8f2bc8a35d8",
+          "a469c9b2bfdf490e9634e5d7ecf25b19",
+          "070d54f56c0c44d78b2066c1eced934c"
+        ]
+      },
+      "cause": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:992028c710ae80d886a27193400a747bd82c01937d11909821f2349b655130f4, request 070d54f56c0c44d78b2066c1eced934c, thoug",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-804d16c7-41b7-4ffd-95ac-1fbaab6c1d3f",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "acb5ed9006cb4a3f80a08e29b66d9cc0",
+          "62edeea99660490fb6e7827af9bf7e5a",
+          "3e46966512ad44dca069c2e687b415e0",
+          "ffcf936251d846cfb12131be1dd3016f",
+          "3a403e971c8d4806b3f47d5fde0421c7"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-823c089d-cbf1-44db-bef6-2829dc1a34a7",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "1041d431466d4f9aa32bf41a08d3709f",
+          "d2dc3117915e482487524d5fd2141922",
+          "ce3ad94f1cd542ff995189f3f13602d0",
+          "259910249434448f956dae25bc397875",
+          "5345039b4133482e8d9c6e1519027775",
+          "42cd06db60eb4d1ab02952db5dbfbd78",
+          "fd7f61dadad343fb99aede38402437f9",
+          "6f9b2150bc0f45afb469ae890e2d2666",
+          "6de305c57e564c01a632fa6464cfcc33"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 5,
+        "SCROLL_TARGET_NOT_SCROLLABLE": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-86ce6948-5101-4993-8718-4ea4dc453b6d",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 3,
+      "phases": {
+        "decision_http": [
+          "e208c6a94ef2459f8beea0d562346018",
+          "86487a704d3346fa95f18973ca645d79",
+          "2462175370434f7cadb8c3dbc8a7a96c",
+          "80449c85afcc430f9939871235841d41",
+          "f27fceb484294c348f49995b43574901",
+          "7fb13180a2fe433db08ecdd632d8e5e9",
+          "412b3678a5c343d6b41844b58e9ecc9c"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "TYPE_REQUIRES_FOCUSED_INPUT": 1,
+        "SELECT_OPTION_REQUIRED": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-8b9e37a9-7e78-4055-894a-f7e0b879fd76",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "a53c6c0c604f4e2da831d8bce2b5524b",
+          "6b6aefc169294af98b396b3f982e2b91",
+          "9cddbce4fe084ce9a113adf953b48fa6",
+          "d068f2c7ce7345819de16371c9d19aee"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-a71e4843-dc06-4bdb-b81b-00ff9fd34590",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "339162830b7e4f359982f943c5b8ed6f",
+          "9dbf1d7faa5243a6bda5d3dfcd15a26d",
+          "d8a89a56b88b415abbeb2a6e3904e55b",
+          "1913bbaa76044d59980b68d77332ee55",
+          "8dc351345b554d639c39630a83eef360",
+          "7d467173b3f847c886c5289cbd70b704",
+          "cff392e0fc1c49c2a3a4734ceb4bc8c3",
+          "6388e64b883d4d18b6141d49e6bf2da5",
+          "72e8332fe51f4ad6920326f052cece4f",
+          "3406666ec8cf435690bc03a2c033a80d",
+          "2e839ebf53b24331abe7a29c126ec8ee",
+          "edc25629237a4464977996c110454fc9",
+          "36f4ef8005fb4257ae04e74841b1c91b",
+          "f32d3794bf2a4d97999a19718b21d2ff",
+          "3cc66e1ba4d14855a45ceb5ae3452b56",
+          "e277aef1da8945ceb4feb6a77e3a4472",
+          "ee7f3a32af8d41bc8f0ec5953aff607b",
+          "e9dbe2597e7c4b8eabb91ed5893622f1",
+          "1da47d4792294fe9bd157bcc3581c622",
+          "7e82dc85d4954b7a9a0f701dfbaaea3a",
+          "919ed5d1f6ba40dbb5c6c7d3d03675f2",
+          "e9d6041865e840249e59e7f61034b2b8",
+          "acb33853a74748708b2d95b705d2aba6",
+          "1408782ab9264072b92dd161195610aa",
+          "33db20f29b7f4a28a3384b28f42dbc03",
+          "6bea5fea5745402f8e2e36cb53b25a71",
+          "505432a8657745be887f89c57cc9cf9a"
+        ]
+      },
+      "cause": "stepwise_protocol_error:ValueError: bounded_field_repair_failed: patch retained; no further correction dispatch",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 17
+      }
+    },
+    {
+      "candidate_id": "candidate-a7256b23-e6cf-4803-8adf-10dc3e87531c",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "17812a6eed2249ef872aae7f14fb6ae4",
+          "0ea648abed9141e2bb9a8639dfdc2b27",
+          "c0ed050fa4234d97b542c00544985ab8"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-aea66b14-5912-40ea-9c26-572cbc3dcc99",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "5af9eb2796a7409a87892fd53ae0c5ed",
+          "0dd765f3f4da4d70b37ab3326db26178",
+          "002748c4df4e484caba40ad33f2d0f6b",
+          "0188348dd9604cb698818a0743aa4b06"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 3
+      }
+    },
+    {
+      "candidate_id": "candidate-b938aa93-9051-47cc-a3c6-fc059024f221",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 4,
+      "phases": {
+        "decision_http": [
+          "40d9976db63447eb9d516a8dc1c9de17",
+          "b18f4b96af864cffaeedbcdaefab75ef",
+          "58f6a80aa304401db797a5156adbfe39",
+          "92958b505aef4995b656c1c7550c017e",
+          "43c1d6bafd744c80b255483a88f9783b",
+          "415c31e06f4042e89b8e0cb9b7ec5df0",
+          "90ef792a3c5243d3ab622727dc92f9f1",
+          "28384458ac1549f0b98514954683cee9",
+          "28d3518cddf648bf9eb31e40259217b8",
+          "a27e30124603461dbf240bf936ba083c",
+          "ef9ff93076834ef589e17e977055ffd5"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 2
+      }
+    },
+    {
+      "candidate_id": "candidate-bf69c279-2583-4ea2-8ce3-991441a57a40",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 5,
+      "phases": {
+        "decision_http": [
+          "575c106aecf64281aaf68801da4a9898",
+          "26835be920da4708a9c56f50044d598d",
+          "3ee5088faf544370b2ed7f23536036f2",
+          "c08ea52e7bbc4495a75c2278b717be80",
+          "fd8f9841e23c40c9b7e2b1722f2e7522",
+          "561e4688ded3407daf347e1448270887",
+          "8b925a4a9290445e824a686b4e62bc97",
+          "79d85f00299344d1827493610830a403",
+          "bb791dca776344f986cbbe3983e37bf3"
+        ]
+      },
+      "cause": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 4
+      }
+    },
+    {
+      "candidate_id": "candidate-d6c95f7c-6b29-49e3-9484-2f76fd528c7a",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "eff1f19bf5234614b6604409af9fdb42",
+          "04426e4a480b484ba8f0cc56f94453d2",
+          "3738b8e4cfe943988fcc0ef1bbdca234",
+          "5685c6503c4345448353d82f916fee46"
+        ]
+      },
+      "cause": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:2c70fbad9c1e49873e91f25977b9245d9954b3fdba1ad962ecfafcac6aa39e1a, request 5685c6503c4345448353d82f916fee46, preco",
+      "decision_rejections": {
+        "CURRENT_FRAME_CITATION": 1
+      }
+    },
+    {
+      "candidate_id": "candidate-da96ac8a-1bec-4e30-974f-54b07997d695",
+      "site": "muxtly.com",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 8,
+      "phases": {
+        "decision_http": [
+          "fc1d9f1fc5fe4798835e09565b7e3749",
+          "513cec6534a342a8b8c1b15225074d47",
+          "1f590994668544de9871192be36605d9",
+          "1277091f4e5b43c5b921b8be2b366b20",
+          "32f218125ef240a08bb16239465950d7",
+          "3d0c8ad0273842a3a877b1a8d19fb297",
+          "6b13676b5f9c4a1bad3ddec7c4ac1594",
+          "ddb4e8c6b2b64265a3e054a387c182b9",
+          "62b030101a9942329ee60adc449a8f7c",
+          "4c21114aab184171b0d458138d69d824"
+        ],
+        "writeback_http": [
+          "d459bb2f0bac4c09913fe3ca81f8613d"
+        ],
+        "judgement_http": [
+          "648345dc203c41d98b0bc9f24bca6f12",
+          "d2faa919cc2b4c6f83b94b030b13c791"
+        ],
+        "complete_accepted": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-03/db032e3d-cf26-4def-8c11-063c4ad270e0/execution/capture/evidence/S000001_sample_000276/stepwise/terminal.json",
+            "sha256": "9af854e08ae7b16064cee390c8cbb3e55ed4e1926c7a065b0fecd795a14a2f74"
+          }
+        ],
+        "writeback_validated": [
+          {
+            "path": "/Users/hemiao/projects/2610/WebCollect/results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-03/db032e3d-cf26-4def-8c11-063c4ad270e0/execution/capture/evidence/S000001_sample_000276/writeback-001.json",
+            "request_id": "d459bb2f0bac4c09913fe3ca81f8613d"
+          }
+        ]
+      },
+      "cause": "stepwise_judgement_failed:终态帧显示输入为1000/25/10，结果区「675 Final Price」「325 You Save」，与1000×75%×90%=675、省325一致，回写有据，指令完成。步骤3在额外折抵仍为「010」未修正时提前点击计算，结果未出现，属错配；步骤4-6为必要修正，无纯冗余步骤。",
+      "decision_rejections": {
+        "HOTKEY_KEYS_NOT_ALLOWED": 1
+      },
+      "judgement": {
+        "completed": true,
+        "instruction_specific": true,
+        "judgement_supported": true,
+        "mismatch_steps": [
+          3
+        ],
+        "reason": "终态帧显示输入为1000/25/10，结果区「675 Final Price」「325 You Save」，与1000×75%×90%=675、省325一致，回写有据，指令完成。步骤3在额外折抵仍为「010」未修正时提前点击计算，结果未出现，属错配；步骤4-6为必要修正，无纯冗余步骤。",
+        "redundant_steps": [],
+        "request_id": "d2faa919cc2b4c6f83b94b030b13c791"
+      }
+    },
+    {
+      "candidate_id": "candidate-dbb09f49-51ba-4d6c-aba4-d40f78fd25ba",
+      "site": "dpm.org.cn",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 2,
+      "phases": {
+        "decision_http": [
+          "97a91365634440a1b2c80f9a454648d6",
+          "61371964ceef42e886535c91026c0bb8",
+          "cd653c74b73c423b951c2f0a230066c5",
+          "0679092217314a7e8fd35ae79d632968",
+          "0542d8ad8f24483cbf8d63519ef68799"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 2），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-df9bda25-810e-4232-8c93-f57591957c2f",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "dc7040e08ba14ebe82dc5ae420b50be1",
+          "deae71faa2b243d981b847629e3de84f",
+          "3075a692847c468ab493e45e7565f1bf",
+          "eb2342b92fff4b56b52d7b08859f164f"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    },
+    {
+      "candidate_id": "candidate-e048aeb4-5a11-42e9-aa9e-82e8498b1964",
+      "site": "zh.wikipedia.org",
+      "claim_state": "failed",
+      "attempt_status": "rejected",
+      "sample_id": null,
+      "effective_steps": 1,
+      "phases": {
+        "decision_http": [
+          "dd8001afdf914d5b9f8534e663b98d5a",
+          "23158f829e294cde912e9c3e9fc76535",
+          "38a3e53b9e7b43319b7cff74eeebb425",
+          "926b1a18d06f40f2bf8d6b72c637d531",
+          "b81e9b295c5348b981e3de2f36d48e7d"
+        ]
+      },
+      "cause": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "decision_rejections": {}
+    }
+  ],
+  "saved_samples": [
+    {
+      "site": "muxtly.com",
+      "sample_id": "S000001_sample_000278",
+      "candidate_id": "candidate-258e8028-acfb-42a8-8eba-947904ed38cf",
+      "effective_steps": 5,
+      "instruction": "在「利润率计算机 - 毛利率与净利率（免费在线计算器）」页面，点击「收入」输入框输入10000，点击「成本」输入框输入7000，再点击「计算」，验证结果区的毛利、净利润（净利）和利润率百分比数值。",
+      "evidence": "results/producer-muxtly-wiki-200-20261111-r01/collections/consumer/20261120195602-1d504552/fixed-20261120195602-1d504552-01/0f6817c5-508e-47ab-9b4e-c9f3e54f3acc/execution/capture/evidence/S000001_sample_000278"
+    }
+  ],
+  "target_passed": false,
+  "history": {
+    "pool": {
+      "protected": 1143,
+      "different_or_missing_ids": []
+    },
+    "registry": {
+      "protected": 859,
+      "different_or_missing_ids": []
+    },
+    "consumer_db": {
+      "protected": 47,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 244,
+      "new_requests_on_preexisting_jobs": 0
+    },
+    "producer_db": {
+      "protected": 21,
+      "different_or_missing_ids": [],
+      "new_request_rows_on_prior_unsettled_jobs": 0,
+      "all_new_request_rows": 2,
+      "new_requests_on_preexisting_jobs": 0
+    }
+  },
+  "failure_events": [
+    {
+      "segment": "run-01",
+      "at": 1795175946.796252,
+      "claim_id": "db032e3d-cf26-4def-8c11-063c4ad270e0",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_attempt",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175947.897919,
+      "claim_id": "71412b3a-6833-4e05-81a0-51f4d07b12b6",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175948.691488,
+      "claim_id": "e7deceb5-6235-496f-b041-e8f9e9b11b2b",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175954.6936939,
+      "claim_id": "e116bceb-0f07-4a32-8199-6c8ff0234f21",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_attempt",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175958.561943,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175958.599621,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175959.303108,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175961.995154,
+      "claim_id": "9485a094-bd20-4126-ac50-dfb27adaddc2",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_attempt",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175964.3434,
+      "claim_id": "0fefb17d-0702-488d-a9c5-1e61d8833b8b",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175969.04051,
+      "claim_id": "86e367aa-876e-4919-a1bc-1bf57f894ee3",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_attempt",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175969.9515688,
+      "claim_id": "684605c6-051b-452e-9df5-49312f4daf69",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "finish",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175972.374563,
+      "claim_id": "e7deceb5-6235-496f-b041-e8f9e9b11b2b",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175979.668777,
+      "claim_id": "753e8cbf-adbd-4e7c-93e0-d4cc3469b2fe",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_attempt",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175982.186956,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175982.283732,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175988.022936,
+      "claim_id": "0fefb17d-0702-488d-a9c5-1e61d8833b8b",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175988.618724,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175988.649359,
+      "claim_id": "71412b3a-6833-4e05-81a0-51f4d07b12b6",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "claim",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175988.9606578,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175992.6872718,
+      "claim_id": "86e367aa-876e-4919-a1bc-1bf57f894ee3",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_attempt",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175993.4149811,
+      "claim_id": "e75175ae-2388-43a7-8183-199be11497c2",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175996.060817,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "_settle_request_once",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795175997.712678,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176001.995268,
+      "claim_id": "9485a094-bd20-4126-ac50-dfb27adaddc2",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "enqueue",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176005.535789,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 3,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176012.2977111,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "bind_model_session",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176014.632444,
+      "claim_id": "0fefb17d-0702-488d-a9c5-1e61d8833b8b",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "claim",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176015.867628,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "_settle_request_once",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176016.4132988,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176017.607029,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176020.48178,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176033.400525,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "_settle_request_once",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176036.239948,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "_settle_request_once",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176038.4018261,
+      "claim_id": "0fefb17d-0702-488d-a9c5-1e61d8833b8b",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "claim",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176038.641397,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "finish",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176040.139335,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 2,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176044.7415528,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176044.7730281,
+      "claim_id": "pre_dispatch",
+      "reason_owner": "program",
+      "disposition": "transient",
+      "reason": "database is locked",
+      "sqlite_database": "consumer-jobs.sqlite3",
+      "sqlite_operation": "reserve_request",
+      "retry_count": 1,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176084.4091048,
+      "claim_id": "e75175ae-2388-43a7-8183-199be11497c2",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_error:ProviderRejected: Provider HTTP status 400; request failed; request retained: 1a62f1fcf02b49eebd63234d083de7ce",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176087.301949,
+      "claim_id": "71412b3a-6833-4e05-81a0-51f4d07b12b6",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176101.7534919,
+      "claim_id": "57cea0d4-94e4-4512-ad43-a8aeddab46f3",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176104.007728,
+      "claim_id": "e7deceb5-6235-496f-b041-e8f9e9b11b2b",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176114.6895401,
+      "claim_id": "d851110a-6c7c-45e0-974e-b9b27d1c5fb4",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 2），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176120.054975,
+      "claim_id": "86e367aa-876e-4919-a1bc-1bf57f894ee3",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 2），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176122.784548,
+      "claim_id": "a1d5001f-0635-4ea6-8634-a1da15e629f0",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176122.8975282,
+      "claim_id": "d5125326-328f-43dd-bae1-7aebfcb1fb99",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176123.176803,
+      "claim_id": "7047aaef-82bb-4fce-ae15-82b2bcda8754",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176124.3546271,
+      "claim_id": "04c0039b-5e80-45a0-891d-73ce5a876483",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176167.796083,
+      "claim_id": "e116bceb-0f07-4a32-8199-6c8ff0234f21",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176191.544632,
+      "claim_id": "8396e3e3-dc06-48cd-9d5d-7ac5c9856092",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:992028c710ae80d886a27193400a747bd82c01937d11909821f2349b655130f4, request 070d54f56c0c44d78b2066c1eced934c, thoug",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176216.8072891,
+      "claim_id": "74a3727e-c522-4984-9557-dafe21453098",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_complete_infeasible:模型声明任务无法完成",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176216.809439,
+      "claim_id": "707feeb8-35c3-4c49-b58c-e45768f081cc",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_judgement_failed:终态帧可核验：输入框为「https://example.com/page」，尺寸为「200 x 200」，二维码完整显示并即时重新生成，任务目标达成，回写判定有依据。但指令要求先完成文本追加与全选替换后再选尺寸，步骤3在文本仍为拼接旧值时提前选择「500 x 500」，与指令顺序不符，计为错配；末步滚动用于核验完整二维码，非冗余。",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176216.818603,
+      "claim_id": "db032e3d-cf26-4def-8c11-063c4ad270e0",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_judgement_failed:终态帧显示输入为1000/25/10，结果区「675 Final Price」「325 You Save」，与1000×75%×90%=675、省325一致，回写有据，指令完成。步骤3在额外折抵仍为「010」未修正时提前点击计算，结果未出现，属错配；步骤4-6为必要修正，无纯冗余步骤。",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176246.7716732,
+      "claim_id": "9485a094-bd20-4126-ac50-dfb27adaddc2",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:a16500e4784f5b2972bb25d769dbc78387ee94ebf3d352fafe8f078fed4ea433, request 3d34bd4171664695b71c204aaf53b7d9, last_",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176247.27213,
+      "claim_id": "59b31a4f-d452-4547-9010-78e412be7163",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 1），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176272.639137,
+      "claim_id": "753e8cbf-adbd-4e7c-93e0-d4cc3469b2fe",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176288.575288,
+      "claim_id": "0fefb17d-0702-488d-a9c5-1e61d8833b8b",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_judgement_failed:终态帧显示方向为「农历转公历」，农历年/月/日已填2026、1、1，结果区输出「公历日期: 2026-02-17」，与2026年农历正月初一公历日期一致，任务完成且回写有据。但步骤2、4在农历输入框尚未填入实值前即点击「换算」，为多余重复点击；步骤3点击「公历年」输入框，与指令要求的对象不符，属错配。",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176297.6568089,
+      "claim_id": "9d1d394b-7c90-4bbf-9bbe-3633c78c1b7c",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_error:ProviderRejected: Provider HTTP status 400; request failed; request retained: df3fa4836e444013a58476a06fab2155",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176344.4342852,
+      "claim_id": "91491f8f-7e12-4982-909d-9cb05dab8d49",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_protocol_error:ValueError: bounded_plan_correction_failed: stepwise:decision:native-tools:output-2048:2c70fbad9c1e49873e91f25977b9245d9954b3fdba1ad962ecfafcac6aa39e1a, request 5685c6503c4345448353d82f916fee46, preco",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176344.435437,
+      "claim_id": "fd22acff-ed89-4b12-a57d-12afd400909a",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176346.6488562,
+      "claim_id": "9659ac33-3d60-4d9d-b249-2cac74311885",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176379.324296,
+      "claim_id": "531c6b0a-90f9-4a3e-a535-a37438184b5c",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176379.338109,
+      "claim_id": "b5b0b436-7f2e-4fd3-b21e-c910f3625c19",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 3），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176385.876638,
+      "claim_id": "8cd88d38-30fc-4e3d-aba0-8ce41f3c966f",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_protocol_error:ValueError: bounded_field_repair_failed: patch retained; no further correction dispatch",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176418.8627431,
+      "claim_id": "684605c6-051b-452e-9df5-49312f4daf69",
+      "reason_owner": "model",
+      "disposition": "business",
+      "reason": "stepwise_repeat_reject:同视图同一动作连续 3 次派发前拒绝",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176428.5033789,
+      "claim_id": "1c4bee7e-2228-4cd1-8260-ae400f6490be",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_judgement_failed:终态帧确认「票房」章节仅有「观影人次为14,257,115人次」，无总票房金额，回写如实说明金额未能查证，判定依据与截图一致。任务要求查证金额与人次两项，金额未查到，故未完全完成。各步均围绕票房目标，无错配；步骤3、4向上滚动偏离目标后又由步骤5滚回，属冗余。",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    },
+    {
+      "segment": "run-01",
+      "at": 1795176528.633721,
+      "claim_id": "4d6e96db-f448-4767-a6da-65e13ccfe92a",
+      "reason_owner": "business",
+      "disposition": "business",
+      "reason": "stepwise_short_flow:有效动作不足 5（实际 4），无法继续扩展或已达 complete 驳回上限",
+      "sqlite_database": null,
+      "sqlite_operation": null,
+      "retry_count": 0,
+      "stop_dispatch": false
+    }
+  ]
+}

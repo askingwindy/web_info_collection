@@ -121,7 +121,8 @@ def next_action_schema(*, autonomous=True, frame_name=None, complete_only=False)
                  'items': {'type': 'string', 'minLength': 1},
                  'minItems': 1, 'maxItems': 4},
         'direction': {'enum': ['up', 'down', 'left', 'right']},
-        'option': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_OPTION},
+        'option': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_OPTION,
+                   'description': 'select 时必填，复制目标下拉框中可用选项的完整标签。'},
         'status': {'enum': ['success', 'infeasible']},
         'expected_result': {'type': 'string', 'minLength': 1, 'maxLength': LIMIT_EXPECTED},
         'note': {'type': 'string', 'maxLength': LIMIT_NOTE},
@@ -140,8 +141,10 @@ def next_action_schema(*, autonomous=True, frame_name=None, complete_only=False)
     if complete_only:
         required.append('status')
     else:
-        schema['allOf'] = [{'if': {'required': ['action'], 'properties': {'action': {'const': 'complete'}}},
-                            'then': {'required': ['status']}}]
+        schema['allOf'] = [
+            {'if': {'required': ['action'], 'properties': {'action': {'const': action}}},
+             'then': {'required': fields}}
+            for action, fields in (('complete', ['status']), ('select', ['element', 'option']), ('type', ['element', 'text']))]
     return schema
 
 
@@ -292,12 +295,20 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
                    else '没有待回填的实际动作，last_step_result 填空字符串。')
     values = {item['element_id']: item for item in state.get('values') or [] if item.get('element_id')}
     selected = selected_option_labels(state)
+    select_controls = {item['element_id']: item for item in state.get('capture_controls') or []
+                       if item.get('element_id') and item.get('tag') == 'select'}
     rows_block = []
     for number, element in rows:
         element_id = element.get('element_id')
         row = element_row(number, element, values.get(element_id))
         if element_id in selected:
             row += ' 当前选中「' + selected[element_id][:LIMIT_ELEMENT_TEXT] + '」'
+        if element_id in select_controls:
+            choices = [item['label'] for item in select_controls[element_id].get('options') or []
+                       if not item.get('disabled') and isinstance(item.get('label'), str)
+                       and 0 < len(item['label']) <= LIMIT_OPTION]
+            if choices:
+                row += ' 可用 option（用于操作）' + compact_json(choices[:8]) + (' 等' if len(choices) > 8 else '')
         rows_block.append(row)
 
     def clip_rows(items):
@@ -312,7 +323,11 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
         return items
 
     rows_block = clip_rows(rows_block)
-    visible = (state.get('visible_text') or '').strip()[:LIMIT_VISIBLE_TEXT]
+    visible = (state.get('visible_text') or '').strip()
+    # Give the first decision the same viewport-only text source used on citation rejection.
+    if visible and '本帧可复制的连续原文示例' not in (feedback or ''):
+        visible = '\n'.join(filter(None, (citation_hint(state, ''), visible)))
+    visible = visible[:LIMIT_VISIBLE_TEXT]
     structure_items = _structure_lines(state)[:LIMIT_STRUCTURE_ITEMS]
     structure_total = 0
     structure = []
@@ -384,12 +399,14 @@ def build_decision_message(*, mode, requested_goal_text, task_goal, progress,
                  f'请用不超过 {LIMIT_PAGE_NAME} 字的简体中文填写 page_name。')
     instructions = ('每轮只调用一次next_action，所有动作（含complete）必填 ' + '、'.join(required)
                     + '。' + name_hint + 'last_step_result 始终保留字段，依照本轮任务与进度中标出的回填要求填写。'
-                    'thought 简述选择本动作的依据，expected_result 写预期可见结果。'
+                    '用一句短句分别写上一操作的可见结果、当前条件和本动作依据，避免复述整段正文。'
+                    'expected_result 写预期可见结果。'
                     '\nclick、double_click、right_click 给 element；type 给 element 和 text；'
                     'hotkey 给 keys，全选写 ["ctrl","a"] 或 ["cmd","a"]，可省略焦点编号；一次组合键中每个键只出现一次；scroll 给 direction，可加可滚动的 element；'
                     'select 给 element 和 option；结束必须同时给出 "action":"complete" 和 "status":"success" 或 "status":"infeasible"；back、wait 无专用参数。')
-    instructions += (' 引用当前页面标题、可见正文或元素中的连续短原文，保留繁简和标点。'
-                     '截图中文字无法准确辨认时，只描述实际可见变化，不能补写名称或数值。')
+    instructions += (' 页面标题用于 page_name。precondition 和 last_step_result 的引文取自当前视口的正文、'
+                     '可见控件文字或当前选中项，保留繁简和标点。滚动后用新视口中的内容说明变化，无法辨认的名称或数值不要补写。'
+                     '填写表单时逐项核对本帧的实际输入值，按任务顺序在参数就绪后触发计算或换算。')
     text = instructions + '\n\n' + '\n\n'.join(
         '【%s】\n%s' % (name, body) for name, body in blocks.items())
     return text, trimmed

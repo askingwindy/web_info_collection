@@ -1,0 +1,226 @@
+{
+  "segments": [
+    {
+      "start": {
+        "pid": 40351,
+        "plan_id": "20261120195602-1d504552",
+        "started": "2026-11-20T19:56:03.675830+08:00",
+        "workers": 20
+      },
+      "elapsed_seconds": 765.2564119169256,
+      "unlaunched": 0,
+      "startup_probes": 0,
+      "worker_concurrency": [
+        {
+          "at": "2026-11-20T19:56:15.477584+08:00",
+          "live": 0,
+          "peak": 0
+        },
+        {
+          "at": "2026-11-20T19:56:52.116533+08:00",
+          "live": 20,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:01:29.038159+08:00",
+          "live": 19,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:02:01.631642+08:00",
+          "live": 17,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:02:09.742880+08:00",
+          "live": 13,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:03:14.484656+08:00",
+          "live": 12,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:04:11.123521+08:00",
+          "live": 11,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:04:35.336881+08:00",
+          "live": 10,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:04:51.477604+08:00",
+          "live": 9,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:04:59.537022+08:00",
+          "live": 8,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:05:47.850074+08:00",
+          "live": 5,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:06:20.074587+08:00",
+          "live": 3,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:06:28.112931+08:00",
+          "live": 2,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:07:16.391592+08:00",
+          "live": 1,
+          "peak": 20
+        },
+        {
+          "at": "2026-11-20T20:08:52.817996+08:00",
+          "live": 0,
+          "peak": 20
+        }
+      ]
+    }
+  ],
+  "phase_image_counts": {
+    "decision": {
+      "1": 231
+    },
+    "writeback": {
+      "2": 7
+    },
+    "judgement": {
+      "3": 6
+    }
+  },
+  "current_value_markers": {
+    "muxtly.com": {
+      "empty": {
+        "requests": 34,
+        "pages": 7
+      },
+      "filled": {
+        "requests": 68,
+        "pages": 10
+      }
+    },
+    "zh.wikipedia.org": {
+      "empty": {
+        "requests": 18,
+        "pages": 10
+      },
+      "filled": {
+        "requests": 0,
+        "pages": 0
+      }
+    },
+    "dpm.org.cn": {
+      "empty": {
+        "requests": 0,
+        "pages": 0
+      },
+      "filled": {
+        "requests": 19,
+        "pages": 1
+      }
+    }
+  },
+  "field_repairs": [
+    {
+      "candidate_id": "candidate-dbb09f49-51ba-4d6c-aba4-d40f78fd25ba",
+      "site": "dpm.org.cn",
+      "phase": "decision",
+      "request_id": "0679092217314a7e8fd35ae79d632968",
+      "source_request_id": "cd653c74b73c423b951c2f0a230066c5",
+      "source_is_same_page_and_phase": true,
+      "allowed_paths": [
+        [
+          "status"
+        ]
+      ],
+      "state": "succeeded",
+      "original_action": "complete",
+      "supplied_status": "success",
+      "only_missing_status_changed": true
+    },
+    {
+      "candidate_id": "candidate-6d4bcfce-e66a-4625-b828-e846da6fc5a7",
+      "site": "dpm.org.cn",
+      "phase": "decision",
+      "request_id": "69450d009e354729bc692b4d35fdd194",
+      "source_request_id": "8c5e2ec7c3ea4ab58716789d84100112",
+      "source_is_same_page_and_phase": true,
+      "allowed_paths": [
+        [
+          "status"
+        ]
+      ],
+      "state": "succeeded",
+      "original_action": "complete",
+      "supplied_status": "success",
+      "only_missing_status_changed": true
+    },
+    {
+      "candidate_id": "candidate-b938aa93-9051-47cc-a3c6-fc059024f221",
+      "site": "zh.wikipedia.org",
+      "phase": "decision",
+      "request_id": "90ef792a3c5243d3ab622727dc92f9f1",
+      "source_request_id": "415c31e06f4042e89b8e0cb9b7ec5df0",
+      "source_is_same_page_and_phase": true,
+      "allowed_paths": [
+        [
+          "status"
+        ]
+      ],
+      "state": "succeeded",
+      "original_action": "complete",
+      "supplied_status": "success",
+      "only_missing_status_changed": true
+    },
+    {
+      "candidate_id": "candidate-a71e4843-dc06-4bdb-b81b-00ff9fd34590",
+      "site": "dpm.org.cn",
+      "phase": "decision",
+      "request_id": "505432a8657745be887f89c57cc9cf9a",
+      "source_request_id": "6bea5fea5745402f8e2e36cb53b25a71",
+      "source_is_same_page_and_phase": true,
+      "allowed_paths": [
+        [
+          "status"
+        ]
+      ],
+      "state": "invalid_response"
+    }
+  ],
+  "provider_errors": [
+    {
+      "candidate_id": "candidate-1d681956-3c35-4a5c-b312-12b979c72c9f",
+      "request_id": "1a62f1fcf02b49eebd63234d083de7ce",
+      "http_status": 400,
+      "provider_code": "1301"
+    },
+    {
+      "candidate_id": "candidate-6b71caf3-b382-4a4e-9b6d-5d1c196f578a",
+      "request_id": "df3fa4836e444013a58476a06fab2155",
+      "http_status": 400,
+      "provider_code": "1301"
+    }
+  ],
+  "sqlite_lock_retries": {
+    "bind_attempt": 6,
+    "enqueue": 7,
+    "bind_model_session": 8,
+    "reserve_request": 8,
+    "finish": 2,
+    "claim": 3,
+    "_settle_request_once": 4
+  },
+  "core_tests": "49 passed, 2 subtests passed in 3.30s"
+}

@@ -1,0 +1,73 @@
+{
+  "core": "50 passed, 2 subtests passed in 4.91s",
+  "archived_real_evidence": {
+    "counts": {
+      "palace_citation_rejections": 39,
+      "first_decision_has_verified_excerpt": 39,
+      "records_quoting_offscreen_title_text": 2
+    },
+    "unique_rejected_frames": 10,
+    "field_rejection_events": {
+      "precondition": 20,
+      "last_step_result": 30
+    },
+    "consecutive_overlength_errors": {
+      "thought": 1,
+      "last_step_result": 1,
+      "precondition": 1
+    },
+    "input_schema_replay": {
+      "SELECT_OPTION_REQUIRED": 11,
+      "select_requests_with_captured_choices": 11,
+      "TYPE_TEXT_REQUIRED": 1,
+      "select_pages": 5
+    }
+  },
+  "local_chrome": {
+    "six_standard_cases": {
+      "cases": [
+        "tabs",
+        "expand",
+        "popup",
+        "slowlink",
+        "extend",
+        "overwrite"
+      ],
+      "checks_passed": 146,
+      "saved_and_export_read_back": 6,
+      "seconds": 72.41,
+      "synthetic_model_http": 50,
+      "external_model_requests": 0,
+      "external_target_site_requests": 0
+    },
+    "overlength_descriptions": {
+      "cases": [
+        "tabs"
+      ],
+      "checks_passed": 25,
+      "saved_and_export_read_back": 1,
+      "seconds": 14.91,
+      "synthetic_model_http": 9,
+      "external_model_requests": 0,
+      "external_target_site_requests": 0
+    },
+    "missing_completion_status": {
+      "cases": [
+        "tabs"
+      ],
+      "checks_passed": 25,
+      "saved_and_export_read_back": 1,
+      "seconds": 14.81,
+      "synthetic_model_http": 9,
+      "external_model_requests": 0,
+      "external_target_site_requests": 0
+    }
+  },
+  "after_repair_new_production_pages": 0,
+  "live_lock_holder_identity": "unknown",
+  "production_ledger_schema_written_by_verification": false,
+  "verification_incidents": [
+    "首次描述超长离线模拟响应漏填缓存用量，网关按未知收口。补全模拟用量后字段修正链通过。",
+    "首次副本性能断言没有确认索引名。使用新连接检查两条实际查询命中的索引并比较完整结果，两项通过。"
+  ]
+}

@@ -208,6 +208,11 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertFalse(validator.is_valid(complete))
         self.assertTrue(validator.is_valid(dict(complete, status='infeasible')))
         self.assertTrue(validator.is_valid(dict(complete, action='back')))
+        select_action = dict(complete, action='select', element=1)
+        self.assertFalse(validator.is_valid(select_action))
+        self.assertTrue(validator.is_valid(dict(select_action, option='按年月')))
+        self.assertFalse(validator.is_valid(dict(complete, action='type', element=1)))
+        self.assertTrue(validator.is_valid(dict(complete, action='type', element=1, text='12')))
         terminal = Draft202012Validator(prompt.next_action_schema(complete_only=True))
         self.assertTrue(terminal.is_valid(dict(complete, status='success')))
         self.assertFalse(terminal.is_valid(dict(complete, action='back', status='success')))
@@ -230,6 +235,22 @@ class StepwiseDecisionProtocolAndBinding(unittest.TestCase):
         self.assertIn('「明清官式建筑研究」', hint)
         self.assertNotIn('另一个人名', hint)
         self.assertEqual(finalize.missing_quotes([('last_step_result', hint)], frame, '本帧'), [])
+        message, _ = prompt.build_decision_message(mode='autonomous', requested_goal_text='', task_goal='',
+            progress='', rows=[], state=frame, history=[], feedback='', note='', site_tasks=[])
+        viewport = message.split('【可见正文】\n', 1)[1].split('\n\n', 1)[0]
+        self.assertIn(prompt.citation_hint(frame, ''), viewport)
+        self.assertNotIn(frame['title'], viewport)
+        self.assertEqual(finalize.missing_quotes([('precondition', viewport)], frame, '本帧'), [])
+        control = {'element_id': 'period', 'tag': 'select',
+                   'options': [{'label': '按年月', 'value': 'month'}, {'label': '旧选项', 'value': 'old', 'disabled': True}]}
+        element = {'element_id': 'period', 'visible': True, 'text': '期间', 'visible_text': '期间'}
+        selection, _ = prompt.build_decision_message(mode='autonomous', requested_goal_text='', task_goal='',
+            progress='', rows=[(1, element)], state={'capture_controls': [control], 'elements': [element]},
+            history=[], feedback='', note='', site_tasks=[])
+        self.assertIn('可用 option（用于操作）["按年月"]', selection)
+        self.assertNotIn('旧选项', selection)
+        self.assertTrue(finalize.missing_quotes([('precondition', '「按年月」')], {'elements': [element],
+                                                'capture_controls': [control]}, '本帧'))
         missing = {'last_step_result', 'thought', 'expected_result'}
         partial = {key: '已见结果' for key in autonomous['required'] if key not in missing}
         partial.update(action='click', element=1)

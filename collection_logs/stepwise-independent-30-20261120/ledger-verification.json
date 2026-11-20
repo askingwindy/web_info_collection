@@ -1,0 +1,41 @@
+{
+  "source_rows_in_snapshot": 5301,
+  "preparation_seconds": 2.767636,
+  "queries": {
+    "balance_after_probe": {
+      "before": {
+        "plan": [
+          "SCAN model_requests"
+        ],
+        "seconds": 18.95629,
+        "rows": 0
+      },
+      "after": {
+        "plan": [
+          "SEARCH model_requests USING INDEX request_balance_failure (<expr>=? AND finished>?)"
+        ],
+        "seconds": 1.7e-05,
+        "rows": 0
+      },
+      "same_rows": true
+    },
+    "prior_account_failures": {
+      "before": {
+        "plan": [
+          "SCAN model_requests"
+        ],
+        "seconds": 1.328449,
+        "rows": 58
+      },
+      "after": {
+        "plan": [
+          "SEARCH model_requests USING INDEX request_historical_failure (state=?)"
+        ],
+        "seconds": 0.003442,
+        "rows": 58
+      },
+      "same_rows": true
+    }
+  },
+  "production_ledger_writes": 0
+}

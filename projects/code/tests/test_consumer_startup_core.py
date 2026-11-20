@@ -487,3 +487,31 @@ class ConsumerStartupCore(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ledger.con.execute('SELECT state FROM consumer_key_probes').fetchone()[0], 'unknown')
         finally:
             ledger.con.close()
+
+    def test_health_indexes_preserve_account_holds_after_probe(self):
+        import json
+        from webcollect.batch_core import BatchLedger, load_json
+        from webcollect.key_health import ensure_schema, model_identity, unavailable_accounts
+
+        accounts = [('restored', 'fixture-a'), ('blocked', 'fixture-b')]
+        config = load_json(Path(__file__).resolve().parents[1] / 'config/batch-synthetic.json')
+        with tempfile.TemporaryDirectory() as directory, patch(
+                'webcollect.model_credentials.configured_credentials', return_value=accounts):
+            ledger = BatchLedger(Path(directory) / 'ledger.sqlite3', config, initialize=True)
+            with ledger.transaction() as con:
+                ensure_schema(con)
+                for account, finished in [('restored', 10), ('blocked', 11)]:
+                    con.execute('INSERT INTO consumer_key_health VALUES(?,?,?,?,?,?,?)',
+                                (model_identity(ledger), account, 'available', 10, None, 'probe', 10))
+                    con.execute("""INSERT INTO model_requests(id,job_id,purpose,attempt,state,reserved_tokens,
+                        reserved_cost,started,finished,response,request_json) VALUES(?,?,?,0,'unknown',0,0,1,?,?,?)""",
+                                (account, account, 'history', finished,
+                                 json.dumps({'provider_error': {'provider_code': '1113'}}), json.dumps({'account_id': account})))
+            for indexed in (False, True):
+                if indexed:
+                    ledger.prepare_dispatch_indexes()
+                with ledger.connect() as con:
+                    historical = ledger._unavailable_model_accounts(con)
+                    self.assertEqual(historical, {'restored', 'blocked'})
+                    self.assertEqual(unavailable_accounts(ledger, con, historical=historical, readonly=True), {'blocked'})
+                    self.assertEqual(con.execute("SELECT count(*) FROM model_requests WHERE state='unknown'").fetchone()[0], 2)

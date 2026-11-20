@@ -1,0 +1,227 @@
+{
+  "denominator": 30,
+  "pages": [
+    {
+      "candidate_id": "candidate-1d681956-3c35-4a5c-b312-12b979c72c9f",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E6%94%AF%E7%A5%A8",
+      "host": "zh.wikipedia.org",
+      "order": 1,
+      "original_order": 55
+    },
+    {
+      "candidate_id": "candidate-258e8028-acfb-42a8-8eba-947904ed38cf",
+      "entry_url": "https://www.muxtly.com/zh-CN/profit-margin-calculator/",
+      "host": "www.muxtly.com",
+      "order": 2,
+      "original_order": 53
+    },
+    {
+      "candidate_id": "candidate-804d16c7-41b7-4ffd-95ac-1fbaab6c1d3f",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/379635.html",
+      "host": "www.dpm.org.cn",
+      "order": 3,
+      "original_order": 48
+    },
+    {
+      "candidate_id": "candidate-3ff2aed4-7bc9-4780-8682-c0bf33673334",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E5%9C%8B%E9%9A%9B%E5%B8%82%E5%A0%B4",
+      "host": "zh.wikipedia.org",
+      "order": 4,
+      "original_order": 61
+    },
+    {
+      "candidate_id": "candidate-da96ac8a-1bec-4e30-974f-54b07997d695",
+      "entry_url": "https://www.muxtly.com/zh-CN/discount-calculator/",
+      "host": "www.muxtly.com",
+      "order": 5,
+      "original_order": 56
+    },
+    {
+      "candidate_id": "candidate-21ad72b5-0a5b-415c-b3eb-136c0cdda204",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/369694.html",
+      "host": "www.dpm.org.cn",
+      "order": 6,
+      "original_order": 54
+    },
+    {
+      "candidate_id": "candidate-bf69c279-2583-4ea2-8ce3-991441a57a40",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E9%A6%99%E6%B8%AF",
+      "host": "zh.wikipedia.org",
+      "order": 7,
+      "original_order": 64
+    },
+    {
+      "candidate_id": "candidate-4eaa7216-123f-4f9f-bdbb-8478c13bed78",
+      "entry_url": "https://www.muxtly.com/zh-CN/tbsp-ml/",
+      "host": "www.muxtly.com",
+      "order": 8,
+      "original_order": 59
+    },
+    {
+      "candidate_id": "candidate-8b9e37a9-7e78-4055-894a-f7e0b879fd76",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/372375.html",
+      "host": "www.dpm.org.cn",
+      "order": 9,
+      "original_order": 60
+    },
+    {
+      "candidate_id": "candidate-df9bda25-810e-4232-8c93-f57591957c2f",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E5%87%BA%E7%94%9F%E7%8E%87",
+      "host": "zh.wikipedia.org",
+      "order": 10,
+      "original_order": 70
+    },
+    {
+      "candidate_id": "candidate-174db744-43c8-4dbb-84a0-8f22b0777361",
+      "entry_url": "https://www.muxtly.com/zh-CN/random-number-generator/",
+      "host": "www.muxtly.com",
+      "order": 11,
+      "original_order": 62
+    },
+    {
+      "candidate_id": "candidate-d6c95f7c-6b29-49e3-9484-2f76fd528c7a",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/102036.html",
+      "host": "www.dpm.org.cn",
+      "order": 12,
+      "original_order": 63
+    },
+    {
+      "candidate_id": "candidate-5d5f39fd-227f-4d29-9ce1-a57fa53e688b",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E9%87%91%E6%98%9F%E5%B7%A5%E7%A8%8B",
+      "host": "zh.wikipedia.org",
+      "order": 13,
+      "original_order": 76
+    },
+    {
+      "candidate_id": "candidate-672f2079-f6ab-49c9-9edc-db54cdcb8461",
+      "entry_url": "https://www.muxtly.com/zh-CN/square-foot-to-acre/",
+      "host": "www.muxtly.com",
+      "order": 14,
+      "original_order": 68
+    },
+    {
+      "candidate_id": "candidate-823c089d-cbf1-44db-bef6-2829dc1a34a7",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/104061.html",
+      "host": "www.dpm.org.cn",
+      "order": 15,
+      "original_order": 69
+    },
+    {
+      "candidate_id": "candidate-6b71caf3-b382-4a4e-9b6d-5d1c196f578a",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E8%84%B1%E8%B4%AB%E6%94%BB%E5%9D%9A%E6%88%98",
+      "host": "zh.wikipedia.org",
+      "order": 16,
+      "original_order": 79
+    },
+    {
+      "candidate_id": "candidate-0e24711c-5394-4330-8f14-b57adc3bc22a",
+      "entry_url": "https://www.muxtly.com/zh-CN/qr-code-generator/",
+      "host": "www.muxtly.com",
+      "order": 17,
+      "original_order": 71
+    },
+    {
+      "candidate_id": "candidate-aea66b14-5912-40ea-9c26-572cbc3dcc99",
+      "entry_url": "https://www.dpm.org.cn/classify_detail/257625.html",
+      "host": "www.dpm.org.cn",
+      "order": 18,
+      "original_order": 72
+    },
+    {
+      "candidate_id": "candidate-b938aa93-9051-47cc-a3c6-fc059024f221",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E6%B3%A1%E6%B2%AB%E7%BB%8F%E6%B5%8E",
+      "host": "zh.wikipedia.org",
+      "order": 19,
+      "original_order": 85
+    },
+    {
+      "candidate_id": "candidate-41746aec-8c1c-4d66-bf9d-c8dd45768073",
+      "entry_url": "https://www.muxtly.com/zh-CN/ounces-pounds-grams/",
+      "host": "www.muxtly.com",
+      "order": 20,
+      "original_order": 77
+    },
+    {
+      "candidate_id": "candidate-6d4bcfce-e66a-4625-b828-e846da6fc5a7",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/104022.html",
+      "host": "www.dpm.org.cn",
+      "order": 21,
+      "original_order": 78
+    },
+    {
+      "candidate_id": "candidate-a7256b23-e6cf-4803-8adf-10dc3e87531c",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E7%AC%AC%E5%8D%81%E4%B8%89%E5%B1%8A%E5%85%A8%E5%9B%BD%E4%BA%BA%E6%B0%91%E4%BB%A3%E8%A1%A8%E5%A4%A7%E4%BC%9A%E7%AC%AC%E4%B8%89%E6%AC%A1%E4%BC%9A%E8%AE%AE",
+      "host": "zh.wikipedia.org",
+      "order": 22,
+      "original_order": 91
+    },
+    {
+      "candidate_id": "candidate-12af4969-ba3e-48c9-993c-5f91b79c4ec2",
+      "entry_url": "https://www.muxtly.com/zh-CN/korea-lunar-calendar-converter/",
+      "host": "www.muxtly.com",
+      "order": 23,
+      "original_order": 80
+    },
+    {
+      "candidate_id": "candidate-a71e4843-dc06-4bdb-b81b-00ff9fd34590",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/101809.html",
+      "host": "www.dpm.org.cn",
+      "order": 24,
+      "original_order": 84
+    },
+    {
+      "candidate_id": "candidate-e048aeb4-5a11-42e9-aa9e-82e8498b1964",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E7%B2%BE%E7%AE%97%E5%AD%B8",
+      "host": "zh.wikipedia.org",
+      "order": 25,
+      "original_order": 94
+    },
+    {
+      "candidate_id": "candidate-5c0516f2-0b75-41b0-9b0c-0a1e17033f5c",
+      "entry_url": "https://www.muxtly.com/zh-CN/inches-feet-yards-miles/",
+      "host": "www.muxtly.com",
+      "order": 26,
+      "original_order": 86
+    },
+    {
+      "candidate_id": "candidate-42e6ef91-fd5f-4101-910f-652fc4fc97ea",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/258081.html",
+      "host": "www.dpm.org.cn",
+      "order": 27,
+      "original_order": 87
+    },
+    {
+      "candidate_id": "candidate-72b65df8-0e3d-4d3b-bcec-9279aa49fae5",
+      "entry_url": "https://zh.wikipedia.org/wiki/%E4%B8%AD%E5%8D%8E%E4%BA%BA%E6%B0%91%E5%85%B1%E5%92%8C%E5%9B%BD%E6%95%99%E8%82%B2",
+      "host": "zh.wikipedia.org",
+      "order": 28,
+      "original_order": 100
+    },
+    {
+      "candidate_id": "candidate-86ce6948-5101-4993-8718-4ea4dc453b6d",
+      "entry_url": "https://www.muxtly.com/zh-CN/fluid-oz-cup-pint-quart-gallon/",
+      "host": "www.muxtly.com",
+      "order": 29,
+      "original_order": 92
+    },
+    {
+      "candidate_id": "candidate-dbb09f49-51ba-4d6c-aba4-d40f78fd25ba",
+      "entry_url": "https://www.dpm.org.cn/expert_detail/102450.html",
+      "host": "www.dpm.org.cn",
+      "order": 30,
+      "original_order": 90
+    }
+  ],
+  "per_site": {
+    "dpm.org.cn": 10,
+    "muxtly.com": 10,
+    "zh.wikipedia.org": 10
+  },
+  "replacement_allowed": false,
+  "selected_at": "2026-11-20T19:55:43.408035+08:00",
+  "selection": "各站按原序取前十个从未领取的候选",
+  "source": "results/stepwise-funnel-150-20261119/selection/cohort.json",
+  "target_palace_saved": 1,
+  "target_saved": 6,
+  "workers": 20
+}

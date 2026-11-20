@@ -879,17 +879,24 @@ class BatchLedger:
             (attempt_id, attempt_id, self.config['mode']=='real')).fetchone()
 
     def prepare_dispatch_indexes(self):
-        """Index original request and legacy job identities without editing an accounting row."""
+        """Prepare session and account-health lookups before consumer workers start."""
         if self._dispatch_indexes_ready:
             return
         with self.connect() as con:
             existing=con.execute("""SELECT count(*) FROM sqlite_master WHERE type='index'
-                AND name IN ('request_dispatch_attempt','react_job_attempt')""").fetchone()[0]
-        if existing < 2:
+                AND name IN ('request_dispatch_attempt','react_job_attempt',
+                             'request_balance_failure','request_historical_failure')""").fetchone()[0]
+        if existing < 4:
             with self.transaction() as con:
                 con.execute("CREATE INDEX IF NOT EXISTS request_dispatch_attempt ON model_requests(json_extract(request_json,'$.dispatch_attempt_id'))")
                 con.execute("""CREATE INDEX IF NOT EXISTS react_job_attempt ON jobs(json_extract(payload,'$.attempt_id'))
                     WHERE kind IN ('react-decision','react-native-decision')""")
+                # Account selection rechecks the last successful probe while holding the session binding lock.
+                con.execute("""CREATE INDEX IF NOT EXISTS request_balance_failure
+                    ON model_requests(json_extract(request_json,'$.account_id'),finished)
+                    WHERE json_extract(response,'$.provider_error.provider_code')='1113'""")
+                con.execute("""CREATE INDEX IF NOT EXISTS request_historical_failure ON model_requests(state)
+                    WHERE state IN ('unknown','failed')""")
         self._dispatch_indexes_ready = True
 
     def bind_model_session(self, session_id, *, consumer=False):
